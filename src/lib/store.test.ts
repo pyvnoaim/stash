@@ -5,11 +5,12 @@ import assert from 'node:assert/strict'
 Object.assign(globalThis, {
   localStorage: { getItem: () => null, setItem: () => {} },
   addEventListener: () => {},
+  location: { hash: '' },
 })
 
 const {
-  addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, removeItem,
-  removeProject,
+  addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
+  removeItem, removeProject, select, setTheme, toggleDone, undo, visible,
 } = await import('./store.ts')
 type Item = import('./store.ts').Item
 
@@ -39,6 +40,23 @@ const [keep] = load({ items: [{ id: 'x', type: 'idea', tags: ['a', 2] }] }).item
 assert.equal(keep.type, 'idea')
 assert.deepEqual(keep.tags, ['a', '2'])
 
+// repeat is a keyword or nothing — a backup from before it existed, or junk, means nothing
+assert.equal(load({ items: [{ id: 'x' }] }).items[0].repeat, null)
+assert.equal(load({ items: [{ id: 'x', repeat: 'fortnight' }] }).items[0].repeat, null)
+assert.equal(load({ items: [{ id: 'x', repeat: 'monday' }] }).items[0].repeat, 'monday')
+
+// a due date is 'YYYY-MM-DD' or nothing: the grouped views sort on it with localeCompare, so a
+// hand-edited backup carrying a number would take the list down on the next render
+for (const junk of [5, {}, [], '31/12/2026', 'today', true]) {
+  assert.equal(load({ items: [{ id: 'x', due: junk }] }).items[0].due, null)
+}
+assert.equal(load({ items: [{ id: 'x', due: '2026-12-31' }] }).items[0].due, '2026-12-31')
+
+const loose = load({ items: [{ id: 'x', flag: 'yes', doneAt: 'now', ts: 'soon' }] }).items[0]
+assert.equal(loose.flag, true)
+assert.equal(loose.doneAt, null)
+assert.equal(typeof loose.ts, 'number')
+
 // an item pointing at a project that isn't there lands in Quick notes instead of going invisible
 const orphans = load({
   projects: [{ id: 'a', name: 'Kova' }],
@@ -63,7 +81,7 @@ assert.equal(load({ theme: 'neon' }).theme, 'auto')
 /* ---------- the two actions that could lose items ---------- */
 
 const item = (over: Partial<Item>): Item => ({
-  id: 'x', type: 'task', text: 'x', note: '', pid: null, due: null,
+  id: 'x', type: 'task', text: 'x', note: '', pid: null, due: null, repeat: null,
   flag: false, tags: [], done: false, doneAt: null, ts: 1, ...over,
 })
 
@@ -142,5 +160,96 @@ const home = addProject('Home')
 patch('a', { pid: home.id })
 moveBefore('c', 'a')
 assert.equal(getState().items.find((i) => i.id === 'c')?.pid, home.id)
+
+/* ---------- finishing a repeating task has to leave exactly one open successor ---------- */
+
+const { nextDue, today } = await import('./parse.ts')
+const wipe = () => getState().items.slice().forEach((i) => removeItem(i.id))
+
+wipe()
+addItem(item({ id: 'r', repeat: 'day', due: '2000-01-01' }))   // years overdue
+toggleDone('r')
+const after = getState().items
+assert.equal(after.length, 2)
+const fresh = after.find((i) => !i.done)
+assert.equal(after.find((i) => i.id === 'r')?.done, true)
+assert.equal(fresh?.repeat, 'day')
+// counted from today, not from the date it slipped past, or it is born overdue again
+assert.equal(fresh?.due, nextDue(today(), 'day'))
+assert.equal(after[0].id, fresh?.id)   // and it takes the old one's place in the order
+
+toggleDone('r')                        // reopening the finished one spawns nothing more
+assert.equal(getState().items.length, 2)
+
+wipe()
+addItem(item({ id: 'once' }))
+toggleDone('once')
+assert.equal(getState().items.length, 1)
+
+// a repeat needs something to finish, so it goes when the item stops being a task
+wipe()
+addItem(item({ id: 'r2', repeat: 'week' }))
+patch('r2', { type: 'note' })
+assert.equal(getState().items[0].repeat, null)
+
+/* ---------- #tag search is the tag, plain search is a substring ---------- */
+
+wipe()
+addItem(item({ id: 'text', text: 'mixing audio' }))
+addItem(item({ id: 'tagged', tags: ['audio'] }))
+assert.deepEqual(visible(getState(), 'audio').map((i) => i.id).sort(), ['tagged', 'text'])
+assert.deepEqual(visible(getState(), '#audio').map((i) => i.id), ['tagged'])
+assert.deepEqual(visible(getState(), '#aud').map((i) => i.id), [])
+
+/* ---------- @project search matches the name's start, the way capture does ---------- */
+
+const kova = addProject('Kova')
+patch('tagged', { pid: kova.id })
+assert.deepEqual(visible(getState(), '@kova').map((i) => i.id), ['tagged'])
+assert.deepEqual(visible(getState(), '@kov').map((i) => i.id), ['tagged'])
+assert.deepEqual(visible(getState(), '@nobody').map((i) => i.id), [])
+// a bare @ names no project, so it falls back to being a substring like any other search
+assert.deepEqual(visible(getState(), '@').map((i) => i.id), [])
+
+/* ---------- undo: one step per run of edits, and the view is not one of them ---------- */
+
+// longer than the window that folds a run of edits — a typed line, a bulk command — into one step
+const beat = () => new Promise((r) => setTimeout(r, 600))
+
+wipe()
+select('done')
+await beat()
+addItem(item({ id: 'z' }))
+await beat()
+patch('z', { text: 'renamed' })
+await beat()
+removeItem('z')
+assert.deepEqual(getState().items, [])
+
+assert.equal(undo(), true)
+assert.equal(getState().items[0]?.text, 'renamed')
+assert.equal(undo(), true)
+assert.equal(getState().items[0]?.text, 'x')
+assert.equal(undo(), true)
+assert.deepEqual(getState().items, [])     // back to before it was ever added
+assert.equal(getState().sel, 'done')       // and still looking at the list you were looking at
+
+assert.equal(redo(), true)
+assert.equal(getState().items[0]?.text, 'x')
+assert.equal(redo(), true)
+assert.equal(getState().items[0]?.text, 'renamed')
+
+// editing after an undo is a new branch, so there is no longer anything to redo onto
+patch('z', { flag: true })
+assert.equal(redo(), false)
+
+// a setting changed after an edit is not part of the edit, so walking back must not take it
+wipe()
+await beat()
+addItem(item({ id: 'y' }))
+setTheme('dark')
+assert.equal(undo(), true)
+assert.deepEqual(getState().items, [])
+assert.equal(getState().theme, 'dark')
 
 console.log('store: ok')

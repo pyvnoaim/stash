@@ -1,37 +1,54 @@
 import { useMemo } from 'react'
-import { Bar, BarChart, CartesianGrid, XAxis } from 'recharts'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
-} from '@/components/ui/chart'
-import { today } from '@/lib/parse'
-import { useStash, type Item } from '@/lib/store'
+import { cn } from '@/lib/utils'
+import { addDays, dayLabel, today } from '@/lib/parse'
+import { select, tagCounts, useStash, type Item } from '@/lib/store'
 
-const DAYS = 30
+const BACK = 30
+const AHEAD = 14
+const TAGS = 8
 const stamp = (ms: number) => new Date(ms).toLocaleDateString('sv')
 
-const chartConfig = {
-  done: { label: 'Finished', color: 'var(--foreground)' },
-} satisfies ChartConfig
+/** A run of days from `t + offset`, one entry each, so a gap reads as a gap and not as no data. */
+const run = (t: string, offset: number, days: number, count: (day: string) => number) =>
+  Array.from({ length: days }, (_, n) => {
+    const day = addDays(t, offset + n)
+    return { day, n: count(day) }
+  })
+const short = (d: string) =>
+  new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
-/** Headline numbers earn a tile, not a chart. */
-function Stat({ label, value, sub }: { label: string; value: number; sub?: string }) {
+/** Headline numbers earn a tile, not a chart. Every one of them is a list you can open. */
+function Stat({ label, value, sub, to }: { label: string; value: number; sub?: string; to: string }) {
   return (
-    <Card className="gap-0 py-4">
-      <CardContent className="px-4">
-        <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
-        <p className="mt-1 text-2xl tabular-nums">{value}</p>
-        {sub && <p className="text-muted-foreground mt-0.5 text-xs">{sub}</p>}
-      </CardContent>
-    </Card>
+    <button type="button" onClick={() => select(to)} className="text-left">
+      <Card className="hover:border-foreground/30 gap-0 py-4 transition-colors">
+        <CardContent className="px-4">
+          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
+          <p className="mt-1 text-2xl tabular-nums">{value}</p>
+          {sub && <p className="text-muted-foreground mt-0.5 text-xs">{sub}</p>}
+        </CardContent>
+      </Card>
+    </button>
   )
 }
 
 /** Every bar is directly labelled, so it needs no hover layer. */
-function BarRow({ name, n, max }: { name: string; n: number; max: number }) {
+function BarRow({ name, n, max, onClick }: {
+  name: string
+  n: number
+  max: number
+  onClick?: () => void
+}) {
   return (
-    <div className="flex items-center gap-3">
-      <span className="w-28 shrink-0 truncate text-xs">{name}</span>
+    <div
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={(e) => { if (onClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onClick() } }}
+      className={cn('group flex items-center gap-3', onClick && 'cursor-pointer')}
+    >
+      <span className={cn('w-28 shrink-0 truncate text-xs', onClick && 'group-hover:underline')}>{name}</span>
       <div className="bg-muted h-2 flex-1 overflow-hidden rounded-full">
         <div
           className="bg-foreground h-full rounded-full transition-[width] duration-300"
@@ -43,7 +60,53 @@ function BarRow({ name, n, max }: { name: string; n: number; max: number }) {
   )
 }
 
-export default function Overview() {
+/**
+ * A run of days as bars. Divs and one flex row: recharts wanted 340KB of the bundle to draw the
+ * same thirty rectangles, and this page was code-split solely to keep that weight off the app.
+ */
+function Days({ data, label }: { data: { day: string; n: number }[]; label: (d: string) => string }) {
+  const max = Math.max(...data.map((d) => d.n), 1)
+  const ends = [data[0], data[Math.floor(data.length / 2)], data[data.length - 1]]
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="border-border flex h-[150px] items-end gap-[3px] border-b">
+        {data.map((d) => (
+          <div
+            key={d.day}
+            title={`${label(d.day)} — ${d.n}`}
+            className="flex h-full flex-1 flex-col justify-end"
+          >
+            {/* an empty day keeps a hairline, so a gap reads as nothing rather than as no data */}
+            <div
+              className={cn('rounded-t-[2px]', d.n ? 'bg-foreground' : 'bg-muted')}
+              style={{ height: d.n ? `${Math.max((d.n / max) * 100, 4)}%` : '2px' }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="text-muted-foreground flex justify-between font-mono text-[10px] tabular-nums">
+        {ends.map((d, n) => <span key={d.day + n}>{short(d.day)}</span>)}
+      </div>
+    </div>
+  )
+}
+
+const Panel = ({ title, sub, children }: {
+  title: string
+  sub: string
+  children: React.ReactNode
+}) => (
+  <Card>
+    <CardHeader>
+      <CardTitle className="font-heading text-sm font-normal tracking-wide uppercase">{title}</CardTitle>
+      <CardDescription>{sub}</CardDescription>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-2.5">{children}</CardContent>
+  </Card>
+)
+
+export default function Overview({ onTag }: { onTag: (tag: string) => void }) {
   const s = useStash()
   const t = today()
 
@@ -62,114 +125,96 @@ export default function Overview() {
     }
   }, [s.items, t])
 
-  // one row per day so gaps read as gaps, not as missing data
-  const daily = useMemo(() => {
+  const back = useMemo(() => {
     const counts = new Map<string, number>()
     for (const i of s.items) {
-      if (!i.done || !i.doneAt) continue
-      const d = stamp(i.doneAt)
-      counts.set(d, (counts.get(d) ?? 0) + 1)
+      if (i.done && i.doneAt) counts.set(stamp(i.doneAt), (counts.get(stamp(i.doneAt)) ?? 0) + 1)
     }
-    const out: { day: string; done: number }[] = []
-    const cur = new Date(t + 'T00:00')
-    cur.setDate(cur.getDate() - (DAYS - 1))
-    for (let n = 0; n < DAYS; n++) {
-      const key = cur.toLocaleDateString('sv')
-      out.push({ day: key, done: counts.get(key) ?? 0 })
-      cur.setDate(cur.getDate() + 1)
-    }
-    return out
+    return run(t, -(BACK - 1), BACK, (d) => counts.get(d) ?? 0)
+  }, [s.items, t])
+
+  const ahead = useMemo(() => {
+    const open = s.items.filter((i) => !i.done && i.due)
+    return run(t, 0, AHEAD, (d) => open.filter((i) => i.due === d).length)
   }, [s.items, t])
 
   const byProject = useMemo(() => {
     const open = s.items.filter((i) => !i.done)
-    const rows = s.projects.map((p) => ({ name: p.name, n: open.filter((i) => i.pid === p.id).length }))
-    rows.push({ name: 'Quick notes', n: open.filter((i) => !i.pid).length })
+    const rows = s.projects.map((p) => ({ id: p.id, name: p.name, n: open.filter((i) => i.pid === p.id).length }))
+    rows.push({ id: 'inbox', name: 'Quick notes', n: open.filter((i) => !i.pid).length })
     return rows.filter((r) => r.n > 0).sort((a, b) => b.n - a.n)
   }, [s.items, s.projects])
 
-  const finished = daily.reduce((n, d) => n + d.done, 0)
+  // the busiest handful, since a tag list is long and flat and the tail says nothing
+  const tags = tagCounts(s).sort((a, b) => b[1] - a[1]).slice(0, TAGS)
+
+  const finished = back.reduce((n, d) => n + d.n, 0)
+  const coming = ahead.reduce((n, d) => n + d.n, 0)
   const maxProject = Math.max(...byProject.map((r) => r.n), 1)
+  const maxTag = Math.max(...tags.map(([, n]) => n), 1)
 
   return (
     <div className="flex flex-col gap-4 overflow-y-auto p-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Open" value={stats.open} sub={stats.open === 1 ? 'item' : 'items'} />
-        <Stat label="Due today" value={stats.dueToday} />
-        <Stat label="Overdue" value={stats.overdue} sub={stats.overdue ? 'needs a new date' : 'all clear'} />
-        <Stat label="Finished" value={stats.doneWeek} sub="last 7 days" />
+        <Stat label="Open" value={stats.open} sub={stats.open === 1 ? 'item' : 'items'} to="all" />
+        <Stat label="Due today" value={stats.dueToday} to="today" />
+        <Stat
+          label="Overdue"
+          value={stats.overdue}
+          sub={stats.overdue ? 'needs a new date' : 'all clear'}
+          to="today"
+        />
+        <Stat label="Finished" value={stats.doneWeek} sub="last 7 days" to="done" />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="font-heading text-sm font-normal tracking-wide uppercase">
-            Finished per day
-          </CardTitle>
-          <CardDescription>
-            {finished ? `${finished} in the last ${DAYS} days` : `Nothing finished in the last ${DAYS} days`}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ChartContainer config={chartConfig} className="h-[180px] w-full">
-            <BarChart data={daily} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
-              <CartesianGrid vertical={false} stroke="var(--border)" />
-              <XAxis
-                dataKey="day"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                minTickGap={24}
-                tickFormatter={(v: string) => new Date(v + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-              />
-              <ChartTooltip
-                cursor={false}
-                content={
-                  <ChartTooltipContent
-                    labelFormatter={(v) => new Date(String(v) + 'T00:00').toLocaleDateString(undefined, { dateStyle: 'medium' })}
-                  />
-                }
-              />
-              <Bar dataKey="done" fill="var(--color-done)" radius={[4, 4, 0, 0]} maxBarSize={14} />
-            </BarChart>
-          </ChartContainer>
-        </CardContent>
-      </Card>
-
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="font-heading text-sm font-normal tracking-wide uppercase">
-              Open by project
-            </CardTitle>
-            <CardDescription>Where the unfinished work sits</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2.5">
-            {byProject.length ? (
-              byProject.map((r) => <BarRow key={r.name} name={r.name} n={r.n} max={maxProject} />)
-            ) : (
-              <p className="text-muted-foreground text-sm">Nothing open anywhere.</p>
-            )}
-          </CardContent>
-        </Card>
+        <Panel
+          title="Finished per day"
+          sub={finished ? `${finished} in the last ${BACK} days` : `Nothing finished in the last ${BACK} days`}
+        >
+          <Days data={back} label={(d) => short(d)} />
+        </Panel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="font-heading text-sm font-normal tracking-wide uppercase">
-              Open by kind
-            </CardTitle>
-            <CardDescription>Tasks to finish, ideas and notes to keep</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2.5">
-            {stats.types.map(({ type, n }) => (
-              <BarRow
-                key={type}
-                name={type[0].toUpperCase() + type.slice(1)}
-                n={n}
-                max={Math.max(...stats.types.map((x) => x.n), 1)}
-              />
+        <Panel
+          title="Due next"
+          sub={[
+            coming ? `${coming} in the next ${AHEAD} days` : `Nothing due in the next ${AHEAD} days`,
+            stats.overdue && `${stats.overdue} already overdue`,
+          ].filter(Boolean).join(' · ')}
+        >
+          <Days data={ahead} label={dayLabel} />
+        </Panel>
+      </div>
+
+      <div className={cn('grid gap-4', tags.length ? 'lg:grid-cols-3' : 'lg:grid-cols-2')}>
+        <Panel title="Open by project" sub="Where the unfinished work sits">
+          {byProject.length ? (
+            byProject.map((r) => (
+              <BarRow key={r.id} name={r.name} n={r.n} max={maxProject} onClick={() => select(r.id)} />
+            ))
+          ) : (
+            <p className="text-muted-foreground text-sm">Nothing open anywhere.</p>
+          )}
+        </Panel>
+
+        {tags.length > 0 && (
+          <Panel title="Open by tag" sub={`The busiest ${tags.length === 1 ? 'one' : tags.length}`}>
+            {tags.map(([tag, n]) => (
+              <BarRow key={tag} name={'#' + tag} n={n} max={maxTag} onClick={() => onTag(tag)} />
             ))}
-          </CardContent>
-        </Card>
+          </Panel>
+        )}
+
+        <Panel title="Open by kind" sub="Tasks to finish, ideas and notes to keep">
+          {stats.types.map(({ type, n }) => (
+            <BarRow
+              key={type}
+              name={type[0].toUpperCase() + type.slice(1)}
+              n={n}
+              max={Math.max(...stats.types.map((x) => x.n), 1)}
+            />
+          ))}
+        </Panel>
       </div>
     </div>
   )

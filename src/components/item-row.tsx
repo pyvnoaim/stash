@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   CalendarOff, CalendarPlus, Check, Copy, Flag, Inbox, Lightbulb, ListTodo, PencilLine,
-  RotateCcw, StickyNote, Trash2,
+  Repeat, RotateCcw, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -10,7 +10,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
-import { dayLabel, today } from '@/lib/parse'
+import { dayLabel, repeatLabel, today, tomorrow } from '@/lib/parse'
 import {
   focus, moveBefore, patch, project, toggleDone, useStash, type Item, type ItemType,
 } from '@/lib/store'
@@ -21,17 +21,15 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
   note: StickyNote,
 }
 
-const tomorrow = () => {
-  const d = new Date(today() + 'T00:00')
-  d.setDate(d.getDate() + 1)
-  return d.toLocaleDateString('sv')
-}
-
-export function ItemRow({ it, selected, reorder, onDelete }: {
+export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onDelete }: {
   it: Item
   selected: boolean
+  /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
+  marked: boolean
   /** false in views that sort themselves — a drop there would move nothing you can see */
   reorder: boolean
+  onSelect: (range: boolean) => void
+  onTag: (tag: string) => void
   onDelete: () => void
 }) {
   const s = useStash()
@@ -40,12 +38,13 @@ export function ItemRow({ it, selected, reorder, onDelete }: {
   const filed = project(s, it.pid)
 
   return (
-    <ContextMenu onOpenChange={(open) => open && focus(it.id)}>
+    /* the menu is this row's own, so opening it drops any multi-row selection and takes just this one */
+    <ContextMenu onOpenChange={(open) => open && onSelect(false)}>
       <ContextMenuTrigger asChild>
         <div
           data-row
           draggable
-          onClick={() => focus(it.id)}
+          onClick={(e) => onSelect(e.shiftKey)}
           onDragStart={(e) => {
             e.dataTransfer.setData('text/plain', it.id)
             e.dataTransfer.effectAllowed = 'move'   // otherwise the cursor offers to copy
@@ -76,6 +75,7 @@ export function ItemRow({ it, selected, reorder, onDelete }: {
             'group flex items-start gap-2.5 rounded-md px-2.5 py-2',
             'transition-[opacity,background-color] duration-100 ease-out',
             'hover:bg-muted/60',
+            marked && 'bg-accent/50 hover:bg-accent/50',
             selected && 'bg-accent hover:bg-accent',
             lifting && 'opacity-40',
             over === 'above' && 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]',
@@ -119,10 +119,23 @@ export function ItemRow({ it, selected, reorder, onDelete }: {
           )}
 
           {it.tags.map((t) => (
-            <span key={t} className="text-muted-foreground mt-0.5 shrink-0 font-mono text-xs">#{t}</span>
+            <button
+              key={t}
+              type="button"
+              // a BUTTON is also what stops the list's space shortcut firing while it has focus
+              onClick={(e) => { e.stopPropagation(); onTag(t) }}
+              title={`Search #${t}`}
+              className="text-muted-foreground hover:text-foreground mt-0.5 shrink-0 font-mono text-xs"
+            >
+              #{t}
+            </button>
           ))}
 
           {it.flag && <span className="text-foreground shrink-0 font-semibold">!</span>}
+
+          {it.repeat && (
+            <Repeat className="text-muted-foreground mt-1 size-3 shrink-0" aria-label={repeatLabel(it.repeat)} />
+          )}
 
           {it.due && (
             <span

@@ -1,8 +1,50 @@
-// Capture parser: pulls #tags, @project, !, and dates out of a single line of text.
+// Capture parser: pulls #tags, @project, !, dates and `every …` out of a single line of text.
 
-const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
 
 export const today = () => new Date().toLocaleDateString('sv')
+
+/** How a task comes back: a fixed span, or the same weekday every week. */
+export const REPEATS = ['day', 'week', 'month', 'year', ...DAYS] as const
+export type Repeat = (typeof REPEATS)[number]
+export const isRepeat = (v: unknown): v is Repeat => REPEATS.includes(v as Repeat)
+
+/** Which weekday a repeat names, or -1 for the spans. */
+const weekday = (r: Repeat) => (DAYS as readonly string[]).indexOf(r)
+
+/** `every mon` and `every monday` mean the same thing, and so do the other five. */
+function repeatWord(w = ''): Repeat | null {
+  if (isRepeat(w)) return w
+  const day = DAYS.find((d) => d.slice(0, 3) === w)
+  return day ?? null
+}
+
+/** The occurrence after `from`. A weekday means the next one, never `from` itself. */
+export function nextDue(from: string, repeat: Repeat): string {
+  const d = new Date(from + 'T00:00')
+  const day = weekday(repeat)
+  if (day >= 0) return shiftDays(d, ((day - d.getDay() + 7) % 7) || 7)
+  if (repeat === 'day') return shiftDays(d, 1)
+  if (repeat === 'week') return shiftDays(d, 7)
+
+  // the 31st has no answer in February, so it clamps to the end of the month rather than
+  // spilling into the next one, which is what setMonth does on its own
+  const date = d.getDate()
+  if (repeat === 'month') d.setMonth(d.getMonth() + 1)
+  else d.setFullYear(d.getFullYear() + 1)
+  if (d.getDate() !== date) d.setDate(0)
+  return d.toLocaleDateString('sv')
+}
+
+const shiftDays = (d: Date, n: number) => {
+  d.setDate(d.getDate() + n)
+  return d.toLocaleDateString('sv')
+}
+
+/** A stored date plus n days, still local, still 'YYYY-MM-DD'. */
+export const addDays = (from: string, n: number) => shiftDays(new Date(from + 'T00:00'), n)
+
+export const tomorrow = () => addDays(today(), 1)
 
 export interface Parsed {
   text: string
@@ -10,6 +52,7 @@ export interface Parsed {
   pid: string | null
   flag: boolean
   due: string | null
+  repeat: Repeat | null
 }
 
 export function parseCapture(
@@ -17,24 +60,30 @@ export function parseCapture(
   projects: { id: string; name: string }[] = [],
   now: string = today(),
 ): Parsed {
-  const shift = (n: number) => {
-    const d = new Date(now + 'T00:00')
-    d.setDate(d.getDate() + n)
-    return d.toLocaleDateString('sv')
-  }
+  const shift = (n: number) => addDays(now, n)
 
   const tags: string[] = []
   const kept: string[] = []
   let pid: string | null = null
   let flag = false
   let due: string | null = null
+  let repeat: Repeat | null = null
 
-  for (const word of input.split(/\s+/)) {
+  const words = input.split(/\s+/)
+  for (let n = 0; n < words.length; n++) {
+    const word = words[n]
     const low = word.toLowerCase()
 
     if (/^#[\w-]+$/.test(word)) {
       tags.push(low.slice(1))
       continue
+    }
+
+    // two words, so it has to eat the next one — and eating `mon` here is what stops the
+    // weekday branch below from reading `every mon` as a one-off due date
+    if (low === 'every') {
+      const unit = repeatWord(words[n + 1]?.toLowerCase())
+      if (unit) { repeat = unit; n++; continue }
     }
 
     if (/^@[\w-]+$/.test(word)) {
@@ -62,8 +111,42 @@ export function parseCapture(
     kept.push(word)
   }
 
-  return { text: kept.join(' ').trim(), tags, pid, flag, due }
+  // a repeat with no date of its own starts now — except a weekday, which starts on that weekday
+  if (repeat && !due) due = weekday(repeat) >= 0 ? nextDue(now, repeat) : now
+
+  return { text: kept.join(' ').trim(), tags, pid, flag, due, repeat }
 }
+
+/** A line of a pasted list, plus what its checkbox said — no checkbox at all is `null`. */
+export interface Line extends Parsed { done: boolean | null }
+
+/**
+ * A pasted Markdown list, one item per line, each line read the way the capture field reads one.
+ * The inverse of ⌘K → Copy as Markdown, so a list copied out of Stash pastes back in unchanged.
+ */
+export function parseList(
+  text: string,
+  projects: { id: string; name: string }[] = [],
+  now: string = today(),
+): Line[] {
+  return text.split('\n')
+    .map((l) => l.trim())
+    // `## Today` is the heading Copy writes, and `#audio` is a tag — only the space tells them apart
+    .filter((l) => l && !/^#{1,6}\s/.test(l))
+    .map((l) => l.replace(/^([-*+]|\d+[.)])\s+/, ''))
+    .map((l) => {
+      const box = /^\[([ xX])\]\s*/.exec(l)
+      return {
+        ...parseCapture(box ? l.slice(box[0].length) : l, projects, now),
+        done: box ? box[1].toLowerCase() === 'x' : null,
+      }
+    })
+    .filter((l) => l.text)
+}
+
+/** `every day` → “every day”, `every monday` → “every Monday”. */
+export const repeatLabel = (r: Repeat) =>
+  `every ${weekday(r) >= 0 ? r[0].toUpperCase() + r.slice(1) : r}`
 
 const WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 

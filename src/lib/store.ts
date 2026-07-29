@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { today } from './parse.ts'
+import { isRepeat, nextDue, today, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
 export type Theme = 'auto' | 'light' | 'dark'
@@ -11,6 +11,8 @@ export interface Item {
   note: string
   pid: string | null
   due: string | null
+  /** Finishing it opens the next one instead of ending the task. */
+  repeat: Repeat | null
   flag: boolean
   tags: string[]
   done: boolean
@@ -47,6 +49,10 @@ export const PDF = 'pdf'
 const PAGES: string[] = [OVERVIEW, PDF]
 export const isPage = (id: string) => PAGES.includes(id)
 
+/** Everything `sel` is allowed to be, which is also everything the URL hash may name. */
+export const isRoute = (s: Pick<State, 'projects'>, id: string) =>
+  isPage(id) || isView(id) || s.projects.some((p) => p.id === id)
+
 const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
@@ -70,13 +76,19 @@ export function load(data: unknown): State {
       text: String(i.text ?? ''),
       note: String(i.note ?? ''),
       tags: Array.isArray(i.tags) ? i.tags.map(String) : [],
+      repeat: isRepeat(i.repeat) ? i.repeat : null,
+      // a due date that isn't 'YYYY-MM-DD' has no localeCompare, and the grouped views sort on it —
+      // a hand-edited backup would take the list down and then be written back to disk that way
+      due: typeof i.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(i.due) ? i.due : null,
+      flag: !!i.flag,
       done: !!i.done,
-      ts: i.ts || Date.now(),
+      doneAt: typeof i.doneAt === 'number' ? i.doneAt : null,
+      ts: typeof i.ts === 'number' ? i.ts : Date.now(),
       // orphans land in Quick notes rather than becoming invisible
       pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
     }))
 
-  if (!isPage(st.sel) && !isView(st.sel) && !st.projects.some((p) => p.id === st.sel)) st.sel = 'today'
+  if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   return st
 }
@@ -88,24 +100,90 @@ const read = (raw: string | null): State => {
 }
 
 let state: State = read(localStorage.getItem(KEY))
+// the hash names the view, and it is read before the first render so nothing flashes the old one
+const routed = decodeURIComponent(location.hash.slice(1))
+if (routed && isRoute(state, routed)) state = { ...state, sel: routed }
+
 const listeners = new Set<() => void>()
 
 const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
 
 export const getState = () => state
 
-export function set(next: State | ((s: State) => State)) {
-  state = typeof next === 'function' ? next(state) : next
-  // ponytail: quota exceeded or Safari private mode — the session keeps working, the disk doesn't
-  try { localStorage.setItem(KEY, JSON.stringify(state)) } catch { /* empty */ }
+let warned = false
+
+function commit(next: State) {
+  state = next
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state))
+  } catch {
+    // quota exceeded, or Safari private mode. The session keeps working and the disk doesn't,
+    // which is the one failure worth interrupting for — App turns this into a toast, once.
+    if (!warned) { warned = true; dispatchEvent(new Event('stash:unsaved')) }
+  }
   listeners.forEach((fn) => fn())
+}
+
+/* ---------- undo: fifty steps, the same as the PDF tab's ---------- */
+
+// ponytail: whole-state snapshots. The data is a few hundred rows of JSON, so a diff would cost
+// more code than the memory it saves.
+const past: State[] = []
+const future: State[] = []
+let edited = 0
+
+export function set(next: State | ((s: State) => State)) {
+  const prev = state
+  const now = Date.now()
+  const value = typeof next === 'function' ? next(prev) : next
+
+  // only the data goes on the stack: which view you are in and what is focused are not edits
+  if (prev.items !== value.items || prev.projects !== value.projects) {
+    // a run of edits is one step — a typed letter, and the five patches one ⌘K command fires
+    if (now - edited > 500) past.push(prev)
+    if (past.length > 50) past.shift()
+    future.length = 0
+    edited = now
+  }
+  commit(value)
+}
+
+// only the two data fields travel — a snapshot also holds the theme and the view, and walking
+// those back would undo a setting you changed after the edit
+const rewind = (to: State) => ({ ...state, items: to.items, projects: to.projects })
+
+/** Both return false when there is nothing left to walk back to, so the caller can stay quiet. */
+export function undo() {
+  const prev = past.pop()
+  if (!prev) return false
+  future.push(state)
+  edited = 0                    // the next edit starts a step rather than joining this one
+  commit(rewind(prev))
+  return true
+}
+
+export function redo() {
+  const next = future.pop()
+  if (!next) return false
+  past.push(state)
+  edited = 0
+  commit(rewind(next))
+  return true
 }
 
 // another window (the dock app and a tab) wrote — take its state rather than clobber it on our next write
 addEventListener('storage', (e) => {
   if (e.key !== KEY) return
+  // and drop our history with it: undoing to a snapshot from before their write would eat it
+  past.length = future.length = 0
   state = read(e.newValue)
   listeners.forEach((fn) => fn())
+})
+
+// back, forward and a pasted link all name a view. App writes the hash whenever `sel` changes.
+addEventListener('hashchange', () => {
+  const id = decodeURIComponent(location.hash.slice(1))
+  if (id !== state.sel && isRoute(state, id)) select(id)
 })
 
 export const useStash = () => useSyncExternalStore(subscribe, getState)
@@ -122,12 +200,29 @@ export const viewName = (s: State) =>
 
 export const isGrouped = (s: State) => isView(s.sel) && 'grouped' in VIEWS[s.sel]
 
+/**
+ * Every tag with something still open under it, and how much, alphabetical. Derived on the way
+ * past — the sidebar lists them, the search field completes them, nothing is kept in sync.
+ */
+export const tagCounts = (s: State): [string, number][] =>
+  [...s.items.filter((i) => !i.done)
+    .flatMap((i) => i.tags)
+    .reduce((m, t) => m.set(t, (m.get(t) ?? 0) + 1), new Map<string, number>())]
+    .sort(([a], [b]) => a.localeCompare(b))
+
 /** Views that impose their own order. Dragging a row onto another can't reorder anything here. */
 export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done'
 
 export function visible(s: State, query: string): Item[] {
-  if (query) {
-    const q = query.toLowerCase()
+  if (query.trim()) {
+    const q = query.trim().toLowerCase()
+    // a leading # is the tag itself, not a substring — what clicking one on a row searches for
+    if (q.startsWith('#')) return s.items.filter((i) => i.tags.includes(q.slice(1)))
+    // and a leading @ is the project, matched on the name's start the same way capture matches it
+    if (q.length > 1 && q.startsWith('@')) {
+      const p = s.projects.find((p) => p.name.toLowerCase().startsWith(q.slice(1)))
+      return p ? s.items.filter((i) => i.pid === p.id) : []
+    }
     return s.items.filter((i) =>
       `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(q))
   }
@@ -144,16 +239,45 @@ const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => ({
   ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)),
 })
 
-export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => ({ ...i, ...p })))
+// every edit routes through here, which is the one place that can hold the rule: a repeat needs
+// something to finish, so an item turned into an idea or a note drops it rather than keeping a
+// marker for a thing that will never come round
+export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
+  const next = { ...i, ...p }
+  return next.type === 'task' ? next : { ...next, repeat: null }
+}))
 
 export const select = (sel: string) => set((s) => ({ ...s, sel }))
 export const focus = (focus: string | null) => set((s) => ({ ...s, focus }))
 export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
 
-export const addItem = (it: Item) => set((s) => ({ ...s, items: [it, ...s.items] }))
+/** A pasted list is one write, not one per line — each `set` serialises the whole store. */
+export const addItems = (list: Item[]) => set((s) => ({ ...s, items: [...list, ...s.items] }))
 
-export const toggleDone = (id: string) =>
-  set(mapItem(id, (i) => ({ ...i, done: !i.done, doneAt: !i.done ? Date.now() : null })))
+export const addItem = (it: Item) => addItems([it])
+
+export function toggleDone(id: string) {
+  set((s) => {
+    const at = s.items.findIndex((i) => i.id === id)
+    if (at < 0) return s
+    const it = s.items[at]
+    const closing = !it.done
+    const items = s.items.map((i) =>
+      (i.id === id ? { ...i, done: closing, doneAt: closing ? Date.now() : null } : i))
+
+    // A repeating task doesn't end when you finish it: the one you ticked stays finished, so it
+    // still counts on Overview, and a fresh one takes its place at the same spot in the list.
+    // ponytail: reopening the finished one leaves the new one behind — untick, then delete it.
+    if (closing && it.repeat) {
+      // count from today when you are late, or a daily task finished a week late is born overdue
+      const from = it.due && it.due > today() ? it.due : today()
+      items.splice(at, 0, {
+        ...it, id: uid(), due: nextDue(from, it.repeat), done: false, doneAt: null, ts: Date.now(),
+      })
+    }
+    return { ...s, items }
+  })
+}
 
 /** Returns the removed item and its index so the caller can offer an undo. */
 export function removeItem(id: string) {

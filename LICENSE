@@ -1,0 +1,13 @@
+Copyright (c) 2026 pyvnoaim. All rights reserved.
+
+This source is published to be read, not to be taken. No licence is granted, so
+the default applies: you may look at it, and you may not copy, modify, publish,
+distribute or sell it, or any part of it, without written permission.
+
+Nothing here is a promise. The software is provided as is, with no warranty of
+any kind, and the author is liable for nothing that comes of running it.
+
+The parts that came from elsewhere are not covered by any of that and keep the
+licences they arrived with — among them Geist Pixel under OFL-1.1, whose terms
+sit beside the fonts in `src/fonts/OFL.txt`, and the dependencies listed in
+`package.json`, each under its own.

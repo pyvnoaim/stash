@@ -5,21 +5,19 @@ import { Calendar } from '@/components/ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
-import { dayLabel, today } from '@/lib/parse'
+import { addDays, dayLabel, today } from '@/lib/parse'
 
 /** Stash stores dates as local 'YYYY-MM-DD'; the calendar speaks Date. */
 const toDate = (due: string | null) => (due ? new Date(due + 'T00:00') : undefined)
 const toStamp = (d: Date) => d.toLocaleDateString('sv')
 
-const shift = (n: number) => {
-  const d = new Date(today() + 'T00:00')
-  d.setDate(d.getDate() + n)
-  return toStamp(d)
-}
+const shift = (n: number) => addDays(today(), n)
 
-export function DueField({ id, due, onPick }: {
+export function DueField({ id, due, placeholder, onPick }: {
   id?: string
   due: string | null
+  /** what no date reads as, for a selection whose rows disagree rather than share one */
+  placeholder?: string
   onPick: (due: string | null) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -41,7 +39,7 @@ export function DueField({ id, due, onPick }: {
               <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">{due}</span>
             </>
           ) : (
-            'No date'
+            placeholder ?? 'No date'
           )}
         </Button>
       </PopoverTrigger>

@@ -18,7 +18,7 @@ import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
   addProject, moveProject, OVERVIEW, patch, PDF, project, removeProject, renameProject,
-  select, useStash, VIEWS, type Item,
+  select, tagCounts, useStash, VIEWS, type Item,
 } from '@/lib/store'
 
 const VIEW_ICONS = {
@@ -30,7 +30,12 @@ const VIEW_ICONS = {
   done: CheckCheck,
 } as const
 
-export function AppSidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
+export function AppSidebar({ tag, onTag, onOpenPalette }: {
+  /** the tag being searched for, so the one you clicked stays lit */
+  tag: string
+  onTag: (tag: string) => void
+  onOpenPalette: () => void
+}) {
   const s = useStash()
   const { setOpenMobile } = useSidebar()
   const [dialog, setDialog] = useState<{ id?: string; name?: string } | null>(null)
@@ -117,6 +122,8 @@ export function AppSidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
 
   const doomed = project(s, confirmDelete)
 
+  const tags = tagCounts(s)
+
   return (
     <Sidebar collapsible="offcanvas">
       <SidebarHeader className="px-3 py-3">
@@ -198,6 +205,29 @@ export function AppSidebar({ onOpenPalette }: { onOpenPalette: () => void }) {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* no group at all until something is tagged — an empty heading is just furniture */}
+        {tags.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="font-heading tracking-wider uppercase">Tags</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {tags.map(([t, n]) => (
+                  <SidebarMenuItem key={t}>
+                    <SidebarMenuButton
+                      isActive={tag === t}
+                      onClick={() => { onTag(t); setOpenMobile(false) }}
+                    >
+                      <span className="text-muted-foreground ml-0.5 font-mono">#</span>
+                      <span className="truncate">{t}</span>
+                    </SidebarMenuButton>
+                    <SidebarMenuBadge>{n}</SidebarMenuBadge>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter>

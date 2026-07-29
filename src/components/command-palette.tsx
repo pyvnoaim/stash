@@ -1,14 +1,20 @@
+import { useEffect, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Download, Eraser, Flag, Inbox,
-  Layers, Monitor, Moon, Plus, Sun, Upload,
+  ArrowRight, CalendarClock, CalendarDays, ChartColumn, Check, CheckCheck, ClipboardCopy,
+  Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo, Monitor,
+  Moon, Plus, StickyNote, Sun, Upload,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem,
   CommandList, CommandSeparator, CommandShortcut,
 } from '@/components/ui/command'
-import { today } from '@/lib/parse'
-import { clearDone, getState, patch, select, setTheme, useStash, VIEWS, type Theme } from '@/lib/store'
+import { cn } from '@/lib/utils'
+import { today, tomorrow } from '@/lib/parse'
+import {
+  clearDone, getState, isPage, OVERVIEW, patch, PDF, project, select, setTheme, useStash,
+  viewName, VIEWS, visible, type Item, type State, type Theme,
+} from '@/lib/store'
 
 const VIEW_ICONS = {
   today: CalendarDays,
@@ -25,7 +31,32 @@ const THEMES: { id: Theme; label: string; icon: React.ElementType }[] = [
   { id: 'dark', label: 'Dark', icon: Moon },
 ]
 
+const PAGES = [
+  { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
+  { id: PDF, name: 'PDF', icon: FileText },
+]
+
 const trim = (t: string) => (t.length > 28 ? t.slice(0, 28) + '…' : t)
+
+/**
+ * The list as Markdown, in the same shorthand the capture field reads — so a line pasted back
+ * into Stash comes out the way it went in, and a list pasted anywhere else is a task list.
+ */
+function copyList() {
+  const s = getState()
+  const items = visible(s, '')
+  const lines = items.map((i) => {
+    const box = i.type === 'task' ? (i.done ? '[x] ' : '[ ] ') : ''
+    const bits = [
+      i.flag && '!', i.text, ...i.tags.map((t) => `#${t}`), i.due, i.repeat && `every ${i.repeat}`,
+    ]
+    return `- ${box}${bits.filter(Boolean).join(' ')}`
+  })
+  navigator.clipboard.writeText(`## ${viewName(s)}\n\n${lines.join('\n')}\n`).then(
+    () => toast(`Copied ${items.length} ${items.length === 1 ? 'item' : 'items'}`),
+    (err: Error) => toast('Copy failed', { description: err.message }),
+  )
+}
 
 export function exportBackup() {
   const url = URL.createObjectURL(
@@ -36,17 +67,35 @@ export function exportBackup() {
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
+/** Everything a search should look at, written the way you would type it. */
+const hay = (s: State, i: Item) => [
+  i.text, i.note, ...i.tags.map((t) => `#${t}`), project(s, i.pid)?.name,
+].filter(Boolean).join(' ').toLowerCase()
+
 export function CommandPalette({
-  open, onOpenChange, onNewProject, onImport,
+  open, onOpenChange, ids, onNewProject, onImport, onJump,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
+  /** What the commands act on: one focused row, or every row of a multi-row selection. */
+  ids: string[]
   onNewProject: () => void
   onImport: () => void
+  onJump: (it: Item) => void
 }) {
   const s = useStash()
-  const it = s.items.find((i) => i.id === s.focus)
+  const [q, setQ] = useState('')
+  useEffect(() => { if (!open) setQ('') }, [open])
+
+  // two letters in, because one letter matches half of everything and the list is not the point
+  const found = q.trim().length < 2 ? []
+    : s.items.filter((i) => hay(s, i).includes(q.trim().toLowerCase())).slice(0, 20)
+  const picked = ids.map((id) => s.items.find((i) => i.id === id)).filter((i) => !!i)
+  const it = picked[0]
   const run = (fn: () => void) => () => { onOpenChange(false); fn() }
+  const each = (p: Partial<typeof s.items[number]>) => () => picked.forEach((i) => patch(i.id, p))
+  // one flagged row and one not: flag the lot first, clearing takes a second pass
+  const allFlagged = picked.every((i) => i.flag)
 
   return (
     <CommandDialog
@@ -57,9 +106,20 @@ export function CommandPalette({
     >
       {/* CommandDialog drops children straight into DialogContent, so the cmdk root is ours to add */}
       <Command>
-        <CommandInput placeholder="Jump to a project, run a command" />
+        <CommandInput value={q} onValueChange={setQ} placeholder="Find an item, run a command" />
         <CommandList className="max-h-[60vh]">
           <CommandEmpty>Nothing matches that.</CommandEmpty>
+
+          <CommandGroup heading="Pages">
+            {PAGES.map(({ id, name, icon: Icon }) => (
+              <CommandItem key={id} value={`page ${name}`} onSelect={run(() => select(id))}>
+                <Icon />
+                <span>{name}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+
+          <CommandSeparator />
 
           <CommandGroup heading="Views">
             {Object.entries(VIEWS).map(([id, v]) => {
@@ -93,24 +153,70 @@ export function CommandPalette({
             </CommandItem>
           </CommandGroup>
 
+          {found.length > 0 && (
+            <>
+              <CommandSeparator />
+              {/* the id keeps two rows of the same text apart, and the rest is what cmdk scores on */}
+              <CommandGroup heading={found.length === 20 ? 'Items — first twenty' : 'Items'}>
+                {found.map((i) => {
+                  const Icon = i.type === 'idea' ? Lightbulb : i.type === 'note' ? StickyNote : ListTodo
+                  return (
+                    <CommandItem
+                      key={i.id}
+                      value={`item ${hay(s, i)} ${i.id}`}
+                      onSelect={run(() => onJump(i))}
+                    >
+                      <Icon className={i.done ? 'opacity-50' : ''} />
+                      <span className={cn('truncate', i.done && 'text-muted-foreground line-through')}>
+                        {i.text}
+                      </span>
+                      <CommandShortcut className="truncate">
+                        {project(s, i.pid)?.name ?? ''}
+                      </CommandShortcut>
+                    </CommandItem>
+                  )
+                })}
+              </CommandGroup>
+            </>
+          )}
+
           {it && (
             <>
               <CommandSeparator />
-              <CommandGroup heading={`Move “${trim(it.text)}”`}>
-                {s.projects.filter((p) => p.id !== it.pid).map((p) => (
+              <CommandGroup
+                heading={picked.length > 1 ? `${picked.length} selected` : `“${trim(it.text)}”`}
+              >
+                <CommandItem value="due today" onSelect={run(each({ due: today() }))}>
+                  <CalendarDays />
+                  <span>Due today</span>
+                  <CommandShortcut>t</CommandShortcut>
+                </CommandItem>
+                <CommandItem value="push snooze tomorrow" onSelect={run(each({ due: tomorrow() }))}>
+                  <CalendarClock />
+                  <span>Push to tomorrow</span>
+                  <CommandShortcut>s</CommandShortcut>
+                </CommandItem>
+                <CommandItem
+                  value="flag unflag"
+                  onSelect={run(each({ flag: !allFlagged }))}
+                >
+                  {allFlagged ? <FlagOff /> : <Flag />}
+                  <span>{allFlagged ? 'Clear flag' : 'Flag'}</span>
+                </CommandItem>
+                {s.projects.filter((p) => picked.some((i) => i.pid !== p.id)).map((p) => (
                   <CommandItem
                     key={p.id}
                     value={`move to ${p.name}`}
-                    onSelect={run(() => patch(it.id, { pid: p.id }))}
+                    onSelect={run(each({ pid: p.id }))}
                   >
                     <ArrowRight />
-                    <span>{p.name}</span>
+                    <span>Move to {p.name}</span>
                   </CommandItem>
                 ))}
-                {it.pid && (
-                  <CommandItem value="move to quick notes" onSelect={run(() => patch(it.id, { pid: null }))}>
+                {picked.some((i) => i.pid) && (
+                  <CommandItem value="move to quick notes" onSelect={run(each({ pid: null }))}>
                     <Inbox />
-                    <span>Quick notes</span>
+                    <span>Move to Quick notes</span>
                   </CommandItem>
                 )}
               </CommandGroup>
@@ -132,6 +238,13 @@ export function CommandPalette({
           <CommandSeparator />
 
           <CommandGroup heading="Data">
+            {/* a page has no list to copy, and an empty one would put a bare heading on the clipboard */}
+            {!isPage(s.sel) && visible(s, '').length > 0 && (
+              <CommandItem value="copy markdown list clipboard" onSelect={run(copyList)}>
+                <ClipboardCopy />
+                <span>Copy “{viewName(s)}” as Markdown</span>
+              </CommandItem>
+            )}
             <CommandItem value="export backup download" onSelect={run(exportBackup)}>
               <Download />
               <span>Export a backup</span>

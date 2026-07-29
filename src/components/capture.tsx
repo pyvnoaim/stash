@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { CornerDownLeft, Lightbulb, ListTodo, StickyNote } from 'lucide-react'
+import { toast } from 'sonner'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { dayLabel, parseCapture } from '@/lib/parse'
-import { addItem, project, uid, useStash, type ItemType } from '@/lib/store'
+import { dayLabel, parseCapture, parseList, repeatLabel, type Parsed } from '@/lib/parse'
+import { addItem, addItems, project, uid, useStash, type Item, type ItemType } from '@/lib/store'
 
 const TYPES = [
   { id: 'task', label: 'Task', icon: ListTodo },
@@ -23,27 +24,46 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
   const understood = [
     parsed.pid && project(s, parsed.pid)?.name,
     parsed.due && dayLabel(parsed.due),
+    parsed.repeat && repeatLabel(parsed.repeat),
     parsed.flag && 'flagged',
     ...parsed.tags.map((t) => '#' + t),
   ].filter(Boolean) as string[]
 
+  // a line off the clipboard brought its own checkbox, a typed one is whatever the toggle says
+  const make = (line: Parsed, done: boolean | null = null): Item => {
+    const kind = done === null ? type : 'task'
+    return {
+      id: uid(),
+      type: kind,
+      text: line.text,
+      note: '',
+      pid: line.pid ?? (project(s, s.sel) ? s.sel : null),
+      due: line.due,
+      repeat: kind === 'task' ? line.repeat : null,
+      flag: line.flag,
+      tags: line.tags,
+      done: !!done,
+      doneAt: done ? Date.now() : null,
+      ts: Date.now(),
+    }
+  }
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!parsed.text) return
-    addItem({
-      id: uid(),
-      type,
-      text: parsed.text,
-      note: '',
-      pid: parsed.pid ?? (project(s, s.sel) ? s.sel : null),
-      due: parsed.due,
-      flag: parsed.flag,
-      tags: parsed.tags,
-      done: false,
-      doneAt: null,
-      ts: Date.now(),
-    })
+    addItem(make(parsed))
     setRaw('')
+  }
+
+  /** More than one line off the clipboard is a list, not a title — take it a line at a time. */
+  const paste = (e: React.ClipboardEvent) => {
+    const text = e.clipboardData.getData('text')
+    if (!text.includes('\n')) return
+    const lines = parseList(text, s.projects)
+    if (!lines.length) return
+    e.preventDefault()
+    addItems(lines.map((l) => make(l, l.done)))
+    toast(`Added ${lines.length} ${lines.length === 1 ? 'item' : 'items'}`)
   }
 
   const here = project(s, s.sel)
@@ -79,6 +99,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
           ref={inputRef}
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
+          onPaste={paste}
           aria-label="Add an item"
           placeholder={here ? `Add to ${here.name}` : 'Add to Stash'}
           className="pl-3!"   // beats the group's own [&>input]:pl-1.5
