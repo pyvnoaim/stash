@@ -4,10 +4,13 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { PageViewport, RenderTask } from 'pdfjs-dist'
 import type { PDFFont } from '@cantoo/pdf-lib'
 import {
-  ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Highlighter, Loader2,
-  MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn, ZoomOut,
+  ChevronDown, ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Files, Highlighter,
+  Loader2, MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toggle } from '@/components/ui/toggle'
@@ -239,6 +242,7 @@ export default function Editor({ visible }: { visible: boolean }) {
      Either way the choice sticks, so a run of plain stamps stays plain. */
   const current = notes.find((n) => n.id === active) ?? null
   const shown = current ?? { size, fill, border, weight }
+  const styling = tool === 'text' || !!current
 
   const restyle = (patch: { size?: number; fill?: boolean; border?: boolean; weight?: number }) => {
     if (patch.size !== undefined) setSize(patch.size)
@@ -326,7 +330,7 @@ export default function Editor({ visible }: { visible: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* the app header above already names the tab, so this bar is only the file and its tools */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b px-4 py-2">
         <span className="text-muted-foreground max-w-40 truncate font-mono text-xs">
           {name}
         </span>
@@ -378,15 +382,27 @@ export default function Editor({ visible }: { visible: boolean }) {
 
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
-        <Button variant="outline" size="sm" onClick={insert}>
-          <FilePlus2 className="size-3.5" /> Blank page
-        </Button>
-        <Button variant="outline" size="sm" disabled={count < 2} onClick={drop}>
-          <Trash2 className="size-3.5" /> Delete page
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => mergeRef.current?.click()}>
-          <Upload className="size-3.5" /> Add a PDF
-        </Button>
+        {/* page work is occasional, so it folds away. Delete also reads better with a full
+            sentence next to it than as a bare bin you might hit while reaching for something */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm">
+              <Files className="size-3.5" /> Pages <ChevronDown className="size-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuItem onSelect={insert}>
+              <FilePlus2 /> Blank page after this one
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => mergeRef.current?.click()}>
+              <Upload /> Add another PDF to the end
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" disabled={count < 2} onSelect={drop}>
+              <Trash2 /> Delete page {page + 1}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
@@ -421,42 +437,47 @@ export default function Editor({ visible }: { visible: boolean }) {
           </ToggleGroupItem>
         </ToggleGroup>
 
-        <select
-          value={shown.size}
-          aria-label="Text size"
-          onChange={(e) => restyle({ size: Number(e.target.value) })}
-          className="border-input bg-background h-8 rounded-md border px-2 text-sm"
-        >
-          {SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
+        {/* only while they have something to act on: the Text tool is armed, or a stamp is
+            picked. In Select with nothing chosen they were four dead controls */}
+        {styling && (
+          <div className="flex items-center gap-1.5">
+            <select
+              value={shown.size}
+              aria-label="Text size"
+              onChange={(e) => restyle({ size: Number(e.target.value) })}
+              className="border-input bg-background h-8 rounded-md border px-2 text-sm"
+            >
+              {SIZES.map((n) => <option key={n} value={n}>{n}pt</option>)}
+            </select>
 
-        <Toggle
-          size="sm" pressed={shown.fill} aria-label="Yellow highlight"
-          onPressedChange={(v) => restyle({ fill: v })}
-        >
-          <Highlighter className="size-3.5" />
-        </Toggle>
-        <Toggle
-          size="sm" pressed={shown.border} aria-label="Red outline"
-          onPressedChange={(v) => restyle({ border: v })}
-        >
-          <Square className="size-3.5" />
-        </Toggle>
+            <Toggle
+              size="sm" pressed={shown.fill} title="Yellow highlight" aria-label="Yellow highlight"
+              onPressedChange={(v) => restyle({ fill: v })}
+            >
+              <Highlighter className="size-3.5" />
+            </Toggle>
+            <Toggle
+              size="sm" pressed={shown.border} title="Red outline" aria-label="Red outline"
+              onPressedChange={(v) => restyle({ border: v })}
+            >
+              <Square className="size-3.5" />
+            </Toggle>
 
-        <select
-          value={shown.weight}
-          aria-label="Outline thickness"
-          disabled={!shown.border}
-          onChange={(e) => restyle({ weight: Number(e.target.value) })}
-          className="border-input bg-background h-8 rounded-md border px-2 text-sm
-            disabled:opacity-50"
-        >
-          {WEIGHTS.map((n) => <option key={n} value={n}>{n}pt</option>)}
-        </select>
+            {/* a thickness picker means nothing without an outline to thicken */}
+            {shown.border && (
+              <select
+                value={shown.weight}
+                aria-label="Outline thickness"
+                onChange={(e) => restyle({ weight: Number(e.target.value) })}
+                className="border-input bg-background h-8 rounded-md border px-2 text-sm"
+              >
+                {WEIGHTS.map((n) => <option key={n} value={n}>{n}pt</option>)}
+              </select>
+            )}
+          </div>
+        )}
 
-        <span className="ml-auto" />
-
-        <Button size="sm" disabled={busy || drawing} onClick={download}>
+        <Button className="ml-auto" size="sm" disabled={busy || drawing} onClick={download}>
           {/* baking redraws every stamp into the file, which on a long document is a wait */}
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
           {busy ? 'Preparing…' : 'Download'}
