@@ -77,34 +77,50 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
           className={cn(
             'group flex items-start gap-2.5 rounded-md px-2.5 py-2',
             'transition-[opacity,background-color] duration-100 ease-out',
-            'hover:bg-muted/60',
+            // the whole row is the handle, so the closed hand only shows once you take hold of it
+            'hover:bg-muted/60 active:cursor-grabbing',
             marked && 'bg-accent/50 hover:bg-accent/50',
             selected && 'bg-accent hover:bg-accent',
-            lifting && 'opacity-40',
+            lifting && 'cursor-grabbing opacity-40',
             over === 'above' && 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]',
             over === 'below' && 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]',
           )}
         >
           {/* no title attr: a native tooltip goes stale when React swaps it under an open one.
-              self-stretch, so it is a rail down the whole entry rather than a stub beside the
-              first line — a fixed h-3 looked cut off the moment a note made the row taller */}
+              A plain row gets the same 3.5 mark the sidebar draws beside the project it names,
+              centred on the title's line box; a note is the only thing that runs it the full height */}
+          {/* py-[3px] is the same inset the plain row gets for free — a 3.5 mark in a 5 line box
+              — so the tall one stops short of the edges by the same amount instead of running
+              the whole way down */}
           <span
-            className={cn('bg-muted-foreground w-[2px] shrink-0 self-stretch rounded-full', !filed && 'invisible')}
-          />
-
-          {it.type === 'task' ? (
-            <Checkbox
-              checked={it.done}
-              aria-label="Done"
-              className="mt-0.5"
-              onClick={(e) => e.stopPropagation()}
-              onCheckedChange={() => toggleDone(it.id)}
+            className={cn('flex shrink-0 items-center', note.length ? 'self-stretch py-[3px]' : 'h-5')}
+          >
+            <span
+              style={filed?.color ? { backgroundColor: filed.color } : undefined}
+              className={cn(
+                'bg-muted-foreground w-[2px] rounded-full',
+                note.length ? 'h-full' : 'h-3.5',
+                !filed && 'invisible',
+              )}
             />
-          ) : (
-            <span className="text-muted-foreground mt-0.5 flex size-4 shrink-0 items-center justify-center">
-              {it.type === 'idea' ? <Lightbulb className="size-3.5" /> : <StickyNote className="size-3.5" />}
-            </span>
-          )}
+          </span>
+
+          {/* the same rule the mark and the trailing metadata follow: centred on the title's line
+              when that is the row, centred on the row once a note makes it taller */}
+          <span className={cn('flex shrink-0 items-center', note.length ? 'self-stretch' : 'h-5')}>
+            {it.type === 'task' ? (
+              <Checkbox
+                checked={it.done}
+                aria-label="Done"
+                onClick={(e) => e.stopPropagation()}
+                onCheckedChange={() => toggleDone(it.id)}
+              />
+            ) : (
+              <span className="text-muted-foreground flex size-4 items-center justify-center">
+                {it.type === 'idea' ? <Lightbulb className="size-3.5" /> : <StickyNote className="size-3.5" />}
+              </span>
+            )}
+          </span>
 
           <div className="flex min-w-0 flex-1 flex-col">
             <span className={cn('truncate text-sm', it.done && 'text-muted-foreground line-through')}>

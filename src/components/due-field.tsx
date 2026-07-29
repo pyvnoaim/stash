@@ -51,20 +51,25 @@ export function DueField({ id, due, placeholder, onPick }: {
           <Button size="sm" variant="ghost" className="flex-1" onClick={() => set(shift(7))}>Next week</Button>
         </div>
         <Separator />
+        {/* pb-0 puts the rule straight under the last week. What is left below the numbers is the
+            day cell itself — 28px buttons around 14px glyphs — not padding. */}
         <Calendar
           mode="single"
           autoFocus
           defaultMonth={toDate(due)}
           selected={toDate(due)}
           onSelect={(d) => set(d ? toStamp(d) : null)}
+          className="p-2 pb-0"
         />
         {due && (
           <>
             <Separator />
+            {/* centred like the quick dates above it, and monochrome like everything else —
+                a destructive tint here reads as an error rather than as an action */}
             <Button
               size="sm"
               variant="ghost"
-              className="text-muted-foreground w-full justify-start rounded-t-none"
+              className="text-muted-foreground hover:text-foreground hover:bg-muted w-full rounded-t-none"
               onClick={() => set(null)}
             >
               <X className="size-3.5" />

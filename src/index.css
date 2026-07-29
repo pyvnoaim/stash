@@ -150,6 +150,12 @@
     }
 }
 
+/* the browser's own selection blue is the one colour in the app nobody chose. A wash of the
+   foreground works in both themes and keeps the text its own colour, which a solid fill would not. */
+::selection {
+  background-color: color-mix(in oklch, var(--foreground) 20%, transparent);
+}
+
 /* the theme swap animates as a clip-path circle (see revealTheme); the default cross-fade would
    only muddy it, and the two roots must stack rather than blend */
 ::view-transition-old(root),

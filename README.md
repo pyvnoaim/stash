@@ -60,7 +60,8 @@ included. Everything else is searched across text, notes and tags.
 | `fonts @kova` | the same as the first — order does not matter |
 
 Click a `#tag` on a row to add it to the search, or pick one out of **Tags** in the sidebar, which
-lists every tag with something still open under it. Clicking a second one narrows further rather
+lists every tag in use with how much is still open under it — a tag whose work is all finished
+stays on the list at a dimmed 0 rather than disappearing out from under you. Clicking a second one narrows further rather
 than starting over, since that is what the terms do. The `@project` on a row opens that project
 instead — it is a place, not a filter.
 
@@ -119,9 +120,26 @@ command across twenty rows counts as editing all twenty, because it is.
 ## Sidebar and settings
 
 The lists come first, in the order work moves through them — **Quick notes**, **Today**,
-**Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Overview
-and PDF sit apart under **Tools**: neither is a list of items, one is a dashboard and one is a
-document editor.
+**Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Overview,
+Calendar and PDF sit apart under **Tools**: none of them is a list of items.
+
+Edit a project from the pencil on its row or from its right-click menu. A project can carry a
+colour: eight presets, a square and a hue slider behind the wheel, or a hex typed in — `#39f`,
+`3b82f6` and `#3B82F6` all mean the same thing, anything else means none. It paints the project's
+mark in the sidebar and the rail down the left of every item filed under it, which is the one
+thing the `@project` label on the right cannot tell you at a glance.
+
+Drag a project onto another to make it a sub-project, or onto the top or bottom edge of a row to
+sit beside it — which is also how one comes back out. The depth stops at two, so a project that
+already holds sub-projects has no middle zone to drop into. A parent's list shows its own items
+and its children's; deleting it promotes them rather than taking them with it.
+
+The projects group sorts five ways from the control beside its `+`: **Custom**, **A–Z**, **Z–A**,
+**Newest edit** and **Oldest edit**. A project has no timestamp of its own, so the edited pair
+goes by the newest touch of anything filed under it — one with nothing in it has never been
+touched, so it sinks under the first and rises under the second. Dragging a project is what makes
+the order yours, so it drops straight back to **Custom**, freezing whatever order you were looking
+at and landing the drop where you saw it land.
 
 **Settings** in the footer holds the theme and a card of every key. The theme is also a single
 button in the header that cycles system → light → dark, and the switch opens as a circle from
@@ -159,9 +177,23 @@ the list it is counting. Under them, thirty days of what you finished and a fort
 coming, so the page looks forward as well as back. Then where the open work sits: by project, by
 tag, and by kind. Click a project bar to go there, a tag bar to search for it.
 
+Under those, thirty days of what you captured, on the same window as what you finished, so the two
+read against each other: what you take on beside what you clear. It counts by capture date, so a
+week you finished everything in still shows the work going in.
+
 Every bar is a div. The charting library that drew the old one wanted 340KB — more than half the
 app — to lay out thirty rectangles, and it was the only reason this page had to be loaded
 separately at all.
+
+## Calendar
+
+The month, with the work sitting on the days it is due — the thing a list down a page cannot show.
+Items live in the cells, each carrying its project's colour; finished ones are struck through, and
+a busy day scrolls inside its own cell. Click one to open whichever list actually holds it.
+
+Only the weeks the month needs, five or six, so there is never a dead row. Days outside the month
+are tinted back, today's number is filled in, and the grid is ruled by its own gaps rather than by
+a border on every cell.
 
 ## PDF
 
@@ -208,7 +240,6 @@ is still in the file and still copies out.
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
 - `src/pdf/doc.ts` — every PDF operation, free of React and the DOM so `npm test` covers it
 - `src/pdf/editor.tsx` — the PDF tab: pdf.js draws it, the stamps are HTML on top until export
-- `legacy/` — the original four-file version with no build step. `python3 -m http.server` inside it still runs
 
 ## Backups
 
@@ -227,7 +258,8 @@ says so and offers the export, and it stays up until you dismiss it. Everything 
 as long as the tab is open; none of it is being kept.
 
 `⌘K → Export a backup` writes a JSON file; **Import a backup** replaces the current data with it.
-Backups from the `legacy/` version import fine — per-project colours are dropped, nothing else is.
+Backups from the original pre-React version import fine. It stored a project's colour as an HSL
+hue rather than a hex, so those are dropped and the projects come in uncoloured; nothing else is.
 
 ## License
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, ChartColumn, CheckCheck, ClipboardCopy,
+  ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
   Plus, StickyNote, Upload,
 } from 'lucide-react'
@@ -12,7 +12,7 @@ import {
 import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
-  clearDone, getState, isPage, OVERVIEW, patch, PDF, project, select, useStash,
+  CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, select, useStash,
   viewName, VIEWS, visible, type Item, type State,
 } from '@/lib/store'
 
@@ -27,6 +27,7 @@ const VIEW_ICONS = {
 
 const PAGES = [
   { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
+  { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
   { id: PDF, name: 'PDF', icon: FileText },
 ]
 
@@ -134,10 +135,15 @@ export function CommandPalette({
           <CommandGroup heading="Projects">
             {s.projects.map((p) => (
               <CommandItem key={p.id} value={`project ${p.name}`} onSelect={run(() => select(p.id))}>
-                <span className="bg-muted-foreground ml-0.5 h-3.5 w-[2px] shrink-0 rounded-full" />
-                <span className="truncate">{p.name}</span>
+                <span
+                  style={p.color ? { backgroundColor: p.color } : undefined}
+                  className="bg-muted-foreground ml-0.5 h-3.5 w-[2px] shrink-0 rounded-full"
+                />
+                <span className={cn('truncate', p.parent && 'text-muted-foreground')}>
+                  {p.parent ? `${project(s, p.parent)?.name} / ${p.name}` : p.name}
+                </span>
                 <CommandShortcut className="tabular-nums">
-                  {s.items.filter((i) => i.pid === p.id && !i.done).length || ''}
+                  {openIn(s, p.id) || ''}
                 </CommandShortcut>
               </CommandItem>
             ))}

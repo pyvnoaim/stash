@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import {
-  CalendarClock, CalendarDays, ChartColumn, CheckCheck, FileText, Flag, GripVertical,
-  Inbox, Layers, Monitor, Moon, Plus, Settings, Sun, Trash2,
+  ArrowDownAZ, ArrowDownZA, ArrowRight, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
+  ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox,
+  ChevronRight, Layers, Monitor, Moon, PencilLine, Plus, Settings, Sun, Trash2,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -9,18 +10,36 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger,
+} from '@/components/ui/context-menu'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction,
   SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuAction,
   SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, useSidebar,
 } from '@/components/ui/sidebar'
+import { Hint } from '@/components/ui/tooltip'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { cn, PROJECT_DRAG, revealTheme } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
-  addProject, moveProject, OVERVIEW, patch, PDF, project, removeProject, renameProject,
-  select, tagCounts, useStash, VIEWS, type Item, type Theme,
+  addProject, CALENDAR, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject,
+  canNest, childProjects, rootProjects, setProjectSort, tagCounts, toggleCollapsed, useStash,
+  VIEWS, type Item, type ProjectSort, type Theme,
 } from '@/lib/store'
+
+const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
+  // custom first: it is the one the drag writes, so it is the one you land back on
+  { id: 'manual', label: 'Custom', icon: GripVertical },
+  { id: 'name', label: 'A–Z', icon: ArrowDownAZ },
+  { id: 'name-desc', label: 'Z–A', icon: ArrowDownZA },
+  { id: 'edited', label: 'Newest edit', icon: ClockArrowDown },
+  { id: 'edited-asc', label: 'Oldest edit', icon: ClockArrowUp },
+]
 
 /* one button, three states: it shows where you are and clicking moves you on. ponytail: no way to
    jump straight from auto to dark — ⌘K lists all three when that matters. */
@@ -39,23 +58,26 @@ const VIEW_ICONS = {
   done: CheckCheck,
 } as const
 
-export function AppSidebar({ tag, onTag }: {
+export function AppSidebar({ tag, onTag, onNavigate }: {
   /** the tag being searched for, so the one you clicked stays lit */
   tag: string
   onTag: (tag: string) => void
+  /** select, plus dropping whatever search is up — App owns the search box, so it has to do it */
+  onNavigate: (id: string) => void
 }) {
   const s = useStash()
   const { setOpenMobile } = useSidebar()
-  const [dialog, setDialog] = useState<{ id?: string; name?: string } | null>(null)
+  const [dialog, setDialog] =
+    useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [settings, setSettings] = useState(false)
   const [over, setOver] = useState<string | null>(null)
-  const [edge, setEdge] = useState<{ id: string; after: boolean } | null>(null)
+  const [edge, setEdge] = useState<{ id: string; where: 'above' | 'below' | 'in' } | null>(null)
   // what is in flight. A ref, not a dataTransfer type: drags never leave this document, and
   // reading custom MIME types during dragover is the flakiest corner of the drag API
   const dragging = useRef<string | null>(null)
 
-  const go = (id: string) => { select(id); setOpenMobile(false) }
+  const go = (id: string) => { onNavigate(id); setOpenMobile(false) }
 
   // dropping a row on a destination is the whole point of the sidebar being a drop target.
   // Only where the drop means something — Upcoming, Everything and Done have nothing to set.
@@ -105,8 +127,13 @@ export function AppSidebar({ tag, onTag }: {
       e.dataTransfer.dropEffect = 'move'
       if (!dragging.current) { setOver(id); setEdge(null); return }
       if (dragging.current === id) return
+      /* the outer quarters reorder, the middle half nests — the same three zones every tree
+         drag uses. A project already holding children can only sit at the top, so for one of
+         those the middle is an edge too rather than a drop that would silently do nothing. */
       const box = e.currentTarget.getBoundingClientRect()
-      setEdge({ id, after: e.clientY > box.top + box.height / 2 })
+      const at = (e.clientY - box.top) / box.height
+      const nests = canNest(s, dragging.current)
+      setEdge({ id, where: at < 0.25 || (!nests && at < 0.5) ? 'above' : at > 0.75 || !nests ? 'below' : 'in' })
       setOver(null)
     },
     onDragLeave: (e: React.DragEvent) => {
@@ -114,18 +141,21 @@ export function AppSidebar({ tag, onTag }: {
     },
     onDrop: (e: React.DragEvent) => {
       const held = dragging.current
-      const after = edge?.id === id && edge.after
+      const where = edge?.id === id ? edge.where : 'below'
       clear()
-      if (held) return moveProject(held, id, after)
+      if (held) return moveProject(held, id, where)
       const itemId = e.dataTransfer.getData('text/plain')
       if (itemId) patch(itemId, { pid: id })
     },
     className: cn(
       'rounded-md transition-[box-shadow] duration-150 ease-out',
       over === id && 'ring-foreground/50 ring-1',
-      edge?.id === id && (edge.after
-        ? 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]'
-        : 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]'),
+      // the ring is "into this one", the line is "beside it" — the same pair the rows use
+      edge?.id === id && (edge.where === 'in'
+        ? 'ring-foreground/50 ring-1'
+        : edge.where === 'below'
+          ? 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]'
+          : 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]'),
     ),
   })
 
@@ -180,35 +210,111 @@ export function AppSidebar({ tag, onTag }: {
 
         <SidebarGroup>
           <SidebarGroupLabel className="font-heading tracking-wider uppercase">Projects</SidebarGroupLabel>
-          <SidebarGroupAction title="New project" onClick={() => setDialog({})}>
-            <Plus />
-          </SidebarGroupAction>
+          <Hint label="New project">
+            <SidebarGroupAction onClick={() => setDialog({})}>
+              <Plus />
+            </SidebarGroupAction>
+          </Hint>
+          <DropdownMenu>
+            <Hint label="Sort projects">
+              <DropdownMenuTrigger asChild>
+                {/* right-9 clears the + beside it: a group action is w-5 pinned at right-3 */}
+                <SidebarGroupAction className="right-9">
+                  <ArrowUpDown />
+                </SidebarGroupAction>
+              </DropdownMenuTrigger>
+            </Hint>
+            <DropdownMenuContent align="end">
+              <DropdownMenuRadioGroup
+                value={s.projectSort}
+                onValueChange={(v) => setProjectSort(v as ProjectSort)}
+              >
+                {SORTS.map(({ id, label, icon: Icon }) => (
+                  <DropdownMenuRadioItem key={id} value={id}>
+                    <Icon className="text-muted-foreground size-3.5" />
+                    {label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <SidebarGroupContent>
             <SidebarMenu>
-              {s.projects.map((p) => (
-                <SidebarMenuItem key={p.id} {...projectDrop(p.id)}>
+              {rootProjects(s).flatMap((root) => {
+                const kids = childProjects(s, root.id)
+                const shut = s.collapsed.includes(root.id)
+                return [root, ...(shut ? [] : kids)].map((p) => {
+                  const holds = p.id === root.id ? kids.length : 0
+                  return (
+                <ContextMenu key={p.id}>
+                <ContextMenuTrigger asChild>
+                <SidebarMenuItem {...projectDrop(p.id)}>
                   <SidebarMenuButton
                     isActive={s.sel === p.id}
+                    className={cn(p.parent && 'pl-6')}
                     onClick={() => go(p.id)}
-                    onDoubleClick={() => setDialog({ id: p.id, name: p.name })}
                   >
                     {/* the project's mark turns into a grip on hover: same spot, same size,
-                        so the row says it can be dragged without moving anything to say it */}
-                    <span className="relative ml-0.5 flex size-3.5 shrink-0 cursor-grab items-center justify-center">
-                      <span className="bg-muted-foreground h-3.5 w-[2px] rounded-full transition-opacity group-hover/menu-item:opacity-0" />
-                      <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />
+                        so the row says it can be dragged without moving anything to say it.
+                        A parent's turns into the fold instead — that is the more useful click. */}
+                    <span
+                      role={holds ? 'button' : undefined}
+                      aria-label={holds ? (shut ? `Show ${holds} under ${p.name}` : `Hide ${holds} under ${p.name}`) : undefined}
+                      onClick={holds ? (e) => { e.stopPropagation(); toggleCollapsed(p.id) } : undefined}
+                      className="relative ml-0.5 flex size-3.5 shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
+                    >
+                      <span
+                        style={p.color ? { backgroundColor: p.color } : undefined}
+                        className="bg-muted-foreground h-3.5 w-[2px] rounded-full transition-opacity group-hover/menu-item:opacity-0"
+                      />
+                      {holds
+                        ? <ChevronRight className={cn('absolute size-3.5 opacity-0 transition-[opacity,transform] group-hover/menu-item:opacity-100', !shut && 'rotate-90')} />
+                        : <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />}
                     </span>
                     <span className="truncate">{p.name}</span>
+                    {/* a shut parent says how much is folded under it, so nothing is simply gone */}
+                    {holds > 0 && shut && (
+                      <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">{holds}</span>
+                    )}
                   </SidebarMenuButton>
-                  <SidebarMenuAction
-                    title="Delete project"
-                    showOnHover
-                    onClick={() => setConfirmDelete(p.id)}
-                  >
-                    <Trash2 />
-                  </SidebarMenuAction>
+                  {/* right-7 clears the trash beside it: an action is w-5 pinned at right-1.
+                      The context menu has these too, but nothing on the row said it existed */}
+                  <Hint label="Edit project">
+                    <SidebarMenuAction
+                      showOnHover
+                      className="right-7"
+                      onClick={() => setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })}
+                    >
+                      <PencilLine />
+                    </SidebarMenuAction>
+                  </Hint>
+                  <Hint label="Delete project">
+                    <SidebarMenuAction showOnHover onClick={() => setConfirmDelete(p.id)}>
+                      <Trash2 />
+                    </SidebarMenuAction>
+                  </Hint>
                 </SidebarMenuItem>
-              ))}
+                </ContextMenuTrigger>
+                {/* the colour lived behind a double-click and nothing said so */}
+                <ContextMenuContent>
+                  <ContextMenuItem onSelect={() => setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })}>
+                    <PencilLine />
+                    Edit
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => go(p.id)}>
+                    <ArrowRight />
+                    Open
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem variant="destructive" onSelect={() => setConfirmDelete(p.id)}>
+                    <Trash2 />
+                    Delete
+                  </ContextMenuItem>
+                </ContextMenuContent>
+                </ContextMenu>
+                  )
+                })
+              })}
               {!s.projects.length && (
                 <p className="text-muted-foreground px-2 py-1 text-xs">
                   None yet. Press <span className="text-foreground">+</span> to add one.
@@ -233,7 +339,8 @@ export function AppSidebar({ tag, onTag }: {
                       <span className="text-muted-foreground ml-0.5 font-mono">#</span>
                       <span className="truncate">{t}</span>
                     </SidebarMenuButton>
-                    <SidebarMenuBadge>{n}</SidebarMenuBadge>
+                    {/* nothing open under it any more, but the tag and its finished work remain */}
+                    <SidebarMenuBadge className={cn(!n && 'opacity-40')}>{n}</SidebarMenuBadge>
                   </SidebarMenuItem>
                 ))}
               </SidebarMenu>
@@ -250,6 +357,12 @@ export function AppSidebar({ tag, onTag }: {
                 <SidebarMenuButton isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
                   <ChartColumn />
                   <span>Overview</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={s.sel === CALENDAR} onClick={() => go(CALENDAR)}>
+                  <CalendarRange />
+                  <span>Calendar</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
@@ -282,7 +395,10 @@ export function AppSidebar({ tag, onTag }: {
         open={!!dialog}
         onOpenChange={(v) => !v && setDialog(null)}
         initial={dialog?.name}
-        onSubmit={(name) => (dialog?.id ? renameProject(dialog.id, name) : addProject(name))}
+        initialColor={dialog?.color}
+        onSubmit={(name, color) => (
+          dialog?.id ? patchProject(dialog.id, { name, color }) : addProject(name, color)
+        )}
       />
 
       <AlertDialog open={!!doomed} onOpenChange={(v) => !v && setConfirmDelete(null)}>

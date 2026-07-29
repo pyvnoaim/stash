@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { addDays, dayLabel, today } from '@/lib/parse'
-import { select, tagCounts, useStash, type Item } from '@/lib/store'
+import { inProject, tagCounts, useStash, type Item } from '@/lib/store'
 
 const BACK = 30
 const AHEAD = 14
@@ -19,10 +20,17 @@ const short = (d: string) =>
   new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
 /** Headline numbers earn a tile, not a chart. Every one of them is a list you can open. */
-function Stat({ label, value, sub, to }: { label: string; value: number; sub?: string; to: string }) {
+function Stat({ label, value, sub, onOpen }: {
+  label: string
+  value: number
+  sub?: string
+  onOpen: () => void
+}) {
   return (
-    <button type="button" onClick={() => select(to)} className="text-left">
-      <Card className="hover:border-foreground/30 gap-0 py-4 transition-colors">
+    // h-full on both: the grid stretches the button, but the card inside was still sizing to its
+    // own content, so a tile without a sub line came up short beside the ones with one
+    <button type="button" onClick={onOpen} className="h-full text-left">
+      <Card className="hover:border-foreground/30 h-full gap-0 py-4 transition-colors">
         <CardContent className="px-4">
           <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
           <p className="mt-1 text-2xl tabular-nums">{value}</p>
@@ -72,17 +80,15 @@ function Days({ data, label }: { data: { day: string; n: number }[]; label: (d: 
     <div className="flex flex-col gap-2">
       <div className="border-border flex h-[150px] items-end gap-[3px] border-b">
         {data.map((d) => (
-          <div
-            key={d.day}
-            title={`${label(d.day)} — ${d.n}`}
-            className="flex h-full flex-1 flex-col justify-end"
-          >
-            {/* an empty day keeps a hairline, so a gap reads as nothing rather than as no data */}
-            <div
-              className={cn('rounded-t-[2px]', d.n ? 'bg-foreground' : 'bg-muted')}
-              style={{ height: d.n ? `${Math.max((d.n / max) * 100, 4)}%` : '2px' }}
-            />
-          </div>
+          <Hint key={d.day} label={`${label(d.day)} — ${d.n}`}>
+            <div className="flex h-full flex-1 flex-col justify-end">
+              {/* an empty day keeps a hairline, so a gap reads as nothing rather than as no data */}
+              <div
+                className={cn('rounded-t-[2px]', d.n ? 'bg-foreground' : 'bg-muted')}
+                style={{ height: d.n ? `${Math.max((d.n / max) * 100, 4)}%` : '2px' }}
+              />
+            </div>
+          </Hint>
         ))}
       </div>
       <div className="text-muted-foreground flex justify-between font-mono text-[10px] tabular-nums">
@@ -106,7 +112,10 @@ const Panel = ({ title, sub, children }: {
   </Card>
 )
 
-export default function Overview({ onTag }: { onTag: (tag: string) => void }) {
+export default function Overview({ onTag, onNavigate }: {
+  onTag: (tag: string) => void
+  onNavigate: (id: string) => void
+}) {
   const s = useStash()
   const t = today()
 
@@ -138,17 +147,31 @@ export default function Overview({ onTag }: { onTag: (tag: string) => void }) {
     return run(t, 0, AHEAD, (d) => open.filter((i) => i.due === d).length)
   }, [s.items, t])
 
+  /* what went in, against what came out. `ts` is when it was captured, so this counts everything
+     — finished, still open, tasks, ideas and notes alike — which is the point of the pairing. */
+  const made = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const i of s.items) {
+      const d = stamp(i.ts)
+      counts.set(d, (counts.get(d) ?? 0) + 1)
+    }
+    return run(t, -(BACK - 1), BACK, (d) => counts.get(d) ?? 0)
+  }, [s.items, t])
+
   const byProject = useMemo(() => {
     const open = s.items.filter((i) => !i.done)
-    const rows = s.projects.map((p) => ({ id: p.id, name: p.name, n: open.filter((i) => i.pid === p.id).length }))
+    // a parent's bar counts its sub-projects' work, the same as its list does
+    const rows = s.projects.map((p) => ({ id: p.id, name: p.name, n: open.filter(inProject(s, p.id)).length }))
     rows.push({ id: 'inbox', name: 'Quick notes', n: open.filter((i) => !i.pid).length })
     return rows.filter((r) => r.n > 0).sort((a, b) => b.n - a.n)
-  }, [s.items, s.projects])
+  }, [s])
 
-  // the busiest handful, since a tag list is long and flat and the tail says nothing
-  const tags = tagCounts(s).sort((a, b) => b[1] - a[1]).slice(0, TAGS)
+  // the busiest handful, since a tag list is long and flat and the tail says nothing. The panel
+  // is open work, so a tag with none left is not in it — the sidebar is where those still show.
+  const tags = tagCounts(s).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, TAGS)
 
   const finished = back.reduce((n, d) => n + d.n, 0)
+  const captured = made.reduce((n, d) => n + d.n, 0)
   const coming = ahead.reduce((n, d) => n + d.n, 0)
   const maxProject = Math.max(...byProject.map((r) => r.n), 1)
   const maxTag = Math.max(...tags.map(([, n]) => n), 1)
@@ -156,15 +179,15 @@ export default function Overview({ onTag }: { onTag: (tag: string) => void }) {
   return (
     <div className="flex flex-col gap-4 overflow-y-auto p-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Open" value={stats.open} sub={stats.open === 1 ? 'item' : 'items'} to="all" />
-        <Stat label="Due today" value={stats.dueToday} to="today" />
+        <Stat label="Open" value={stats.open} sub={stats.open === 1 ? 'item' : 'items'} onOpen={() => onNavigate('all')} />
+        <Stat label="Due today" value={stats.dueToday} onOpen={() => onNavigate('today')} />
         <Stat
           label="Overdue"
           value={stats.overdue}
           sub={stats.overdue ? 'needs a new date' : 'all clear'}
-          to="today"
+          onOpen={() => onNavigate('today')}
         />
-        <Stat label="Finished" value={stats.doneWeek} sub="last 7 days" to="done" />
+        <Stat label="Finished" value={stats.doneWeek} sub="last 7 days" onOpen={() => onNavigate('done')} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -186,11 +209,24 @@ export default function Overview({ onTag }: { onTag: (tag: string) => void }) {
         </Panel>
       </div>
 
+      {/* the same window as "Finished per day", so the two read against each other: what you take
+          on beside what you clear. A week of tall bars here and none there is the whole story. */}
+      <Panel
+        title="Captured per day"
+        sub={[
+          captured ? `${captured} in the last ${BACK} days` : `Nothing captured in the last ${BACK} days`,
+          captured && `${(captured / BACK).toFixed(1)} a day`,
+          `${finished} finished`,
+        ].filter(Boolean).join(' · ')}
+      >
+        <Days data={made} label={(d) => short(d)} />
+      </Panel>
+
       <div className={cn('grid gap-4', tags.length ? 'lg:grid-cols-3' : 'lg:grid-cols-2')}>
         <Panel title="Open by project" sub="Where the unfinished work sits">
           {byProject.length ? (
             byProject.map((r) => (
-              <BarRow key={r.id} name={r.name} n={r.n} max={maxProject} onClick={() => select(r.id)} />
+              <BarRow key={r.id} name={r.name} n={r.n} max={maxProject} onClick={() => onNavigate(r.id)} />
             ))
           ) : (
             <p className="text-muted-foreground text-sm">Nothing open anywhere.</p>

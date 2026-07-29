@@ -22,7 +22,28 @@ export interface Item {
   editedAt: number | null
 }
 
-export interface Project { id: string; name: string }
+export interface Project {
+  id: string
+  name: string
+  /** '#rrggbb' or null for none. The only place a project gets to be anything but grey. */
+  color: string | null
+  /**
+   * The project this one sits under, or null for a top-level one. One level only: a project with
+   * a parent cannot be given children. Two levels is a sidebar; more is a file tree.
+   */
+  parent: string | null
+}
+
+/** Six digits with a hash. Anything else — a name, a shorthand, junk out of a backup — is no colour. */
+export const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v)
+
+/* Every way a colour is set runs through here, not just the one on load. A value that only load()
+   cleans up is a value that looks fine all session and changes under you on the next reload. */
+const cleanColor = (v: unknown) => (isHex(v) ? v.toLowerCase() : null)
+
+/** Manual is the drag order the sidebar has always had; the other two are derived on the way past. */
+export const PROJECT_SORTS = ['manual', 'name', 'name-desc', 'edited', 'edited-asc'] as const
+export type ProjectSort = (typeof PROJECT_SORTS)[number]
 
 export interface State {
   v: 1
@@ -31,6 +52,9 @@ export interface State {
   sel: string
   focus: string | null
   theme: Theme
+  projectSort: ProjectSort
+  /** Parent projects folded shut in the sidebar. */
+  collapsed: string[]
 }
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
@@ -50,8 +74,9 @@ export const isView = (id: string): id is ViewId => id in VIEWS
 
 /** Not filtered lists, so they stay out of VIEWS and App renders each on its own. */
 export const OVERVIEW = 'overview'
+export const CALENDAR = 'calendar'
 export const PDF = 'pdf'
-const PAGES: string[] = [OVERVIEW, PDF]
+const PAGES: string[] = [OVERVIEW, CALENDAR, PDF]
 export const isPage = (id: string) => PAGES.includes(id)
 
 /** Everything `sel` is allowed to be, which is also everything the URL hash may name. */
@@ -61,7 +86,10 @@ export const isRoute = (s: Pick<State, 'projects'>, id: string) =>
 const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
-const blank = (): State => ({ v: 1, projects: [], items: [], sel: 'today', focus: null, theme: 'auto' })
+const blank = (): State => ({
+  v: 1, projects: [], items: [], sel: 'today', focus: null, theme: 'auto',
+  projectSort: 'manual', collapsed: [],
+})
 
 // Every way data enters — localStorage, an imported backup — comes through here.
 export function load(data: unknown): State {
@@ -70,7 +98,20 @@ export function load(data: unknown): State {
 
   st.projects = (Array.isArray(st.projects) ? st.projects : [])
     .filter((p) => p && p.id)
-    .map((p) => ({ id: String(p.id), name: String(p.name || 'Project') }))
+    .map((p) => ({
+      id: String(p.id),
+      name: String(p.name || 'Project'),
+      color: cleanColor(p.color),
+      parent: typeof p.parent === 'string' ? p.parent : null,
+    }))
+
+  /* A parent has to exist, cannot be the project itself, and cannot have a parent of its own.
+     That last rule is what keeps the depth at two without walking a chain looking for cycles —
+     a backup naming a grandparent, or two projects naming each other, simply comes back flat. */
+  const tops = new Set(st.projects.filter((p) => !p.parent || p.parent === p.id).map((p) => p.id))
+  st.projects = st.projects.map((p) => (
+    p.parent && p.parent !== p.id && tops.has(p.parent) ? p : { ...p, parent: null }
+  ))
 
   st.items = (Array.isArray(st.items) ? st.items : [])
     .filter((i) => i && i.id)
@@ -97,6 +138,8 @@ export function load(data: unknown): State {
 
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
+  if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'
+  st.collapsed = Array.isArray(st.collapsed) ? st.collapsed.map(String) : []
   return st
 }
 
@@ -119,8 +162,10 @@ export const getState = () => state
 
 let warned = false
 
-function commit(next: State) {
-  state = next
+let pending: ReturnType<typeof setTimeout> | undefined
+
+function save() {
+  pending = undefined
   try {
     localStorage.setItem(KEY, JSON.stringify(state))
   } catch {
@@ -128,8 +173,25 @@ function commit(next: State) {
     // which is the one failure worth interrupting for — App turns this into a toast, once.
     if (!warned) { warned = true; dispatchEvent(new Event('stash:unsaved')) }
   }
-  listeners.forEach((fn) => fn())
 }
+
+/**
+ * The screen first, the disk a moment later. Writing meant serialising the whole store inside the
+ * event that caused it — a letter typed into a note, the drop at the end of a drag — and the
+ * browser could not paint until it finished. At most one write every 200ms instead.
+ */
+function commit(next: State) {
+  state = next
+  listeners.forEach((fn) => fn())
+  if (pending === undefined) pending = setTimeout(save, 200)
+}
+
+// ...but a tab closing inside that window must not take the last edit with it
+addEventListener('pagehide', () => {
+  if (pending === undefined) return
+  clearTimeout(pending)
+  save()
+})
 
 /* ---------- undo: fifty steps, the same as the PDF tab's ---------- */
 
@@ -199,23 +261,81 @@ export const useStash = () => useSyncExternalStore(subscribe, getState)
 
 export const project = (s: State, id: string | null) => s.projects.find((p) => p.id === id)
 
+const PAGE_NAMES: Record<string, string> = { [OVERVIEW]: 'Overview', [CALENDAR]: 'Calendar', [PDF]: 'PDF' }
+
 export const viewName = (s: State) =>
-  s.sel === OVERVIEW ? 'Overview'
-    : s.sel === PDF ? 'PDF'
-      : isView(s.sel) ? VIEWS[s.sel].name
-        : project(s, s.sel)?.name ?? 'Everything'
+  PAGE_NAMES[s.sel]
+    ?? (isView(s.sel) ? VIEWS[s.sel].name : project(s, s.sel)?.name ?? 'Everything')
 
 export const isGrouped = (s: State) => isView(s.sel) && 'grouped' in VIEWS[s.sel]
 
 /**
- * Every tag with something still open under it, and how much, alphabetical. Derived on the way
- * past — the sidebar lists them, the search field completes them, nothing is kept in sync.
+ * Every tag in use and how much of it is still open, alphabetical. Finished work keeps the tag on
+ * the list at 0 rather than deleting it out from under you — searching `#tag` still finds it, so
+ * the shortcut should not vanish the moment you tick the last one. Derived on the way past: the
+ * sidebar lists them, the search field completes them, nothing is kept in sync.
  */
-export const tagCounts = (s: State): [string, number][] =>
-  [...s.items.filter((i) => !i.done)
-    .flatMap((i) => i.tags)
-    .reduce((m, t) => m.set(t, (m.get(t) ?? 0) + 1), new Map<string, number>())]
-    .sort(([a], [b]) => a.localeCompare(b))
+export const tagCounts = (s: State): [string, number][] => {
+  const counts = new Map<string, number>()
+  for (const i of s.items) {
+    for (const t of i.tags) counts.set(t, (counts.get(t) ?? 0) + (i.done ? 0 : 1))
+  }
+  return [...counts].sort(([a], [b]) => a.localeCompare(b))
+}
+
+/**
+ * The sidebar's project list in whatever order is set. The edited pair goes by the most recent
+ * touch of anything filed under it — a project has no timestamp of its own, and the work inside
+ * it is what "recent" could honestly mean. One with nothing in it has never been touched, so it
+ * sinks under `edited` and rises under `edited-asc`, which is the same statement twice.
+ */
+function sortProjects(s: State, list: Project[]): Project[] {
+  if (s.projectSort === 'name' || s.projectSort === 'name-desc') {
+    const dir = s.projectSort === 'name' ? 1 : -1
+    return [...list].sort((a, b) => dir * a.name.localeCompare(b.name))
+  }
+  if (s.projectSort === 'edited' || s.projectSort === 'edited-asc') {
+    const touched = new Map(s.projects.map((p) => [p.id, 0]))
+    const bump = (id: string, at: number) => {
+      if (at > (touched.get(id) ?? 0)) touched.set(id, at)
+    }
+    for (const i of s.items) {
+      if (i.pid === null) continue
+      const at = Math.max(i.editedAt ?? 0, i.ts)
+      bump(i.pid, at)
+      // work in a sub-project is work in its parent, or a busy parent would sort as untouched
+      const up = s.projects.find((p) => p.id === i.pid)?.parent
+      if (up) bump(up, at)
+    }
+    const dir = s.projectSort === 'edited' ? -1 : 1
+    return [...list].sort((a, b) => dir * ((touched.get(a.id) ?? 0) - (touched.get(b.id) ?? 0)))
+  }
+  return list
+}
+
+/** The top-level projects, in whatever order is set. */
+export const rootProjects = (s: State) => sortProjects(s, s.projects.filter((p) => !p.parent))
+
+/** What sits under one, in the same order. Empty for a sub-project — the depth stops at two. */
+export const childProjects = (s: State, id: string) =>
+  sortProjects(s, s.projects.filter((p) => p.parent === id))
+
+/** The sidebar's order read straight down, parents each followed by their own. */
+export const flatProjects = (s: State): Project[] =>
+  rootProjects(s).flatMap((p) => [p, ...childProjects(s, p.id)])
+
+/**
+ * A project and everything filed under it — a parent's list includes its sub-projects' work.
+ * Every count and every list goes through this: a parent that reads as empty in one place and
+ * full in another is worse than either answer.
+ */
+export const inProject = (s: State, id: string) => {
+  const ids = new Set([id, ...s.projects.filter((p) => p.parent === id).map((p) => p.id)])
+  return (i: Item) => i.pid !== null && ids.has(i.pid)
+}
+
+/** How much is still open under a project, its sub-projects included. */
+export const openIn = (s: State, id: string) => s.items.filter((i) => !i.done && inProject(s, id)(i)).length
 
 /** Views that impose their own order. Dragging a row onto another can't reorder anything here. */
 export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done'
@@ -240,7 +360,9 @@ export function visible(s: State, query: string): Item[] {
       // and an @ is the project, matched on the name's start the same way capture matches it
       if (w.length > 1 && w.startsWith('@')) {
         const p = s.projects.find((p) => p.name.toLowerCase().startsWith(w.slice(1)))
-        list = p ? list.filter((i) => i.pid === p.id) : []
+        // the same reach as selecting it in the sidebar: `@development` has to mean its
+        // sub-projects too, or clicking and searching give two different answers
+        list = p ? list.filter(inProject(s, p.id)) : []
         continue
       }
       text.push(w)
@@ -251,7 +373,7 @@ export function visible(s: State, query: string): Item[] {
     return list.filter((i) =>
       `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(rest))
   }
-  const filter = isView(s.sel) ? VIEWS[s.sel].filter : (i: Item) => i.pid === s.sel
+  const filter = isView(s.sel) ? VIEWS[s.sel].filter : inProject(s, s.sel)
   const list = s.items.filter(filter)
   if (s.sel === 'done') return list.sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0))
   if (isGrouped(s)) return list.sort((a, b) => (a.due || '').localeCompare(b.due || ''))
@@ -276,6 +398,7 @@ export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
 export const select = (sel: string) => set((s) => ({ ...s, sel }))
 export const focus = (focus: string | null) => set((s) => ({ ...s, focus }))
 export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
+export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
 /** A pasted list is one write, not one per line — each `set` serialises the whole store. */
 export const addItems = (list: Item[]) => set((s) => ({ ...s, items: [...list, ...s.items] }))
@@ -361,30 +484,68 @@ export function moveBefore(dragId: string, targetId: string, after = false) {
   })
 }
 
-/** Drag a project onto another to set the sidebar's order. */
-export function moveProject(dragId: string, targetId: string, after = false) {
+/**
+ * Drag a project onto another to set the sidebar's order. Dragging is what makes the order yours,
+ * so it drops back to `manual` — and it reorders the list as shown, freezing the sorted order it
+ * was in, or the drop would land somewhere you weren't looking.
+ */
+/** Whether a project can go under a parent at all — the depth stops at two, in both directions. */
+export const canNest = (s: State, dragId: string) => !s.projects.some((p) => p.parent === dragId)
+
+export function moveProject(dragId: string, targetId: string, where: 'above' | 'below' | 'in') {
   set((s) => {
-    const done = reorder(s.projects, dragId, targetId, after)
-    return done ? { ...s, projects: done.next } : s
+    const target = s.projects.find((p) => p.id === targetId)
+    if (!target || dragId === targetId) return s
+
+    // onto a row makes it that row's child; above or below makes it that row's sibling, which is
+    // also the only way back out — dropping a sub-project beside a top-level one lifts it
+    const parent = where === 'in' ? target.id : target.parent
+    if (parent && !canNest(s, dragId)) return s
+
+    const done = reorder(flatProjects(s), dragId, targetId, where !== 'above')
+    if (!done) return s
+    return {
+      ...s,
+      projects: done.next.map((p) => (p.id === dragId ? { ...p, parent } : p)),
+      projectSort: 'manual',
+      // dropping into a folded parent has to show what just went in
+      collapsed: where === 'in' ? s.collapsed.filter((c) => c !== target.id) : s.collapsed,
+    }
   })
 }
 
-export const addProject = (name: string) => {
-  const p = { id: uid(), name }
+export const addProject = (name: string, color: string | null = null, parent: string | null = null) => {
+  const p = { id: uid(), name, color: cleanColor(color), parent }
   set((s) => ({ ...s, projects: [...s.projects, p], sel: p.id }))
   return p
 }
 
-export const renameProject = (id: string, name: string) =>
-  set((s) => ({ ...s, projects: s.projects.map((p) => (p.id === id ? { ...p, name } : p)) }))
+/** Name and colour are the whole of a project, so one function edits it. */
+export const patchProject = (id: string, p: Partial<Project>) =>
+  set((s) => ({
+    ...s,
+    projects: s.projects.map((x) => (x.id === id
+      // 'color' in p, not p.color: clearing it is passing null, which a truthiness check would skip
+      ? { ...x, ...p, ...('color' in p && { color: cleanColor(p.color) }) }
+      : x)),
+  }))
 
-/** The project goes, its items don't — they fall back to Quick notes, same as an orphan on load. */
+/**
+ * The project goes, its items don't — they fall back to Quick notes, same as an orphan on load.
+ * Its sub-projects don't go either: they come up a level rather than vanishing with their parent.
+ */
 export const removeProject = (id: string) =>
   set((s) => ({
     ...s,
-    projects: s.projects.filter((p) => p.id !== id),
+    projects: s.projects.filter((p) => p.id !== id).map((p) => (p.parent === id ? { ...p, parent: null } : p)),
     items: s.items.map((i) => (i.pid === id ? { ...i, pid: null } : i)),
     sel: s.sel === id ? 'today' : s.sel,
+    collapsed: s.collapsed.filter((c) => c !== id),
   }))
+
+export const toggleCollapsed = (id: string) => set((s) => ({
+  ...s,
+  collapsed: s.collapsed.includes(id) ? s.collapsed.filter((c) => c !== id) : [...s.collapsed, id],
+}))
 
 export const replaceAll = (data: unknown) => set(load(data))

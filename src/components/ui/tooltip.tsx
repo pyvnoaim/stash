@@ -52,4 +52,21 @@ function TooltipContent({
   )
 }
 
-export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }
+/**
+ * A label on hover, for the places that would otherwise reach for a native `title` — unstyled,
+ * slow to appear, and gone the moment React swaps the element under it.
+ */
+function Hint({ label, side = "top", children }: {
+  label: React.ReactNode
+  side?: React.ComponentProps<typeof TooltipContent>["side"]
+  children: React.ReactNode
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side}>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+export { Hint, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger }

@@ -7,18 +7,21 @@ import { CommandPalette, exportBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
 import { Inspector, Selection } from '@/components/inspector'
 import { ItemRow } from '@/components/item-row'
+import CalendarPage from '@/components/calendar-page'
 import Overview from '@/components/overview'
 import { ProjectDialog } from '@/components/project-dialog'
 import { Input } from '@/components/ui/input'
+import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, focus, isGrouped, isPage, isSorted, moveBefore, OVERVIEW, patch, PDF, redo,
-  removeItem, replaceAll, restoreItem, select, tagCounts, toggleDone, undo, useStash, viewName,
-  VIEWS, visible,
+  addProject, CALENDAR, focus, isGrouped, isPage, isSorted, moveBefore, OVERVIEW, patch, PDF,
+  openIn, redo, removeItem, replaceAll, restoreItem, select, tagCounts, toggleDone, undo, useStash,
+  viewName, VIEWS, visible, type Item,
 } from '@/lib/store'
 
 // the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
@@ -65,7 +68,7 @@ export default function App() {
     if (word[0] === '#') return tagCounts(s).filter(([t]) => t.startsWith(rest)).map(([t, n]) => ['#' + t, n])
     if (word[0] === '@') {
       return s.projects.filter((p) => p.name.toLowerCase().startsWith(rest))
-        .map((p) => ['@' + p.name.toLowerCase(), s.items.filter((i) => i.pid === p.id && !i.done).length])
+        .map((p) => ['@' + p.name.toLowerCase(), openIn(s, p.id)])
     }
     return []
   }, [query, s])
@@ -90,6 +93,10 @@ export default function App() {
 
   /* the marks name rows in the list you were looking at, and this is no longer that list */
   useEffect(() => setMarked([]), [s.sel, query])
+
+  /* a view was picked — the sidebar, ⌘K, an Overview tile, the back button. A search overlays
+     every list and both pages, so leaving it up makes the new view look like it never took. */
+  useEffect(() => { setQuery('') }, [s.sel])
 
   /* the disk has stopped taking writes — a full quota, or Safari's private mode. Everything
      still works and none of it is being kept, so it says so and offers the way out. */
@@ -127,6 +134,19 @@ export default function App() {
     })
   }
 
+  /* Every deliberate navigation, from wherever. The effect below catches the hash and the back
+     button, but it only fires when `sel` actually changes — and clicking Everything while already
+     on Everything with a tag search up is exactly the case where it does not. */
+  const goTo = (id: string) => { setQuery(''); select(id) }
+
+  /** Land on an item from somewhere that is not a list — ⌘K, the calendar. */
+  const jumpTo = (it: Item) => {
+    // whichever list actually holds it — its project keeps finished work, the views don't
+    setQuery('')
+    select(it.pid ?? (it.done ? 'done' : 'all'))
+    focus(it.id)
+  }
+
   /** Click picks one row, shift-click paints from the anchor to the row you hit. */
   const pick = (id: string, range: boolean) => {
     const from = items.findIndex((i) => i.id === s.focus)
@@ -135,6 +155,8 @@ export default function App() {
     setMarked(items.slice(Math.min(from, to), Math.max(from, to) + 1).map((i) => i.id))
   }
 
+  /* Anything bound here belongs in SHORTCUTS (src/lib/keys.ts) in the same commit — that list
+     is what the Settings card shows, and it cannot tell when this stops matching it. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const cmd = e.metaKey || e.ctrlKey
@@ -235,11 +257,14 @@ export default function App() {
   let group: string | null = null
 
   return (
+    // delayDuration: the shipped default is 0, which fires a tooltip at every passing cursor
+    <TooltipProvider delayDuration={400}>
     <SidebarProvider>
       {/* the sidebar tag is lit only while the search is that one tag and nothing else */}
       <AppSidebar
         tag={/^#[\w-]+$/.test(query.trim()) ? query.trim().slice(1) : ''}
         onTag={(t) => addTerm('#' + t)}
+        onNavigate={goTo}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden">
@@ -273,9 +298,9 @@ export default function App() {
                   type="button"
                   onClick={() => setPalette(true)}
                   title="Commands and item search"
-                  className="text-muted-foreground hover:text-foreground bg-muted absolute top-1/2 right-1.5 -translate-y-1/2 rounded px-1.5 py-1 font-mono text-xs"
+                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2"
                 >
-                  ⌘K
+                  <Kbd>⌘K</Kbd>
                 </button>
               )}
               {searching && hints.length > 0 && (
@@ -300,7 +325,9 @@ export default function App() {
           </header>
 
           {/* it draws its own bars now, so there is nothing heavy left to split off */}
-          {page === OVERVIEW && <Overview onTag={(t) => addTerm('#' + t)} />}
+          {page === OVERVIEW && <Overview onTag={(t) => addTerm('#' + t)} onNavigate={goTo} />}
+
+          {page === CALENDAR && <CalendarPage onOpen={jumpTo} />}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would
@@ -375,12 +402,7 @@ export default function App() {
         ids={chosen}
         onNewProject={() => setNewProject(true)}
         onImport={() => fileRef.current?.click()}
-        onJump={(it) => {
-          // whichever list actually holds it — its project keeps finished work, the views don't
-          setQuery('')
-          select(it.pid ?? (it.done ? 'done' : 'all'))
-          focus(it.id)
-        }}
+        onJump={jumpTo}
       />
 
       <ProjectDialog
@@ -403,5 +425,6 @@ export default function App() {
 
       <Toaster position="bottom-right" />
     </SidebarProvider>
+    </TooltipProvider>
   )
 }

@@ -10,7 +10,8 @@ Object.assign(globalThis, {
 
 const {
   addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
-  removeItem, removeProject, select, setTheme, toggleDone, undo, visible,
+  flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
+  toggleDone, undo, visible,
 } = await import('./store.ts')
 type Item = import('./store.ts').Item
 
@@ -25,7 +26,31 @@ for (const junk of [null, undefined, 42, 'nope', [], { items: 'no' }, { projects
 
 // projects: no id means dropped, no name means named
 const p = load({ projects: [{ id: 'a', name: 'Kova' }, { name: 'orphan' }, { id: 'b' }] }).projects
-assert.deepEqual(p, [{ id: 'a', name: 'Kova' }, { id: 'b', name: 'Project' }])
+assert.deepEqual(p, [
+  { id: 'a', name: 'Kova', color: null, parent: null },
+  { id: 'b', name: 'Project', color: null, parent: null },
+])
+
+/* A parent must exist, cannot be the project itself, and cannot have a parent of its own —
+   so a backup naming a grandparent or a cycle comes back flat rather than looping a render. */
+const nest = (projects: unknown[]) =>
+  load({ projects }).projects.map((x) => [x.id, x.parent])
+
+assert.deepEqual(nest([{ id: 'a' }, { id: 'b', parent: 'a' }]), [['a', null], ['b', 'a']])
+assert.deepEqual(nest([{ id: 'a', parent: 'gone' }]), [['a', null]])
+assert.deepEqual(nest([{ id: 'a', parent: 'a' }]), [['a', null]])
+// two naming each other, and a three-deep chain: both flatten to one level
+assert.deepEqual(nest([{ id: 'a', parent: 'b' }, { id: 'b', parent: 'a' }]), [['a', null], ['b', null]])
+assert.deepEqual(
+  nest([{ id: 'a' }, { id: 'b', parent: 'a' }, { id: 'c', parent: 'b' }]),
+  [['a', null], ['b', 'a'], ['c', null]],
+)
+
+// a colour is six digits and a hash, normalised — a name or a shorthand is not one
+for (const junk of ['red', '#39f', '3b82f6', '#3b82f', 7, null]) {
+  assert.equal(load({ projects: [{ id: 'a', color: junk }] }).projects[0].color, null)
+}
+assert.equal(load({ projects: [{ id: 'a', color: '#3B82F6' }] }).projects[0].color, '#3b82f6')
 
 // items: missing fields filled, wrong types coerced, unknown type falls back to task
 const [it] = load({ items: [{ id: 'x', type: 'chore', text: 5, tags: 'audio', done: 1 }] }).items
@@ -142,15 +167,15 @@ assert.deepEqual(order(), ['c', 'b', 'a'])
 /* ---------- projects reorder through the same helper ---------- */
 
 const names = () => getState().projects.map((p) => p.name)
-const [one, two, three] = ['One', 'Two', 'Three'].map(addProject)
+const [one, two, three] = ['One', 'Two', 'Three'].map((n) => addProject(n))
 assert.deepEqual(names(), ['One', 'Two', 'Three'])
 
-moveProject(three.id, one.id)          // last to the front
+moveProject(three.id, one.id, 'above')          // last to the front
 assert.deepEqual(names(), ['Three', 'One', 'Two'])
-moveProject(three.id, two.id, true)    // and back to the end
+moveProject(three.id, two.id, 'below')    // and back to the end
 assert.deepEqual(names(), ['One', 'Two', 'Three'])
-moveProject(one.id, one.id)            // onto itself, and onto one that is gone
-moveProject(one.id, 'nope')
+moveProject(one.id, one.id, 'below')            // onto itself, and onto one that is gone
+moveProject(one.id, 'nope', 'below')
 assert.deepEqual(names(), ['One', 'Two', 'Three'])
 
 // removing a project leaves the rest in order
@@ -239,6 +264,83 @@ assert.deepEqual(visible(getState(), '#design #audio').map((i) => i.id), [])
 assert.deepEqual(visible(getState(), '@kova #design').map((i) => i.id), ['inkova'])
 // a narrowing on its own still lists everything under it
 assert.deepEqual(visible(getState(), '@kova').map((i) => i.id).sort(), ['inkova', 'tagged'])
+
+/* ---------- sub-projects: one level, and a parent's list holds its children's work ---------- */
+
+wipe()
+getState().projects.slice().forEach((x) => removeProject(x.id))
+const main = addProject('Development')
+const sub = addProject('Kova', null, main.id)
+addItem(item({ id: 'up', pid: main.id }))
+addItem(item({ id: 'down', pid: sub.id }))
+
+select(main.id)
+assert.deepEqual(visible(getState(), '').map((i) => i.id).sort(), ['down', 'up'])
+select(sub.id)
+assert.deepEqual(visible(getState(), '').map((i) => i.id), ['down'])   // and not the other way
+
+// the sidebar reads parents each followed by their own
+assert.deepEqual(flatProjects(getState()).map((x) => x.name), ['Development', 'Kova'])
+
+// deleting the parent promotes the child rather than taking it down too
+removeProject(main.id)
+assert.deepEqual(getState().projects.map((x) => [x.name, x.parent]), [['Kova', null]])
+assert.equal(getState().items.find((i) => i.id === 'up')?.pid, null)   // its own items unfile
+assert.equal(getState().items.find((i) => i.id === 'down')?.pid, sub.id)
+removeProject(sub.id)
+
+/* ---------- project order: drag is custom, the other two are derived ---------- */
+
+// a colour set on the way in gets the same normalising a loaded one does — and so does an edit,
+// or it would look right all session and change under you on the next reload
+assert.equal(addProject('Tinted', '#EF4444').color, '#ef4444')
+assert.equal(addProject('Bare', 'not a colour').color, null)
+
+const tinted = getState().projects.find((p) => p.name === 'Tinted')!
+patchProject(tinted.id, { color: '#3B82F6' })
+assert.equal(getState().projects.find((p) => p.id === tinted.id)?.color, '#3b82f6')
+patchProject(tinted.id, { color: 'nope' })
+assert.equal(getState().projects.find((p) => p.id === tinted.id)?.color, null)
+// renaming must not quietly clear a colour it was never told about
+patchProject(tinted.id, { color: '#22c55e' })
+patchProject(tinted.id, { name: 'Renamed' })
+assert.equal(getState().projects.find((p) => p.id === tinted.id)?.color, '#22c55e')
+
+wipe()
+// wipe() only takes the items — the projects earlier blocks made are still standing
+getState().projects.slice().forEach((p) => removeProject(p.id))
+const zeta = addProject('Zeta')
+const alpha = addProject('Alpha')
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Zeta', 'Alpha'])  // as added
+
+setProjectSort('name')
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Alpha', 'Zeta'])
+setProjectSort('name-desc')
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Zeta', 'Alpha'])
+
+// a project is only as recent as the newest thing filed under it, and an empty one sinks
+setProjectSort('edited')
+addItem(item({ id: 'old', pid: zeta.id, ts: 100 }))
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Zeta', 'Alpha'])
+addItem(item({ id: 'new', pid: alpha.id, ts: 200 }))
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Alpha', 'Zeta'])
+// the counterpart is the same statement backwards
+setProjectSort('edited-asc')
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Zeta', 'Alpha'])
+// editing the older one is a touch, so its project comes forward under either
+setProjectSort('edited')
+patch('old', { text: 'touched' })
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Zeta', 'Alpha'])
+
+// dragging is what makes the order yours: it drops back to custom and keeps what you saw
+setProjectSort('name')
+moveProject(zeta.id, alpha.id, 'above')   // Zeta above Alpha, against the alphabet
+assert.equal(getState().projectSort, 'manual')
+assert.deepEqual(flatProjects(getState()).map((p) => p.name), ['Zeta', 'Alpha'])
+
+// and an unknown one out of a backup is not a sort
+assert.equal(load({ projectSort: 'sideways' }).projectSort, 'manual')
+assert.equal(load({ projectSort: 'name' }).projectSort, 'name')
 
 /* ---------- undo: one step per run of edits, and the view is not one of them ---------- */
 
