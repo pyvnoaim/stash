@@ -88,7 +88,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
           >
             <span
               aria-hidden
-              className="bg-muted absolute inset-y-0 left-0 w-1/3 rounded-md transition-transform duration-200 ease-out motion-reduce:transition-none"
+              className="bg-muted absolute inset-y-0 left-0 w-1/3 rounded-sm transition-transform duration-200 ease-out motion-reduce:transition-none"
               style={{ transform: `translateX(${TYPES.findIndex((t) => t.id === type) * 100}%)` }}
             />
             {/* labels stay visible: three options fit, and a hover-only label is a bug farm */}
@@ -98,7 +98,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
                 value={id}
                 aria-label={label}
                 // the pill draws the active background now, so the item's own must get out of its way
-                className="text-muted-foreground data-[state=on]:text-foreground relative z-10 h-7 w-full gap-1.5 rounded-md px-2 hover:bg-transparent data-[state=on]:bg-transparent"
+                className="text-muted-foreground data-[state=on]:text-foreground relative z-10 h-7 w-full gap-1.5 rounded-sm px-2 hover:bg-transparent data-[state=on]:bg-transparent"
                 // radix focuses the item on click and onValueChange hands focus straight back to the
                 // field — long enough for the focus ring to flash. Keyboard focus still lands normally.
                 onMouseDown={(e) => e.preventDefault()}

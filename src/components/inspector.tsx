@@ -1,4 +1,4 @@
-import { ExternalLink, Flag, Trash2, X } from 'lucide-react'
+import { ExternalLink, Flag, Maximize2, Trash2, X } from 'lucide-react'
 import { DueField } from '@/components/due-field'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
+import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { isRepeat, REPEATS, repeatLabel, today } from '@/lib/parse'
 import { patch, useStash, type Item, type ItemType } from '@/lib/store'
@@ -49,7 +50,7 @@ function Links({ it }: { it: Item }) {
   )
 }
 
-export function Inspector({ it, onDelete }: { it: Item; onDelete: () => void }) {
+export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () => void; onExpand: () => void }) {
   const s = useStash()
 
   /** Whatever is in the box joins the tags it already has, and the box empties for the next one. */
@@ -88,7 +89,20 @@ export function Inspector({ it, onDelete }: { it: Item; onDelete: () => void }) 
       </div>
 
       <div className="grid gap-2">
-        <Label htmlFor="i-note">Notes</Label>
+        <div className="flex items-center justify-between">
+          <Label htmlFor="i-note">Notes</Label>
+          {/* the panel is 300px; a long note gets the whole main area instead */}
+          <Hint label="Open as page">
+            <button
+              type="button"
+              aria-label="Open as page"
+              onClick={onExpand}
+              className="text-muted-foreground hover:text-foreground hover:bg-muted -my-1 cursor-pointer rounded-sm p-1"
+            >
+              <Maximize2 className="size-3.5" />
+            </button>
+          </Hint>
+        </div>
         <Textarea
           id="i-note"
           rows={7}

@@ -37,6 +37,19 @@ export function DueField({ id, due, placeholder, onPick }: {
             <>
               {dayLabel(due)}
               <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">{due}</span>
+              {/* nested clickable clears without opening the popover — no in-popover button, no dead space */}
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label="Clear date"
+                className="text-muted-foreground hover:text-foreground hover:bg-muted -mr-1 rounded-sm p-0.5"
+                onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPick(null) }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onPick(null) }
+                }}
+              >
+                <X className="size-3.5" />
+              </span>
             </>
           ) : (
             placeholder ?? 'No date'
@@ -44,39 +57,22 @@ export function DueField({ id, due, placeholder, onPick }: {
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent className="w-auto p-0" align="start">
+      <PopoverContent className="w-auto gap-0 p-0" align="start">
         <div className="flex gap-1 p-2">
           <Button size="sm" variant="ghost" className="flex-1" onClick={() => set(today())}>Today</Button>
           <Button size="sm" variant="ghost" className="flex-1" onClick={() => set(shift(1))}>Tomorrow</Button>
           <Button size="sm" variant="ghost" className="flex-1" onClick={() => set(shift(7))}>Next week</Button>
         </div>
         <Separator />
-        {/* pb-0 puts the rule straight under the last week. What is left below the numbers is the
-            day cell itself — 28px buttons around 14px glyphs — not padding. */}
+        {/* day glyphs are centred in their cells, so the last week sits balanced against the popover
+            edge rather than leaving a top-aligned gap below the numbers */}
         <Calendar
           mode="single"
-          autoFocus
           defaultMonth={toDate(due)}
           selected={toDate(due)}
           onSelect={(d) => set(d ? toStamp(d) : null)}
-          className="p-2 pb-0"
+          className="p-2"
         />
-        {due && (
-          <>
-            <Separator />
-            {/* centred like the quick dates above it, and monochrome like everything else —
-                a destructive tint here reads as an error rather than as an action */}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-muted-foreground hover:text-foreground hover:bg-muted w-full rounded-t-none"
-              onClick={() => set(null)}
-            >
-              <X className="size-3.5" />
-              Clear date
-            </Button>
-          </>
-        )}
       </PopoverContent>
     </Popover>
   )

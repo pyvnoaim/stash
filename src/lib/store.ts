@@ -337,8 +337,11 @@ export const inProject = (s: State, id: string) => {
 /** How much is still open under a project, its sub-projects included. */
 export const openIn = (s: State, id: string) => s.items.filter((i) => !i.done && inProject(s, id)(i)).length
 
+/** The order kinds read in, in Everything: tasks to do, then ideas and notes to keep. */
+export const TYPE_RANK: Record<ItemType, number> = { task: 0, idea: 1, note: 2 }
+
 /** Views that impose their own order. Dragging a row onto another can't reorder anything here. */
-export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done'
+export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done' || s.sel === 'all'
 
 /**
  * A search is any number of #tag and @project narrowings plus whatever text is left over, in any
@@ -377,6 +380,8 @@ export function visible(s: State, query: string): Item[] {
   const list = s.items.filter(filter)
   if (s.sel === 'done') return list.sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0))
   if (isGrouped(s)) return list.sort((a, b) => (a.due || '').localeCompare(b.due || ''))
+  // Everything reads as sections by kind; sort is stable, so each kind keeps its own order
+  if (s.sel === 'all') return list.sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type])
   return list.sort((a, b) => Number(a.done) - Number(b.done)) // manual order, finished items sink
 }
 

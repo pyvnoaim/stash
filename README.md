@@ -117,6 +117,25 @@ flattened onto one line is a wall of half-sentences, not a preview. The panel's 
 an item was added and, once anything has actually been changed, when it was last edited. A bulk
 command across twenty rows counts as editing all twenty, because it is.
 
+## Notes
+
+The panel edits a note in its 300px column; the ⤢ in its header — **Open as page** — hands the
+whole main area to one item instead, for a note too long for that. It is the same `text` and `note`,
+so editing on the page and editing in the panel are one edit, and either shows the other's changes.
+
+The page starts in preview when there is already something to read and in edit when the note is
+empty and waiting. The ✏/👁 toggle in the header switches the two by hand. Select text in the
+editor and a small toolbar lands where the selection ended — heading (cycles 1→2→3→off), quote,
+bold, italic, underline, strikethrough, code and link — each wrapping the selection and leaving it
+selected inside the new marks, so a second press peels them back off.
+
+It is a small markdown renderer, not a full CommonMark one: headings, ordered and unordered lists,
+quotes, fenced code, and the inline marks notes actually use. It builds React elements rather than
+HTML, so there is no escaping to get wrong and no dependency to pull. Markdown has no underline, so
+`++x++` stands in for it. A link only renders as a real link for a safe scheme — `http`, `https`,
+`mailto`, or a same-page `/` or `#` — and anything else, `javascript:` or `data:`, is defanged to
+`#`.
+
 ## Sidebar and settings
 
 The lists come first, in the order work moves through them — **Quick notes**, **Today**,
@@ -236,7 +255,9 @@ is still in the file and still copies out.
 
 - `src/lib/parse.ts` — capture parser and date labels
 - `src/lib/store.ts` — state, validation on every load, actions. `useSyncExternalStore`, no state library
-- `src/components/` — sidebar, capture, row, inspector, command palette
+- `src/lib/markdown.ts` — the note renderer's DOM-free helpers, so `npm test` covers link safety
+- `src/components/` — sidebar, capture, row, inspector, command palette, the note page
+- `src/components/markdown.tsx` — the small markdown renderer for the note page
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
 - `src/pdf/doc.ts` — every PDF operation, free of React and the DOM so `npm test` covers it
 - `src/pdf/editor.tsx` — the PDF tab: pdf.js draws it, the stamps are HTML on top until export

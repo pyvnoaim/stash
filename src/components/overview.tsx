@@ -68,14 +68,22 @@ function BarRow({ name, n, max, onClick }: {
   )
 }
 
+/** First / middle / last day, the only x-labels a 150px strip has room for. */
+const Axis = ({ data }: { data: { day: string }[] }) => {
+  const ends = [data[0], data[Math.floor(data.length / 2)], data[data.length - 1]]
+  return (
+    <div className="text-muted-foreground flex justify-between font-mono text-[10px] tabular-nums">
+      {ends.map((d, n) => <span key={d.day + n}>{short(d.day)}</span>)}
+    </div>
+  )
+}
+
 /**
  * A run of days as bars. Divs and one flex row: recharts wanted 340KB of the bundle to draw the
  * same thirty rectangles, and this page was code-split solely to keep that weight off the app.
  */
 function Days({ data, label }: { data: { day: string; n: number }[]; label: (d: string) => string }) {
   const max = Math.max(...data.map((d) => d.n), 1)
-  const ends = [data[0], data[Math.floor(data.length / 2)], data[data.length - 1]]
-
   return (
     <div className="flex flex-col gap-2">
       <div className="border-border flex h-[150px] items-end gap-[3px] border-b">
@@ -91,9 +99,44 @@ function Days({ data, label }: { data: { day: string; n: number }[]; label: (d: 
           </Hint>
         ))}
       </div>
-      <div className="text-muted-foreground flex justify-between font-mono text-[10px] tabular-nums">
-        {ends.map((d, n) => <span key={d.day + n}>{short(d.day)}</span>)}
+      <Axis data={data} />
+    </div>
+  )
+}
+
+/**
+ * The same run of days as a filled line — a continuous flow reads as a trend rather than as counts.
+ * SVG is drawn in a 0..100 box and stretched (preserveAspectRatio="none"); the stroke stays 1.5px
+ * via vector-effect. An invisible flex row on top reuses Hint, so every day still hovers.
+ */
+function Trend({ data, label }: { data: { day: string; n: number }[]; label: (d: string) => string }) {
+  const max = Math.max(...data.map((d) => d.n), 1)
+  const pts = data.map((d, i) => [data.length > 1 ? (i / (data.length - 1)) * 100 : 0, 100 - (d.n / max) * 100])
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x} ${y}`).join(' ')
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="border-border relative h-[150px] border-b">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+          <path d={`${line} L100 100 L0 100 Z`} className="fill-foreground/10" />
+          <path
+            d={line}
+            className="stroke-foreground fill-none"
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+        <div className="absolute inset-0 flex">
+          {data.map((d) => (
+            <Hint key={d.day} label={`${label(d.day)} — ${d.n}`}>
+              <div className="h-full flex-1" />
+            </Hint>
+          ))}
+        </div>
       </div>
+      <Axis data={data} />
     </div>
   )
 }
@@ -195,7 +238,7 @@ export default function Overview({ onTag, onNavigate }: {
           title="Finished per day"
           sub={finished ? `${finished} in the last ${BACK} days` : `Nothing finished in the last ${BACK} days`}
         >
-          <Days data={back} label={(d) => short(d)} />
+          <Trend data={back} label={(d) => short(d)} />
         </Panel>
 
         <Panel
@@ -219,7 +262,7 @@ export default function Overview({ onTag, onNavigate }: {
           `${finished} finished`,
         ].filter(Boolean).join(' · ')}
       >
-        <Days data={made} label={(d) => short(d)} />
+        <Trend data={made} label={(d) => short(d)} />
       </Panel>
 
       <div className={cn('grid gap-4', tags.length ? 'lg:grid-cols-3' : 'lg:grid-cols-2')}>
