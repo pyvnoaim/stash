@@ -56,6 +56,9 @@ const loose = load({ items: [{ id: 'x', flag: 'yes', doneAt: 'now', ts: 'soon' }
 assert.equal(loose.flag, true)
 assert.equal(loose.doneAt, null)
 assert.equal(typeof loose.ts, 'number')
+// a backup written before editedAt existed reads as never edited, not as edited at NaN
+assert.equal(loose.editedAt, null)
+assert.equal(load({ items: [{ id: 'x', editedAt: 5 }] }).items[0].editedAt, 5)
 
 // an item pointing at a project that isn't there lands in Quick notes instead of going invisible
 const orphans = load({
@@ -82,7 +85,7 @@ assert.equal(load({ theme: 'neon' }).theme, 'auto')
 
 const item = (over: Partial<Item>): Item => ({
   id: 'x', type: 'task', text: 'x', note: '', pid: null, due: null, repeat: null,
-  flag: false, tags: [], done: false, doneAt: null, ts: 1, ...over,
+  flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null, ...over,
 })
 
 const proj = addProject('Kova')
@@ -192,6 +195,16 @@ addItem(item({ id: 'r2', repeat: 'week' }))
 patch('r2', { type: 'note' })
 assert.equal(getState().items[0].repeat, null)
 
+// an edit stamps the item; capturing one and finishing it are not edits
+wipe()
+addItem(item({ id: 'e1', repeat: 'day', due: '2026-01-01' }))
+assert.equal(getState().items[0].editedAt, null)
+toggleDone('e1')
+// the occurrence toggleDone opened is new, so it starts unedited too
+assert.deepEqual(getState().items.map((i) => i.editedAt), [null, null])
+patch('e1', { text: 'renamed' })
+assert.ok((getState().items.find((i) => i.id === 'e1')?.editedAt ?? 0) > 0)
+
 /* ---------- #tag search is the tag, plain search is a substring ---------- */
 
 wipe()
@@ -210,6 +223,22 @@ assert.deepEqual(visible(getState(), '@kov').map((i) => i.id), ['tagged'])
 assert.deepEqual(visible(getState(), '@nobody').map((i) => i.id), [])
 // a bare @ names no project, so it falls back to being a substring like any other search
 assert.deepEqual(visible(getState(), '@').map((i) => i.id), [])
+
+/* ---------- and the two compose: narrow by project or tag, then search inside it ---------- */
+
+addItem(item({ id: 'inkova', text: 'add fonts', tags: ['design'] }))
+patch('inkova', { pid: kova.id })
+
+// the project narrows, the leftover words are the search — in either order
+assert.deepEqual(visible(getState(), '@kova fonts').map((i) => i.id), ['inkova'])
+assert.deepEqual(visible(getState(), 'fonts @kova').map((i) => i.id), ['inkova'])
+// same word outside the project finds nothing, which is the whole point of narrowing
+assert.deepEqual(visible(getState(), '@nobody fonts').map((i) => i.id), [])
+// tags stack as ANDs, and stack with a project
+assert.deepEqual(visible(getState(), '#design #audio').map((i) => i.id), [])
+assert.deepEqual(visible(getState(), '@kova #design').map((i) => i.id), ['inkova'])
+// a narrowing on its own still lists everything under it
+assert.deepEqual(visible(getState(), '@kova').map((i) => i.id).sort(), ['inkova', 'tagged'])
 
 /* ---------- undo: one step per run of edits, and the view is not one of them ---------- */
 

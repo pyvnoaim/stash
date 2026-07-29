@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, ChartColumn, Check, CheckCheck, ClipboardCopy,
-  Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo, Monitor,
-  Moon, Plus, StickyNote, Sun, Upload,
+  ArrowRight, CalendarClock, CalendarDays, ChartColumn, CheckCheck, ClipboardCopy,
+  Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
+  Plus, StickyNote, Upload,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -12,8 +12,8 @@ import {
 import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
-  clearDone, getState, isPage, OVERVIEW, patch, PDF, project, select, setTheme, useStash,
-  viewName, VIEWS, visible, type Item, type State, type Theme,
+  clearDone, getState, isPage, OVERVIEW, patch, PDF, project, select, useStash,
+  viewName, VIEWS, visible, type Item, type State,
 } from '@/lib/store'
 
 const VIEW_ICONS = {
@@ -24,12 +24,6 @@ const VIEW_ICONS = {
   all: Layers,
   done: CheckCheck,
 } as const
-
-const THEMES: { id: Theme; label: string; icon: React.ElementType }[] = [
-  { id: 'auto', label: 'Match the system', icon: Monitor },
-  { id: 'light', label: 'Light', icon: Sun },
-  { id: 'dark', label: 'Dark', icon: Moon },
-]
 
 const PAGES = [
   { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
@@ -222,18 +216,6 @@ export function CommandPalette({
               </CommandGroup>
             </>
           )}
-
-          <CommandSeparator />
-
-          <CommandGroup heading="Appearance">
-            {THEMES.map(({ id, label, icon: Icon }) => (
-              <CommandItem key={id} value={`appearance ${label}`} onSelect={run(() => setTheme(id))}>
-                <Icon />
-                <span>{label}</span>
-                {s.theme === id && <Check className="ml-auto size-3.5" />}
-              </CommandItem>
-            ))}
-          </CommandGroup>
 
           <CommandSeparator />
 

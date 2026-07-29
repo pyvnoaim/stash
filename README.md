@@ -48,15 +48,26 @@ so a Markdown list off a page or an issue lands as a list. `- ` and `1. ` bullet
 `[ ]` or `[x]` box sets whether it is already finished, and headings and blank lines are not
 items. One line pastes as text, the way it always did.
 
-Click a `#tag` on a row to search for it, or pick one out of **Tags** in the sidebar, which
-lists every tag with something still open under it. A search that starts with `#` matches the tag
-itself rather than the letters, so `#audio` finds what is tagged *audio* and skips what merely
-mentions it. A search that starts with `@` is the project, matched on the start of its name the
-same way capture matches it — `@kova` is everything filed under Kova, finished work included.
+A search is any number of narrowings plus whatever text is left over, in any order. `#audio`
+matches the tag itself rather than the letters, so it skips what merely mentions the word. `@kova`
+is the project, matched on the start of its name the same way capture matches it, finished work
+included. Everything else is searched across text, notes and tags.
 
-Both say what they could mean while you type them: a `#` or an `@` in the field drops a list of
-the tags or projects that still match, each with what is open under it, and clicking one finishes
-the search off. Type past the last match and the list empties, which is the answer too.
+| You search | What you get |
+| --- | --- |
+| `@kova add fonts` | *add fonts* inside Kova only |
+| `#wartung #wsh` | tagged both, not either |
+| `fonts @kova` | the same as the first — order does not matter |
+
+Click a `#tag` on a row to add it to the search, or pick one out of **Tags** in the sidebar, which
+lists every tag with something still open under it. Clicking a second one narrows further rather
+than starting over, since that is what the terms do. The `@project` on a row opens that project
+instead — it is a place, not a filter.
+
+The field says what it could mean while you type: a `#` or an `@` drops a list of the tags or
+projects that still match, each with what is open under it, and clicking one finishes that word
+off and leaves you typing the next. Type past the last match and the list empties, which is the
+answer too.
 
 Each view has its own URL. The hash follows whatever you are looking at, so a reload lands where
 you left, back and forward walk the views you visited, and a link to `#flagged` opens there.
@@ -78,7 +89,7 @@ repeat, since finishing is what brings the next one round.
 
 | | |
 | --- | --- |
-| `⌘K` | commands — find an item, jump to a page or project, act on what is selected, copy the list, clear finished, export, appearance |
+| `⌘K` | commands — find an item, jump to a page or project, act on what is selected, copy the list, clear finished, export |
 | `⌘Z` `⇧⌘Z` | undo and redo the list, fifty steps deep |
 | `⌘N` | capture field |
 | `⌘F` | search everything, finished work included |
@@ -86,17 +97,36 @@ repeat, since finishing is what brings the next one round.
 | `⇧↑` `⇧↓` / `⇧J` `⇧K` | take the next row with you, and go back over one to leave it behind |
 | `t` `s` | due today, or pushed to tomorrow |
 | `space` | finish or reopen a task |
-| `⌫` | delete, with an undo in the toast |
+| `⌘⌫` | delete, with an undo in the toast |
 | `⌥↑` `⌥↓` | move the selected row up or down, where the order is yours to set |
 | `esc` | drop the selection, then the focus |
 
-Shift-click a row to take everything between it and the focused one. `space`, `t`, `s`, `⌫` and
+Shift-click a row to take everything between it and the focused one. `space`, `t`, `s`, `⌘⌫` and
 the ⌘K commands then act on all of them at once, and one undo puts a whole deleted run back. A
 right-click is the row's own menu, so it takes just that row. The panel on the right follows: one
 row shows its details, several show only what they have in common, and setting a field there sets
-it on the lot — a due date they disagree about reads *Mixed* rather than picking a side. The count
-in the header is the list; the one in the window title is what is due, since the dock icon carries
-no badge of its own.
+it on the lot — a due date they disagree about reads *Mixed* rather than picking a side, and the
+tag field only ever adds, since a shared list would wipe whatever each row had of its own. The
+count in the header is the list; the one in the window title is what is due, since the dock icon
+carries no badge of its own.
+
+Tags in the panel are chips: type and press `return` to add, `×` on a chip to take one off. A row
+carrying a note shows its first line under the title, with `+4` for the rest — the whole note
+flattened onto one line is a wall of half-sentences, not a preview. The panel's footer says when
+an item was added and, once anything has actually been changed, when it was last edited. A bulk
+command across twenty rows counts as editing all twenty, because it is.
+
+## Sidebar and settings
+
+The lists come first, in the order work moves through them — **Quick notes**, **Today**,
+**Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Overview
+and PDF sit apart under **Tools**: neither is a list of items, one is a dashboard and one is a
+document editor.
+
+**Settings** in the footer holds the theme and a card of every key. The theme is also a single
+button in the header that cycles system → light → dark, and the switch opens as a circle from
+whatever you clicked, using the browser's own View Transitions — Firefox and *reduce motion* get
+the plain switch.
 
 ## Undo
 
@@ -135,7 +165,7 @@ separately at all.
 
 ## PDF
 
-**PDF** in the sidebar, under Overview. Open a PDF, add and delete pages, merge another file in,
+**PDF** in the sidebar, under **Tools**. Open a PDF, add and delete pages, merge another file in,
 and drop text on it. **Download** writes a new file and leaves the original alone.
 
 Clicks only place text while the **Text** tool is on — **Select** is the default, so nothing

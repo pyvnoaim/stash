@@ -18,6 +18,8 @@ export interface Item {
   done: boolean
   doneAt: number | null
   ts: number
+  /** Last time an edit went through `patch`. Null until something is actually changed. */
+  editedAt: number | null
 }
 
 export interface Project { id: string; name: string }
@@ -31,11 +33,14 @@ export interface State {
   theme: Theme
 }
 
+/* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
+   just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
+   and finally the archive. */
 export const VIEWS = {
+  inbox: { name: 'Quick notes', filter: (i: Item) => !i.done && !i.pid },
   today: { name: 'Today', filter: (i: Item) => !i.done && !!i.due && i.due <= today(), grouped: true },
   upcoming: { name: 'Upcoming', filter: (i: Item) => !i.done && !!i.due && i.due > today(), grouped: true },
   flagged: { name: 'Flagged', filter: (i: Item) => !i.done && i.flag },
-  inbox: { name: 'Quick notes', filter: (i: Item) => !i.done && !i.pid },
   all: { name: 'Everything', filter: (i: Item) => !i.done },
   done: { name: 'Done', filter: (i: Item) => i.done },
 } as const
@@ -84,6 +89,8 @@ export function load(data: unknown): State {
       done: !!i.done,
       doneAt: typeof i.doneAt === 'number' ? i.doneAt : null,
       ts: typeof i.ts === 'number' ? i.ts : Date.now(),
+      // a backup from before this existed has never been edited as far as anyone can tell
+      editedAt: typeof i.editedAt === 'number' ? i.editedAt : null,
       // orphans land in Quick notes rather than becoming invisible
       pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
     }))
@@ -213,18 +220,36 @@ export const tagCounts = (s: State): [string, number][] =>
 /** Views that impose their own order. Dragging a row onto another can't reorder anything here. */
 export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done'
 
+/**
+ * A search is any number of #tag and @project narrowings plus whatever text is left over, in any
+ * order: `@kova fonts`, `#wartung #wsh`, `fonts #wartung`. Each narrowing is an AND, and the text
+ * is matched once over what survives them.
+ */
 export function visible(s: State, query: string): Item[] {
-  if (query.trim()) {
-    const q = query.trim().toLowerCase()
-    // a leading # is the tag itself, not a substring — what clicking one on a row searches for
-    if (q.startsWith('#')) return s.items.filter((i) => i.tags.includes(q.slice(1)))
-    // and a leading @ is the project, matched on the name's start the same way capture matches it
-    if (q.length > 1 && q.startsWith('@')) {
-      const p = s.projects.find((p) => p.name.toLowerCase().startsWith(q.slice(1)))
-      return p ? s.items.filter((i) => i.pid === p.id) : []
+  const q = query.trim().toLowerCase()
+  if (q) {
+    const text: string[] = []
+    let list = s.items
+
+    for (const w of q.split(/\s+/)) {
+      // a # is the tag itself, not a substring — what clicking one on a row searches for
+      if (w.length > 1 && w.startsWith('#')) {
+        list = list.filter((i) => i.tags.includes(w.slice(1)))
+        continue
+      }
+      // and an @ is the project, matched on the name's start the same way capture matches it
+      if (w.length > 1 && w.startsWith('@')) {
+        const p = s.projects.find((p) => p.name.toLowerCase().startsWith(w.slice(1)))
+        list = p ? list.filter((i) => i.pid === p.id) : []
+        continue
+      }
+      text.push(w)
     }
-    return s.items.filter((i) =>
-      `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(q))
+
+    if (!text.length) return list
+    const rest = text.join(' ')
+    return list.filter((i) =>
+      `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(rest))
   }
   const filter = isView(s.sel) ? VIEWS[s.sel].filter : (i: Item) => i.pid === s.sel
   const list = s.items.filter(filter)
@@ -239,11 +264,12 @@ const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => ({
   ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)),
 })
 
-// every edit routes through here, which is the one place that can hold the rule: a repeat needs
+// every edit routes through here, which is the one place that can hold the rules: a repeat needs
 // something to finish, so an item turned into an idea or a note drops it rather than keeping a
-// marker for a thing that will never come round
+// marker for a thing that will never come round — and being here at all is what "edited" means,
+// so a bulk command across twenty rows stamps all twenty
 export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
-  const next = { ...i, ...p }
+  const next = { ...i, ...p, editedAt: Date.now() }
   return next.type === 'task' ? next : { ...next, repeat: null }
 }))
 
@@ -271,8 +297,10 @@ export function toggleDone(id: string) {
     if (closing && it.repeat) {
       // count from today when you are late, or a daily task finished a week late is born overdue
       const from = it.due && it.due > today() ? it.due : today()
+      // a fresh occurrence, so it carries none of the finished one's history
       items.splice(at, 0, {
-        ...it, id: uid(), due: nextDue(from, it.repeat), done: false, doneAt: null, ts: Date.now(),
+        ...it, id: uid(), due: nextDue(from, it.repeat), done: false, doneAt: null,
+        ts: Date.now(), editedAt: null,
       })
     }
     return { ...s, items }

@@ -21,7 +21,7 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
   note: StickyNote,
 }
 
-export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onDelete }: {
+export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProject, onDelete }: {
   it: Item
   selected: boolean
   /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
@@ -30,12 +30,15 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onDele
   reorder: boolean
   onSelect: (range: boolean) => void
   onTag: (tag: string) => void
+  onProject: (pid: string) => void
   onDelete: () => void
 }) {
   const s = useStash()
   const [over, setOver] = useState<'above' | 'below' | null>(null)
   const [lifting, setLifting] = useState(false)
   const filed = project(s, it.pid)
+  // blank lines are spacing, not content — they must not inflate the "there is more" count
+  const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
 
   return (
     /* the menu is this row's own, so opening it drops any multi-row selection and takes just this one */
@@ -82,9 +85,11 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onDele
             over === 'below' && 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]',
           )}
         >
-          {/* no title attr: a native tooltip goes stale when React swaps it under an open one */}
+          {/* no title attr: a native tooltip goes stale when React swaps it under an open one.
+              self-stretch, so it is a rail down the whole entry rather than a stub beside the
+              first line — a fixed h-3 looked cut off the moment a note made the row taller */}
           <span
-            className={cn('bg-muted-foreground mt-1 h-3 w-[2px] shrink-0 rounded-full', !filed && 'invisible')}
+            className={cn('bg-muted-foreground w-[2px] shrink-0 self-stretch rounded-full', !filed && 'invisible')}
           />
 
           {it.type === 'task' ? (
@@ -105,49 +110,70 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onDele
             <span className={cn('truncate text-sm', it.done && 'text-muted-foreground line-through')}>
               {it.text}
             </span>
-            {/* the note itself, not a marker for one — first line is usually the whole point */}
-            {it.note && (
-              <span className="text-muted-foreground truncate text-xs">{it.note}</span>
+            {/* the note itself, not a marker for one — first line is usually the whole point, and
+                the rest of it flattened into one run-on line is not: HTML eats the newlines and
+                leaves the bullets behind. The count is what says the rest is down there. */}
+            {note.length > 0 && (
+              <span className="text-muted-foreground flex items-baseline gap-1.5 text-xs">
+                <span className="truncate">{note[0]}</span>
+                {note.length > 1 && (
+                  <span className="shrink-0 font-mono opacity-70">+{note.length - 1}</span>
+                )}
+              </span>
             )}
           </div>
 
-          {/* which project, for the views that mix them — inside one, the header already says it */}
-          {filed && s.sel !== it.pid && (
-            <span className="text-muted-foreground mt-0.5 max-w-28 shrink-0 truncate text-xs">
-              {filed.name}
-            </span>
-          )}
+          {/* one group, centred against the whole row: each of these used to carry its own mt-*
+              to line up with the title, which left them clinging to the top once a note made the
+              row two lines tall */}
+          <div className="flex shrink-0 items-center gap-2.5 self-center">
+            {/* which project, for the views that mix them — inside one, the header already says it */}
+            {filed && s.sel !== it.pid && (
+              // the @ is what keeps it from reading as another tag — same sigil capture and search use
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onProject(filed.id) }}
+                title={`Open ${filed.name}`}
+                className="text-muted-foreground hover:text-foreground max-w-28 truncate font-mono text-xs"
+              >
+                @{filed.name.toLowerCase()}
+              </button>
+            )}
 
-          {it.tags.map((t) => (
-            <button
-              key={t}
-              type="button"
-              // a BUTTON is also what stops the list's space shortcut firing while it has focus
-              onClick={(e) => { e.stopPropagation(); onTag(t) }}
-              title={`Search #${t}`}
-              className="text-muted-foreground hover:text-foreground mt-0.5 shrink-0 font-mono text-xs"
-            >
-              #{t}
-            </button>
-          ))}
+            {it.tags.map((t) => (
+              <button
+                key={t}
+                type="button"
+                // a BUTTON is also what stops the list's space shortcut firing while it has focus
+                onClick={(e) => { e.stopPropagation(); onTag(t) }}
+                title={`Search #${t}`}
+                className="text-muted-foreground hover:text-foreground font-mono text-xs"
+              >
+                #{t}
+              </button>
+            ))}
 
-          {it.flag && <span className="text-foreground shrink-0 font-semibold">!</span>}
+            {/* an icon, like the repeat beside it — a bare “!” reads as a typo in the middle of a row */}
+            {it.flag && (
+              <Flag className="text-foreground size-3 fill-current" aria-label="Flagged" />
+            )}
 
-          {it.repeat && (
-            <Repeat className="text-muted-foreground mt-1 size-3 shrink-0" aria-label={repeatLabel(it.repeat)} />
-          )}
+            {it.repeat && (
+              <Repeat className="text-muted-foreground size-3" aria-label={repeatLabel(it.repeat)} />
+            )}
 
-          {it.due && (
-            <span
-              className={cn(
-                'text-muted-foreground mt-0.5 shrink-0 font-mono text-xs tabular-nums',
-                it.due === today() && 'text-foreground',
-                it.due < today() && 'text-foreground font-medium',
-              )}
-            >
-              {dayLabel(it.due)}
-            </span>
-          )}
+            {it.due && (
+              <span
+                className={cn(
+                  'text-muted-foreground font-mono text-xs tabular-nums',
+                  it.due === today() && 'text-foreground',
+                  it.due < today() && 'text-foreground font-medium',
+                )}
+              >
+                {dayLabel(it.due)}
+              </span>
+            )}
+          </div>
         </div>
       </ContextMenuTrigger>
 

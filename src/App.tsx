@@ -14,7 +14,7 @@ import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { dayLabel, today, tomorrow } from '@/lib/parse'
-import { cn } from '@/lib/utils'
+import { applyTheme, cn } from '@/lib/utils'
 import {
   addProject, focus, isGrouped, isPage, isSorted, moveBefore, OVERVIEW, patch, PDF, redo,
   removeItem, replaceAll, restoreItem, select, tagCounts, toggleDone, undo, useStash, viewName,
@@ -59,10 +59,11 @@ export default function App() {
   /* # and @ mean a tag and a project, so the field says which ones exist rather than leaving
      you to type at it blind. Live: every keystroke narrows it, and nothing is a dead end. */
   const hints = useMemo((): [string, number][] => {
-    const q = query.trim().toLowerCase()
-    const rest = q.slice(1)
-    if (q[0] === '#') return tagCounts(s).filter(([t]) => t.startsWith(rest)).map(([t, n]) => ['#' + t, n])
-    if (q[0] === '@') {
+    // the word still being typed, not the whole query — `@kova #wa` completes the tag
+    const word = query.toLowerCase().split(/\s+/).at(-1) ?? ''
+    const rest = word.slice(1)
+    if (word[0] === '#') return tagCounts(s).filter(([t]) => t.startsWith(rest)).map(([t, n]) => ['#' + t, n])
+    if (word[0] === '@') {
       return s.projects.filter((p) => p.name.toLowerCase().startsWith(rest))
         .map((p) => ['@' + p.name.toLowerCase(), s.items.filter((i) => i.pid === p.id && !i.done).length])
     }
@@ -71,6 +72,11 @@ export default function App() {
 
   /** What a key or a command acts on: the marked rows, or the focused one when nothing is marked. */
   const chosen = marked.length ? marked : selected ? [selected.id] : []
+
+  /* clicking #wsh while searching @kova narrows to both rather than throwing the project away —
+     the search ANDs its terms, so the only sensible thing a second click can do is add one */
+  const addTerm = (term: string) => setQuery((q) =>
+    (q.split(/\s+/).includes(term) ? q : `${q.trim()} ${term} `.trimStart()))
 
   /* the view is in the URL, so reload, back and a pasted link all land where it says.
      store.ts reads it before the first render and listens for the other direction. */
@@ -97,12 +103,11 @@ export default function App() {
     return () => removeEventListener('stash:unsaved', warn)
   }, [])
 
-  /* theme: shadcn switches on a .dark class, auto follows the system */
+  /* theme: on load, on a cross-window change, and whenever the system flips under `auto`.
+     Clicking the toggle applies it itself, inside a view transition — see revealTheme. */
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const apply = () => document.documentElement.classList.toggle(
-      'dark', s.theme === 'dark' || (s.theme === 'auto' && mq.matches),
-    )
+    const apply = () => applyTheme(s.theme)
     apply()
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
@@ -154,7 +159,14 @@ export default function App() {
         return
       }
       if (typingIn(e.target)) return
-      // no list shortcut wants a modifier, and ⌘S belongs to the browser
+      // ⌘⌫, not a bare ⌫: reaching for the search field past a focused row should not wipe it
+      if (cmd && (e.key === 'Backspace' || e.key === 'Delete')) {
+        if ((!query && isPage(s.sel)) || !chosen.length) return
+        e.preventDefault()
+        drop(chosen)
+        return
+      }
+      // no other list shortcut wants a modifier, and ⌘S belongs to the browser
       if (cmd) return
       // the list shortcuts would act on a row you cannot see from here, delete included
       if (!query && isPage(s.sel)) return
@@ -202,9 +214,7 @@ export default function App() {
         chosen.forEach((id) => {
           if (s.items.find((i) => i.id === id)?.type === 'task') toggleDone(id)
         })
-        return
       }
-      if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); drop(chosen) }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -226,10 +236,10 @@ export default function App() {
 
   return (
     <SidebarProvider>
+      {/* the sidebar tag is lit only while the search is that one tag and nothing else */}
       <AppSidebar
-        tag={query.startsWith('#') ? query.slice(1) : ''}
-        onTag={(t) => setQuery('#' + t)}
-        onOpenPalette={() => setPalette(true)}
+        tag={/^#[\w-]+$/.test(query.trim()) ? query.trim().slice(1) : ''}
+        onTag={(t) => addTerm('#' + t)}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden">
@@ -255,8 +265,19 @@ export default function App() {
                 onBlur={() => setSearching(false)}
                 placeholder="Search"
                 aria-label="Search all items"
-                className="h-8 w-40 pl-8"
+                className="h-8 w-44 pl-8"
               />
+              {/* hidden once you type, so it never sits under the search field's own clear button */}
+              {!query && (
+                <button
+                  type="button"
+                  onClick={() => setPalette(true)}
+                  title="Commands and item search"
+                  className="text-muted-foreground hover:text-foreground bg-muted absolute top-1/2 right-1.5 -translate-y-1/2 rounded px-1.5 py-1 font-mono text-xs"
+                >
+                  ⌘K
+                </button>
+              )}
               {searching && hints.length > 0 && (
                 <div className="bg-popover absolute top-full right-0 z-20 mt-1 w-52 rounded-md border p-1 shadow-md">
                   {hints.map(([v, n]) => (
@@ -265,7 +286,8 @@ export default function App() {
                       type="button"
                       // the field blurs before a click lands, and a blur hides what you clicked
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setQuery(v)}
+                      // swap the half-typed word for the whole one and leave a space to carry on
+                      onClick={() => { setQuery(query.replace(/\S*$/, v) + ' '); searchRef.current?.focus() }}
                       className="hover:bg-accent flex w-full items-center gap-2 rounded-sm px-2 py-1 font-mono text-xs"
                     >
                       <span className="truncate">{v}</span>
@@ -278,7 +300,7 @@ export default function App() {
           </header>
 
           {/* it draws its own bars now, so there is nothing heavy left to split off */}
-          {page === OVERVIEW && <Overview onTag={(t) => setQuery('#' + t)} />}
+          {page === OVERVIEW && <Overview onTag={(t) => addTerm('#' + t)} />}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would
@@ -326,7 +348,10 @@ export default function App() {
                         marked={marked.includes(it.id)}
                         reorder={!query && !isSorted(s)}
                         onSelect={(range) => pick(it.id, range)}
-                        onTag={(t) => setQuery('#' + t)}
+                        onTag={(t) => addTerm('#' + t)}
+                        // the same landing the palette does: drop the search, or the project you
+                        // just opened would still be showing search results
+                        onProject={(pid) => { setQuery(''); select(pid) }}
                         onDelete={() => drop([it.id])}
                       />
                     </div>
@@ -376,7 +401,7 @@ export default function App() {
         }}
       />
 
-      <Toaster position="bottom-center" />
+      <Toaster position="bottom-right" />
     </SidebarProvider>
   )
 }

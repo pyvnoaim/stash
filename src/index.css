@@ -143,7 +143,25 @@
     }
   html {
     @apply font-sans;
+    /* Geist Pixel ships a single weight, so font-bold would only get the browser's synthetic
+       smear. Stroking the outlines thickens them evenly, which is what a pixel face wants.
+       ponytail: one dial for the whole app — raise it to 0.5px for heavier, drop it to 0 for stock. */
+    -webkit-text-stroke: 0.35px currentColor;
     }
+}
+
+/* the theme swap animates as a clip-path circle (see revealTheme); the default cross-fade would
+   only muddy it, and the two roots must stack rather than blend */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 0;
+}
+::view-transition-new(root) {
+  z-index: 1;
 }
 
 /* asked to sit still, everything sits still */

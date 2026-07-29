@@ -45,6 +45,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
       done: !!done,
       doneAt: done ? Date.now() : null,
       ts: Date.now(),
+      editedAt: null,
     }
   }
 
@@ -77,15 +78,31 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
         {/* 12px of air either side of the divider: the addon's own gap-2 plus the toggle's px-2
             made the left side twice the input's pl-1.5, so both sides are set here instead */}
         <InputGroupAddon align="inline-start" className="gap-1 pl-1.5">
+          {/* grid-cols-3 under w-fit gives three columns as wide as the widest label, which is what
+              lets the pill be a plain w-1/3 translated by column — no measuring, no layout effect */}
           <ToggleGroup
             type="single"
             value={type}
             onValueChange={(v) => { if (v) { setType(v as ItemType); inputRef.current?.focus() } }}
-            className="gap-0.5"
+            className="relative grid grid-cols-3 gap-0"
           >
+            <span
+              aria-hidden
+              className="bg-muted absolute inset-y-0 left-0 w-1/3 rounded-md transition-transform duration-200 ease-out motion-reduce:transition-none"
+              style={{ transform: `translateX(${TYPES.findIndex((t) => t.id === type) * 100}%)` }}
+            />
             {/* labels stay visible: three options fit, and a hover-only label is a bug farm */}
             {TYPES.map(({ id, label, icon: Icon }) => (
-              <ToggleGroupItem key={id} value={id} aria-label={label} className="h-7 gap-1.5 rounded-md px-2">
+              <ToggleGroupItem
+                key={id}
+                value={id}
+                aria-label={label}
+                // the pill draws the active background now, so the item's own must get out of its way
+                className="text-muted-foreground data-[state=on]:text-foreground relative z-10 h-7 w-full gap-1.5 rounded-md px-2 hover:bg-transparent data-[state=on]:bg-transparent"
+                // radix focuses the item on click and onValueChange hands focus straight back to the
+                // field — long enough for the focus ring to flash. Keyboard focus still lands normally.
+                onMouseDown={(e) => e.preventDefault()}
+              >
                 <Icon className="size-3.5" />
                 <span className="text-xs">{label}</span>
               </ToggleGroupItem>

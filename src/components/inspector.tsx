@@ -1,5 +1,6 @@
-import { ExternalLink, Flag, Trash2 } from 'lucide-react'
+import { ExternalLink, Flag, Trash2, X } from 'lucide-react'
 import { DueField } from '@/components/due-field'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -22,6 +23,9 @@ const linksIn = (it: Item) =>
   [...new Set((`${it.text} ${it.note}`.match(LINK) ?? []).map((u) => u.replace(/[.,;:!?]+$/, '')))]
 
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
+
+const stamp = (ms: number) =>
+  new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
 function Links({ it }: { it: Item }) {
   const links = linksIn(it)
@@ -47,6 +51,13 @@ function Links({ it }: { it: Item }) {
 
 export function Inspector({ it, onDelete }: { it: Item; onDelete: () => void }) {
   const s = useStash()
+
+  /** Whatever is in the box joins the tags it already has, and the box empties for the next one. */
+  const addTags = (el: HTMLInputElement) => {
+    const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
+    el.value = ''
+    if (add.length) patch(it.id, { tags: [...new Set([...it.tags, ...add])] })
+  }
 
   return (
     <aside
@@ -138,15 +149,34 @@ export function Inspector({ it, onDelete }: { it: Item; onDelete: () => void }) 
 
       <div className="grid gap-2">
         <Label htmlFor="i-tags">Tags</Label>
+        {/* the field only ever adds — the chips below are the list, and each one removes itself */}
         <Input
           id="i-tags"
-          defaultValue={it.tags.join(' ')}
-          key={it.id + it.tags.join(' ')}
+          key={it.id}
           placeholder="audio bug"
-          onBlur={(e) => patch(it.id, {
-            tags: e.target.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase()),
-          })}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
+          // typed, then clicked away: the words were meant, so they land rather than evaporate
+          onBlur={(e) => addTags(e.currentTarget)}
         />
+        {it.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {it.tags.map((t) => (
+              <Badge key={t} variant="secondary" className="gap-1 pr-1.5 font-mono">
+                #{t}
+                <button
+                  type="button"
+                  aria-label={`Remove #${t}`}
+                  onClick={() => patch(it.id, { tags: it.tags.filter((x) => x !== t) })}
+                  // the space stays reserved, so arriving at a chip doesn't make it grow under you
+                  className="text-muted-foreground hover:text-foreground opacity-0 transition-opacity group-hover/badge:opacity-100 focus-visible:opacity-100"
+                >
+                  {/* Badge sizes its own svgs, but this one is a button's child and misses that */}
+                  <X className="size-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        )}
       </div>
 
       <Button
@@ -159,9 +189,11 @@ export function Inspector({ it, onDelete }: { it: Item; onDelete: () => void }) 
       </Button>
 
       <Separator className="mt-auto" />
-      <p className="text-muted-foreground font-mono text-[11px]">
-        Added {new Date(it.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
-      </p>
+      <div className="text-muted-foreground font-mono text-[11px]">
+        <p>Added {stamp(it.ts)}</p>
+        {/* only once it has actually been changed — every item would otherwise carry two identical lines */}
+        {it.editedAt && <p>Edited {stamp(it.editedAt)}</p>}
+      </div>
       <Button variant="outline" size="sm" onClick={onDelete}>
         <Trash2 className="size-3.5" /> Delete item
       </Button>
@@ -182,6 +214,15 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
   const same = <K extends keyof Item>(k: K) => picked.every((i) => i[k] === picked[0][k])
   const flagged = picked.every((i) => i.flag)
   const tasks = picked.filter((i) => i.type === 'task')
+  // tags every one of them carries — the only ones a single chip can honestly stand for
+  const common = picked[0].tags.filter((t) => picked.every((i) => i.tags.includes(t)))
+
+  /** Adds to each row's own tags rather than replacing them: a shared list would wipe the rest. */
+  const addTags = (el: HTMLInputElement) => {
+    const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
+    el.value = ''
+    if (add.length) picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, ...add])] }))
+  }
 
   return (
     <aside
@@ -234,6 +275,37 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="s-tags">Tags</Label>
+        {/* adds to every row, keeping whatever each already had — the field cannot show a list
+            that differs per row, so it only ever adds */}
+        <Input
+          id="s-tags"
+          key={ids.join(' ')}
+          placeholder="Add to all"
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
+          onBlur={(e) => addTags(e.currentTarget)}
+        />
+        {/* only the ones every row carries: a chip that meant "some of these" would lie */}
+        {common.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {common.map((t) => (
+              <Badge key={t} variant="secondary" className="gap-1 pr-1.5 font-mono">
+                #{t}
+                <button
+                  type="button"
+                  aria-label={`Remove #${t} from all`}
+                  onClick={() => picked.forEach((i) => patch(i.id, { tags: i.tags.filter((x) => x !== t) }))}
+                  className="text-muted-foreground hover:text-foreground opacity-0 transition-opacity group-hover/badge:opacity-100 focus-visible:opacity-100"
+                >
+                  <X className="size-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* one of them unflagged means the button flags, so it takes two presses to clear a mix */}

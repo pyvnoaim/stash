@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import {
-  CalendarClock, CalendarDays, ChartColumn, CheckCheck, Command, FileText, Flag, GripVertical,
-  Inbox, Layers, Plus, Trash2,
+  CalendarClock, CalendarDays, ChartColumn, CheckCheck, FileText, Flag, GripVertical,
+  Inbox, Layers, Monitor, Moon, Plus, Settings, Sun, Trash2,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -14,12 +14,21 @@ import {
   SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, useSidebar,
 } from '@/components/ui/sidebar'
 import { ProjectDialog } from '@/components/project-dialog'
-import { cn, PROJECT_DRAG } from '@/lib/utils'
+import { SettingsDialog } from '@/components/settings-dialog'
+import { cn, PROJECT_DRAG, revealTheme } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
   addProject, moveProject, OVERVIEW, patch, PDF, project, removeProject, renameProject,
-  select, tagCounts, useStash, VIEWS, type Item,
+  select, tagCounts, useStash, VIEWS, type Item, type Theme,
 } from '@/lib/store'
+
+/* one button, three states: it shows where you are and clicking moves you on. ponytail: no way to
+   jump straight from auto to dark — ⌘K lists all three when that matters. */
+const THEMES: Record<Theme, { next: Theme; icon: React.ElementType; label: string }> = {
+  auto: { next: 'light', icon: Monitor, label: 'Theme: follows the system' },
+  light: { next: 'dark', icon: Sun, label: 'Theme: light' },
+  dark: { next: 'auto', icon: Moon, label: 'Theme: dark' },
+}
 
 const VIEW_ICONS = {
   today: CalendarDays,
@@ -30,16 +39,16 @@ const VIEW_ICONS = {
   done: CheckCheck,
 } as const
 
-export function AppSidebar({ tag, onTag, onOpenPalette }: {
+export function AppSidebar({ tag, onTag }: {
   /** the tag being searched for, so the one you clicked stays lit */
   tag: string
   onTag: (tag: string) => void
-  onOpenPalette: () => void
 }) {
   const s = useStash()
   const { setOpenMobile } = useSidebar()
   const [dialog, setDialog] = useState<{ id?: string; name?: string } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [settings, setSettings] = useState(false)
   const [over, setOver] = useState<string | null>(null)
   const [edge, setEdge] = useState<{ id: string; after: boolean } | null>(null)
   // what is in flight. A ref, not a dataTransfer type: drags never leave this document, and
@@ -123,6 +132,7 @@ export function AppSidebar({ tag, onTag, onOpenPalette }: {
   const doomed = project(s, confirmDelete)
 
   const tags = tagCounts(s)
+  const theme = THEMES[s.theme]
 
   return (
     <Sidebar collapsible="offcanvas">
@@ -130,6 +140,20 @@ export function AppSidebar({ tag, onTag, onOpenPalette }: {
         <div className="flex items-center gap-2">
           <div className="bg-foreground h-4 w-[3px] rounded-full" />
           <span className="font-heading text-[13px] tracking-[0.18em] uppercase">Stash</span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-foreground ml-auto size-7"
+            aria-label={theme.label}
+            title={theme.label}
+            // the circle opens from the button itself, so the switch starts where you clicked
+            onClick={(e) => {
+              const b = e.currentTarget.getBoundingClientRect()
+              revealTheme(THEMES[s.theme].next, b.left + b.width / 2, b.top + b.height / 2)
+            }}
+          >
+            <theme.icon className="size-3.5" />
+          </Button>
         </div>
       </SidebarHeader>
 
@@ -137,18 +161,6 @@ export function AppSidebar({ tag, onTag, onOpenPalette }: {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
-                  <ChartColumn />
-                  <span>Overview</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === PDF} onClick={() => go(PDF)}>
-                  <FileText />
-                  <span>PDF</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
               {Object.entries(VIEWS).map(([id, v]) => {
                 const Icon = VIEW_ICONS[id as keyof typeof VIEW_ICONS]
                 const n = id === 'done' ? 0 : s.items.filter(v.filter).length
@@ -228,19 +240,43 @@ export function AppSidebar({ tag, onTag, onOpenPalette }: {
             </SidebarGroupContent>
           </SidebarGroup>
         )}
+        {/* neither of these is a list of items — one is a dashboard and one is a document editor,
+            so they sit apart from the views rather than being mistaken for two more of them */}
+        <SidebarGroup>
+          <SidebarGroupLabel className="font-heading tracking-wider uppercase">Tools</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
+                  <ChartColumn />
+                  <span>Overview</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={s.sel === PDF} onClick={() => go(PDF)}>
+                  <FileText />
+                  <span>PDF</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-muted-foreground w-full justify-between font-normal"
-          onClick={onOpenPalette}
-        >
-          <span className="flex items-center gap-2"><Command className="size-3.5" /> Commands</span>
-          <kbd className="bg-muted rounded px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd>
-        </Button>
+      {/* the same row the nav above is made of, so it sits at the same height with the same icon
+          and the same hover — a bare Button here read as a different kind of thing */}
+      <SidebarFooter className="border-t">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton isActive={settings} onClick={() => setSettings(true)}>
+              <Settings />
+              <span>Settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarFooter>
+
+      <SettingsDialog open={settings} onOpenChange={setSettings} />
 
       <ProjectDialog
         open={!!dialog}
