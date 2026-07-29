@@ -272,11 +272,12 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                         : <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />}
                     </span>
                     <span className="truncate">{p.name}</span>
-                    {/* a shut parent says how much is folded under it, so nothing is simply gone */}
-                    {holds > 0 && shut && (
-                      <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">{holds}</span>
-                    )}
                   </SidebarMenuButton>
+                  {/* a shut parent says how much is folded under it — same badge as the tag counts,
+                      faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
+                  {holds > 0 && shut && (
+                    <SidebarMenuBadge className="transition-opacity group-hover/menu-item:opacity-0">{holds}</SidebarMenuBadge>
+                  )}
                   {/* right-7 clears the trash beside it: an action is w-5 pinned at right-1.
                       The context menu has these too, but nothing on the row said it existed */}
                   <Hint label="Edit project">

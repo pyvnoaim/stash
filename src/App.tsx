@@ -7,6 +7,7 @@ import { CommandPalette, exportBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
 import { Inspector, Selection } from '@/components/inspector'
 import { ItemRow } from '@/components/item-row'
+import { NotePage } from '@/components/note-page'
 import CalendarPage from '@/components/calendar-page'
 import Overview from '@/components/overview'
 import { ProjectDialog } from '@/components/project-dialog'
@@ -21,7 +22,7 @@ import { applyTheme, cn } from '@/lib/utils'
 import {
   addProject, CALENDAR, focus, isGrouped, isPage, isSorted, moveBefore, OVERVIEW, patch, PDF,
   openIn, redo, removeItem, replaceAll, restoreItem, select, tagCounts, toggleDone, undo, useStash,
-  viewName, VIEWS, visible, type Item,
+  viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
 
 // the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
@@ -38,6 +39,9 @@ const Waiting = ({ name }: { name: string }) => (
 const typingIn = (el: EventTarget | null) =>
   el instanceof HTMLElement && (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName) || el.isContentEditable)
 
+/** Section headers for Everything, where the list reads as kinds rather than one flat run. */
+const TYPE_HEADS: Record<ItemType, string> = { task: 'Tasks', idea: 'Ideas', note: 'Notes' }
+
 export default function App() {
   const s = useStash()
   const [query, setQuery] = useState('')
@@ -46,11 +50,14 @@ export default function App() {
   // rows picked out alongside the focused one. The focused row is the anchor and stays in it.
   const [marked, setMarked] = useState<string[]>([])
   const [searching, setSearching] = useState(false)
+  // an item opened to fill the main area; navigating away or deleting it drops back to the list
+  const [pageItem, setPageItem] = useState<string | null>(null)
 
   const boxRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<React.ReactNode>(null)   // last open panel, kept so it slides shut with content
 
   // a search pulls you back to the list from whichever page you were on
   const page = !query && isPage(s.sel) ? s.sel : null
@@ -92,7 +99,9 @@ export default function App() {
   }, [s.items])
 
   /* the marks name rows in the list you were looking at, and this is no longer that list */
-  useEffect(() => setMarked([]), [s.sel, query])
+  useEffect(() => { setMarked([]); setPageItem(null) }, [s.sel, query])
+  // the open page is an item; if it's gone (deleted, filtered out) fall back to the list
+  const paged = pageItem ? s.items.find((i) => i.id === pageItem) : undefined
 
   /* a view was picked — the sidebar, ⌘K, an Overview tile, the back button. A search overlays
      every list and both pages, so leaving it up makes the new view look like it never took. */
@@ -269,6 +278,8 @@ export default function App() {
 
       <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden">
         <div className="flex min-w-0 flex-1 flex-col">
+          {/* the full-page editor brings its own header (back + title), so the search bar steps aside */}
+          {!paged && (
           <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger className="-ml-1" />
             {/* it ships as data-vertical:self-stretch, so match the variant or it runs header-tall */}
@@ -298,9 +309,9 @@ export default function App() {
                   type="button"
                   onClick={() => setPalette(true)}
                   title="Commands and item search"
-                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2"
+                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2"
                 >
-                  <Kbd>⌘K</Kbd>
+                  <Kbd className="rounded-sm">⌘K</Kbd>
                 </button>
               )}
               {searching && hints.length > 0 && (
@@ -323,6 +334,7 @@ export default function App() {
               )}
             </div>
           </header>
+          )}
 
           {/* it draws its own bars now, so there is nothing heavy left to split off */}
           {page === OVERVIEW && <Overview onTag={(t) => addTerm('#' + t)} onNavigate={goTo} />}
@@ -340,7 +352,11 @@ export default function App() {
             </div>
           )}
 
-          {!page && (
+          {!page && paged && (
+            <NotePage it={paged} onBack={() => setPageItem(null)} />
+          )}
+
+          {!page && !paged && (
           /* clicking the capture field or blank list space dismisses the inspector;
              clicking a row is how you open it, so rows opt out */
           <div
@@ -358,7 +374,11 @@ export default function App() {
                 <EmptyState view={s.sel} query={query} onCapture={() => boxRef.current?.focus()} />
               ) : (
                 items.map((it) => {
-                  const label = isGrouped(s) && !query && it.due ? dayLabel(it.due) : null
+                  // Everything reads as sections by kind; the dated views keep their day headers
+                  const label = query ? null
+                    : s.sel === 'all' ? TYPE_HEADS[it.type]
+                    : isGrouped(s) && it.due ? dayLabel(it.due)
+                    : null
                   const head = label && label !== group ? label : null
                   if (label) group = label
                   return (
@@ -390,10 +410,25 @@ export default function App() {
           )}
         </div>
 
-        {/* one row gets its details, several get what they have in common */}
-        {!page && (marked.length > 1
-          ? <Selection ids={marked} onDelete={() => drop(marked)} />
-          : selected && <Inspector it={selected} onDelete={() => drop([selected.id])} />)}
+        {/* one row gets its details, several get what they have in common. Always mounted and
+            animated by width like the left sidebar, so it slides shut too — the last panel is kept
+            during the close (via panelRef) so it slides out with content rather than blanking first. */}
+        {(() => {
+          // the full-page editor already holds the item, so the side panel steps aside for it
+          const open = !page && !paged && (marked.length > 1 || !!selected)
+          const panel = page || paged ? null : marked.length > 1
+            ? <Selection ids={marked} onDelete={() => drop(marked)} />
+            : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => setPageItem(selected.id)} /> : null
+          if (panel) panelRef.current = panel
+          return (
+            <div className={cn(
+              'flex shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]',
+              open ? 'w-[300px]' : 'w-0',
+            )}>
+              {panelRef.current}
+            </div>
+          )
+        })()}
       </SidebarInset>
 
       <CommandPalette

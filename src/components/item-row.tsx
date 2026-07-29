@@ -4,6 +4,7 @@ import {
   Repeat, RotateCcw, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Hint } from '@/components/ui/tooltip'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
   ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
@@ -37,6 +38,10 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
   const [over, setOver] = useState<'above' | 'below' | null>(null)
   const [lifting, setLifting] = useState(false)
   const filed = project(s, it.pid)
+  // a sub-project shows its parent too, the same path the sidebar reads: parent/child
+  const filedPath = filed
+    ? [filed.parent && project(s, filed.parent)?.name, filed.name].filter(Boolean).join('/')
+    : ''
   // blank lines are spacing, not content — they must not inflate the "there is more" count
   const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
 
@@ -86,28 +91,9 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
             over === 'below' && 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]',
           )}
         >
-          {/* no title attr: a native tooltip goes stale when React swaps it under an open one.
-              A plain row gets the same 3.5 mark the sidebar draws beside the project it names,
-              centred on the title's line box; a note is the only thing that runs it the full height */}
-          {/* py-[3px] is the same inset the plain row gets for free — a 3.5 mark in a 5 line box
-              — so the tall one stops short of the edges by the same amount instead of running
-              the whole way down */}
-          <span
-            className={cn('flex shrink-0 items-center', note.length ? 'self-stretch py-[3px]' : 'h-5')}
-          >
-            <span
-              style={filed?.color ? { backgroundColor: filed.color } : undefined}
-              className={cn(
-                'bg-muted-foreground w-[2px] rounded-full',
-                note.length ? 'h-full' : 'h-3.5',
-                !filed && 'invisible',
-              )}
-            />
-          </span>
-
-          {/* the same rule the mark and the trailing metadata follow: centred on the title's line
-              when that is the row, centred on the row once a note makes it taller */}
-          <span className={cn('flex shrink-0 items-center', note.length ? 'self-stretch' : 'h-5')}>
+          {/* always centred on the title's line box, so the icon sits beside the title rather than
+              floating in the middle once a note makes the row two lines tall */}
+          <span className="flex h-5 shrink-0 items-center">
             {it.type === 'task' ? (
               <Checkbox
                 checked={it.done}
@@ -146,27 +132,28 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
             {/* which project, for the views that mix them — inside one, the header already says it */}
             {filed && s.sel !== it.pid && (
               // the @ is what keeps it from reading as another tag — same sigil capture and search use
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onProject(filed.id) }}
-                title={`Open ${filed.name}`}
-                className="text-muted-foreground hover:text-foreground max-w-28 truncate font-mono text-xs"
-              >
-                @{filed.name.toLowerCase()}
-              </button>
+              <Hint label={`Open ${filedPath}`}>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onProject(filed.id) }}
+                  className="text-muted-foreground hover:text-foreground max-w-40 cursor-pointer truncate font-mono text-xs"
+                >
+                  @{filedPath.toLowerCase()}
+                </button>
+              </Hint>
             )}
 
             {it.tags.map((t) => (
-              <button
-                key={t}
-                type="button"
-                // a BUTTON is also what stops the list's space shortcut firing while it has focus
-                onClick={(e) => { e.stopPropagation(); onTag(t) }}
-                title={`Search #${t}`}
-                className="text-muted-foreground hover:text-foreground font-mono text-xs"
-              >
-                #{t}
-              </button>
+              <Hint key={t} label={`Search #${t}`}>
+                <button
+                  type="button"
+                  // a BUTTON is also what stops the list's space shortcut firing while it has focus
+                  onClick={(e) => { e.stopPropagation(); onTag(t) }}
+                  className="text-muted-foreground hover:text-foreground cursor-pointer font-mono text-xs"
+                >
+                  #{t}
+                </button>
+              </Hint>
             ))}
 
             {/* an icon, like the repeat beside it — a bare “!” reads as a typo in the middle of a row */}
