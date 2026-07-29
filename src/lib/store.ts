@@ -32,6 +32,7 @@ export interface State {
 export const VIEWS = {
   today: { name: 'Today', filter: (i: Item) => !i.done && !!i.due && i.due <= today(), grouped: true },
   upcoming: { name: 'Upcoming', filter: (i: Item) => !i.done && !!i.due && i.due > today(), grouped: true },
+  flagged: { name: 'Flagged', filter: (i: Item) => !i.done && i.flag },
   inbox: { name: 'Quick notes', filter: (i: Item) => !i.done && !i.pid },
   all: { name: 'Everything', filter: (i: Item) => !i.done },
   done: { name: 'Done', filter: (i: Item) => i.done },
@@ -40,8 +41,11 @@ export const VIEWS = {
 export type ViewId = keyof typeof VIEWS
 export const isView = (id: string): id is ViewId => id in VIEWS
 
-/** Not a filtered list, so it stays out of VIEWS and App renders it on its own. */
+/** Not filtered lists, so they stay out of VIEWS and App renders each on its own. */
 export const OVERVIEW = 'overview'
+export const PDF = 'pdf'
+const PAGES: string[] = [OVERVIEW, PDF]
+export const isPage = (id: string) => PAGES.includes(id)
 
 const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
@@ -72,7 +76,7 @@ export function load(data: unknown): State {
       pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
     }))
 
-  if (st.sel !== OVERVIEW && !isView(st.sel) && !st.projects.some((p) => p.id === st.sel)) st.sel = 'today'
+  if (!isPage(st.sel) && !isView(st.sel) && !st.projects.some((p) => p.id === st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   return st
 }
@@ -112,10 +116,14 @@ export const project = (s: State, id: string | null) => s.projects.find((p) => p
 
 export const viewName = (s: State) =>
   s.sel === OVERVIEW ? 'Overview'
-    : isView(s.sel) ? VIEWS[s.sel].name
-      : project(s, s.sel)?.name ?? 'Everything'
+    : s.sel === PDF ? 'PDF'
+      : isView(s.sel) ? VIEWS[s.sel].name
+        : project(s, s.sel)?.name ?? 'Everything'
 
 export const isGrouped = (s: State) => isView(s.sel) && 'grouped' in VIEWS[s.sel]
+
+/** Views that impose their own order. Dragging a row onto another can't reorder anything here. */
+export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done'
 
 export function visible(s: State, query: string): Item[] {
   if (query) {
@@ -169,17 +177,43 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
   })
 }
 
-/** Drag one row onto another: same project as the target, inserted before it. */
-export function moveBefore(dragId: string, targetId: string) {
-  if (dragId === targetId) return
+/** Returns the cleared items so the caller can offer an undo, or null if there were none. */
+export function clearDone() {
+  const gone = state.items.filter((i) => i.done)
+  if (!gone.length) return null
+  set((s) => ({ ...s, items: s.items.filter((i) => !i.done) }))
+  // put back by appending: finished items sink in every view anyway, so position was never meaningful
+  return { n: gone.length, undo: () => set((s) => ({ ...s, items: [...s.items, ...gone] })) }
+}
+
+/** Pull one out of a list and drop it back beside another. Rows and projects both do this. */
+function reorder<T extends { id: string }>(list: T[], dragId: string, targetId: string, after: boolean) {
+  const from = list.findIndex((x) => x.id === dragId)
+  const target = list.find((x) => x.id === targetId)
+  if (from < 0 || !target || dragId === targetId) return null
+  const next = [...list]
+  const [moving] = next.splice(from, 1)
+  const at = next.indexOf(target) + (after ? 1 : 0)
+  next.splice(at, 0, moving)
+  return { next, at, moving }
+}
+
+/** Drag one row onto another: same project as the target, dropped above it or below it. */
+export function moveBefore(dragId: string, targetId: string, after = false) {
   set((s) => {
-    const from = s.items.findIndex((i) => i.id === dragId)
+    const done = reorder(s.items, dragId, targetId, after)
     const target = s.items.find((i) => i.id === targetId)
-    if (from < 0 || !target) return s
-    const items = [...s.items]
-    const [moving] = items.splice(from, 1)
-    items.splice(items.indexOf(target), 0, { ...moving, pid: target.pid })
-    return { ...s, items }
+    if (!done || !target) return s
+    done.next[done.at] = { ...done.moving, pid: target.pid }
+    return { ...s, items: done.next }
+  })
+}
+
+/** Drag a project onto another to set the sidebar's order. */
+export function moveProject(dragId: string, targetId: string, after = false) {
+  set((s) => {
+    const done = reorder(s.projects, dragId, targetId, after)
+    return done ? { ...s, projects: done.next } : s
   })
 }
 
@@ -192,11 +226,12 @@ export const addProject = (name: string) => {
 export const renameProject = (id: string, name: string) =>
   set((s) => ({ ...s, projects: s.projects.map((p) => (p.id === id ? { ...p, name } : p)) }))
 
+/** The project goes, its items don't — they fall back to Quick notes, same as an orphan on load. */
 export const removeProject = (id: string) =>
   set((s) => ({
     ...s,
     projects: s.projects.filter((p) => p.id !== id),
-    items: s.items.filter((i) => i.pid !== id),
+    items: s.items.map((i) => (i.pid === id ? { ...i, pid: null } : i)),
     sel: s.sel === id ? 'today' : s.sel,
   }))
 

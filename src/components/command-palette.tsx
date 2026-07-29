@@ -1,17 +1,19 @@
 import {
-  ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Download, Inbox, Layers,
-  Monitor, Moon, Plus, Sun, Upload,
+  ArrowRight, CalendarClock, CalendarDays, Check, CheckCheck, Download, Eraser, Flag, Inbox,
+  Layers, Monitor, Moon, Plus, Sun, Upload,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem,
   CommandList, CommandSeparator, CommandShortcut,
 } from '@/components/ui/command'
 import { today } from '@/lib/parse'
-import { getState, patch, select, setTheme, useStash, VIEWS, type Theme } from '@/lib/store'
+import { clearDone, getState, patch, select, setTheme, useStash, VIEWS, type Theme } from '@/lib/store'
 
 const VIEW_ICONS = {
   today: CalendarDays,
   upcoming: CalendarClock,
+  flagged: Flag,
   inbox: Inbox,
   all: Layers,
   done: CheckCheck,
@@ -129,7 +131,7 @@ export function CommandPalette({
 
           <CommandSeparator />
 
-          <CommandGroup heading="Backup">
+          <CommandGroup heading="Data">
             <CommandItem value="export backup download" onSelect={run(exportBackup)}>
               <Download />
               <span>Export a backup</span>
@@ -138,6 +140,20 @@ export function CommandPalette({
               <Upload />
               <span>Import a backup</span>
             </CommandItem>
+            {/* only offered when there is something to clear, so it is never a no-op */}
+            {s.items.some((i) => i.done) && (
+              <CommandItem value="clear finished done delete" onSelect={run(() => {
+                const cleared = clearDone()
+                if (cleared) {
+                  toast(`Cleared ${cleared.n} finished`, {
+                    action: { label: 'Undo', onClick: cleared.undo },
+                  })
+                }
+              })}>
+                <Eraser />
+                <span>Clear finished</span>
+              </CommandItem>
+            )}
           </CommandGroup>
         </CommandList>
       </Command>

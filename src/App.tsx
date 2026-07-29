@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Search } from 'lucide-react'
+import { Loader2, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
 import { Capture } from '@/components/capture'
@@ -14,12 +14,14 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Toaster } from '@/components/ui/sonner'
 import { dayLabel } from '@/lib/parse'
 import {
-  addProject, focus, isGrouped, OVERVIEW, removeItem, replaceAll, restoreItem, toggleDone,
-  useStash, viewName, visible, type Item,
+  addProject, focus, isGrouped, isPage, isSorted, OVERVIEW, removeItem, replaceAll,
+  restoreItem, toggleDone, useStash, viewName, visible, type Item,
 } from '@/lib/store'
 
 // charts pull in recharts, so they load only when you actually open the page
 const Overview = lazy(() => import('@/components/overview'))
+// and the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
+const PdfEditor = lazy(() => import('@/pdf/editor'))
 
 // BUTTON counts as typing so space activates the button instead of also toggling the row
 const typingIn = (el: EventTarget | null) =>
@@ -36,7 +38,8 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const overview = s.sel === OVERVIEW && !query
+  // a search pulls you back to the list from whichever page you were on
+  const page = !query && isPage(s.sel) ? s.sel : null
   const items = useMemo(() => visible(s, query), [s, query])
   const selected = s.items.find((i) => i.id === s.focus)
 
@@ -78,6 +81,8 @@ export default function App() {
         return
       }
       if (typingIn(e.target)) return
+      // the list shortcuts would act on a row you cannot see from here, delete included
+      if (!query && isPage(s.sel)) return
 
       const at = items.findIndex((i) => i.id === s.focus)
       if (e.key === 'ArrowDown' || e.key === 'j') {
@@ -126,7 +131,7 @@ export default function App() {
               {query ? `Search “${query}”` : viewName(s)}
             </h1>
             <span className="text-muted-foreground mr-auto font-mono text-xs tabular-nums">
-              {overview ? '' : items.length || ''}
+              {page ? '' : items.length || ''}
             </span>
             <div className="relative">
               <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
@@ -142,9 +147,16 @@ export default function App() {
             </div>
           </header>
 
-          {overview ? (
-            <Suspense fallback={<div className="text-muted-foreground p-4 text-sm">Loading…</div>}>
-              <Overview />
+          {page ? (
+            /* both tabs are code-split, and the PDF one is a couple of megabytes with a worker
+               behind it — long enough that a bare “Loading…” in the corner reads as a stall */
+            <Suspense fallback={
+              <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
+                <Loader2 className="size-4 animate-spin" />
+                Loading {viewName(s)}…
+              </div>
+            }>
+              {page === OVERVIEW ? <Overview /> : <PdfEditor />}
             </Suspense>
           ) : (
           /* clicking the capture field or blank list space dismisses the inspector;
@@ -173,7 +185,12 @@ export default function App() {
                           <span className="bg-border h-px flex-1" />
                         </h2>
                       )}
-                      <ItemRow it={it} selected={it.id === s.focus} onDelete={() => drop(it)} />
+                      <ItemRow
+                        it={it}
+                        selected={it.id === s.focus}
+                        reorder={!query && !isSorted(s)}
+                        onDelete={() => drop(it)}
+                      />
                     </div>
                   )
                 })
@@ -183,7 +200,7 @@ export default function App() {
           )}
         </div>
 
-        {selected && !overview && <Inspector it={selected} onDelete={() => drop(selected)} />}
+        {selected && !page && <Inspector it={selected} onDelete={() => drop(selected)} />}
       </SidebarInset>
 
       <CommandPalette

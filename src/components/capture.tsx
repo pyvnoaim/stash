@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { CornerDownLeft, Lightbulb, ListTodo, StickyNote } from 'lucide-react'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
+import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { dayLabel, parseCapture } from '@/lib/parse'
 import { addItem, project, uid, useStash, type ItemType } from '@/lib/store'
@@ -49,8 +50,13 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
 
   return (
     <form onSubmit={submit} autoComplete="off" className="px-4 pt-3">
-      <InputGroup className="h-10">
-        <InputGroupAddon align="inline-start">
+      {/* 42px = the 28px toggle plus the addon's own py-1.5 either side plus the border, so the
+          chip is inset by exactly its padding vertically and pl-1.5 matches it horizontally.
+          At h-10 the leftover 5px above the chip fought the 8px beside it. */}
+      <InputGroup className="h-10.5">
+        {/* 12px of air either side of the divider: the addon's own gap-2 plus the toggle's px-2
+            made the left side twice the input's pl-1.5, so both sides are set here instead */}
+        <InputGroupAddon align="inline-start" className="gap-1 pl-1.5">
           <ToggleGroup
             type="single"
             value={type}
@@ -65,6 +71,8 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
+          {/* same variant fix as the header: it ships stretching to the parent's full height */}
+          <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
         </InputGroupAddon>
 
         <InputGroupInput
@@ -73,6 +81,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
           onChange={(e) => setRaw(e.target.value)}
           aria-label="Add an item"
           placeholder={here ? `Add to ${here.name}` : 'Add to Stash'}
+          className="pl-3!"   // beats the group's own [&>input]:pl-1.5
         />
 
         <InputGroupAddon align="inline-end">

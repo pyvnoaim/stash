@@ -9,7 +9,7 @@ import {
   ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
-import { cn } from '@/lib/utils'
+import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { dayLabel, today } from '@/lib/parse'
 import {
   focus, moveBefore, patch, project, toggleDone, useStash, type Item, type ItemType,
@@ -27,14 +27,17 @@ const tomorrow = () => {
   return d.toLocaleDateString('sv')
 }
 
-export function ItemRow({ it, selected, onDelete }: {
+export function ItemRow({ it, selected, reorder, onDelete }: {
   it: Item
   selected: boolean
+  /** false in views that sort themselves — a drop there would move nothing you can see */
+  reorder: boolean
   onDelete: () => void
 }) {
   const s = useStash()
-  const [over, setOver] = useState(false)
-  const filed = !!project(s, it.pid)
+  const [over, setOver] = useState<'above' | 'below' | null>(null)
+  const [lifting, setLifting] = useState(false)
+  const filed = project(s, it.pid)
 
   return (
     <ContextMenu onOpenChange={(open) => open && focus(it.id)}>
@@ -43,19 +46,40 @@ export function ItemRow({ it, selected, onDelete }: {
           data-row
           draggable
           onClick={() => focus(it.id)}
-          onDragStart={(e) => e.dataTransfer.setData('text/plain', it.id)}
-          onDragOver={(e) => { e.preventDefault(); setOver(true) }}
-          onDragLeave={() => setOver(false)}
+          onDragStart={(e) => {
+            e.dataTransfer.setData('text/plain', it.id)
+            e.dataTransfer.effectAllowed = 'move'   // otherwise the cursor offers to copy
+            setLifting(true)
+          }}
+          // fires wherever the drag ends, so nothing is left highlighted after a miss
+          onDragEnd={() => { setLifting(false); setOver(null) }}
+          onDragOver={(e) => {
+            // no preventDefault means the row refuses the drop outright, which is what a
+            // project being dragged past the list deserves — it has nowhere to land here
+            if (!reorder || e.dataTransfer.types.includes(PROJECT_DRAG)) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            // which half you are over decides which side of this row it lands on,
+            // so the last row's bottom half is how you reach the end of the list
+            const box = e.currentTarget.getBoundingClientRect()
+            setOver(e.clientY < box.top + box.height / 2 ? 'above' : 'below')
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(null)
+          }}
           onDrop={(e) => {
             e.stopPropagation()
-            setOver(false)
-            moveBefore(e.dataTransfer.getData('text/plain'), it.id)
+            setOver(null)
+            moveBefore(e.dataTransfer.getData('text/plain'), it.id, over === 'below')
           }}
           className={cn(
-            'group flex items-start gap-2.5 rounded-md px-2.5 py-2 transition-colors',
+            'group flex items-start gap-2.5 rounded-md px-2.5 py-2',
+            'transition-[opacity,background-color] duration-100 ease-out',
             'hover:bg-muted/60',
             selected && 'bg-accent hover:bg-accent',
-            over && 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]',
+            lifting && 'opacity-40',
+            over === 'above' && 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]',
+            over === 'below' && 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]',
           )}
         >
           {/* no title attr: a native tooltip goes stale when React swaps it under an open one */}
@@ -86,6 +110,13 @@ export function ItemRow({ it, selected, onDelete }: {
               <span className="text-muted-foreground truncate text-xs">{it.note}</span>
             )}
           </div>
+
+          {/* which project, for the views that mix them — inside one, the header already says it */}
+          {filed && s.sel !== it.pid && (
+            <span className="text-muted-foreground mt-0.5 max-w-28 shrink-0 truncate text-xs">
+              {filed.name}
+            </span>
+          )}
 
           {it.tags.map((t) => (
             <span key={t} className="text-muted-foreground mt-0.5 shrink-0 font-mono text-xs">#{t}</span>

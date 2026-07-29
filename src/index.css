@@ -145,3 +145,11 @@
     @apply font-sans;
     }
 }
+
+/* asked to sit still, everything sits still */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

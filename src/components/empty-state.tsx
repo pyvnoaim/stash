@@ -1,5 +1,5 @@
 import {
-  CalendarClock, CalendarDays, CheckCheck, FolderOpen, Inbox, Layers, SearchX,
+  CalendarClock, CalendarDays, CheckCheck, Flag, FolderOpen, Inbox, Layers, SearchX,
 } from 'lucide-react'
 import {
   Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
@@ -18,6 +18,11 @@ const BY_VIEW: Record<string, Copy> = {
     icon: CalendarClock,
     title: 'Nothing scheduled',
     body: 'Type a date as you capture: tomorrow, friday, 2026-09-01.',
+  },
+  flagged: {
+    icon: Flag,
+    title: 'Nothing flagged',
+    body: 'Start a capture with ! to flag it, or flag anything from its row.',
   },
   inbox: {
     icon: Inbox,
