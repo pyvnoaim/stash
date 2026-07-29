@@ -52,6 +52,7 @@ The line under the field shows what was understood before you commit it.
 | `↑` `↓` / `j` `k` | move through the list |
 | `space` | finish or reopen a task |
 | `⌫` | delete, with an undo in the toast |
+| `⌥↑` `⌥↓` | move the selected row up or down, where the order is yours to set |
 | `esc` | drop focus |
 
 Drag a row onto a project in the sidebar to move it, onto **Quick notes** to unfile it, or onto
@@ -90,9 +91,14 @@ It loads only when you open the tab, the way Overview does: pdf.js and its worke
 than the rest of the app put together, and nobody who came here for a task list should pay for
 them.
 
+`⌘Z` and `⇧⌘Z` work too, except inside a stamp, where the browser's own text undo is the one
+you meant. Zoom with the buttons beside the pager; the canvas renders at twice whatever zoom you
+pick, so zooming in buys real resolution rather than magnifying the pixels already there.
+
 The file is read in the tab, held in memory, and never stored — no localStorage, no upload,
-nothing to clear. Leave the tab and it is gone, which also means switching to Today and back
-means opening it again.
+nothing to clear. It does survive leaving the tab: once opened, the editor stays mounted and
+hides, because glancing at Today should not throw away a document and its undo history. Closing
+or reloading the tab does end it, which is the point.
 
 Two things it deliberately does not do. It will not edit the text already in a PDF: that text is
 positioned glyphs in subsetted fonts, not paragraphs, and anything short of a rewrite gets it

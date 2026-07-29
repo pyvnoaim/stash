@@ -5,7 +5,7 @@ import type { PageViewport, RenderTask } from 'pdfjs-dist'
 import type { PDFFont } from '@cantoo/pdf-lib'
 import {
   ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Highlighter, Loader2,
-  MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload,
+  MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -26,11 +26,13 @@ const uid = () => Math.random().toString(36).slice(2, 9)
 const SIZES = [8, 10, 12, 14, 18, 24, 32]
 const WEIGHTS = [1, 2, 3, 4, 6, 8]
 const HISTORY = 50
+const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 
 interface Snap { bytes: Uint8Array | null; notes: Note[] }
 const RENDER_SCALE = 2   // canvas pixels per PDF point; CSS scales the result down to fit
 
-export default function Editor() {
+/** `visible` is false while the tab is hidden — the editor stays mounted so its file survives. */
+export default function Editor({ visible }: { visible: boolean }) {
   const [bytes, setBytes] = useState<Uint8Array | null>(null)
   const [name, setName] = useState('document.pdf')
   const [notes, setNotes] = useState<Note[]>([])
@@ -45,6 +47,7 @@ export default function Editor() {
   const [weight, setWeight] = useState(1)
   const [font, setFont] = useState<PDFFont | null>(null)
   const [view, setView] = useState<PageViewport | null>(null)
+  const [zoom, setZoom] = useState(1)
   const [drawing, setDrawing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -88,6 +91,21 @@ export default function Editor() {
   const undo = () => step(past, future, setPast, setFuture)
   const redo = () => step(future, past, setFuture, setPast)
 
+  // no dep array: the handler has to close over this render's undo and redo
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!visible || !(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
+      // inside a stamp, the browser's own text undo is the one you meant
+      const el = e.target as HTMLElement | null
+      if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return
+      e.preventDefault()
+      if (e.shiftKey) redo()
+      else undo()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  })
+
   /* render the current page. ponytail: reloads the document on every page turn — one file,
      one reader, nobody notices. Cache the proxy in a ref if a 500-page scan ever feels slow. */
   useEffect(() => {
@@ -106,7 +124,7 @@ export default function Editor() {
 
         const at = Math.min(page, doc.numPages - 1)
         const proxy = await doc.getPage(at + 1)
-        const viewport = proxy.getViewport({ scale: RENDER_SCALE })
+        const viewport = proxy.getViewport({ scale: RENDER_SCALE * zoom })
         const canvas = canvasRef.current
         if (!live || !canvas) return
 
@@ -125,7 +143,7 @@ export default function Editor() {
     })()
 
     return () => { live = false; task?.cancel() }
-  }, [bytes, page])
+  }, [bytes, page, zoom])
 
   const load = async (file: File, into: 'open' | 'merge') => {
     setBusy(true)
@@ -331,6 +349,35 @@ export default function Editor() {
 
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
+        {/* the canvas renders at RENDER_SCALE × zoom and displays at zoom, so zooming in buys
+            real resolution rather than magnifying the pixels you already had */}
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost" size="icon-sm" aria-label="Zoom out"
+            disabled={zoom <= ZOOMS[0]}
+            onClick={() => setZoom(ZOOMS[ZOOMS.indexOf(zoom) - 1] ?? ZOOMS[0])}
+          >
+            <ZoomOut />
+          </Button>
+          <button
+            type="button"
+            onClick={() => setZoom(1)}
+            title="Back to 100%"
+            className="text-muted-foreground w-10 font-mono text-xs tabular-nums"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <Button
+            variant="ghost" size="icon-sm" aria-label="Zoom in"
+            disabled={zoom >= ZOOMS[ZOOMS.length - 1]}
+            onClick={() => setZoom(ZOOMS[ZOOMS.indexOf(zoom) + 1] ?? zoom)}
+          >
+            <ZoomIn />
+          </Button>
+        </div>
+
+        <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
+
         <Button variant="outline" size="sm" onClick={insert}>
           <FilePlus2 className="size-3.5" /> Blank page
         </Button>
@@ -437,6 +484,9 @@ export default function Editor() {
           <canvas
             ref={canvasRef}
             onPointerDown={place}
+            // the canvas holds RENDER_SCALE times as many pixels as it shows. Every coordinate
+            // in here is a ratio of the displayed box, so the two never have to agree.
+            style={{ width: view ? view.width / RENDER_SCALE : undefined }}
             className={cn(
               'block h-auto max-w-full bg-white shadow-lg',
               tool === 'text' && 'cursor-text',

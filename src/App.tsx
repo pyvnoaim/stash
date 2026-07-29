@@ -13,15 +13,23 @@ import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { dayLabel } from '@/lib/parse'
+import { cn } from '@/lib/utils'
 import {
-  addProject, focus, isGrouped, isPage, isSorted, OVERVIEW, removeItem, replaceAll,
-  restoreItem, toggleDone, useStash, viewName, visible, type Item,
+  addProject, focus, isGrouped, isPage, isSorted, moveBefore, OVERVIEW, PDF, removeItem,
+  replaceAll, restoreItem, toggleDone, useStash, viewName, visible, type Item,
 } from '@/lib/store'
 
 // charts pull in recharts, so they load only when you actually open the page
 const Overview = lazy(() => import('@/components/overview'))
 // and the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
 const PdfEditor = lazy(() => import('@/pdf/editor'))
+
+const Waiting = ({ name }: { name: string }) => (
+  <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
+    <Loader2 className="size-4 animate-spin" />
+    Loading {name}…
+  </div>
+)
 
 // BUTTON counts as typing so space activates the button instead of also toggling the row
 const typingIn = (el: EventTarget | null) =>
@@ -41,6 +49,9 @@ export default function App() {
   // a search pulls you back to the list from whichever page you were on
   const page = !query && isPage(s.sel) ? s.sel : null
   const items = useMemo(() => visible(s, query), [s, query])
+  // sticks once true: the PDF tab keeps its document between visits, see below
+  const [seenPdf, setSeenPdf] = useState(false)
+  if (page === PDF && !seenPdf) setSeenPdf(true)
   const selected = s.items.find((i) => i.id === s.focus)
 
   /* theme: shadcn switches on a .dark class, auto follows the system */
@@ -85,6 +96,18 @@ export default function App() {
       if (!query && isPage(s.sel)) return
 
       const at = items.findIndex((i) => i.id === s.focus)
+
+      // dragging is the only way to reorder otherwise, which leaves a keyboard with none
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault()
+        // same rule the rows use for a drop: search results and self-sorting views have no order
+        if (!selected || query || isSorted(s)) return
+        const down = e.key === 'ArrowDown'
+        const target = items[down ? at + 1 : at - 1]
+        if (target) moveBefore(selected.id, target.id, down)
+        return
+      }
+
       if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault()
         focus(items[Math.min(at + 1, items.length - 1)]?.id ?? items[0]?.id ?? null)
@@ -147,18 +170,26 @@ export default function App() {
             </div>
           </header>
 
-          {page ? (
+          {page === OVERVIEW && (
             /* both tabs are code-split, and the PDF one is a couple of megabytes with a worker
                behind it — long enough that a bare “Loading…” in the corner reads as a stall */
-            <Suspense fallback={
-              <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
-                <Loader2 className="size-4 animate-spin" />
-                Loading {viewName(s)}…
-              </div>
-            }>
-              {page === OVERVIEW ? <Overview /> : <PdfEditor />}
+            <Suspense fallback={<Waiting name={viewName(s)} />}>
+              <Overview />
             </Suspense>
-          ) : (
+          )}
+
+          {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
+              stamps and its undo history in memory, and unmounting to glance at Today would
+              throw all of it away. It is still never loaded until the tab is first opened. */}
+          {seenPdf && (
+            <div className={cn('flex min-h-0 flex-1 flex-col', page !== PDF && 'hidden')}>
+              <Suspense fallback={<Waiting name="PDF" />}>
+                <PdfEditor visible={page === PDF} />
+              </Suspense>
+            </div>
+          )}
+
+          {!page && (
           /* clicking the capture field or blank list space dismisses the inspector;
              clicking a row is how you open it, so rows opt out */
           <div
