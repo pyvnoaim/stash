@@ -267,7 +267,7 @@ export default function App() {
 
   return (
     // delayDuration: the shipped default is 0, which fires a tooltip at every passing cursor
-    <TooltipProvider delayDuration={400}>
+    <TooltipProvider delayDuration={200}>
     <SidebarProvider>
       {/* the sidebar tag is lit only while the search is that one tag and nothing else */}
       <AppSidebar
