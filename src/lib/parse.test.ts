@@ -1,6 +1,6 @@
 // npm test
 import assert from 'node:assert/strict'
-import { nextDue, parseCapture, parseList } from './parse.ts'
+import { nextAfter, nextDue, parseCapture, parseList } from './parse.ts'
 
 const projects = [{ id: 'k', name: 'Kova' }, { id: 'a', name: 'aimlib' }]
 const FRI = '2026-07-31' // a Friday
@@ -91,5 +91,15 @@ assert.equal(list[0].due, '2026-08-01')
 assert.deepEqual(parseList('\n\n# Heading\n', projects, FRI), [])
 assert.deepEqual(parseList('- #audio', projects, FRI).map((l) => l.tags), [])   // nothing left but the tag
 assert.equal(parseList('- read #audio', projects, FRI)[0].tags[0], 'audio')
+
+// nextAfter: a late completion keeps its anchor day but never comes back already overdue
+// a monthly task due the 15th, finished on the 20th two months on, returns on the 15th — not the 20th
+assert.equal(nextAfter('2026-05-15', 'month', '2026-07-20'), '2026-08-15')
+// a daily task finished a week late lands tomorrow, not a week ago
+assert.equal(nextAfter('2026-07-20', 'day', '2026-07-27'), '2026-07-28')
+// a weekday repeat keeps its weekday, on the first one after today
+assert.equal(nextAfter('2026-08-03', 'monday', '2026-08-19'), '2026-08-24') // both Mondays
+// finished early (due still ahead): just the next occurrence after the anchor
+assert.equal(nextAfter('2026-08-01', 'month', '2026-07-30'), '2026-09-01')
 
 console.log('parse: ok')
