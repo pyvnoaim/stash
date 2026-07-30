@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, Search } from 'lucide-react'
+import { ChevronDown, Loader2, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
 import { Capture } from '@/components/capture'
@@ -52,6 +52,8 @@ export default function App() {
   const [searching, setSearching] = useState(false)
   // an item opened to fill the main area; navigating away or deleting it drops back to the list
   const [pageItem, setPageItem] = useState<string | null>(null)
+  // scrollbars are hidden, so a chevron says the list runs on past the bottom edge
+  const [moreBelow, setMoreBelow] = useState(false)
 
   const boxRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -129,10 +131,26 @@ export default function App() {
     return () => mq.removeEventListener('change', apply)
   }, [s.theme])
 
-  /* keep the keyboard-selected row on screen */
+  /* keep the keyboard-selected row on screen. Gated on focus alone: keying on `items` too meant
+     every edit (typing in the inspector) yanked a far-off selected row back into view. */
   useEffect(() => {
     listRef.current?.querySelector('[data-selected="true"]')?.scrollIntoView({ block: 'nearest' })
-  }, [s.focus, items])
+  }, [s.focus])
+
+  const checkMore = () => {
+    const el = listRef.current
+    if (el) setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 8)
+  }
+  // observe the list element once it mounts (only in the list view); the observer fires on resize
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    const ro = new ResizeObserver(checkMore)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [page, pageItem])
+  // and recompute when the content itself changes, without tearing the observer down each time
+  useEffect(checkMore, [items])
 
   const drop = (ids: string[]) => {
     // each undo holds the index the row had when it left, so they go back in the reverse order
@@ -360,7 +378,7 @@ export default function App() {
           /* clicking the capture field or blank list space dismisses the inspector;
              clicking a row is how you open it, so rows opt out */
           <div
-            className="flex min-h-0 flex-1 flex-col"
+            className="relative flex min-h-0 flex-1 flex-col"
             onPointerDown={(e) => {
               if ((e.target as HTMLElement).closest('[data-row]')) return
               setMarked([])
@@ -369,7 +387,28 @@ export default function App() {
           >
             <Capture inputRef={boxRef} />
 
-            <div ref={listRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pt-2 pb-16">
+            {/* scrollbars are hidden app-wide, so this is the only sign the list runs on; it
+                pages down on click and hides once there is nothing left below */}
+            {moreBelow && (
+              <button
+                type="button"
+                aria-label="Scroll down for more"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => listRef.current?.scrollBy({ top: listRef.current.clientHeight * 0.8, behavior: 'smooth' })}
+                className="bg-popover text-muted-foreground hover:text-foreground ring-foreground/10 absolute bottom-4 left-1/2 z-10 flex size-7 -translate-x-1/2 items-center justify-center rounded-full shadow-md ring-1"
+              >
+                <ChevronDown className="size-4" />
+              </button>
+            )}
+
+            <div
+              ref={listRef}
+              onScroll={checkMore}
+              className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pt-2 pb-16"
+              // scrollbars are hidden, so also fade the bottom edge. The pb-16 padding means at the
+              // true bottom the fade lands on empty space and vanishes.
+              style={{ maskImage: 'linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)' }}
+            >
               {items.length === 0 ? (
                 <EmptyState view={s.sel} query={query} onCapture={() => boxRef.current?.focus()} />
               ) : (
@@ -394,6 +433,8 @@ export default function App() {
                         selected={it.id === s.focus}
                         marked={marked.includes(it.id)}
                         reorder={!query && !isSorted(s)}
+                        projects={s.projects}
+                        sel={s.sel}
                         onSelect={(range) => pick(it.id, range)}
                         onTag={(t) => addTerm('#' + t)}
                         // the same landing the palette does: drop the search, or the project you

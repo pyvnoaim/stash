@@ -138,6 +138,11 @@
   * {
     @apply border-border outline-ring/50;
     }
+  /* Tailwind's preflight sets cursor:default on every button; every button here is meant to be
+     clicked, so put the pointer back. Disabled ones keep the arrow. */
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+    }
   /* The app owns its scrolling — the list, the note page, the PDF each scroll inside their own
      box. Lock the document so it never scrolls itself: in Safari's standalone "Add to Dock"
      window an h-svh child under a min-h-svh shell can grow the page and carry the header off the
