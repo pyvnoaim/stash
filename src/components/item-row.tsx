@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import {
   CalendarOff, CalendarPlus, Check, Copy, Flag, Inbox, Lightbulb, ListTodo, PencilLine,
   Repeat, RotateCcw, StickyNote, Trash2,
@@ -13,7 +13,7 @@ import {
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { dayLabel, repeatLabel, today, tomorrow } from '@/lib/parse'
 import {
-  focus, moveBefore, patch, project, toggleDone, useStash, type Item, type ItemType,
+  focus, moveBefore, patch, toggleDone, type Item, type ItemType, type Project,
 } from '@/lib/store'
 
 const TYPE_ICONS: Record<ItemType, React.ElementType> = {
@@ -22,28 +22,32 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
   note: StickyNote,
 }
 
-export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProject, onDelete }: {
+function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onTag, onProject, onDelete }: {
   it: Item
   selected: boolean
   /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
   marked: boolean
   /** false in views that sort themselves — a drop there would move nothing you can see */
   reorder: boolean
+  /** passed in rather than read from the store, so an unrelated edit doesn't re-render every row */
+  projects: Project[]
+  /** the current view id — a row already inside its own project hides its @project label */
+  sel: string
   onSelect: (range: boolean) => void
   onTag: (tag: string) => void
   onProject: (pid: string) => void
   onDelete: () => void
 }) {
-  const s = useStash()
   const [over, setOver] = useState<'above' | 'below' | null>(null)
   const [lifting, setLifting] = useState(false)
-  const filed = project(s, it.pid)
+  const filed = projects.find((p) => p.id === it.pid)
   // a sub-project shows its parent too, the same path the sidebar reads: parent/child
   const filedPath = filed
-    ? [filed.parent && project(s, filed.parent)?.name, filed.name].filter(Boolean).join('/')
+    ? [filed.parent && projects.find((p) => p.id === filed.parent)?.name, filed.name].filter(Boolean).join('/')
     : ''
   // blank lines are spacing, not content — they must not inflate the "there is more" count
   const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
+  const t = today()
 
   return (
     /* the menu is this row's own, so opening it drops any multi-row selection and takes just this one */
@@ -130,7 +134,7 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
               row two lines tall */}
           <div className="flex shrink-0 items-center gap-2.5 self-center">
             {/* which project, for the views that mix them — inside one, the header already says it */}
-            {filed && s.sel !== it.pid && (
+            {filed && sel !== it.pid && (
               // the @ is what keeps it from reading as another tag — same sigil capture and search use
               <Hint label={`Open ${filedPath}`}>
                 <button
@@ -169,8 +173,8 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
               <span
                 className={cn(
                   'text-muted-foreground font-mono text-xs tabular-nums',
-                  it.due === today() && 'text-foreground',
-                  it.due < today() && 'text-foreground font-medium',
+                  it.due === t && 'text-foreground',
+                  it.due < t && 'text-foreground font-medium',
                 )}
               >
                 {dayLabel(it.due)}
@@ -223,7 +227,7 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
             Move to
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {s.projects.map((p) => (
+            {projects.map((p) => (
               <ContextMenuItem
                 key={p.id}
                 disabled={p.id === it.pid}
@@ -232,7 +236,7 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
                 {p.name}
               </ContextMenuItem>
             ))}
-            {s.projects.length > 0 && <ContextMenuSeparator />}
+            {projects.length > 0 && <ContextMenuSeparator />}
             <ContextMenuItem disabled={!it.pid} onSelect={() => patch(it.id, { pid: null })}>
               Quick notes
             </ContextMenuItem>
@@ -277,3 +281,14 @@ export function ItemRow({ it, selected, marked, reorder, onSelect, onTag, onProj
     </ContextMenu>
   )
 }
+
+// The whole visible list mounts one of these per row. Every store commit notifies every subscriber,
+// so without this the list re-rendered in full on every keystroke and checkbox toggle. Unchanged
+// rows keep item identity (mapItem re-maps only the edited one), and the callbacks are ignored on
+// purpose — their behaviour is fixed, only the data props decide the output.
+export const ItemRow = memo(
+  ItemRowBase,
+  (a, b) =>
+    a.it === b.it && a.selected === b.selected && a.marked === b.marked &&
+    a.reorder === b.reorder && a.sel === b.sel && a.projects === b.projects,
+)

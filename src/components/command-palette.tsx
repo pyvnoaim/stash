@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
@@ -82,9 +82,13 @@ export function CommandPalette({
   const [q, setQ] = useState('')
   useEffect(() => { if (!open) setQ('') }, [open])
 
-  // two letters in, because one letter matches half of everything and the list is not the point
-  const found = q.trim().length < 2 ? []
-    : s.items.filter((i) => hay(s, i).includes(q.trim().toLowerCase())).slice(0, 20)
+  // two letters in, because one letter matches half of everything and the list is not the point.
+  // memoised so an unrelated re-render doesn't rescan every item building a hay string apiece.
+  const found = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    return needle.length < 2 ? []
+      : s.items.filter((i) => hay(s, i).includes(needle)).slice(0, 20)
+  }, [s, q])
   const picked = ids.map((id) => s.items.find((i) => i.id === id)).filter((i) => !!i)
   const it = picked[0]
   const run = (fn: () => void) => () => { onOpenChange(false); fn() }
