@@ -3,17 +3,10 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
-/* Geist Pixel, self-hosted from the official release (OFL-1.1, see src/fonts/OFL.txt).
-   Square is the reading face, Circle is the display face. */
+/* Geist Pixel, self-hosted from the official release (OFL-1.1, see src/fonts/OFL.txt). */
 @font-face {
     font-family: 'Geist Pixel Square';
     src: url('./fonts/GeistPixel-Square.woff2') format('woff2');
-    font-weight: 400;
-    font-display: swap;
-}
-@font-face {
-    font-family: 'Geist Pixel Circle';
-    src: url('./fonts/GeistPixel-Circle.woff2') format('woff2');
     font-weight: 400;
     font-display: swap;
 }
@@ -23,7 +16,7 @@
 @theme inline {
     /* Geist Variable stays in the stack to cover glyphs Pixel does not carry. */
     --font-sans: 'Geist Pixel Square', 'Geist Variable', sans-serif;
-    --font-heading: 'Geist Pixel Circle', 'Geist Pixel Square', monospace;
+    --font-heading: 'Geist Pixel Square', monospace;
     --font-mono: 'Geist Pixel Square', ui-monospace, monospace;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
@@ -160,6 +153,15 @@
        ponytail: one dial for the whole app — raise it to 0.5px for heavier, drop it to 0 for stock. */
     -webkit-text-stroke: 0.35px currentColor;
     }
+}
+
+/* the item list can hold thousands of rows, each a full context-menu tree. content-visibility lets
+   the browser skip layout/paint for the ones scrolled off-screen — DOM stays intact, so drag and the
+   context menu still work. contain-intrinsic-size is the placeholder height until a row first renders
+   (the `auto` keyword then remembers each row's real size), keeping the scrollbar honest. */
+.item-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
 }
 
 /* the browser's own selection blue is the one colour in the app nobody chose. A wash of the

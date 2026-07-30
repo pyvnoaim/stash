@@ -91,7 +91,7 @@ export function ColorPicker({ value, onChange }: {
           aria-label="No colour"
           onClick={() => onChange(null)}
           className={cn(
-            'text-muted-foreground flex size-6 items-center justify-center rounded-full border',
+            'text-muted-foreground flex size-6 items-center justify-center rounded-full border hover:ring-1 hover:ring-foreground/40',
             !value && 'ring-foreground ring-2 ring-offset-1 ring-offset-(--color-background)',
           )}
         >
@@ -107,7 +107,7 @@ export function ColorPicker({ value, onChange }: {
             onClick={() => onChange(c)}
             style={{ backgroundColor: c }}
             className={cn(
-              'flex size-6 items-center justify-center rounded-full',
+              'flex size-6 items-center justify-center rounded-full hover:ring-1 hover:ring-foreground/40',
               value === c && 'ring-foreground ring-2 ring-offset-1 ring-offset-(--color-background)',
             )}
           >

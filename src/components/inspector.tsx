@@ -63,21 +63,25 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
   return (
     <aside
       aria-label="Item details"
-      className="bg-background flex w-[300px] shrink-0 flex-col gap-4 overflow-y-auto border-l p-4"
+      className="bg-background flex w-[300px] shrink-0 flex-col overflow-hidden border-l"
     >
-      <div className="grid grid-cols-3 gap-1.5">
-        {TYPES.map((t) => (
-          <Button
-            key={t}
-            size="sm"
-            variant={it.type === t ? 'default' : 'outline'}
-            onClick={() => patch(it.id, { type: t, done: t === 'task' ? it.done : false })}
-          >
-            {t[0].toUpperCase() + t.slice(1)}
-          </Button>
-        ))}
+      {/* h-14 header + border-b so the type toggle lines up with the main content header */}
+      <div className="flex h-14 shrink-0 items-center border-b px-4">
+        <div className="grid w-full grid-cols-3 gap-1.5">
+          {TYPES.map((t) => (
+            <Button
+              key={t}
+              size="sm"
+              variant={it.type === t ? 'default' : 'outline'}
+              onClick={() => patch(it.id, { type: t, done: t === 'task' ? it.done : false })}
+            >
+              {t[0].toUpperCase() + t.slice(1)}
+            </Button>
+          ))}
+        </div>
       </div>
 
+      <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
       <div className="grid gap-2">
         <Label htmlFor="i-title">Title</Label>
         <Textarea
@@ -211,6 +215,7 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
       <Button variant="outline" size="sm" onClick={onDelete}>
         <Trash2 className="size-3.5" /> Delete item
       </Button>
+      </div>
     </aside>
   )
 }
@@ -241,15 +246,19 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
   return (
     <aside
       aria-label="Selection details"
-      className="bg-background flex w-[300px] shrink-0 flex-col gap-4 overflow-y-auto border-l p-4"
+      className="bg-background flex w-[300px] shrink-0 flex-col overflow-hidden border-l"
     >
-      <div>
-        <p className="font-heading text-sm tracking-wide uppercase">{picked.length} selected</p>
-        <p className="text-muted-foreground mt-1 text-xs">
-          {tasks.length === picked.length ? 'All tasks' : `${tasks.length} of them tasks`}
-        </p>
+      {/* h-14 header + border-b to line up with the main content header */}
+      <div className="flex h-14 shrink-0 items-center border-b px-4">
+        <div>
+          <p className="font-heading text-sm tracking-wide uppercase">{picked.length} selected</p>
+          <p className="text-muted-foreground text-xs">
+            {tasks.length === picked.length ? 'All tasks' : `${tasks.length} of them tasks`}
+          </p>
+        </div>
       </div>
 
+      <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
       <div className="grid grid-cols-3 gap-1.5">
         {TYPES.map((t) => (
           <Button
@@ -332,6 +341,7 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
       <Button variant="outline" size="sm" onClick={onDelete}>
         <Trash2 className="size-3.5" /> Delete {picked.length} items
       </Button>
+      </div>
     </aside>
   )
 }

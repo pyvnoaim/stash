@@ -1,14 +1,13 @@
-import { useRef, useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowRight, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
-  ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox,
-  ChevronRight, Layers, Monitor, Moon, PencilLine, Plus, Settings, Sun, Trash2,
+  CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
+  ChevronRight, Layers, PencilLine, Plus, Settings, Trash2,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger,
 } from '@/components/ui/context-menu'
@@ -24,12 +23,12 @@ import {
 import { Hint } from '@/components/ui/tooltip'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
-import { cn, PROJECT_DRAG, revealTheme } from '@/lib/utils'
+import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
-  addProject, CALENDAR, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject,
+  addProject, CALENDAR, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
   canNest, childProjects, rootProjects, setProjectSort, tagCounts, toggleCollapsed, useStash,
-  VIEWS, type Item, type ProjectSort, type Theme,
+  VIEWS, type Item, type Project, type ProjectSort,
 } from '@/lib/store'
 
 const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
@@ -41,13 +40,6 @@ const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
   { id: 'edited-asc', label: 'Oldest edit', icon: ClockArrowUp },
 ]
 
-/* one button, three states: it shows where you are and clicking moves you on. ponytail: no way to
-   jump straight from auto to dark — ⌘K lists all three when that matters. */
-const THEMES: Record<Theme, { next: Theme; icon: React.ElementType; label: string }> = {
-  auto: { next: 'light', icon: Monitor, label: 'Theme: follows the system' },
-  light: { next: 'dark', icon: Sun, label: 'Theme: light' },
-  dark: { next: 'auto', icon: Moon, label: 'Theme: dark' },
-}
 
 const VIEW_ICONS = {
   today: CalendarDays,
@@ -162,33 +154,116 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   const doomed = project(s, confirmDelete)
 
   const tags = tagCounts(s)
-  const theme = THEMES[s.theme]
+
+  /** one project row. holds = how many sit under it (0 for a leaf/child); shut = its fold state. */
+  const renderRow = (p: Project, holds: number, shut: boolean) => (
+    <ContextMenu key={p.id}>
+      <ContextMenuTrigger asChild>
+        <SidebarMenuItem {...projectDrop(p.id)}>
+          <SidebarMenuButton
+            isActive={s.sel === p.id}
+            className={cn(p.parent && 'pl-6')}
+            // a parent row toggles its fold on each click (and navigates): first opens it, next folds it
+            onClick={() => { go(p.id); if (holds) toggleCollapsed(p.id) }}
+          >
+            {/* the project's mark turns into a grip on hover: same spot, same size,
+                so the row says it can be dragged without moving anything to say it.
+                A parent's turns into the fold instead — that is the more useful click. */}
+            <span
+              role={holds ? 'button' : undefined}
+              aria-label={holds ? (shut ? `Show ${holds} under ${p.name}` : `Hide ${holds} under ${p.name}`) : undefined}
+              onClick={holds ? (e) => { e.stopPropagation(); toggleCollapsed(p.id) } : undefined}
+              className={cn(
+                'relative ml-0.5 flex size-3.5 shrink-0 items-center justify-center',
+                holds ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
+              )}
+            >
+              <span
+                style={p.color ? { backgroundColor: p.color } : undefined}
+                className="bg-muted-foreground h-3.5 w-[2px] rounded-full transition-opacity group-hover/menu-item:opacity-0"
+              />
+              {holds
+                ? <ChevronRight className={cn('absolute size-3.5 opacity-0 transition-[opacity,transform] group-hover/menu-item:opacity-100', !shut && 'rotate-90')} />
+                : <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />}
+            </span>
+            <span className="truncate">{p.name}</span>
+          </SidebarMenuButton>
+          {/* a shut parent says how much is folded under it — same badge as the tag counts,
+              faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
+          {holds > 0 && shut && (
+            <SidebarMenuBadge className="transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">{holds}</SidebarMenuBadge>
+          )}
+          {/* right-7 clears the trash beside it: an action is w-5 pinned at right-1.
+              The context menu has these too, but nothing on the row said it existed */}
+          <Hint label="Edit project">
+            <SidebarMenuAction
+              aria-label="Edit project"
+              showOnHover
+              className="right-7"
+              onClick={() => setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })}
+            >
+              <PencilLine />
+            </SidebarMenuAction>
+          </Hint>
+          <Hint label="Delete project">
+            <SidebarMenuAction aria-label="Delete project" showOnHover onClick={() => setConfirmDelete(p.id)}>
+              <Trash2 />
+            </SidebarMenuAction>
+          </Hint>
+        </SidebarMenuItem>
+      </ContextMenuTrigger>
+      {/* the colour lived behind a double-click and nothing said so */}
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })}>
+          <PencilLine />
+          Edit
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => go(p.id)}>
+          <ArrowRight />
+          Open
+        </ContextMenuItem>
+        {/* one level deep, so only a top-level project can take a subproject */}
+        {!p.parent && (
+          <ContextMenuItem onSelect={() => setDialog({ parent: p.id })}>
+            <Plus />
+            Add subproject
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem variant="destructive" onSelect={() => setConfirmDelete(p.id)}>
+          <Trash2 />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
 
   return (
     <Sidebar collapsible="offcanvas">
-      <SidebarHeader className="px-3 py-3">
+      {/* h-14 + border-b to match the main content header, so STASH and the page title share a baseline */}
+      <SidebarHeader className="h-14 justify-center border-b px-3 py-0">
         <div className="flex items-center gap-2">
           <div className="bg-foreground h-4 w-[3px] rounded-full" />
           <span className="font-heading text-[13px] tracking-[0.18em] uppercase">Stash</span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground hover:text-foreground ml-auto size-7"
-            aria-label={theme.label}
-            title={theme.label}
-            // the circle opens from the button itself, so the switch starts where you clicked
-            onClick={(e) => {
-              const b = e.currentTarget.getBoundingClientRect()
-              revealTheme(THEMES[s.theme].next, b.left + b.width / 2, b.top + b.height / 2)
-            }}
-          >
-            <theme.icon className="size-3.5" />
-          </Button>
         </div>
       </SidebarHeader>
 
       <SidebarContent>
+        {/* Overview is the home dashboard, so it sits on top on its own, above the task views */}
         <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
+                  <ChartColumn />
+                  <span>Overview</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel className="font-heading tracking-wider uppercase">Lists</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {Object.entries(VIEWS).map(([id, v]) => {
@@ -208,18 +283,19 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
+        <SidebarGroup className="group/projects">
           <SidebarGroupLabel className="font-heading tracking-wider uppercase">Projects</SidebarGroupLabel>
           <Hint label="New project">
-            <SidebarGroupAction onClick={() => setDialog({})}>
+            <SidebarGroupAction aria-label="New project" onClick={() => setDialog({})}>
               <Plus />
             </SidebarGroupAction>
           </Hint>
           <DropdownMenu>
             <Hint label="Sort projects">
               <DropdownMenuTrigger asChild>
-                {/* right-9 clears the + beside it: a group action is w-5 pinned at right-3 */}
-                <SidebarGroupAction className="right-9">
+                {/* right-9 clears the + beside it; only shown on hover (or while its menu is open) */}
+                <SidebarGroupAction aria-label="Sort projects"
+                  className="right-9 opacity-0 transition-opacity group-hover/projects:opacity-100 group-focus-within/projects:opacity-100 aria-expanded:opacity-100">
                   <ArrowUpDown />
                 </SidebarGroupAction>
               </DropdownMenuTrigger>
@@ -240,81 +316,36 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           </DropdownMenu>
           <SidebarGroupContent>
             <SidebarMenu>
-              {rootProjects(s).flatMap((root) => {
+              {rootProjects(s).map((root) => {
                 const kids = childProjects(s, root.id)
                 const shut = s.collapsed.includes(root.id)
-                return [root, ...(shut ? [] : kids)].map((p) => {
-                  const holds = p.id === root.id ? kids.length : 0
-                  return (
-                <ContextMenu key={p.id}>
-                <ContextMenuTrigger asChild>
-                <SidebarMenuItem {...projectDrop(p.id)}>
-                  <SidebarMenuButton
-                    isActive={s.sel === p.id}
-                    className={cn(p.parent && 'pl-6')}
-                    onClick={() => go(p.id)}
-                  >
-                    {/* the project's mark turns into a grip on hover: same spot, same size,
-                        so the row says it can be dragged without moving anything to say it.
-                        A parent's turns into the fold instead — that is the more useful click. */}
-                    <span
-                      role={holds ? 'button' : undefined}
-                      aria-label={holds ? (shut ? `Show ${holds} under ${p.name}` : `Hide ${holds} under ${p.name}`) : undefined}
-                      onClick={holds ? (e) => { e.stopPropagation(); toggleCollapsed(p.id) } : undefined}
-                      className="relative ml-0.5 flex size-3.5 shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
-                    >
-                      <span
-                        style={p.color ? { backgroundColor: p.color } : undefined}
-                        className="bg-muted-foreground h-3.5 w-[2px] rounded-full transition-opacity group-hover/menu-item:opacity-0"
-                      />
-                      {holds
-                        ? <ChevronRight className={cn('absolute size-3.5 opacity-0 transition-[opacity,transform] group-hover/menu-item:opacity-100', !shut && 'rotate-90')} />
-                        : <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />}
-                    </span>
-                    <span className="truncate">{p.name}</span>
-                  </SidebarMenuButton>
-                  {/* a shut parent says how much is folded under it — same badge as the tag counts,
-                      faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
-                  {holds > 0 && shut && (
-                    <SidebarMenuBadge className="transition-opacity group-hover/menu-item:opacity-0">{holds}</SidebarMenuBadge>
-                  )}
-                  {/* right-7 clears the trash beside it: an action is w-5 pinned at right-1.
-                      The context menu has these too, but nothing on the row said it existed */}
-                  <Hint label="Edit project">
-                    <SidebarMenuAction
-                      showOnHover
-                      className="right-7"
-                      onClick={() => setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })}
-                    >
-                      <PencilLine />
-                    </SidebarMenuAction>
-                  </Hint>
-                  <Hint label="Delete project">
-                    <SidebarMenuAction showOnHover onClick={() => setConfirmDelete(p.id)}>
-                      <Trash2 />
-                    </SidebarMenuAction>
-                  </Hint>
-                </SidebarMenuItem>
-                </ContextMenuTrigger>
-                {/* the colour lived behind a double-click and nothing said so */}
-                <ContextMenuContent>
-                  <ContextMenuItem onSelect={() => setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })}>
-                    <PencilLine />
-                    Edit
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={() => go(p.id)}>
-                    <ArrowRight />
-                    Open
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem variant="destructive" onSelect={() => setConfirmDelete(p.id)}>
-                    <Trash2 />
-                    Delete
-                  </ContextMenuItem>
-                </ContextMenuContent>
-                </ContextMenu>
-                  )
-                })
+                return (
+                  <Fragment key={root.id}>
+                    {renderRow(root, kids.length, shut)}
+                    {/* kids stay mounted so they can animate: grid 0fr→1fr slides height:auto with
+                        no measuring and no dep. inert when shut keeps the hidden rows off the tab order */}
+                    {kids.length > 0 && (
+                      <div className={cn('grid transition-[grid-template-rows] duration-200 ease-out', shut ? 'grid-rows-[0fr] -mt-1' : 'grid-rows-[1fr]')}>
+                        <div inert={shut} className="flex min-h-0 flex-col gap-1 overflow-hidden">
+                          {kids.map((k, i) => (
+                            <div
+                              key={k.id}
+                              // each child fades in a beat after the one above, so they cascade
+                              // instead of snapping in together; closing drops the delay
+                              style={{ transitionDelay: shut ? '0ms' : `${i * 45}ms` }}
+                              className={cn(
+                                'transition-opacity duration-200 ease-out',
+                                shut ? 'opacity-0' : 'opacity-100',
+                              )}
+                            >
+                              {renderRow(k, 0, false)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </Fragment>
+                )
               })}
               {!s.projects.length && (
                 <p className="text-muted-foreground px-2 py-1 text-xs">
@@ -355,15 +386,21 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
-                  <ChartColumn />
-                  <span>Overview</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
                 <SidebarMenuButton isActive={s.sel === CALENDAR} onClick={() => go(CALENDAR)}>
                   <CalendarRange />
                   <span>Calendar</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={s.sel === SUBS} onClick={() => go(SUBS)}>
+                  <Wallet />
+                  <span>Subscriptions</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={s.sel === MARKET} onClick={() => go(MARKET)}>
+                  <CandlestickChart />
+                  <span>Markets</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
@@ -395,11 +432,16 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
       <ProjectDialog
         open={!!dialog}
         onOpenChange={(v) => !v && setDialog(null)}
+        id={dialog?.id}
         initial={dialog?.name}
         initialColor={dialog?.color}
-        onSubmit={(name, color) => (
-          dialog?.id ? patchProject(dialog.id, { name, color }) : addProject(name, color)
-        )}
+        initialParent={dialog?.parent}
+        onSubmit={(name, color, parent) => {
+          if (dialog?.id) { patchProject(dialog.id, { name, color, parent }); return }
+          addProject(name, color, parent)
+          // unfold the parent so the freshly added child is visible, not hidden under a shut fold
+          if (parent && s.collapsed.includes(parent)) toggleCollapsed(parent)
+        }}
       />
 
       <AlertDialog open={!!doomed} onOpenChange={(v) => !v && setConfirmDelete(null)}>

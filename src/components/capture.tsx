@@ -70,7 +70,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
   const here = project(s, s.sel)
 
   return (
-    <form onSubmit={submit} autoComplete="off" className="px-4 pt-3">
+    <form onSubmit={submit} autoComplete="off" className="px-3 pt-2">
       {/* 42px = the 28px toggle plus the addon's own py-1.5 either side plus the border, so the
           chip is inset by exactly its padding vertically and pl-1.5 matches it horizontally.
           At h-10 the leftover 5px above the chip fought the 8px beside it. */}

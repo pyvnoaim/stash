@@ -275,7 +275,7 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
         <ContextMenuItem variant="destructive" onSelect={onDelete}>
           <Trash2 />
           Delete
-          <ContextMenuShortcut>⌫</ContextMenuShortcut>
+          <ContextMenuShortcut>⌘⌫</ContextMenuShortcut>
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

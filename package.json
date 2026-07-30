@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "for f in src/lib/parse.test.ts src/lib/store.test.ts src/lib/markdown.test.ts src/pdf/doc.test.ts; do node --experimental-strip-types --disable-warning=ExperimentalWarning $f || exit 1; done"
+    "test": "for f in src/lib/parse.test.ts src/lib/store.test.ts src/lib/markdown.test.ts src/lib/treemap.test.ts src/lib/market.test.ts src/lib/notify.test.ts src/pdf/doc.test.ts; do node --experimental-strip-types --disable-warning=ExperimentalWarning $f || exit 1; done"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.7.4",
@@ -17,9 +17,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "date-fns": "^4.4.0",
     "lucide-react": "^1.27.0",
-    "next-themes": "^0.4.6",
     "pdfjs-dist": "^6.2.108",
     "radix-ui": "^1.6.7",
     "react": "^19.2.7",
