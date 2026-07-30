@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as pdfjs from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import type { PageViewport, RenderTask } from 'pdfjs-dist'
+import type { PageViewport, PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist'
 import type { PDFFont } from '@cantoo/pdf-lib'
 import {
   ChevronDown, ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Files, Highlighter,
@@ -114,6 +114,7 @@ export default function Editor({ visible }: { visible: boolean }) {
   useEffect(() => {
     if (!bytes) return
     let task: RenderTask | null = null
+    let loading: PDFDocumentLoadingTask | null = null
     let live = true
     setDrawing(true)
     setError(null)
@@ -121,8 +122,10 @@ export default function Editor({ visible }: { visible: boolean }) {
     ;(async () => {
       try {
         // pdf.js takes ownership of the buffer it is handed, so it never gets ours
-        const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise
-        if (!live) return
+        loading = pdfjs.getDocument({ data: bytes.slice() })
+        const doc = await loading.promise
+        // cleanup already ran while we were loading — tear this orphan down rather than leak it
+        if (!live) { loading.destroy(); return }
         setCount(doc.numPages)
 
         const at = Math.min(page, doc.numPages - 1)
@@ -145,7 +148,8 @@ export default function Editor({ visible }: { visible: boolean }) {
       }
     })()
 
-    return () => { live = false; task?.cancel() }
+    // destroy the document (and its worker) on every change, or each page turn/zoom leaks one
+    return () => { live = false; task?.cancel(); loading?.destroy() }
   }, [bytes, page, zoom])
 
   const load = async (file: File, into: 'open' | 'merge') => {
@@ -161,8 +165,10 @@ export default function Editor({ visible }: { visible: boolean }) {
         setPast([])       // a new file is not something you undo your way out of
         setFuture([])
       } else if (bytes) {
+        // merge first, then record the step — a failed merge must not leave a phantom undo behind
+        const merged = await appendPdf(bytes, next)
         push()
-        setBytes(await appendPdf(bytes, next))
+        setBytes(merged)
       }
     } catch {
       alert('That file could not be read as a PDF.')
@@ -173,20 +179,28 @@ export default function Editor({ visible }: { visible: boolean }) {
 
   /* ---------- pages ---------- */
 
+  // build the new bytes first, then push+set: a rejecting op (e.g. a corrupt file) must not throw
+  // an unhandled rejection or record a phantom undo step with future already wiped
   const insert = async () => {
     if (!bytes) return
-    push()
-    setBytes(await addPage(bytes, page + 1))
-    setNotes((ns) => notesAfterInsert(ns, page + 1))
-    setPage(page + 1)
+    try {
+      const next = await addPage(bytes, page + 1)
+      push()
+      setBytes(next)
+      setNotes((ns) => notesAfterInsert(ns, page + 1))
+      setPage(page + 1)
+    } catch { alert('That page could not be added.') }
   }
 
   const drop = async () => {
     if (!bytes || count < 2) return
-    push()
-    setBytes(await removePage(bytes, page))
-    setNotes((ns) => notesAfterRemove(ns, page))
-    setPage(Math.max(0, Math.min(page, count - 2)))
+    try {
+      const next = await removePage(bytes, page)
+      push()
+      setBytes(next)
+      setNotes((ns) => notesAfterRemove(ns, page))
+      setPage(Math.max(0, Math.min(page, count - 2)))
+    } catch { alert('That page could not be removed.') }
   }
 
   const download = async () => {

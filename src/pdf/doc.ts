@@ -63,7 +63,9 @@ const turn = (dx: number, dy: number, angle: number): [number, number] =>
 
 /** Draws the notes into the file for good. The editor keeps them loose until you download. */
 export async function bake(bytes: Uint8Array, notes: Note[]): Promise<Uint8Array> {
-  const doc = await PDFDocument.load(bytes)
+  // pdf.js renders owner-encrypted PDFs, so the user can annotate one; without this the write back
+  // throws and the work is trapped in the tab
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
   const font = await doc.embedFont(StandardFonts.Helvetica)
   const pages = doc.getPages()
 
@@ -103,7 +105,7 @@ export async function bake(bytes: Uint8Array, notes: Note[]): Promise<Uint8Array
 /* ---------- page surgery. Each returns fresh bytes, so the file on screen is the file ---------- */
 
 const edit = async (bytes: Uint8Array, fn: (d: PDFDocument) => unknown) => {
-  const doc = await PDFDocument.load(bytes)
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
   await fn(doc)
   return doc.save()
 }
@@ -121,7 +123,7 @@ export const addPage = (bytes: Uint8Array, at: number) =>
 
 export const appendPdf = (bytes: Uint8Array, other: Uint8Array) =>
   edit(bytes, async (d) => {
-    const src = await PDFDocument.load(other)
+    const src = await PDFDocument.load(other, { ignoreEncryption: true })
     const pages = await d.copyPages(src, src.getPageIndices())
     for (const p of pages) d.addPage(p)
   })
