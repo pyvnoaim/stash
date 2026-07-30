@@ -4,8 +4,9 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { PageViewport, PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist'
 import type { PDFFont } from '@cantoo/pdf-lib'
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Files, Highlighter,
-  Loader2, MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn, ZoomOut,
+  ChevronDown, ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Files, FolderOpen,
+  Highlighter, Loader2, MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -349,6 +350,14 @@ export default function Editor({ visible }: { visible: boolean }) {
           {name}
         </span>
 
+        {/* the only way back to a different file once one is open — the drop zone is gone by now */}
+        <Button
+          variant="ghost" size="icon-sm" title="Open a different PDF" aria-label="Open a different PDF"
+          onClick={() => openRef.current?.click()}
+        >
+          <FolderOpen />
+        </Button>
+
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
         <div className="flex items-center gap-1">
@@ -586,6 +595,17 @@ export default function Editor({ visible }: { visible: boolean }) {
         </p>
       </div>
 
+      {/* replacing the open file discards the loose stamps, so ask first when there are any */}
+      <input
+        ref={openRef} type="file" accept="application/pdf" hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f && (!notes.length || confirm('Open a different PDF? The text you added here will be discarded.'))) {
+            load(f, 'open')
+          }
+          e.target.value = ''
+        }}
+      />
       <input
         ref={mergeRef} type="file" accept="application/pdf" hidden
         onChange={(e) => {
