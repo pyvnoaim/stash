@@ -138,8 +138,15 @@
   * {
     @apply border-border outline-ring/50;
     }
+  /* The app owns its scrolling — the list, the note page, the PDF each scroll inside their own
+     box. Lock the document so it never scrolls itself: in Safari's standalone "Add to Dock"
+     window an h-svh child under a min-h-svh shell can grow the page and carry the header off the
+     top. height:100% + overflow:hidden keeps everything inside the viewport. */
+  html, body, #root {
+    height: 100%;
+    }
   body {
-    @apply bg-background text-foreground;
+    @apply overflow-hidden bg-background text-foreground;
     }
   html {
     @apply font-sans;
