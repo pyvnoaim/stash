@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { isRepeat, nextDue, today, type Repeat } from './parse.ts'
+import { isRepeat, nextAfter, today, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
 export type Theme = 'auto' | 'light' | 'dark'
@@ -113,28 +113,36 @@ export function load(data: unknown): State {
     p.parent && p.parent !== p.id && tops.has(p.parent) ? p : { ...p, parent: null }
   ))
 
+  const seen = new Set<string>()
   st.items = (Array.isArray(st.items) ? st.items : [])
     .filter((i) => i && i.id)
-    .map((i) => ({
-      ...i,
-      id: String(i.id),
-      type: (['task', 'idea', 'note'] as const).includes(i.type) ? i.type : 'task',
-      text: String(i.text ?? ''),
-      note: String(i.note ?? ''),
-      tags: Array.isArray(i.tags) ? i.tags.map(String) : [],
-      repeat: isRepeat(i.repeat) ? i.repeat : null,
-      // a due date that isn't 'YYYY-MM-DD' has no localeCompare, and the grouped views sort on it —
-      // a hand-edited backup would take the list down and then be written back to disk that way
-      due: typeof i.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(i.due) ? i.due : null,
-      flag: !!i.flag,
-      done: !!i.done,
-      doneAt: typeof i.doneAt === 'number' ? i.doneAt : null,
-      ts: typeof i.ts === 'number' ? i.ts : Date.now(),
-      // a backup from before this existed has never been edited as far as anyone can tell
-      editedAt: typeof i.editedAt === 'number' ? i.editedAt : null,
-      // orphans land in Quick notes rather than becoming invisible
-      pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
-    }))
+    .map((i) => {
+      const type = (['task', 'idea', 'note'] as const).includes(i.type) ? i.type : 'task'
+      return {
+        ...i,
+        id: String(i.id),
+        type,
+        text: String(i.text ?? ''),
+        note: String(i.note ?? ''),
+        tags: Array.isArray(i.tags) ? i.tags.map(String) : [],
+        // only tasks repeat — finishing is what brings the next one round, so a note or idea can't
+        // carry one; patch enforces this too, and load must not let a hand-edited backup slip past it
+        repeat: type === 'task' && isRepeat(i.repeat) ? i.repeat : null,
+        // a due date that isn't 'YYYY-MM-DD' has no localeCompare, and the grouped views sort on it —
+        // a hand-edited backup would take the list down and then be written back to disk that way
+        due: typeof i.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(i.due) ? i.due : null,
+        flag: !!i.flag,
+        done: !!i.done,
+        doneAt: typeof i.doneAt === 'number' ? i.doneAt : null,
+        ts: typeof i.ts === 'number' ? i.ts : Date.now(),
+        // a backup from before this existed has never been edited as far as anyone can tell
+        editedAt: typeof i.editedAt === 'number' ? i.editedAt : null,
+        // orphans land in Quick notes rather than becoming invisible
+        pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
+      }
+    })
+    // a duplicate id makes patch and removeItem act on two rows at once — keep the first, drop the rest
+    .filter((i) => !seen.has(i.id) && seen.add(i.id))
 
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
@@ -243,6 +251,13 @@ export function redo() {
 // another window (the dock app and a tab) wrote — take its state rather than clobber it on our next write
 addEventListener('storage', (e) => {
   if (e.key !== KEY) return
+  // the key was cleared elsewhere (devtools, a sibling calling localStorage.clear) — adopting null
+  // would blank us and then persist the blank, so leave our data alone
+  if (e.newValue == null) return
+  // we still have an unsaved edit in the debounce window: it is at least as new as theirs, so keep
+  // ours and let its flush win rather than silently dropping what was just typed.
+  // ponytail: last-writer-wins, no per-field merge — two tabs editing the same 200ms are rare.
+  if (pending !== undefined) { clearTimeout(pending); save(); return }
   // and drop our history with it: undoing to a snapshot from before their write would eat it
   past.length = future.length = 0
   state = read(e.newValue)
@@ -423,12 +438,12 @@ export function toggleDone(id: string) {
     // still counts on Overview, and a fresh one takes its place at the same spot in the list.
     // ponytail: reopening the finished one leaves the new one behind — untick, then delete it.
     if (closing && it.repeat) {
-      // count from today when you are late, or a daily task finished a week late is born overdue
-      const from = it.due && it.due > today() ? it.due : today()
+      // step from the finished one's own date so the anchor day survives a late completion, but
+      // never come back already overdue — nextAfter clears today either way
+      const due = nextAfter(it.due ?? today(), it.repeat)
       // a fresh occurrence, so it carries none of the finished one's history
       items.splice(at, 0, {
-        ...it, id: uid(), due: nextDue(from, it.repeat), done: false, doneAt: null,
-        ts: Date.now(), editedAt: null,
+        ...it, id: uid(), due, done: false, doneAt: null, ts: Date.now(), editedAt: null,
       })
     }
     return { ...s, items }

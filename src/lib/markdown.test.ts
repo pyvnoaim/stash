@@ -14,5 +14,8 @@ assert.equal(safeHref('javascript:alert(1)'), '#')
 assert.equal(safeHref('JavaScript:alert(1)'), '#')
 assert.equal(safeHref('  javascript:alert(1)'), '#')
 assert.equal(safeHref('data:text/html,<script>'), '#')
+// protocol-relative would navigate off-origin — the single-slash allowance must not admit it
+assert.equal(safeHref('//evil.com/login'), '#')
+assert.equal(safeHref('/local/page'), '/local/page')
 
 console.log('markdown: ok')

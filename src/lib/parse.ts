@@ -36,6 +36,18 @@ export function nextDue(from: string, repeat: Repeat): string {
   return d.toLocaleDateString('sv')
 }
 
+/**
+ * The first occurrence strictly after `after`, stepping from `anchor` by the repeat's own period.
+ * Keeps the anchor day — a monthly task due the 15th finished a month late comes back on the 15th,
+ * not on the day it was finished — while never returning already overdue: a daily task finished a
+ * week late still lands tomorrow.
+ */
+export function nextAfter(anchor: string, repeat: Repeat, after: string = today()): string {
+  let due = nextDue(anchor, repeat)
+  while (due <= after) due = nextDue(due, repeat)
+  return due
+}
+
 const shiftDays = (d: Date, n: number) => {
   d.setDate(d.getDate() + n)
   return d.toLocaleDateString('sv')
