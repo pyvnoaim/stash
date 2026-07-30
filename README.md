@@ -3,9 +3,9 @@
 Tasks, ideas and quick notes across projects. React + Vite + Tailwind + shadcn/ui, monochrome,
 Geist Pixel. No account, no server — everything lives in your browser's localStorage.
 
-Type is two cuts of Geist Pixel, self-hosted in `src/fonts/` from Vercel's release under OFL-1.1:
-**Square** reads the text, **Circle** sets the headings and labels. Geist Sans stays in the stack
-underneath to cover glyphs Pixel doesn't carry.
+Type is one cut of Geist Pixel — **Square**, self-hosted in `src/fonts/` from Vercel's release
+under OFL-1.1 — for text, headings and labels alike. Geist Sans stays in the stack underneath to
+cover glyphs Pixel doesn't carry.
 
 ## Run it
 
@@ -25,7 +25,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | checks for the capture parser and the load validator |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -138,9 +138,11 @@ HTML, so there is no escaping to get wrong and no dependency to pull. Markdown h
 
 ## Sidebar and settings
 
-The lists come first, in the order work moves through them — **Quick notes**, **Today**,
-**Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Overview,
-Calendar and PDF sit apart under **Tools**: none of them is a list of items.
+**Overview** sits on top on its own, since it is the home dashboard rather than one more list.
+Under it the lists come in the order work moves through them — **Quick notes**, **Today**,
+**Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Calendar,
+Subscriptions, Markets and PDF sit apart at the bottom under **Tools**: none of them is a list of
+items.
 
 Edit a project from the pencil on its row or from its right-click menu. A project can carry a
 colour: eight presets, a square and a hue slider behind the wheel, or a hex typed in — `#39f`,
@@ -160,10 +162,10 @@ touched, so it sinks under the first and rises under the second. Dragging a proj
 the order yours, so it drops straight back to **Custom**, freezing whatever order you were looking
 at and landing the drop where you saw it land.
 
-**Settings** in the footer holds the theme and a card of every key. The theme is also a single
-button in the header that cycles system → light → dark, and the switch opens as a circle from
-whatever you clicked, using the browser's own View Transitions — Firefox and *reduce motion* get
-the plain switch.
+**Settings** in the footer holds the theme, the Markets chart style, the stock-data key and a card
+of every key. The theme is also a single button in the header that cycles system → light → dark,
+and the switch opens as a circle from whatever you clicked, using the browser's own View
+Transitions — Firefox and *reduce motion* get the plain switch.
 
 ## Undo
 
@@ -192,9 +194,17 @@ pretending to accept it.
 ## Overview
 
 Four counts across the top — open, due today, overdue, finished this week — and each one opens
-the list it is counting. Under them, thirty days of what you finished and a fortnight of what is
-coming, so the page looks forward as well as back. Then where the open work sits: by project, by
-tag, and by kind. Click a project bar to go there, a tag bar to search for it.
+the list it is counting. Under them income, expenses and net for the month, once there is a
+subscription to count, and **Where it goes**: every expense as a tile whose area is its share of
+the monthly spend, so the one eating the budget is the big rectangle rather than a row you have to
+read. It is a squarified treemap, laid out in `src/lib/treemap.ts` and drawn as divs. Then
+**Markets**, four watched assets — Bitcoin, Ethereum, Solana and gold — each with its live price,
+its 24-hour move and a sparkline of the last twenty-four hours, and any of them taps through to the
+desk.
+
+Then thirty days of what you finished and a fortnight of what is coming, so the page looks forward
+as well as back, and where the open work sits: by project, by tag, and by kind. Click a project bar
+to go there, a tag bar to search for it.
 
 Under those, thirty days of what you captured, on the same window as what you finished, so the two
 read against each other: what you take on beside what you clear. It counts by capture date, so a
@@ -210,9 +220,67 @@ The month, with the work sitting on the days it is due — the thing a list down
 Items live in the cells, each carrying its project's colour; finished ones are struck through, and
 a busy day scrolls inside its own cell. Click one to open whichever list actually holds it.
 
+Subscriptions land on the days they bill, generated across the visible weeks only — income reads
+green with a `+`, an expense stays quiet behind a `€`. A charge is not an item, so clicking one
+opens the Subscriptions tool rather than trying to select it.
+
 Only the weeks the month needs, five or six, so there is never a dead row. Days outside the month
 are tinted back, today's number is filled in, and the grid is ruled by its own gaps rather than by
 a border on every cell.
+
+## Subscriptions
+
+What goes out every month, and what comes in. Add a name, a cost and a cycle — **Weekly**,
+**Monthly**, **Quarterly** or **Yearly** — and the four cards on top do the arithmetic: income a
+month, expenses a month, the net, and what to **set aside** each month for the yearly and quarterly
+bills that would otherwise land all at once. A €120 yearly abo is €10 a month, which is the whole
+point. Everything is euros and nothing is ever converted; it only adds up what you type. The cost
+field takes a comma as well as a dot, since that is what the header shows back.
+
+**Expenses** and **Income** are two sides of the same row and the same cycle maths, one sign apart.
+The header always counts both. Filter by cycle — only the cycles actually in use get a chip — and
+sort by **Recent**, **Name**, **Cost** or **Next charge**. The view and the sort live in the store,
+so leaving the tab and coming back lands where you left.
+
+The date on a row is the anchor, not a deadline: a monthly abo dated last month bills again this
+month, so a date in the past rolls forward instead of reading as overdue. Charges step off the
+anchor rather than off the previous result, so the 31st stays the 31st — Jan 31 → Feb 28 → Mar 31,
+never drifting. A charge landing on a Saturday or Sunday clears on the Monday, the way a bank
+debits. There is no bank-holiday calendar; that is a per-country dataset.
+
+Deleting gives the same undo toast every other delete in the app does.
+
+## Markets
+
+A read-only desk over other people's price feeds. Crypto and gold ride Binance's public API — no
+key, no signup; gold is PAXG, a token pegged to a troy ounce, and there is no liquid silver token
+so silver sits it out. The nine stocks ride Twelve Data, which needs a free key: paste it into
+Settings or into the prompt the page shows, and it stays on this machine and never travels in a
+backup.
+
+Pick an asset, an interval — `15m` to `1w` — and a horizon. **Long-term** rides the classic 50/200
+moving averages and a wide support band; **Short-term** uses 9/21 and a tight one, so it flips far
+sooner. The chart draws price as a line or as candles (Settings picks which), both moving averages,
+the support/resistance band, and the Asia, Europe and US session opens where they fall, each in its
+own timezone so daylight saving handles itself. Hover for the price and date under the crosshair.
+
+Under it, the signals every TA guide repeats, computed in `src/lib/market.ts` and tested: the
+moving-average cross, which side of the slow MA price sits, RSI and its extremes, proximity to
+support or resistance, RSI divergence, and the one- and two-bar candlestick patterns — engulfing,
+hammer, shooting star, doji. No head-and-shoulders and no chart-shape recognition; that is guesswork
+dressed as maths. When the bias is clear, a card spells the setup out: entry on the pull-back to the
+fast MA, stop at the swing against you, target the opposite swing or a 2R projection, with the
+resulting R:R. The **Opening range** preset pins 15m bars and marks the session-open high and low
+the breakout play watches.
+
+None of it is advice, and none of it is stored — every number on the page is fetched fresh.
+
+## Notifications
+
+The bell in the header counts what wants attention, derived from state rather than stored, so it is
+never stale: tasks overdue or due today, subscriptions charging within three days, and any of the
+four watched assets that moved more than 3% in twenty-four hours. Clicking one goes where it lives.
+Dismissing is for the session — a reload brings back whatever is still true.
 
 ## PDF
 
@@ -228,7 +296,12 @@ it and clicking away.
 
 **Undo** and **Redo** cover the stamps and the pages together, fifty steps deep — deleting a page
 moves the stamps that were on it, so undoing one without the other would strand them. Typing runs
-fold into one step, as does a whole drag. Opening a different file starts over.
+fold into one step, as does a whole drag. The folder button in the toolbar opens a different file,
+which starts over — it asks first if there is text on the page to lose.
+
+An owner-encrypted PDF — the kind that renders fine but says it may not be edited — opens and
+annotates like any other, since refusing to write one back would only strand a file the viewer had
+already shown you.
 
 Lines never wrap on their own. pdf-lib does not wrap either, so a line that only broke on screen
 would come out of the file as one long one — better that a long line looks long while you write it.
@@ -254,9 +327,12 @@ is still in the file and still copies out.
 ## Layout
 
 - `src/lib/parse.ts` — capture parser and date labels
-- `src/lib/store.ts` — state, validation on every load, actions. `useSyncExternalStore`, no state library
+- `src/lib/store.ts` — state, validation on every load, actions, subscription cycle maths. `useSyncExternalStore`, no state library
 - `src/lib/markdown.ts` — the note renderer's DOM-free helpers, so `npm test` covers link safety
-- `src/components/` — sidebar, capture, row, inspector, command palette, the note page
+- `src/lib/market.ts` — the price feeds and every signal the Markets desk shows, free of React
+- `src/lib/treemap.ts` — squarified treemap, pure geometry, for Overview's spend panel
+- `src/lib/notify.ts` — the alerts the bell shows, derived from state
+- `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
 - `src/pdf/doc.ts` — every PDF operation, free of React and the DOM so `npm test` covers it
@@ -279,8 +355,11 @@ says so and offers the export, and it stays up until you dismiss it. Everything 
 as long as the tab is open; none of it is being kept.
 
 `⌘K → Export a backup` writes a JSON file; **Import a backup** replaces the current data with it.
-Backups from the original pre-React version import fine. It stored a project's colour as an HSL
-hue rather than a hex, so those are dropped and the projects come in uncoloured; nothing else is.
+The Twelve Data key is stripped on the way out, so a backup you hand to someone else carries no
+credential of yours, and an import without one leaves the key already on this device alone rather
+than wiping it. Backups from the original pre-React version import fine. It stored a project's
+colour as an HSL hue rather than a hex, so those are dropped and the projects come in uncoloured;
+nothing else is.
 
 ## License
 
