@@ -111,6 +111,8 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
           <div className="relative flex min-h-0 flex-1 flex-col">
             <textarea
               ref={taRef}
+              // mounts fresh on every entry to edit, so native autoFocus lands the cursor
+              autoFocus
               value={it.note}
               onChange={(e) => patch(it.id, { note: e.target.value })}
               onMouseUp={onSelect}

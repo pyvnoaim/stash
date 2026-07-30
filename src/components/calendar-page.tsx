@@ -3,9 +3,11 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { today } from '@/lib/parse'
-import { project, useStash, type Item } from '@/lib/store'
+import { chargesBetween, project, select, SUBS, useStash, type Item, type Sub } from '@/lib/store'
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const stamp = (d: Date) => d.toLocaleDateString('sv')
 const monthOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1)
 
@@ -18,10 +20,11 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
   const t = today()
   const [cursor, setCursor] = useState(() => monthOf(new Date()))
 
-  /* Whole weeks from the Sunday on or before the 1st, however many the month needs — five for a
+  /* Whole weeks from the Monday on or before the 1st, however many the month needs — five for a
      short one, six when it runs over. A fixed six leaves an empty row most months. */
   const weeks = useMemo(() => {
-    const first = cursor.getDay()
+    // days before the 1st, counting from Monday: getDay() is 0=Sun, so shift it to a Mon-first index
+    const first = (cursor.getDay() + 6) % 7
     const days = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate()
     const rows = Math.ceil((first + days) / 7)
     return Array.from({ length: rows }, (_, w) =>
@@ -44,6 +47,21 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     for (const list of m.values()) list.sort((a, b) => Number(a.done) - Number(b.done))
     return m
   }, [s.items])
+
+  // subscription charges land on the days they bill, generated across the visible window only
+  const subsByDay = useMemo(() => {
+    const from = stamp(weeks[0][0])
+    const to = stamp(weeks[weeks.length - 1][6])
+    const m = new Map<string, Sub[]>()
+    for (const sub of s.subs) {
+      for (const day of chargesBetween(sub, from, to)) {
+        const at = m.get(day)
+        if (at) at.push(sub)
+        else m.set(day, [sub])
+      }
+    }
+    return m
+  }, [s.subs, weeks])
 
   const shift = (n: number) => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + n, 1))
   const label = cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
@@ -130,6 +148,24 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                       </button>
                     )
                   })}
+
+                  {/* subscription charges: income reads green, an expense stays quiet. Clicking
+                      jumps to the tool, since a charge is not an item to open. */}
+                  {(subsByDay.get(key) ?? []).map((sub) => (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      onClick={() => select(SUBS)}
+                      title={`${sub.name} — ${euro(sub.cost)} ${sub.cycle}`}
+                      className={cn(
+                        'hover:bg-muted flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-left text-xs tabular-nums',
+                        sub.kind === 'income' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground',
+                      )}
+                    >
+                      <span className="shrink-0 font-mono">{sub.kind === 'income' ? '+' : '€'}</span>
+                      <span className="truncate">{sub.name}</span>
+                    </button>
+                  ))}
                 </div>
               )
             })}

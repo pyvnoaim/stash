@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Loader2, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
+import { NotificationBell } from '@/components/notification-bell'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
@@ -10,6 +12,8 @@ import { ItemRow } from '@/components/item-row'
 import { NotePage } from '@/components/note-page'
 import CalendarPage from '@/components/calendar-page'
 import Overview from '@/components/overview'
+import SubsPage from '@/components/subs-page'
+import MarketPage from '@/components/market-page'
 import { ProjectDialog } from '@/components/project-dialog'
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
@@ -20,7 +24,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, focus, isGrouped, isPage, isSorted, moveBefore, OVERVIEW, patch, PDF,
+  addProject, CALENDAR, focus, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
   openIn, redo, removeItem, replaceAll, restoreItem, select, tagCounts, toggleDone, undo, useStash,
   viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
@@ -174,12 +178,17 @@ export default function App() {
     focus(it.id)
   }
 
-  /** Click picks one row, shift-click paints from the anchor to the row you hit. */
+  /** Click picks one row, shift-click paints from the anchor to the row you hit.
+   *  Reads the anchor + list through refs, not this render's closure: ItemRow is memo'd and ignores
+   *  onSelect, so an un-re-rendered row holds an old pick — the refs keep even that old one current. */
+  const pickState = useRef({ items, focus: s.focus })
+  pickState.current = { items, focus: s.focus }
   const pick = (id: string, range: boolean) => {
-    const from = items.findIndex((i) => i.id === s.focus)
-    const to = items.findIndex((i) => i.id === id)
+    const { items: list, focus: anchor } = pickState.current
+    const from = list.findIndex((i) => i.id === anchor)
+    const to = list.findIndex((i) => i.id === id)
     if (!range || from < 0 || to < 0) { setMarked([]); focus(id); return }
-    setMarked(items.slice(Math.min(from, to), Math.max(from, to) + 1).map((i) => i.id))
+    setMarked(list.slice(Math.min(from, to), Math.max(from, to) + 1).map((i) => i.id))
   }
 
   /* Anything bound here belongs in SHORTCUTS (src/lib/keys.ts) in the same commit — that list
@@ -308,6 +317,8 @@ export default function App() {
             <span className="text-muted-foreground mr-auto font-mono text-xs tabular-nums">
               {page ? '' : items.length || ''}
             </span>
+            <NotificationBell onNavigate={goTo} />
+            <ThemeToggle />
             <div className="relative">
               <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
               <Input
@@ -358,6 +369,9 @@ export default function App() {
           {page === OVERVIEW && <Overview onTag={(t) => addTerm('#' + t)} onNavigate={goTo} />}
 
           {page === CALENDAR && <CalendarPage onOpen={jumpTo} />}
+
+          {page === SUBS && <SubsPage />}
+          {page === MARKET && <MarketPage />}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would
@@ -421,7 +435,7 @@ export default function App() {
                   const head = label && label !== group ? label : null
                   if (label) group = label
                   return (
-                    <div key={it.id} data-selected={it.id === s.focus}>
+                    <div key={it.id} data-selected={it.id === s.focus} className="item-row">
                       {head && (
                         <h2 className="text-muted-foreground font-heading mt-5 mb-1.5 flex items-center gap-2.5 px-2.5 text-[11px] tracking-wider uppercase">
                           {head}

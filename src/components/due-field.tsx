@@ -30,19 +30,20 @@ export function DueField({ id, due, placeholder, onPick }: {
         <Button
           id={id}
           variant="outline"
-          className={cn('w-full justify-start font-normal', !due && 'text-muted-foreground')}
+          className={cn('w-full justify-start overflow-hidden font-normal', !due && 'text-muted-foreground')}
         >
-          <CalendarIcon className="size-3.5" />
+          <CalendarIcon className="size-3.5 shrink-0" />
           {due ? (
             <>
-              {dayLabel(due)}
-              <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">{due}</span>
+              <span className="shrink-0">{dayLabel(due)}</span>
+              {/* the ISO date gives up room first, so the clear button never spills past the edge */}
+              <span className="text-muted-foreground min-w-0 truncate font-mono text-xs tabular-nums">{due}</span>
               {/* nested clickable clears without opening the popover — no in-popover button, no dead space */}
               <span
                 role="button"
                 tabIndex={0}
                 aria-label="Clear date"
-                className="text-muted-foreground hover:text-foreground hover:bg-muted -mr-1 rounded-sm p-0.5"
+                className="text-muted-foreground hover:text-foreground hover:bg-muted -mr-1 ml-auto shrink-0 rounded-sm p-0.5"
                 onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPick(null) }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onPick(null) }

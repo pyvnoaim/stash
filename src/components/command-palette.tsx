@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
-  Plus, StickyNote, Upload,
+  Plus, StickyNote, Upload, Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -12,7 +12,7 @@ import {
 import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
-  CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, select, useStash,
+  CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, select, SUBS, useStash,
   viewName, VIEWS, visible, type Item, type State,
 } from '@/lib/store'
 
@@ -29,6 +29,7 @@ const PAGES = [
   { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
   { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
   { id: PDF, name: 'PDF', icon: FileText },
+  { id: SUBS, name: 'Subscriptions', icon: Wallet },
 ]
 
 const trim = (t: string) => (t.length > 28 ? t.slice(0, 28) + '…' : t)
@@ -54,8 +55,10 @@ function copyList() {
 }
 
 export function exportBackup() {
+  // strip the Twelve Data key — the store promises it never travels in a backup (store.ts apiKey)
+  const { apiKey: _drop, ...safe } = getState()
   const url = URL.createObjectURL(
-    new Blob([JSON.stringify(getState(), null, 2)], { type: 'application/json' }),
+    new Blob([JSON.stringify(safe, null, 2)], { type: 'application/json' }),
   )
   const a = Object.assign(document.createElement('a'), { href: url, download: `stash-${today()}.json` })
   a.click()
@@ -86,9 +89,20 @@ export function CommandPalette({
   // memoised so an unrelated re-render doesn't rescan every item building a hay string apiece.
   const found = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return needle.length < 2 ? []
-      : s.items.filter((i) => hay(s, i).includes(needle)).slice(0, 20)
+    if (needle.length < 2) return { items: [], more: false }
+    const hits = s.items.filter((i) => hay(s, i).includes(needle))
+    return { items: hits.slice(0, 20), more: hits.length > 20 } // `more` distinguishes "exactly 20" from "capped"
   }, [s, q])
+
+  // counts don't depend on the query — memoise so typing doesn't rescan every item / project each key
+  const viewCounts = useMemo(
+    () => Object.fromEntries(Object.entries(VIEWS).map(([id, v]) => [id, s.items.filter(v.filter).length])),
+    [s.items],
+  )
+  const openCounts = useMemo(
+    () => Object.fromEntries(s.projects.map((p) => [p.id, openIn(s, p.id)])),
+    [s.projects, s.items], // eslint-disable-line react-hooks/exhaustive-deps
+  )
   const picked = ids.map((id) => s.items.find((i) => i.id === id)).filter((i) => !!i)
   const it = picked[0]
   const run = (fn: () => void) => () => { onOpenChange(false); fn() }
@@ -123,7 +137,7 @@ export function CommandPalette({
           <CommandGroup heading="Views">
             {Object.entries(VIEWS).map(([id, v]) => {
               const Icon = VIEW_ICONS[id as keyof typeof VIEW_ICONS]
-              const n = s.items.filter(v.filter).length
+              const n = viewCounts[id]
               return (
                 <CommandItem key={id} value={`view ${v.name}`} onSelect={run(() => select(id))}>
                   <Icon />
@@ -147,7 +161,7 @@ export function CommandPalette({
                   {p.parent ? `${project(s, p.parent)?.name} / ${p.name}` : p.name}
                 </span>
                 <CommandShortcut className="tabular-nums">
-                  {openIn(s, p.id) || ''}
+                  {openCounts[p.id] || ''}
                 </CommandShortcut>
               </CommandItem>
             ))}
@@ -157,12 +171,12 @@ export function CommandPalette({
             </CommandItem>
           </CommandGroup>
 
-          {found.length > 0 && (
+          {found.items.length > 0 && (
             <>
               <CommandSeparator />
               {/* the id keeps two rows of the same text apart, and the rest is what cmdk scores on */}
-              <CommandGroup heading={found.length === 20 ? 'Items — first twenty' : 'Items'}>
-                {found.map((i) => {
+              <CommandGroup heading={found.more ? 'Items — first twenty' : 'Items'}>
+                {found.items.map((i) => {
                   const Icon = i.type === 'idea' ? Lightbulb : i.type === 'note' ? StickyNote : ListTodo
                   return (
                     <CommandItem

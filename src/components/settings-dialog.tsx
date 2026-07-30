@@ -1,19 +1,25 @@
-import { Monitor, Moon, Sun } from 'lucide-react'
+import { CandlestickChart, ChartLine, Monitor, Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { SHORTCUTS } from '@/lib/keys'
 import { revealTheme } from '@/lib/utils'
-import { useStash, type Theme } from '@/lib/store'
+import { setApiKey, setChart, useStash, type ChartStyle, type Theme } from '@/lib/store'
 
 const THEMES: { id: Theme; label: string; icon: React.ElementType }[] = [
   { id: 'auto', label: 'System', icon: Monitor },
   { id: 'light', label: 'Light', icon: Sun },
   { id: 'dark', label: 'Dark', icon: Moon },
+]
+
+const CHARTS: { id: ChartStyle; label: string; icon: React.ElementType }[] = [
+  { id: 'line', label: 'Line', icon: ChartLine },
+  { id: 'candles', label: 'Candles', icon: CandlestickChart },
 ]
 
 export function SettingsDialog({ open, onOpenChange }: {
@@ -47,6 +53,41 @@ export function SettingsDialog({ open, onOpenChange }: {
           </div>
           <p className="text-muted-foreground text-xs">
             System follows whatever the machine is set to, and changes with it.
+          </p>
+        </div>
+
+        <Separator />
+
+        <div className="grid gap-2">
+          <Label>Markets chart</Label>
+          <div className="grid grid-cols-2 gap-1.5">
+            {CHARTS.map(({ id, label, icon: Icon }) => (
+              <Button
+                key={id}
+                size="sm"
+                variant={s.chart === id ? 'default' : 'outline'}
+                onClick={() => setChart(id)}
+              >
+                <Icon className="size-3.5" />
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <Separator />
+
+        <div className="grid gap-2">
+          <Label htmlFor="td-key">Stock data key</Label>
+          <Input
+            id="td-key"
+            type="password"
+            placeholder="Twelve Data API key"
+            defaultValue={s.apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <p className="text-muted-foreground text-xs">
+            Free key from twelvedata.com — needed only for the stock feeds. Crypto and gold work without it.
           </p>
         </div>
 

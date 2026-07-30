@@ -34,6 +34,77 @@ export interface Project {
   parent: string | null
 }
 
+/** How often a subscription bills. */
+export const CYCLES = ['weekly', 'monthly', 'quarterly', 'yearly'] as const
+export type Cycle = (typeof CYCLES)[number]
+const PER_YEAR: Record<Cycle, number> = { weekly: 52, monthly: 12, quarterly: 4, yearly: 1 }
+
+/** Money out is an expense, money in is income — the same row, the same cycle maths, one sign apart. */
+export type Kind = 'expense' | 'income'
+
+export interface Sub {
+  id: string
+  kind: Kind
+  name: string
+  /** Cost per billing cycle, in whatever currency you keep — the app never converts. */
+  cost: number
+  cycle: Cycle
+  /** The next charge/payday, 'YYYY-MM-DD', or null if you haven't dated it. */
+  due: string | null
+}
+
+/** What to set aside each month to cover it: a €120 yearly abo is €10 a month. The whole point. */
+export const monthlyCost = (sub: Sub) => (sub.cost * PER_YEAR[sub.cycle]) / 12
+export const yearlyCost = (sub: Sub) => sub.cost * PER_YEAR[sub.cycle]
+
+// n periods after the anchor date. Stepping off the anchor each time, not off the last result, is
+// what keeps a monthly charge on the 31st: Jan 31 → Feb 28 → Mar 31, never drifting to Feb's 28th.
+function chargeAt(anchor: string, cycle: Cycle, n: number): string {
+  const d = new Date(anchor + 'T00:00')
+  if (cycle === 'weekly') d.setDate(d.getDate() + 7 * n)
+  else {
+    const day = d.getDate()
+    d.setMonth(d.getMonth() + n * (cycle === 'monthly' ? 1 : cycle === 'quarterly' ? 3 : 12))
+    if (d.getDate() !== day) d.setDate(0) // the 31st has no answer in a 30-day month — clamp to its end
+  }
+  // banks don't debit on weekends — a charge landing Sat/Sun clears the next business day (Mon).
+  // Each n steps off the anchor, so rolling the result never drifts the following charge.
+  // ponytail: no bank-holiday calendar — that's a per-country dataset; add one if a user needs it.
+  const wd = d.getDay()
+  if (wd === 6) d.setDate(d.getDate() + 2)
+  else if (wd === 0) d.setDate(d.getDate() + 1)
+  return d.toLocaleDateString('sv')
+}
+
+/**
+ * Every charge date of a sub that falls in [from, to], stepping forward from `due`. A sub with no
+ * date has none. ponytail: capped at 500 steps, so a `due` left years in the past can't hang the
+ * loop — subs are meant to carry their *next* charge, which this walks forward from.
+ */
+export function chargesBetween(sub: Sub, from: string, to: string): string[] {
+  if (!sub.due) return []
+  const out: string[] = []
+  for (let n = 0; n < 500; n++) {
+    const d = chargeAt(sub.due, sub.cycle, n)
+    if (d > to) break
+    if (d >= from) out.push(d)
+  }
+  return out
+}
+
+/**
+ * The upcoming charge, on or after `from`. `due` is only the anchor day — a monthly abo dated last
+ * month bills again this month, so a past date rolls forward rather than reading as "overdue".
+ */
+export function nextCharge(sub: Sub, from: string = today()): string | null {
+  if (!sub.due) return null
+  for (let n = 0; n < 500; n++) {
+    const d = chargeAt(sub.due, sub.cycle, n)
+    if (d >= from) return d
+  }
+  return null
+}
+
 /** Six digits with a hash. Anything else — a name, a shorthand, junk out of a backup — is no colour. */
 export const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v)
 
@@ -41,20 +112,42 @@ export const isHex = (v: unknown): v is string => typeof v === 'string' && /^#[0
    cleans up is a value that looks fine all session and changes under you on the next reload. */
 const cleanColor = (v: unknown) => (isHex(v) ? v.toLowerCase() : null)
 
+// a regex only proves the shape — 2026-02-30 and 2026-13-45 pass it and then break localeCompare
+// in the grouped views. Round-trip through a real Date so only a date that exists survives.
+function cleanDate(v: unknown): string | null {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null
+  const d = new Date(v + 'T00:00')
+  return !isNaN(+d) && d.toLocaleDateString('sv') === v ? v : null
+}
+
 /** Manual is the drag order the sidebar has always had; the other two are derived on the way past. */
 export const PROJECT_SORTS = ['manual', 'name', 'name-desc', 'edited', 'edited-asc'] as const
 export type ProjectSort = (typeof PROJECT_SORTS)[number]
+
+/** How the Markets chart draws price: a single line, or OHLC candlesticks. */
+export type ChartStyle = 'line' | 'candles'
+
+/** Subscriptions view state, kept so it survives leaving the tab. */
+export const SUB_SORTS = ['recent', 'name', 'cost', 'due'] as const
+export type SubSort = (typeof SUB_SORTS)[number]
 
 export interface State {
   v: 1
   projects: Project[]
   items: Item[]
+  subs: Sub[]
   sel: string
   focus: string | null
   theme: Theme
   projectSort: ProjectSort
   /** Parent projects folded shut in the sidebar. */
   collapsed: string[]
+  chart: ChartStyle
+  /** Twelve Data key for the Markets stock feeds. Stays local, never travels in a backup. */
+  apiKey: string
+  subSort: SubSort
+  /** Which side of Subscriptions is open — expenses or income. */
+  subView: 'expense' | 'income'
 }
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
@@ -76,7 +169,9 @@ export const isView = (id: string): id is ViewId => id in VIEWS
 export const OVERVIEW = 'overview'
 export const CALENDAR = 'calendar'
 export const PDF = 'pdf'
-const PAGES: string[] = [OVERVIEW, CALENDAR, PDF]
+export const SUBS = 'subs'
+export const MARKET = 'market'
+const PAGES: string[] = [OVERVIEW, CALENDAR, SUBS, MARKET, PDF]
 export const isPage = (id: string) => PAGES.includes(id)
 
 /** Everything `sel` is allowed to be, which is also everything the URL hash may name. */
@@ -87,8 +182,8 @@ const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
-  v: 1, projects: [], items: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [],
+  v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
+  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', subSort: 'recent', subView: 'expense',
 })
 
 // Every way data enters — localStorage, an imported backup — comes through here.
@@ -96,8 +191,10 @@ export function load(data: unknown): State {
   const raw = (data && typeof data === 'object' ? data : {}) as Partial<State>
   const st = { ...blank(), ...raw }
 
+  // a duplicate id makes patch/remove/move act on two rows at once — the same guard items get below
+  const pseen = new Set<string>()
   st.projects = (Array.isArray(st.projects) ? st.projects : [])
-    .filter((p) => p && p.id)
+    .filter((p) => p && p.id && !pseen.has(String(p.id)) && pseen.add(String(p.id)))
     .map((p) => ({
       id: String(p.id),
       name: String(p.name || 'Project'),
@@ -130,7 +227,7 @@ export function load(data: unknown): State {
         repeat: type === 'task' && isRepeat(i.repeat) ? i.repeat : null,
         // a due date that isn't 'YYYY-MM-DD' has no localeCompare, and the grouped views sort on it —
         // a hand-edited backup would take the list down and then be written back to disk that way
-        due: typeof i.due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(i.due) ? i.due : null,
+        due: cleanDate(i.due),
         flag: !!i.flag,
         done: !!i.done,
         doneAt: typeof i.doneAt === 'number' ? i.doneAt : null,
@@ -144,10 +241,28 @@ export function load(data: unknown): State {
     // a duplicate id makes patch and removeItem act on two rows at once — keep the first, drop the rest
     .filter((i) => !seen.has(i.id) && seen.add(i.id))
 
+  // same duplicate-id and shape guards the items get: a hand-edited backup shouldn't take the
+  // Subscriptions tool down or write NaN totals back to disk
+  const sseen = new Set<string>()
+  st.subs = (Array.isArray(st.subs) ? st.subs : [])
+    .filter((x) => x && x.id && !sseen.has(String(x.id)) && sseen.add(String(x.id)))
+    .map((x) => ({
+      id: String(x.id),
+      kind: x.kind === 'income' ? 'income' as const : 'expense' as const,
+      name: String(x.name || 'Subscription'),
+      cost: typeof x.cost === 'number' && isFinite(x.cost) && x.cost >= 0 ? x.cost : 0,
+      cycle: (CYCLES as readonly string[]).includes(x.cycle) ? x.cycle : 'monthly',
+      due: cleanDate(x.due),
+    }))
+
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'
   st.collapsed = Array.isArray(st.collapsed) ? st.collapsed.map(String) : []
+  st.chart = st.chart === 'candles' ? 'candles' : 'line'
+  st.apiKey = typeof st.apiKey === 'string' ? st.apiKey : ''
+  st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
+  st.subView = st.subView === 'income' ? 'income' : 'expense'
   return st
 }
 
@@ -158,9 +273,8 @@ const read = (raw: string | null): State => {
 }
 
 let state: State = read(localStorage.getItem(KEY))
-// the hash names the view, and it is read before the first render so nothing flashes the old one
-const routed = decodeURIComponent(location.hash.slice(1))
-if (routed && isRoute(state, routed)) state = { ...state, sel: routed }
+// always open on the Overview dashboard, whatever view was last active (App rewrites the hash on mount)
+state = { ...state, sel: OVERVIEW }
 
 const listeners = new Set<() => void>()
 
@@ -215,7 +329,7 @@ export function set(next: State | ((s: State) => State)) {
   const value = typeof next === 'function' ? next(prev) : next
 
   // only the data goes on the stack: which view you are in and what is focused are not edits
-  if (prev.items !== value.items || prev.projects !== value.projects) {
+  if (prev.items !== value.items || prev.projects !== value.projects || prev.subs !== value.subs) {
     // a run of edits is one step — a typed letter, and the five patches one ⌘K command fires
     if (now - edited > 500) past.push(prev)
     if (past.length > 50) past.shift()
@@ -227,7 +341,7 @@ export function set(next: State | ((s: State) => State)) {
 
 // only the two data fields travel — a snapshot also holds the theme and the view, and walking
 // those back would undo a setting you changed after the edit
-const rewind = (to: State) => ({ ...state, items: to.items, projects: to.projects })
+const rewind = (to: State) => ({ ...state, items: to.items, projects: to.projects, subs: to.subs })
 
 /** Both return false when there is nothing left to walk back to, so the caller can stay quiet. */
 export function undo() {
@@ -276,7 +390,9 @@ export const useStash = () => useSyncExternalStore(subscribe, getState)
 
 export const project = (s: State, id: string | null) => s.projects.find((p) => p.id === id)
 
-const PAGE_NAMES: Record<string, string> = { [OVERVIEW]: 'Overview', [CALENDAR]: 'Calendar', [PDF]: 'PDF' }
+const PAGE_NAMES: Record<string, string> = {
+  [OVERVIEW]: 'Overview', [CALENDAR]: 'Calendar', [PDF]: 'PDF', [SUBS]: 'Subscriptions', [MARKET]: 'Markets',
+}
 
 export const viewName = (s: State) =>
   PAGE_NAMES[s.sel]
@@ -418,6 +534,10 @@ export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
 export const select = (sel: string) => set((s) => ({ ...s, sel }))
 export const focus = (focus: string | null) => set((s) => ({ ...s, focus }))
 export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
+export const setChart = (chart: ChartStyle) => set((s) => ({ ...s, chart }))
+export const setApiKey = (apiKey: string) => set((s) => ({ ...s, apiKey: apiKey.trim() }))
+export const setSubSort = (subSort: SubSort) => set((s) => ({ ...s, subSort }))
+export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
 /** A pasted list is one write, not one per line — each `set` serialises the whole store. */
@@ -520,6 +640,8 @@ export function moveProject(dragId: string, targetId: string, where: 'above' | '
     // onto a row makes it that row's child; above or below makes it that row's sibling, which is
     // also the only way back out — dropping a sub-project beside a top-level one lifts it
     const parent = where === 'in' ? target.id : target.parent
+    // depth stops at two: can't nest under a sub-project, and can't nest a node that has children
+    if (where === 'in' && target.parent) return s
     if (parent && !canNest(s, dragId)) return s
 
     const done = reorder(flatProjects(s), dragId, targetId, where !== 'above')
@@ -568,4 +690,34 @@ export const toggleCollapsed = (id: string) => set((s) => ({
   collapsed: s.collapsed.includes(id) ? s.collapsed.filter((c) => c !== id) : [...s.collapsed, id],
 }))
 
-export const replaceAll = (data: unknown) => set(load(data))
+export const addSub = (kind: Kind, name: string, cost: number, cycle: Cycle, due: string | null = null) => {
+  const sub: Sub = { id: uid(), kind, name, cost, cycle, due }
+  set((s) => ({ ...s, subs: [sub, ...s.subs] }))
+  return sub
+}
+
+export const patchSub = (id: string, p: Partial<Sub>) =>
+  set((s) => ({ ...s, subs: s.subs.map((x) => (x.id === id ? { ...x, ...p } : x)) }))
+
+/** Returns the removed sub and its index so the caller can offer an undo — the same as removeItem. */
+export function removeSub(id: string) {
+  const at = state.subs.findIndex((x) => x.id === id)
+  if (at < 0) return null
+  const sub = state.subs[at]
+  set((s) => ({ ...s, subs: s.subs.filter((x) => x.id !== id) }))
+  return { sub, at }
+}
+
+export function restoreSub(undo: { sub: Sub; at: number } | null) {
+  if (!undo || state.subs.some((x) => x.id === undo.sub.id)) return
+  set((s) => {
+    const subs = [...s.subs]
+    subs.splice(undo.at, 0, undo.sub)
+    return { ...s, subs }
+  })
+}
+
+// keep the live Twelve Data key on import — backups deliberately omit it, so a missing one must not
+// wipe the key already on this device (an older backup that still carries one is honoured)
+export const replaceAll = (data: unknown) =>
+  set((s) => { const next = load(data); return { ...next, apiKey: next.apiKey || s.apiKey } })

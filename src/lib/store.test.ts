@@ -11,8 +11,11 @@ Object.assign(globalThis, {
 const {
   addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
-  toggleDone, undo, visible,
+  toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge,
 } = await import('./store.ts')
+type Sub = import('./store.ts').Sub
+const mkSub = (p: Partial<Sub>): Sub =>
+  ({ id: 's', kind: 'expense', name: 'x', cost: 0, cycle: 'monthly', due: null, ...p })
 type Item = import('./store.ts').Item
 
 // junk in, a usable blank state out
@@ -282,6 +285,12 @@ assert.deepEqual(visible(getState(), '').map((i) => i.id), ['down'])   // and no
 // the sidebar reads parents each followed by their own
 assert.deepEqual(flatProjects(getState()).map((x) => x.name), ['Development', 'Kova'])
 
+// depth stops at two: dropping a project "in" a sub-project is rejected, not made a grandchild
+const leaf = addProject('Leaf')
+moveProject(leaf.id, sub.id, 'in')
+assert.equal(getState().projects.find((p) => p.id === leaf.id)?.parent, null)
+removeProject(leaf.id)
+
 // deleting the parent promotes the child rather than taking it down too
 removeProject(main.id)
 assert.deepEqual(getState().projects.map((x) => [x.name, x.parent]), [['Kova', null]])
@@ -382,5 +391,40 @@ setTheme('dark')
 assert.equal(undo(), true)
 assert.deepEqual(getState().items, [])
 assert.equal(getState().theme, 'dark')
+
+// subs: the whole point is a yearly abo spread over twelve months, and a monthly one unchanged
+assert.equal(monthlyCost(mkSub({ cost: 120, cycle: 'yearly' })), 10)
+assert.equal(monthlyCost(mkSub({ cost: 9.99, cycle: 'monthly' })), 9.99)
+assert.equal(monthlyCost(mkSub({ cost: 30, cycle: 'quarterly' })), 10)
+assert.equal(yearlyCost(mkSub({ cost: 10, cycle: 'monthly' })), 120)
+
+// charge dates: monthly steps and clamps to the month's end, then rolls weekends to the next business
+// day (Jan 31 & Feb 28 2026 are Saturdays → Mon); none before `due`, none past the window
+assert.deepEqual(chargesBetween(mkSub({ due: '2026-01-31', cycle: 'monthly' }), '2026-01-01', '2026-04-01'),
+  ['2026-02-02', '2026-03-02', '2026-03-31'])
+assert.deepEqual(chargesBetween(mkSub({ due: '2026-06-01', cycle: 'monthly' }), '2026-01-01', '2026-03-01'), [])
+assert.deepEqual(chargesBetween(mkSub({ due: null }), '2026-01-01', '2026-12-31'), [])
+
+// next charge rolls a past anchor forward instead of reading as overdue; a future one stands.
+// the 15th lands on a Saturday in Aug 2026, so it clears the following Monday
+assert.equal(nextCharge(mkSub({ due: '2026-01-15', cycle: 'monthly' }), '2026-07-30'), '2026-08-17')
+assert.equal(nextCharge(mkSub({ due: '2026-09-01', cycle: 'monthly' }), '2026-07-30'), '2026-09-01')
+assert.equal(nextCharge(mkSub({ due: null }), '2026-07-30'), null)
+
+// load() is the trust boundary: junk cost and bad cycle come back safe, dupes drop
+const subs = load({
+  subs: [
+    { id: 'a', kind: 'income', name: 'Salary', cost: 12, cycle: 'yearly', due: '2026-01-15' },
+    { id: 'a', name: 'dupe' },                              // duplicate id dropped
+    { name: 'no id' },                                      // no id dropped
+    { id: 'b', cost: 'lots', cycle: 'daily', due: 'nope' }, // junk cost → 0, bad cycle → monthly, bad date → null
+    { id: 'c', cost: -5 },                                 // negatives are not costs
+  ],
+}).subs
+assert.deepEqual(subs, [
+  { id: 'a', kind: 'income', name: 'Salary', cost: 12, cycle: 'yearly', due: '2026-01-15' },
+  { id: 'b', kind: 'expense', name: 'Subscription', cost: 0, cycle: 'monthly', due: null },
+  { id: 'c', kind: 'expense', name: 'Subscription', cost: 0, cycle: 'monthly', due: null },
+])
 
 console.log('store: ok')
