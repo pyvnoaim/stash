@@ -184,6 +184,31 @@
   z-index: 1;
 }
 
+/* Skeleton shimmer: a highlight sweeping left to right, which reads as "loading" rather than as the
+   "broken element" a bare pulsing block can look like. A gradient and one keyframe — no animation
+   library for a moving rectangle, and the reduced-motion rule below already stills it.
+   The sweep is drawn from `--foreground` at low alpha rather than from `--accent`, because in this
+   theme --accent and --muted are the same colour and the shimmer would have been invisible. */
+@keyframes stash-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -150% 0; }
+}
+
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklch, var(--foreground) 9%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+  animation: stash-shimmer 1.5s ease-in-out infinite;
+}
+
 /* asked to sit still, everything sits still */
 @media (prefers-reduced-motion: reduce) {
   * {
