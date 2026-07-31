@@ -156,7 +156,9 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   const tags = tagCounts(s)
 
   /** one project row. holds = how many sit under it (0 for a leaf/child); shut = its fold state. */
-  const renderRow = (p: Project, holds: number, shut: boolean) => (
+  // `holds` is how many children the row has (whether it folds at all); `folded` is how many are
+  // actually hidden right now, which is what the badge counts — a pinned child is still on screen
+  const renderRow = (p: Project, holds: number, shut: boolean, folded = holds) => (
     <ContextMenu key={p.id}>
       <ContextMenuTrigger asChild>
         <SidebarMenuItem {...projectDrop(p.id)}>
@@ -190,8 +192,8 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           </SidebarMenuButton>
           {/* a shut parent says how much is folded under it — same badge as the tag counts,
               faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
-          {holds > 0 && shut && (
-            <SidebarMenuBadge className="transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">{holds}</SidebarMenuBadge>
+          {folded > 0 && shut && (
+            <SidebarMenuBadge className="transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">{folded}</SidebarMenuBadge>
           )}
           {/* right-7 clears the trash beside it: an action is w-5 pinned at right-1.
               The context menu has these too, but nothing on the row said it existed */}
@@ -319,15 +321,20 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
               {rootProjects(s).map((root) => {
                 const kids = childProjects(s, root.id)
                 const shut = s.collapsed.includes(root.id)
+                // the sub-project you're actually looking at rides out the fold — folding away the
+                // thing on screen leaves the sidebar with no trace of where you are
+                const pinned = shut ? kids.filter((k) => k.id === s.sel) : []
+                const folding = shut ? kids.filter((k) => k.id !== s.sel) : kids
                 return (
                   <Fragment key={root.id}>
-                    {renderRow(root, kids.length, shut)}
+                    {renderRow(root, kids.length, shut, folding.length)}
+                    {pinned.map((k) => renderRow(k, 0, false))}
                     {/* kids stay mounted so they can animate: grid 0fr→1fr slides height:auto with
                         no measuring and no dep. inert when shut keeps the hidden rows off the tab order */}
-                    {kids.length > 0 && (
+                    {folding.length > 0 && (
                       <div className={cn('grid transition-[grid-template-rows] duration-200 ease-out', shut ? 'grid-rows-[0fr] -mt-1' : 'grid-rows-[1fr]')}>
                         <div inert={shut} className="flex min-h-0 flex-col gap-1 overflow-hidden">
-                          {kids.map((k, i) => (
+                          {folding.map((k, i) => (
                             <div
                               key={k.id}
                               // each child fades in a beat after the one above, so they cascade
