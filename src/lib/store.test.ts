@@ -11,7 +11,7 @@ Object.assign(globalThis, {
 const {
   addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
-  toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge,
+  toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -426,5 +426,38 @@ assert.deepEqual(subs, [
   { id: 'b', kind: 'expense', name: 'Subscription', cost: 0, cycle: 'monthly', due: null },
   { id: 'c', kind: 'expense', name: 'Subscription', cost: 0, cycle: 'monthly', due: null },
 ])
+
+// a saved setup is keyed by asset, side AND horizon: saving the hourly one must not quietly delete
+// the daily one, which is a different trade off a different chart
+const mkWatch = (horizon: string, entry: number) =>
+  ({ id: horizon, asset: 'BTCUSDT', label: 'Bitcoin', horizon, dir: 'long' as const, entry, stop: 1, target: 9, ts: 0 })
+addWatch(mkWatch('Investing', 100))
+addWatch(mkWatch('Trading', 50))
+assert.deepEqual(getState().watches.map((w) => w.horizon).sort(), ['Investing', 'Trading'])
+addWatch({ ...mkWatch('Trading', 55), id: 'again' }) // same asset/side/horizon → replaces that one only
+assert.equal(getState().watches.length, 2)
+assert.equal(getState().watches.find((w) => w.horizon === 'Trading')?.entry, 55)
+assert.equal(getState().watches.find((w) => w.horizon === 'Investing')?.entry, 100)
+removeWatch('again')
+assert.deepEqual(getState().watches.map((w) => w.horizon), ['Investing'])
+
+// the desk's asset survives a reload, and junk falls back to Bitcoin rather than an empty picker
+assert.equal(load({ marketAsset: 'ETHUSDT' }).marketAsset, 'ETHUSDT')
+assert.equal(load({ marketAsset: 7 }).marketAsset, 'BTCUSDT')
+assert.equal(load({}).marketAsset, 'BTCUSDT')
+
+// a backup written before horizons existed loads with an empty one rather than being thrown away
+assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 2, stop: 1, target: 3 }] }).watches[0].horizon, '')
+// a level that isn't a number can't be compared against a price, so the row goes
+assert.deepEqual(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 'soon', stop: 2, target: 3 }] }).watches, [])
+// nor can levels that are the wrong way round for their side: a long stopped above its own entry
+// is "stopped out" the instant it loads, and would have the bell shouting on every poll forever
+const geometry = (dir: string, entry: number, stop: number, target: number) =>
+  load({ watches: [{ id: 'w', asset: 'BTCUSDT', dir, entry, stop, target }] }).watches.length
+assert.equal(geometry('long', 100, 95, 110), 1)   // stop below, target above — a real long
+assert.equal(geometry('long', 100, 105, 110), 0)  // stop above the entry
+assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
+assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
+assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
 
 console.log('store: ok')

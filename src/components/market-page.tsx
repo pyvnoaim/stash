@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { Bell, BellRing, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
+import { GuideDialog } from '@/components/guide-dialog'
 import { cn } from '@/lib/utils'
-import { setApiKey, useStash } from '@/lib/store'
+import { addWatch, removeWatch, setApiKey, setMarketAsset, uid, useStash } from '@/lib/store'
 import {
-  ASSETS, fetchCandles, HORIZONS, INTERVALS, orb, signals, tradePlan,
-  type Asset, type Candle, type Horizon, type Interval,
+  ASSETS, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb, PLAN_WORDS,
+  signals, tradePlan, trendFilter,
+  type Asset, type Candle, type Horizon, type Interval, type Signal,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -22,7 +24,13 @@ const PRESETS = [
 ] as const
 type Preset = (typeof PRESETS)[number]['id']
 
-const VISIBLE = 100 // bars drawn; MAs/signals still use every fetched bar
+const VISIBLE = 60 // bars drawn by default; MAs/signals still use every fetched bar
+const MIN_BARS = 20, MAX_BARS = 400 // how far the wheel can zoom in and out
+const LIVE = 5000 // how often the forming candle is repriced
+const LIVE_SLOW = 15_000 // …and how often for stocks, whose free tier allows 8 calls a minute
+// how long to wait between full-window refetches when a bar looks closed — see the tick below
+const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
+const BAR_MS: Record<Interval, number> = { '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
 
 // The big three equity opens, each in its own tz so daylight saving is handled for free. These
 // markets don't trade the assets here (all 24/7 crypto/gold) — they mark when global volume and
@@ -33,18 +41,29 @@ const SESSIONS = [
   { label: 'US', tz: 'America/New_York', min: 9 * 60 + 30, color: '#14b8a6' }, // NYSE 09:30
 ]
 
+// One formatter per timezone, built once. The session scan calls this ~210 times and reruns on every
+// live tick; constructing a fresh Intl.DateTimeFormat each call measured 8.8ms a tick against 1.1ms
+// reused — eight times the main-thread work, five seconds apart, for the same three formatters.
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>()
+const formatterFor = (tz: string) => {
+  let f = FORMATTERS.get(tz)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+    FORMATTERS.set(tz, f)
+  }
+  return f
+}
+
 // DST-correct local clock for a timestamp in a tz: the calendar day (to spot a new session) and
 // minutes-of-day (to spot the open within it)
 const localClock = (ms: number, tz: string) => {
-  const p = new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date(ms))
+  const p = formatterFor(tz).formatToParts(new Date(ms))
   const g = (t: string) => p.find((x) => x.type === t)?.value ?? '0'
   return { day: g('year') + g('month') + g('day'), min: (+g('hour') % 24) * 60 + +g('minute') }
 }
 
-const fmt = (n: number) =>
-  n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 // hotlinked logo; a miss just renders nothing (no broken-image box). Error is tracked in state and
 // reset whenever src changes, so the one persistent <img> in the header/trigger can't get stuck hidden
@@ -57,19 +76,22 @@ function AssetLogo({ src, className }: { src: string; className?: string }) {
     className={cn('size-4 shrink-0 rounded-full object-contain', className)} />
 }
 
-const TONE = {
-  bull: 'text-emerald-600 dark:text-emerald-400 border-emerald-600/30',
-  bear: 'text-destructive border-destructive/30',
-  flat: 'text-muted-foreground border-border',
+// which side a signal is on, as a dot. Colour used to be on the label text of every card, which
+// made a page of eight readings look like an alarm going off rather than a read-out.
+const DOT = {
+  bull: 'bg-emerald-500',
+  bear: 'bg-destructive',
+  flat: 'bg-muted-foreground/40',
 } as const
 
-/** Map a price to the 0..100 SVG box, hi at the top. Nulls (a warming-up MA) break the path. */
-const pathOf = (v: (number | null)[], lo: number, hi: number) => {
+/** Map a price to the 0..100 SVG box, hi at the top. Nulls (a warming-up MA) break the path.
+ *  `xSpan` is the x domain in bars — wider than the data, so the right end stays empty for the future. */
+const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => {
   const span = hi - lo || 1
   let d = '', pen = false
   v.forEach((p, i) => {
     if (p == null) { pen = false; return }
-    const x = v.length > 1 ? (i / (v.length - 1)) * 100 : 0
+    const x = (i / xSpan) * 100
     const y = ((hi - p) / span) * 100
     d += `${pen ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)} `
     pen = true
@@ -78,8 +100,10 @@ const pathOf = (v: (number | null)[], lo: number, hi: number) => {
 }
 
 export default function MarketPage() {
-  const { chart, apiKey } = useStash()
-  const [asset, setAsset] = useState<string>(ASSETS[1].id) // default Bitcoin
+  const { chart, apiKey, watches, marketAsset: asset } = useStash()
+  // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
+  // desk already showing the right thing — and it survives a reload
+  const setAsset = setMarketAsset
   const [interval, setInterval] = useState<Interval>('1d')
   const [candles, setCandles] = useState<Candle[]>([])
   const [error, setError] = useState('')
@@ -88,9 +112,16 @@ export default function MarketPage() {
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
   const [preset, setPreset] = useState<Preset>('standard')
   const [horizon, setHorizon] = useState<Horizon>('long')
+  const [live, setLive] = useState(true) // reprice the forming candle on a timer
+  const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
+  const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
+  const [guide, setGuide] = useState<Signal | null>(null) // the reading whose explainer is open
   const cfg = HORIZONS[horizon]
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
+  // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
+  // Bitcoin, 4 for a coin at 0.17 — where two printed entry, stop and target as the same number
+  const fmt = (v: number) => fmtPrice(v, candles.at(-1)?.c ?? 1)
   const needKey = current.source === 'twelvedata' && !apiKey
 
   // the opening-range play only makes sense on 15m bars, so selecting it pins the interval
@@ -101,13 +132,105 @@ export default function MarketPage() {
     if (needKey) { setCandles([]); setError(''); return } // no feed without the key; the prompt shows instead
     const mine = ++seq.current // ignore a slow response once the user has moved on
     // drop the old asset's candles right away so a loading state shows instead of a stale chart
-    setLoading(true); setError(''); setHover(null); setCandles([])
+    // a new feed resets the view — a scroll position in 4h bars means nothing in 1w bars
+    setLoading(true); setError(''); setHover(null); setCandles([]); setScroll(0); setWin(VISIBLE)
+    nextRoll.current = 0
     fetchCandles(current, interval, apiKey)
       .then((c) => { if (mine === seq.current) { setCandles(c); setLoading(false) } })
       .catch((e) => { if (mine === seq.current) { setError(e.message); setCandles([]); setLoading(false) } })
   }, [asset, interval, nonce, apiKey, needKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The timeframe one step up, purely for the "don't fight the bigger picture" card. Its own small
+  // fetch rather than grouping the bars we have: the slow MA wants 200 higher-timeframe bars of
+  // history, which this window doesn't hold. Fails quietly — it's a filter, not the feed.
+  const [higher, setHigher] = useState<Signal | null>(null)
+  useEffect(() => {
+    const up = HIGHER[interval]
+    setHigher(null)
+    if (needKey || !up) return
+    let on = true
+    fetchCandles(current, up, apiKey)
+      .then((c) => { if (on) setHigher(trendFilter(c, cfg.slow, up)) })
+      .catch(() => {})
+    return () => { on = false }
+  }, [asset, interval, nonce, apiKey, needKey, cfg.slow]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The forming candle, kept alive off the last-price endpoint: its close follows the tick and its
+  // high/low stretch to hold it, exactly as the real bar is doing on the exchange. One tiny request
+  // rather than refetching the window — a stock refetch is 5000 rows and Twelve Data's free tier
+  // allows 8 calls a minute, which a 5-second full poll would burn through immediately.
+  // Once the bar's own duration is up it has closed, so the window is refetched properly and the
+  // new bar arrives from the feed rather than being invented here.
+  // ponytail: polling, not a websocket. A socket means reconnects, backoff and a second code path
+  // for the stock feed that hasn't got one; swap it in if this ever needs to be tick-accurate.
+  const lastAt = useRef(0)
+  const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
+  useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
+  useEffect(() => {
+    if (needKey || !live) return
+    let on = true
+    const tick = () => {
+      const t = lastAt.current
+      if (!t) return
+      /* The bar's duration is up, so it has closed and the window is refetched for the real next
+         one. Behind a cool-off, because "the last bar is older than one bar" is also permanently
+         true whenever the market is *shut* — a stock over a weekend would otherwise refetch 5000
+         rows every fifteen seconds, forever, against a feed that allows eight calls a minute, and
+         never converge because the answer keeps coming back the same. */
+      if (Date.now() >= t + BAR_MS[interval] && Date.now() >= nextRoll.current) {
+        nextRoll.current = Date.now() + (current.source === 'twelvedata' ? ROLL_RETRY_SLOW : ROLL_RETRY)
+        fetchCandles(current, interval, apiKey)
+          .then((fresh) => { if (on && fresh.length) setCandles(fresh) })
+          .catch(() => {})
+        return
+      }
+      fetchPrices([current.id], apiKey).then((pr) => {
+        const px = pr[current.id]
+        if (!on || !px) return
+        setCandles((prev) => {
+          const bar = prev.at(-1)
+          if (!bar) return prev
+          return [...prev.slice(0, -1), { ...bar, c: px, h: Math.max(bar.h, px), l: Math.min(bar.l, px) }]
+        })
+      }).catch(() => {})
+    }
+    const h = window.setInterval(tick, current.source === 'twelvedata' ? LIVE_SLOW : LIVE)
+    return () => { on = false; window.clearInterval(h) }
+  }, [asset, interval, apiKey, needKey, live]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const view = useMemo(() => (candles.length ? signals(candles, cfg) : null), [candles, cfg])
+
+  // The drawn window: `win` bars wide, `scroll` bars back from the newest. Clamped here rather than
+  // in the setters, so a wheel spin or a drag can overshoot and just stop at the end of the data.
+  const winBars = Math.max(MIN_BARS, Math.min(win, MAX_BARS))
+  const stop = candles.length - Math.min(scroll, Math.max(0, candles.length - winBars))
+  const start = Math.max(0, stop - winBars)
+  // memoised so it's the same array across hover re-renders — the session scan below leans on that
+  const vis = useMemo(() => candles.slice(start, stop), [candles, start, stop])
+
+  // Room on the right for what hasn't happened yet — a share of the window, not a fixed ten bars.
+  // Zoomed in to 30 bars, ten of them was a fifth of the chart left blank. And panned back into
+  // history there is no future to leave room for, which read as the right-hand side being cut off.
+  const atEdge = stop === candles.length
+  const future = atEdge ? Math.max(3, Math.round(winBars * 0.08)) : 0
+
+  // wheel zoom needs a non-passive listener to stop the page scrolling under it, which React's
+  // onWheel can't promise. Anchored on the right edge, so the newest bar stays put while you zoom.
+  const plot = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = plot.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.deltaY) return
+      e.preventDefault()
+      setWin((w) => Math.round(Math.max(MIN_BARS, Math.min(MAX_BARS, w * (e.deltaY > 0 ? 1.15 : 1 / 1.15)))))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+  // drag-to-pan: remember where the grab started, then offset from there (not per-move deltas, which
+  // drift). Null means "not dragging", which is also what tells the move handler to do the crosshair.
+  const grab = useRef<{ x: number; scroll: number } | null>(null)
 
   // session-open x-positions, memoised off the candles so hovering doesn't re-run the Intl work.
   // Mark the first bar that reaches the open each local day — works whether bars run continuously
@@ -118,61 +241,137 @@ export default function MarketPage() {
     // falls inside a closed-market gap (Asia/Europe on a US-hours stock) is skipped, not stamped on
     // the first bar after the gap. Continuous 24/7 crypto still catches every session.
     const barMin = { '15m': 15, '1h': 60, '4h': 240 }[interval] ?? 60
-    const v = candles.slice(-VISIBLE)
+    const v = vis
     const m = v.length
     if (m < 2) return []
-    const marks: { x: number; color: string; label: string }[] = []
+    // the same scan runs over the drawn bars and the projected ones, so an open that hasn't happened
+    // yet gets marked in the empty right-hand room. ponytail: projected bars just repeat the last
+    // bar's spacing — right for the 24/7 feeds; on a gapped stock feed the mark still counts real
+    // time to the open, it only ignores that no bars print while the market is shut.
+    const step = v.at(-1)!.t - v.at(-2)!.t
+    const ts = [...v.map((c) => c.t), ...Array.from({ length: future }, (_, k) => v.at(-1)!.t + (k + 1) * step)]
+    const marks: { x: number; color: string; label: string; future: boolean }[] = []
     for (const s of SESSIONS) {
-      let prev = localClock(v[0].t, s.tz)
-      for (let i = 1; i < m; i++) {
-        const cur = localClock(v[i].t, s.tz)
+      let prev = localClock(ts[0], s.tz)
+      for (let i = 1; i < ts.length; i++) {
+        const cur = localClock(ts[i], s.tz)
         if (cur.min >= s.min && cur.min < s.min + barMin && (cur.day !== prev.day || prev.min < s.min))
-          marks.push({ x: (i / (m - 1)) * 100, color: s.color, label: s.label })
+          marks.push({ x: (i / (m - 1 + future)) * 100, color: s.color, label: s.label, future: i >= m })
         prev = cur
       }
     }
     return marks
-  }, [candles, interval])
+  }, [vis, interval, future])
+  // the opens still ahead of the last bar — labelled on the chart, since that's the point of the gap.
+  // Only while the view sits at the live edge; scrolled back, "ahead of the last drawn bar" is history.
+  const nextOpens = stop === candles.length ? sessionMarks.filter((mk) => mk.future) : []
+
   // only the sessions that actually landed a line get a legend entry
   const shownSessions = SESSIONS.filter((s) => sessionMarks.some((mk) => mk.label === s.label))
 
   // opening-range levels + breakout signal, computed off the full window so the 00:00 bar is found.
   // memoised so it doesn't re-scan (and re-spread) the whole candle array on every hover re-render
   const range = useMemo(() => (preset === 'orb' && candles.length ? orb(candles) : null), [preset, candles])
-  const shownSignals = range ? [range.signal, ...(view?.signals ?? [])] : (view?.signals ?? [])
+  // where the range hour sits in the drawn window — both -1 once it's scrolled out of view
+  const orbBar = range ? vis.findIndex((c) => c.t === range.t) : -1
+  const orbEnd = range ? vis.findIndex((c) => c.t === range.until) : -1
+  // the higher-timeframe lean leads: it's the filter the others get read through
+  const shownSignals = [
+    ...(higher ? [higher] : []), ...(range ? [range.signal] : []), ...(view?.signals ?? []),
+  ]
 
   // one clean call: tally the bull vs bear cards into a Long / Short / Flat verdict for the horizon
   const bulls = shownSignals.filter((s) => s.tone === 'bull').length
   const bears = shownSignals.filter((s) => s.tone === 'bear').length
   const dir = bulls > bears ? 'long' : bears > bulls ? 'short' : 'flat'
+  // tinted rather than solid: a filled red pill reads as an emergency, and a 1/5 tally is a lean
   const bias = dir === 'long'
-    ? { label: 'Long', cls: 'bg-emerald-600 text-white', Icon: TrendingUp }
+    ? { label: 'Long', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400', Icon: TrendingUp }
     : dir === 'short'
-      ? { label: 'Short', cls: 'bg-destructive text-white', Icon: TrendingDown }
+      ? { label: 'Short', cls: 'bg-destructive/10 text-destructive', Icon: TrendingDown }
       : { label: 'Flat', cls: 'bg-muted text-muted-foreground', Icon: Minus }
 
-  // the exact setup: enter on a pullback to the fast MA, with stop and target from the swing band
+  // the exact setup: the fast MA is the entry, the swing band gives the stop and the target, and the
+  // ATR widens the stop past the swing so ordinary noise doesn't take it out
   const entryMA = view?.smaFast.at(-1) ?? null
-  const plan = view && entryMA != null ? tradePlan(dir, entryMA, view.support, view.resistance) : null
+  const last = candles.at(-1)?.c
+  const plan = view && entryMA != null && last != null
+    ? tradePlan(dir, last, entryMA, view.levels, view.atr) : null
+  // taking a long while the timeframe above leans down is the trade guides tell you to skip
+  const against = plan && higher && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
 
-  // draw only a recent window so candles are fat and both MAs span the whole view — but the MAs and
-  // signals above were computed off every fetched bar, so the 200-MA is real from the first visible bar
-  const vis = candles.slice(-VISIBLE)
-  const smaFast = view ? view.smaFast.slice(-VISIBLE) : []
-  const smaSlow = view ? view.smaSlow.slice(-VISIBLE) : []
+  /* The whole card in one line, because "when do I buy" shouldn't need three cards cross-referenced.
+     Within a quarter-ATR of the entry counts as "here" — asking for the exact number is asking for a
+     fill you won't get. A setup that doesn't pay, or that fights the timeframe above, says so first:
+     the most useful thing this tool can tell you is usually that there is nothing to do. */
+  // in money, not in R: "the reward is under 1R" is only clear if you already know what R is
+  const risk = plan ? Math.abs(plan.entry - plan.stop) : 0
+  const reward = plan ? Math.abs(plan.target - plan.entry) : 0
+  const verdict = !view || last == null ? null
+    // A split tally has no side to trade, and a bias whose geometry doesn't work has no trade
+    // either. Both used to render as an empty space where the answer goes, which reads as the tool
+    // being broken rather than as it having looked and found nothing.
+    : dir === 'flat'
+      ? {
+          text: 'No side to take', tone: 'wait' as const,
+          why: `the readings are split ${bulls} to ${bears} — when they disagree this evenly, the honest answer is that there is no trade here`,
+        }
+    : !plan
+      ? {
+          text: 'No clean setup', tone: 'wait' as const,
+          why: `the tally leans ${dir}, but price has already run past the level this setup would aim at — there is nothing left between the ${cfg.fast}-MA and the swing`,
+        }
+    : plan.thin || against
+      ? {
+          text: 'Nothing to do here', tone: 'wait' as const,
+          why: plan.thin
+            ? `you'd put ${fmt(risk)} at risk to make ${fmt(reward)} — it pays less than it costs when wrong`
+            : `the ${HIGHER[interval]} chart is going the other way, and that is the bigger tide`,
+        }
+    : Math.abs(plan.entry - last) <= (view?.atr ?? 0) * 0.25
+      ? {
+          text: dir === 'long' ? 'Buy now' : 'Sell now', tone: 'go' as const,
+          why: `price is at the entry — get out at ${fmt(plan.stop)} if wrong (${fmt(risk)}), take ${fmt(reward)} at ${fmt(plan.target)}`,
+        }
+      : {
+          text: `Wait — ${dir === 'long' ? 'buy' : 'sell'} at ${fmt(plan.entry)}`, tone: 'hold' as const,
+          why: `${Math.abs(((plan.entry - last) / last) * 100).toFixed(2)}% ${plan.entry > last ? 'above' : 'below'} the price now · risk ${fmt(risk)} to make ${fmt(reward)}`,
+        }
+  const VERDICT = {
+    go: 'text-emerald-600 dark:text-emerald-400',
+    hold: 'text-foreground',
+    wait: 'text-amber-600 dark:text-amber-500',
+  } as const
+  // an existing alert for this asset, side and horizon — the button toggles that one, and an alert
+  // saved on the other horizon is left alone rather than being silently replaced
+  const watched = watches.find((w) => w.asset === current.id && w.dir === dir && w.horizon === cfg.label)
+
+  // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
+  // computed off every fetched bar, so the 200-MA is real from the first visible bar
+  const smaFast = view ? view.smaFast.slice(start, stop) : []
+  const smaSlow = view ? view.smaSlow.slice(start, stop) : []
   const n = vis.length
-  // autoscale to the candles AND the visible MAs together, so a 200-MA sitting far from price
-  // (a stock that's trended for a year) stays inside the frame instead of sweeping off the bottom
+  // Autoscale on price first. The MAs get to widen the frame, but only by a quarter of the price
+  // range — a 200-MA sitting 12% above a quiet market used to own the top half of the box and squash
+  // every candle into the bottom. Past that it just leaves the frame, and is clipped rather than
+  // being allowed to decide the scale for the thing you actually came to look at.
   const finite = (a: (number | null)[]) => a.filter((x): x is number => x != null)
-  // the entry sits on a MA (already in scope); the stop/target can be far (a 2R projection), so keep
-  // them out of the autoscale — the chart stays framed on price and off-frame levels live in the card
-  const ys = n ? [...vis.map((c) => c.l), ...vis.map((c) => c.h), ...finite(smaFast), ...finite(smaSlow)] : [0, 1]
+  const lows = n ? vis.map((c) => c.l) : [0]
+  const highs = n ? vis.map((c) => c.h) : [1]
+  const pLo = Math.min(...lows), pHi = Math.max(...highs)
+  const room = (pHi - pLo) * 0.25 || 1
+  const near = [...finite(smaFast), ...finite(smaSlow)].filter((v) => v >= pLo - room && v <= pHi + room)
+  // the entry sits on a MA (already in scope); the stop/target can be far, so they stay out of the
+  // autoscale — the chart stays framed on price and off-frame levels live in the card
+  const ys = [pLo, pHi, ...near]
   // pad the range so the lines breathe instead of hugging the top and bottom edges
   const rawLo = Math.min(...ys), rawHi = Math.max(...ys)
   const pad = (rawHi - rawLo) * 0.08 || 1
   const lo = rawLo - pad, hi = rawHi + pad
   const y = (p: number) => ((hi - p) / (hi - lo)) * 100
-  const xAt = (i: number) => (n > 1 ? (i / (n - 1)) * 100 : 0)
+  const xSpan = n > 1 ? n - 1 + future : 1
+  const xAt = (i: number) => (n > 1 ? (i / xSpan) * 100 : 0)
+  const barW = (100 / xSpan) * 0.6
   const price = vis.at(-1)?.c
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
@@ -204,11 +403,13 @@ export default function MarketPage() {
             ))}
           </SelectContent>
         </Select>
-        {/* trade horizon — swaps the MA pair (50/200 vs 9/21) so signals flip on the right timescale */}
+        {/* trade horizon — swaps the MA pair (50/200 vs 9/21) AND the bar size, so the whole read moves
+            to that timescale. Opening range pins 15m, so there the interval is left alone. */}
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
           {(Object.keys(HORIZONS) as Horizon[]).map((h) => (
             <Button key={h} size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
-              className={cn('h-7', horizon !== h && 'text-muted-foreground')} onClick={() => setHorizon(h)}>
+              className={cn('h-7', horizon !== h && 'text-muted-foreground')}
+              onClick={() => { setHorizon(h); if (preset === 'standard') setInterval(HORIZONS[h].interval) }}>
               {HORIZONS[h].label}
             </Button>
           ))}
@@ -232,6 +433,12 @@ export default function MarketPage() {
             </Button>
           ))}
         </div>
+        {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
+        <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', !live && 'text-muted-foreground')}
+          onClick={() => setLive((v) => !v)} title={live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
+          <span className={cn('size-1.5 rounded-full', live ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
+          Live
+        </Button>
         <Button size="icon" variant="ghost" className="size-8" onClick={() => setNonce((n) => n + 1)} title="Refresh">
           <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
         </Button>
@@ -260,7 +467,7 @@ export default function MarketPage() {
       {/* the chart: price line, the two MAs whose cross the guides watch, and the S/R band */}
       <Card className="py-3">
         <CardContent className="px-3">
-          <div className="relative h-[300px]">
+          <div ref={plot} className="relative h-[300px]">
             {error && <p className="text-destructive absolute inset-0 flex items-center justify-center text-sm">{error}</p>}
             {loading && (
               <div className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm">
@@ -271,14 +478,23 @@ export default function MarketPage() {
             {view && !error && (
               <>
                 <div
-                  className="absolute inset-0"
+                  className="absolute inset-0 cursor-crosshair active:cursor-grabbing"
+                  onMouseDown={(e) => { grab.current = { x: e.clientX, scroll }; setHover(null) }}
+                  onMouseUp={() => { grab.current = null }}
                   onMouseMove={(e) => {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
+                    if (grab.current) {
+                      // drag right → walk back in time by however many bars that many pixels covers
+                      const bars = Math.round(((e.clientX - grab.current.x) / r.width) * winBars)
+                      setScroll(Math.max(0, Math.min(candles.length - winBars, grab.current.scroll + bars)))
+                      return
+                    }
                     const f = (e.clientX - r.left) / r.width
-                    setHover(Math.max(0, Math.min(n - 1, Math.round(f * (n - 1)))))
+                    // clamps in the future strip, so hovering it reads the last bar rather than nothing
+                    setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
                   }}
-                  onMouseLeave={() => setHover(null)}
+                  onMouseLeave={() => { grab.current = null; setHover(null) }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
                   <defs>
@@ -287,25 +503,33 @@ export default function MarketPage() {
                       <stop offset="0%" stopColor={up ? '#10b981' : '#ef4444'} stopOpacity={0.22} />
                       <stop offset="100%" stopColor={up ? '#10b981' : '#ef4444'} stopOpacity={0} />
                     </linearGradient>
+                    {/* an MA too far from price to be worth framing runs out of the box, not off the card */}
+                    <clipPath id="mkt-clip"><rect x="0" y="0" width="100" height="100" /></clipPath>
                   </defs>
                   {/* faint baseline grid */}
                   {[25, 50, 75].map((gy) => (
                     <line key={gy} x1="0" x2="100" y1={gy} y2={gy} className="stroke-border/60" strokeWidth={1} vectorEffect="non-scaling-stroke" />
                   ))}
-                  {/* session opens — Asia / Europe / US volatility windows, drawn where each falls */}
+                  {/* Session opens — Asia / Europe / US. The ones already passed sit right back in the
+                      background so they read as texture behind the candles rather than ten dotted
+                      verticals competing with them; the ones still ahead, which are the part you'd
+                      act on, stay bright. */}
                   {sessionMarks.map((mk, i) => (
                     <line key={`s-${i}`} x1={mk.x} x2={mk.x} y1="0" y2="100"
-                      stroke={mk.color} strokeWidth={1} strokeOpacity={0.45} strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+                      stroke={mk.color} strokeWidth={1} strokeOpacity={mk.future ? 0.8 : 0.16}
+                      strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
                   ))}
-                  {/* with a live setup: entry / stop / target lines. Otherwise the plain S/R band. */}
+                  {/* The setup's levels, or the plain S/R band when there's no setup. Only the entry
+                      keeps a colour — it's the line you're waiting on. Stop and target are grey:
+                      three coloured dashed lines plus the band was more decoration than information. */}
                   {plan ? (
                     [
-                      { lvl: plan.entry, cls: 'stroke-sky-500', dash: '5 3' },
-                      { lvl: plan.stop, cls: 'stroke-destructive', dash: '2 3' },
-                      { lvl: plan.target, cls: 'stroke-emerald-500', dash: '2 3' },
+                      { lvl: plan.entry, cls: 'stroke-sky-500', dash: '5 3', w: 1.25 },
+                      { lvl: plan.stop, cls: 'stroke-muted-foreground/60', dash: '2 4', w: 1 },
+                      { lvl: plan.target, cls: 'stroke-muted-foreground/60', dash: '2 4', w: 1 },
                     ].filter((l) => l.lvl >= lo && l.lvl <= hi).map((l, i) => (
                       <line key={i} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
-                        className={l.cls} strokeWidth={1.25} strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
+                        className={l.cls} strokeWidth={l.w} strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
                     ))
                   ) : (
                     [view.support, view.resistance].map((lvl, i) => (
@@ -322,6 +546,16 @@ export default function MarketPage() {
                         <line key={i} x1="0" x2="100" y1={y(lvl)} y2={y(lvl)}
                           className="stroke-violet-500" strokeWidth={1} strokeOpacity={0.7} vectorEffect="non-scaling-stroke" />
                       ))}
+                      {/* the hour that set the range, when it's in view — otherwise the band looks
+                          like it came from nowhere, which is exactly how a range set hours ago reads */}
+                      {orbBar >= 0 && (
+                        <>
+                          <rect x={xAt(orbBar)} y={y(range.high)} width={Math.max(xAt(orbEnd) - xAt(orbBar), 0.5)}
+                            height={Math.max(y(range.low) - y(range.high), 0)} className="fill-violet-500/25" stroke="none" />
+                          <line x1={xAt(orbBar)} x2={xAt(orbBar)} y1="0" y2="100"
+                            className="stroke-violet-500" strokeWidth={1} strokeOpacity={0.55} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
+                        </>
+                      )}
                     </>
                   )}
                   {/* highlight the hovered candle's column, behind the candles so it sits lit on top */}
@@ -331,17 +565,19 @@ export default function MarketPage() {
                   )}
                   {/* area fill only reads under a single price line, so it's line-mode only */}
                   {chart === 'line' && (
-                    <path d={`${pathOf(vis.map((c) => c.c), lo, hi)} L100 100 L0 100 Z`} fill="url(#mkt-fill)" stroke="none" />
+                    <path d={`${pathOf(vis.map((c) => c.c), lo, hi, xSpan)} L${xAt(n - 1).toFixed(2)} 100 L0 100 Z`} fill="url(#mkt-fill)" stroke="none" />
                   )}
-                  <path d={pathOf(smaSlow, lo, hi)}
-                    className="stroke-amber-500 fill-none" strokeWidth={1.25} strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
-                  <path d={pathOf(smaFast, lo, hi)}
-                    className="stroke-sky-500 fill-none" strokeWidth={1.25} strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
+                  <g clipPath="url(#mkt-clip)">
+                    <path d={pathOf(smaSlow, lo, hi, xSpan)}
+                      className="stroke-amber-500 fill-none" strokeWidth={1.25} strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
+                    <path d={pathOf(smaFast, lo, hi, xSpan)}
+                      className="stroke-sky-500 fill-none" strokeWidth={1.25} strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
+                  </g>
                   {chart === 'candles'
                     // rect width is in viewBox units so it stretches with the x-axis (what we want);
                     // the wick keeps its 1px via non-scaling-stroke. Doji get a floor height to stay visible.
                     ? vis.map((c, i) => {
-                        const x = xAt(i), w = (n > 1 ? 100 / (n - 1) : 100) * 0.6
+                        const x = xAt(i), w = n > 1 ? barW : 60
                         const top = y(Math.max(c.o, c.c)), col = c.c >= c.o ? '#10b981' : '#ef4444'
                         return (
                           <g key={i} fill={col}>
@@ -351,10 +587,16 @@ export default function MarketPage() {
                         )
                       })
                     : (
-                      <path d={pathOf(vis.map((c) => c.c), lo, hi)}
+                      <path d={pathOf(vis.map((c) => c.c), lo, hi, xSpan)}
                         className="stroke-foreground fill-none" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
                     )}
                 </svg>
+
+                {/* which session each upcoming line is, named where it sits — the reason for the gap */}
+                {nextOpens.map((mk, i) => (
+                  <span key={`n-${i}`} className="pointer-events-none absolute bottom-1 -translate-x-1/2 text-[10px] whitespace-nowrap"
+                    style={{ left: `${mk.x}%`, color: mk.color }}>{mk.label}</span>
+                ))}
 
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
                     HTML overlay, not SVG shapes — preserveAspectRatio=none would squash those */}
@@ -369,65 +611,128 @@ export default function MarketPage() {
               </>
             )}
           </div>
-          {/* time axis — a handful of evenly-spaced stamps, first under the left bar, last under the right */}
+          {/* time axis — evenly spaced over the whole x domain, so the last stamps land in the future
+              strip and read as dates still to come (projected off the last bar's spacing) */}
           {view && n > 1 && (
             <div className="text-muted-foreground mt-2 flex justify-between text-[10px] tabular-nums">
-              {Array.from({ length: 6 }, (_, k) => vis[Math.round((k / 5) * (n - 1))]).map((c, k) => (
-                <span key={k}>{stamp(c.t)}</span>
+              {Array.from({ length: 6 }, (_, k) => Math.round((k / 5) * xSpan)).map((i, k) => (
+                <span key={k} className={cn(i > n - 1 && 'opacity-50')}>
+                  {stamp(i <= n - 1 ? vis[i].t : vis.at(-1)!.t + (i - (n - 1)) * (vis.at(-1)!.t - vis.at(-2)!.t))}
+                </span>
               ))}
             </div>
           )}
           {view && (
             <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-              <span className="text-foreground/80"><span className="inline-block h-0.5 w-3 translate-y-[-3px] bg-foreground align-middle" /> price</span>
-              <span><span className="bg-sky-500 inline-block h-0.5 w-3 translate-y-[-3px] align-middle" /> {cfg.fast}-MA</span>
-              <span><span className="bg-amber-500 inline-block h-0.5 w-3 translate-y-[-3px] align-middle" /> {cfg.slow}-MA</span>
+              {/* an MA the frame clipped says so rather than sitting in the legend as a line you
+                  can't find — "off frame ↑" is the answer to "where is my 200-MA" */}
+              {([[cfg.fast, smaFast, 'bg-sky-500'], [cfg.slow, smaSlow, 'bg-amber-500']] as const).map(([p, series, bg]) => {
+                const vals = finite(series)
+                const seen = vals.some((v) => v >= lo && v <= hi)
+                return (
+                  <span key={p} className={cn(!seen && 'opacity-60')}>
+                    <span className={cn('inline-block h-0.5 w-3 translate-y-[-3px] align-middle', bg)} /> {p}-MA
+                    {!seen && vals.length > 0 && <span className="ml-1">off frame {vals.at(-1)! > hi ? '↑' : '↓'}</span>}
+                  </span>
+                )
+              })}
               {shownSessions.map((s) => (
-                <span key={s.label}>
+                <span key={s.label} className="opacity-70">
                   <span className="inline-block h-0.5 w-3 translate-y-[-3px] align-middle" style={{ backgroundColor: s.color }} /> {s.label} open
                 </span>
               ))}
               {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 translate-y-[-3px] align-middle" /> opening range</span>}
-              <span className="ml-auto tabular-nums">support {fmt(view.support)} · resistance {fmt(view.resistance)}</span>
+              <span className="ml-auto tabular-nums">
+                <span className="mr-4 opacity-70">drag to pan · scroll to zoom · {n} bars</span>
+                support {fmt(view.support)} · resistance {fmt(view.resistance)}
+              </span>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* the exact setup — the levels drawn on the chart, spelled out */}
-      {plan && (
-        <Card className="border-foreground/30 py-3">
-          <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 px-3 text-sm">
+      {/* the answer, and the levels behind it when there are any */}
+      {verdict && (
+        <Card className={cn('py-3', against ? 'border-amber-600/40' : 'border-foreground/30')}>
+          <CardContent className="px-3 pb-2">
+              <p className="flex items-center gap-2">
+                <span className={cn('text-base font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
+                {/* which chart this verdict is off — the two horizons disagree often, and a hint with
+                    no timeframe on it is the kind you act on for the wrong reason */}
+                <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
+                  {cfg.label} · {interval}
+                </span>
+              </p>
+            <p className="text-muted-foreground text-xs">{verdict.why}</p>
+          </CardContent>
+          {/* faded when the verdict above already said not to take it — the levels are still there to
+              read, they just stop competing with the answer for attention */}
+          {plan && (
+          <CardContent className={cn('flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm',
+            verdict?.tone === 'wait' && 'opacity-60')}>
+            {/* the wording follows the geometry: the entry only reads as a pull-back when the MA is
+                actually below the price. It wasn't, on roughly half the bars. */}
             <span className="font-medium">
               {dir === 'long' ? 'Long' : 'Short'} setup
               <span className="text-muted-foreground font-normal">
-                {' · '}{dir === 'long' ? 'buy the pull-back' : 'sell the bounce'} to the {cfg.fast}-MA
+                {' · '}{PLAN_WORDS[plan.kind]} the {cfg.fast}-MA
               </span>
             </span>
             <span className="text-sky-600 dark:text-sky-400">Entry <span className="font-medium tabular-nums">{fmt(plan.entry)}</span></span>
             <span className="text-destructive">Stop <span className="font-medium tabular-nums">{fmt(plan.stop)}</span></span>
             <span className="text-emerald-600 dark:text-emerald-400">Target <span className="font-medium tabular-nums">{fmt(plan.target)}</span></span>
-            <span className="text-muted-foreground ml-auto">R : R <span className="text-foreground font-medium tabular-nums">{plan.rr.toFixed(2)}</span></span>
+            {/* R:R used to be 2.00 by construction and could never warn you off anything */}
+            {/* spelled out as well as ratio'd: "0.70" means nothing until you see it's 1.310 for 900 */}
+            <span className={cn('ml-auto', plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}
+              title={`Risk ${fmt(risk)} per unit for a shot at ${fmt(reward)}`}>
+              Risk <span className="tabular-nums">{fmt(risk)}</span> to make <span className="tabular-nums">{fmt(reward)}</span>
+              <span className={cn('ml-1 font-medium tabular-nums', !plan.thin && 'text-foreground')}>({plan.rr.toFixed(2)}×)</span>
+            </span>
+            {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
+                watch that kept re-reading it would quietly become a different trade every bar */}
+            <Button size="sm" variant={watched ? 'secondary' : 'outline'}
+              onClick={() => (watched
+                ? removeWatch(watched.id)
+                : dir !== 'flat' && addWatch({
+                    id: uid(), asset: current.id, label: current.label, horizon: cfg.label, dir,
+                    entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
+                  }))}>
+              {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
+              {watched ? 'Alerting' : 'Alert me'}
+            </Button>
+            {against && (
+              <p className="text-amber-600 dark:text-amber-500 w-full text-xs">
+                Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
+              </p>
+            )}
           </CardContent>
+          )}
         </Card>
       )}
 
-      {/* the read-out: the signals guides talk about, computed off the candles above */}
+      {/* The read-out. One quiet card of rows rather than eight bordered ones in two colours: the
+          side a signal is on is a dot, and the reading itself is read as text. Eight cards all
+          shouting made the wall harder to read than the chart it was explaining. */}
       {view && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          {shownSignals.map((sig, i) => (
-            <Card key={i} className={cn('py-3', TONE[sig.tone])}>
-              <CardContent className="px-3">
-                <p className={cn('text-sm', TONE[sig.tone])}>{sig.label}</p>
-                <p className="text-muted-foreground mt-0.5 text-xs">{sig.detail}</p>
-              </CardContent>
-            </Card>
-          ))}
-          {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
-        </div>
+        <Card className="py-3">
+          <CardContent className="grid gap-x-8 gap-y-2 px-3 sm:grid-cols-2">
+            {/* click a reading for its guide: what it's called, what it claims, when it turns up —
+                over a worked example drawn from the same code that drew the chart above */}
+            {shownSignals.map((sig, i) => (
+              <button key={i} type="button" onClick={() => setGuide(sig)}
+                className="flex min-w-0 items-baseline gap-2 text-left text-sm">
+                <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
+                <span className="decoration-muted-foreground/40 shrink-0 underline decoration-dotted underline-offset-4">{sig.label}</span>
+                <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
+              </button>
+            ))}
+            {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
+          </CardContent>
+        </Card>
       )}
       </>
       )}
+      <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
   )
 }

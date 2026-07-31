@@ -258,28 +258,109 @@ so silver sits it out. The nine stocks ride Twelve Data, which needs a free key:
 Settings or into the prompt the page shows, and it stays on this machine and never travels in a
 backup.
 
-Pick an asset, an interval — `15m` to `1w` — and a horizon. **Long-term** rides the classic 50/200
-moving averages and a wide support band; **Short-term** uses 9/21 and a tight one, so it flips far
-sooner. The chart draws price as a line or as candles (Settings picks which), both moving averages,
-the support/resistance band, and the Asia, Europe and US session opens where they fall, each in its
-own timezone so daylight saving handles itself. Hover for the price and date under the crosshair.
+Pick an asset, an interval — `15m` to `1w` — and a horizon. **Investing** rides the classic 50/200
+moving averages, a wide support band and daily bars; **Trading** uses 9/21, a tight band and hourly
+bars, so it flips far sooner. Picking a horizon switches the interval with it; the interval row still
+overrides it afterwards. The chart draws price as a line or as candles (Settings picks which), both
+moving averages, the support/resistance band, and the Asia, Europe and US session opens that have
+not happened yet, each in its own timezone so daylight saving handles itself — the ones already gone
+are not drawn, since a session you can no longer trade is not worth a line across the candles. The
+frame is set by price: a moving average may widen it by a quarter of the price range and no more,
+so a 200-MA sitting far above a quiet market is clipped rather than squashing every candle into the
+bottom third (80% of the box for the candles instead of 63%). Hover for the price and date under
+the crosshair, drag to pan back through the history, and scroll to zoom — 20 to 400 bars, so a busy
+4h chart thins out to something readable. The right of the chart is deliberately empty: ten bars of
+room ahead of the last candle, where the sessions that have not opened yet are already marked and
+named. The forming candle is live: its close follows the last price every five seconds (fifteen for
+stocks, whose free tier allows eight calls a minute) and its wick stretches to hold it, the same bar
+the exchange is drawing. When the bar's duration is up the window refetches, so the next candle comes
+from the feed rather than being invented here. **Live** in the toolbar turns it off.
+
+Every reading opens. Click one and a dialog gives the guide: what the thing is called, what it is
+actually claiming, when it turns up, and where it is weak — because each of these is a rule of thumb
+a lot of people watch, not a law. Above the words is a worked example: a small chart of that exact
+pattern, with the moving averages, the band, or an RSI/MACD/volume panel beneath it as the concept
+needs. The bars are synthetic; the pattern in them is not. Each example is drawn by the same
+`sma`/`rsi`/`macd`/`orb` code the live chart uses, and `market.test.ts` asserts per guide that its
+fixture still produces the signal it illustrates — so an example cannot quietly rot into a picture of
+nothing.
 
 Under it, the signals every TA guide repeats, computed in `src/lib/market.ts` and tested: the
 moving-average cross, which side of the slow MA price sits, RSI and its extremes, proximity to
-support or resistance, RSI divergence, and the one- and two-bar candlestick patterns — engulfing,
-hammer, shooting star, doji. No head-and-shoulders and no chart-shape recognition; that is guesswork
-dressed as maths. When the bias is clear, a card spells the setup out: entry on the pull-back to the
-fast MA, stop at the swing against you, target the opposite swing or a 2R projection, with the
-resulting R:R. The **Opening range** preset pins 15m bars and marks the session-open high and low
-the breakout play watches.
+support or resistance, RSI divergence, MACD's momentum cross, ATR as a share of price, a Bollinger
+squeeze when the bands are the tightest they have been in a hundred bars, a volume surge on the
+latest bar, the one- and two-bar candlestick patterns — engulfing, hammer, shooting star, doji — and
+the trend on the timeframe one step up, because a 9-MA cross on the hourly means something different
+depending on which way the daily leans. No head-and-shoulders and no chart-shape recognition; that is
+guesswork dressed as maths. Direction-carrying cards vote in the Long/Short tally; the ones that
+describe conditions rather than a side — volatility, volume — deliberately do not.
+
+The card under the chart always answers, even when the answer is no. A tally split evenly between
+the two sides says **No side to take** and shows the count; a bias whose geometry doesn't work — price
+already past the level the setup would aim at — says **No clean setup**. Both used to render as an
+empty space where the answer goes, which reads as the tool being broken rather than as it having
+looked and found nothing.
+
+When there is a trade, the card spells the setup out. The entry is the fast MA, and the card says
+which trade that actually is: a **pull-back** or **bounce** when the MA is the side of price you'd
+wait for, a **reclaim** or **break** when it isn't. The stop sits past the near swing by a quarter of
+an ATR, so ordinary noise doesn't clip it. The target is a real level — the structural high or low
+over three times the swing window — and the R:R is whatever that works out to, `thin` in amber when
+the reward is under 1R. Nothing is projected to make the number look good, which means roughly half
+of all setups now say they don't pay, and that is the honest answer. Taking one against the higher
+timeframe gets said out loud too.
+
+**Alert me** on that card saves those three levels, and the bell then watches the live
+price against them: it tells you when price reaches the entry, when it runs through the stop (the
+setup is dead), and when it hits the target. The levels are a snapshot — the entry rides a moving
+average that walks every bar, and a watch that kept re-reading it would be a different trade every
+hour. One saved setup per asset, side **and horizon** — an hourly long and a daily long on the same
+coin are two different trades off two different charts, so saving one leaves the other alone, and the
+alert names which is firing. Saving again replaces that one, and the button toggles it off.
+Prices are re-checked every minute **while the app is open** — nothing runs in the background and
+nothing is pushed to your phone.
+
+The **Opening range** preset pins 15m bars and marks the high and low of the first hour of the New
+York session — 09:30 local, daylight saving included — which is the window the breakout play watches.
+The hour itself is shaded on the chart, the levels run across it, and the signal carries its age: a
+range set nineteen hours ago is a level, not a setup. A break that fails either of the quality checks
+(a range narrower than a normal bar, or thin volume behind it) is reported in grey with the reason
+rather than as a directional call.
+
+The anchor and the length were chosen by testing rather than by tradition. Over 219 days of 15m BTC
+and ETH — enter on the first close beyond the range, stop the other side, target 2R, everything net
+of 0.2% round-trip fees:
+
+| Rule | Trades | Win | Net per trade |
+| --- | --- | --- | --- |
+| Midnight UTC, first 15 min *(the old default)* | 498 | 31% | **−0.64R** |
+| Frankfurt 09:00, first hour | 497 | 36% | −0.34R |
+| New York 09:30, first hour | 444 | 36% | −0.15R |
+| …+ daily trend must agree | 233 | 43% | −0.04R |
+| …+ range at least 1.5× a normal bar | 211 | 42% | −0.03R |
+| …+ break carries volume | **148** | **46%** | **+0.05R** |
+
+Midnight UTC is a date boundary, not a moment anyone turns up for, which is why it was the worst of
+the three. A longer range helps for an unglamorous reason: fees are a fixed share of price, so a
+wider stop makes them a smaller share of the risk. Fading the break instead of taking it was tested
+too, and was far worse (−1.24R). What the last row says honestly is that filtering turned a bad rule
+into a flat one — so the preset marks the levels, names which of the checks a break fails, and does
+not pretend to be a system.
 
 None of it is advice, and none of it is stored — every number on the page is fetched fresh.
+
+The Overview's Markets panel ranks the eleven keyless assets by the size of their 24-hour move and
+shows the four biggest, either direction — a 6% drop is as much news as a 6% rally. Tapping one opens
+the desk on that asset, and so does clicking a Markets notification: the bell's "Bitcoin · Trading at
+entry" lands on Bitcoin rather than on whatever the desk was last left showing. The selected asset
+lives in the store, so it also survives a reload.
 
 ## Notifications
 
 The bell in the header counts what wants attention, derived from state rather than stored, so it is
-never stale: tasks overdue or due today, subscriptions charging within three days, and any of the
-four watched assets that moved more than 3% in twenty-four hours. Clicking one goes where it lives.
+never stale: tasks overdue or due today, subscriptions charging within three days, any of the four
+watched assets that moved more than 3% in twenty-four hours, and any saved Markets setup whose entry,
+stop or target the live price has reached. Clicking one goes where it lives.
 Dismissing is for the session — a reload brings back whatever is still true.
 
 ## PDF

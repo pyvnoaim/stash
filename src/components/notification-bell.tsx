@@ -3,8 +3,9 @@ import { Bell, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { MARKET, useStash } from '@/lib/store'
-import { alerts, type Alert } from '@/lib/notify'
+import { MARKET, setMarketAsset, useStash } from '@/lib/store'
+import { fetchPrices } from '@/lib/market'
+import { alerts, watchAlerts, type Alert } from '@/lib/notify'
 
 // a coloured dot stands in for a per-kind icon; keeps the row compact
 const DOT: Record<Alert['tone'], string> = {
@@ -21,6 +22,7 @@ const WATCH = [
   { id: 'PAXGUSDT', label: 'Gold' },
 ]
 const MOVE = 3 // percent
+const POLL = 60_000 // how often saved setups are re-priced while the app is open
 
 export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
@@ -48,6 +50,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
             detail: 'last 24 hours',
             tone: up ? 'info' : 'warn',
             target: MARKET,
+            asset: w.id,
           } as Alert]
         }))
       })
@@ -55,7 +58,21 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     return () => { live = false }
   }, [])
 
-  const shown = [...stateAlerts, ...movers].filter((a) => !dismissed.has(a.id))
+  // saved setups, re-priced on a timer. The joined ids are the dep so the poll only restarts when
+  // the set of watched assets actually changes, not on every unrelated write to the store.
+  const [live, setLive] = useState<Record<string, number>>({})
+  const assets = [...new Set(s.watches.map((w) => w.asset))].sort().join(',')
+  useEffect(() => {
+    if (!assets) { setLive({}); return }
+    let on = true
+    const tick = () => fetchPrices(assets.split(','), s.apiKey).then((p) => { if (on) setLive(p) })
+    tick()
+    const h = setInterval(tick, POLL)
+    return () => { on = false; clearInterval(h) }
+  }, [assets, s.apiKey])
+  const setups = useMemo(() => watchAlerts(s.watches, live), [s.watches, live])
+
+  const shown = [...stateAlerts, ...setups, ...movers].filter((a) => !dismissed.has(a.id))
   const drop = (ids: string[]) => setDismissed((prev) => new Set([...prev, ...ids]))
 
   return (
@@ -83,7 +100,8 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
             {shown.map((a) => (
               <div key={a.id} className="hover:bg-accent group/noti flex items-start gap-2 px-3 py-2">
                 <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[a.tone])} />
-                <button type="button" onClick={() => { onNavigate(a.target); setOpen(false) }} className="min-w-0 flex-1 text-left">
+                <button type="button" className="min-w-0 flex-1 text-left"
+                  onClick={() => { if (a.asset) setMarketAsset(a.asset); onNavigate(a.target); setOpen(false) }}>
                   <span className="block truncate text-sm">{a.title}</span>
                   <span className="text-muted-foreground block text-xs">{a.detail}</span>
                 </button>

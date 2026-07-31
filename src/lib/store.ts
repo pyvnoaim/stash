@@ -53,6 +53,29 @@ export interface Sub {
   due: string | null
 }
 
+/**
+ * A Markets setup you asked to be told about. The levels are a snapshot taken when you saved it —
+ * the entry sits on a moving average that walks every bar, and a target that moved under you is not
+ * the trade you agreed to. `label` is copied in so the bell never has to look the asset up.
+ */
+export interface Watch {
+  id: string
+  /** An ASSETS id from market.ts, e.g. 'BTCUSDT'. */
+  asset: string
+  label: string
+  /**
+   * Which horizon produced it — the HORIZONS label, 'Investing' or 'Trading'. The two disagree
+   * often and read different timeframes, so a daily setup and an hourly one on the same asset in
+   * the same direction are two trades, not one, and neither may quietly overwrite the other.
+   */
+  horizon: string
+  dir: 'long' | 'short'
+  entry: number
+  stop: number
+  target: number
+  ts: number
+}
+
 /** What to set aside each month to cover it: a €120 yearly abo is €10 a month. The whole point. */
 export const monthlyCost = (sub: Sub) => (sub.cost * PER_YEAR[sub.cycle]) / 12
 export const yearlyCost = (sub: Sub) => sub.cost * PER_YEAR[sub.cycle]
@@ -148,6 +171,12 @@ export interface State {
   subSort: SubSort
   /** Which side of Subscriptions is open — expenses or income. */
   subView: 'expense' | 'income'
+  /** Saved Markets setups the bell watches the live price against. */
+  watches: Watch[]
+  /** Which asset the Markets desk is on. Lives here so a mover tile or an alert can open the desk
+   *  already showing the right thing — and so it survives a reload. Validated by the page, which
+   *  owns the asset table and falls back to Bitcoin for an id it doesn't recognise. */
+  marketAsset: string
 }
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
@@ -184,6 +213,7 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', subSort: 'recent', subView: 'expense',
+  watches: [], marketAsset: 'BTCUSDT',
 })
 
 // Every way data enters — localStorage, an imported backup — comes through here.
@@ -255,6 +285,29 @@ export function load(data: unknown): State {
       due: cleanDate(x.due),
     }))
 
+  // a level that isn't a real number can't be compared against a price — the alert would either
+  // never fire or fire forever, so a broken row is dropped rather than kept and half-honoured
+  const wseen = new Set<string>()
+  st.watches = (Array.isArray(st.watches) ? st.watches : [])
+    .filter((w) => w && w.id && !wseen.has(String(w.id)) && wseen.add(String(w.id)))
+    .map((w) => ({
+      id: String(w.id),
+      asset: String(w.asset ?? ''),
+      label: String(w.label || w.asset || 'Setup'),
+      horizon: String(w.horizon ?? ''),
+      dir: w.dir === 'short' ? 'short' as const : 'long' as const,
+      entry: Number(w.entry),
+      stop: Number(w.stop),
+      target: Number(w.target),
+      ts: typeof w.ts === 'number' ? w.ts : Date.now(),
+    }))
+    // levels the wrong way round for their side are not a trade, they are an alarm that fires on
+    // every tick forever: a long whose stop sits above its entry is already "stopped out" the
+    // moment it loads. The app can't build one — tradePlan checks the geometry — but a hand-edited
+    // backup can, and this is the boundary that decides what the bell is allowed to shout about.
+    .filter((w) => w.asset && [w.entry, w.stop, w.target].every(isFinite)
+      && (w.dir === 'long' ? w.stop < w.entry && w.target > w.entry : w.stop > w.entry && w.target < w.entry))
+
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'
@@ -263,6 +316,7 @@ export function load(data: unknown): State {
   st.apiKey = typeof st.apiKey === 'string' ? st.apiKey : ''
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
+  st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
   return st
 }
 
@@ -537,6 +591,17 @@ export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
 export const setChart = (chart: ChartStyle) => set((s) => ({ ...s, chart }))
 export const setApiKey = (apiKey: string) => set((s) => ({ ...s, apiKey: apiKey.trim() }))
 export const setSubSort = (subSort: SubSort) => set((s) => ({ ...s, subSort }))
+
+/** One saved setup per asset, direction and horizon — re-saving replaces that one, and leaves the
+ *  other horizon's alone: an hourly long and a daily long on the same coin are two different trades. */
+export const addWatch = (w: Watch) =>
+  set((s) => ({
+    ...s,
+    watches: [w, ...s.watches.filter((x) => !(x.asset === w.asset && x.dir === w.dir && x.horizon === w.horizon))],
+  }))
+/** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
+export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
+export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 

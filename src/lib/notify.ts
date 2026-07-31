@@ -1,12 +1,50 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
-import { nextCharge, SUBS, type State } from './store.ts'
+import { nextCharge, SUBS, MARKET, type State, type Watch } from './store.ts'
 import { today } from './parse.ts'
 
-export type Alert = { id: string; title: string; detail: string; tone: 'due' | 'warn' | 'info'; target: string }
+export type Alert = {
+  id: string; title: string; detail: string; tone: 'due' | 'warn' | 'info'
+  /** The view to open. */
+  target: string
+  /** For Markets alerts, the asset to open it on — clicking "Bitcoin at entry" should land on
+   *  Bitcoin, not on whatever the desk was last left showing. */
+  asset?: string
+}
 
 const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const daysUntil = (date: string, from: string) => Math.round((Date.parse(date) - Date.parse(from)) / 864e5)
+
+const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/**
+ * Saved Markets setups against the live price. Pure — the bell does the fetching and passes prices
+ * in, so the rule that decides "is this trade on" is testable without a network.
+ *
+ * Order matters: for a long, price through the stop is also past the entry, so the worst news wins.
+ * An asset with no price yet (feed down, stock without a key) says nothing rather than guessing.
+ */
+export function watchAlerts(watches: Watch[], prices: Record<string, number>): Alert[] {
+  return watches.flatMap((w) => {
+    const p = prices[w.asset]
+    if (typeof p !== 'number' || !isFinite(p)) return []
+    const below = w.dir === 'long' // which way price has to travel for a level to be "reached"
+    const reached = (lvl: number) => (below ? p <= lvl : p >= lvl)
+    const hit = reached(w.stop) ? 'stop' : (below ? p >= w.target : p <= w.target) ? 'target' : reached(w.entry) ? 'entry' : null
+    if (!hit) return []
+    const side = w.dir === 'long' ? 'Long' : 'Short'
+    // the horizon is in the title: two setups on one asset can fire at once, and "which chart is
+    // this?" is the first thing you'd ask of an alert that just said the coin's name
+    const who = w.horizon ? `${w.label} · ${w.horizon}` : w.label
+    const a = {
+      entry: { title: `${who} at entry`, detail: `${price(p)} — the ${side.toLowerCase()} entry ${price(w.entry)} is here`, tone: 'due' as const },
+      target: { title: `${who} hit target`, detail: `${price(p)} — ${side} target ${price(w.target)} reached`, tone: 'info' as const },
+      stop: { title: `${who} setup broken`, detail: `${price(p)} — through the ${side.toLowerCase()} stop ${price(w.stop)}`, tone: 'warn' as const },
+    }[hit]
+    // the level is in the id, so dismissing "at entry" doesn't also silence the stop that follows
+    return [{ id: `watch-${w.id}-${hit}`, ...a, target: MARKET, asset: w.asset }]
+  })
+}
 
 /** Overdue/today tasks first (most urgent), then subscriptions charging within three days. */
 export function alerts(s: State): Alert[] {

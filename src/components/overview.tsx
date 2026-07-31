@@ -1,24 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { addDays, dayLabel, today } from '@/lib/parse'
-import { inProject, MARKET, monthlyCost, SUBS, tagCounts, useStash, type Item } from '@/lib/store'
-import { ASSETS } from '@/lib/market'
+import { inProject, MARKET, monthlyCost, setMarketAsset, SUBS, tagCounts, useStash, type Item } from '@/lib/store'
+import { ASSETS, fmtPrice } from '@/lib/market'
 import { treemap } from '@/lib/treemap'
 
 const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
 
-const usd = (n: number) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-
-// a glance at the desk — the last 24h of keyless Binance hourly closes gives the sparkline, the last
-// price, and the 24h move all in one call per asset. Tap through to the Markets tool.
-const WATCH = [
-  { id: 'BTCUSDT', label: 'Bitcoin' },
-  { id: 'ETHUSDT', label: 'Ethereum' },
-  { id: 'SOLUSDT', label: 'Solana' },
-  { id: 'PAXGUSDT', label: 'Gold' },
-]
+// a glance at the desk — whichever assets actually moved, not a fixed four. One batched 24h ticker
+// call ranks every keyless asset by the size of its move, then the top few get an hourly-closes call
+// each for the sparkline. Stocks sit it out: they need the Twelve Data key, and a tile that's empty
+// until you've pasted one is worse than a tile that isn't there.
+const MOVERS = 4
+const CANDIDATES = ASSETS.filter((a) => a.source === 'binance')
 type Row = { id: string; label: string; closes: number[]; price: number; change: number }
 
 /** Price line with a gradient area fading beneath it, drawn in a stretched 0..100 box; the 1.5px
@@ -44,46 +41,90 @@ function Sparkline({ data, up, id }: { data: number[]; up: boolean; id: string }
   )
 }
 
-function Markets({ onOpen }: { onOpen: () => void }) {
+/** The tile's own shape, pulsing — a row of four keeps the panel's height while the ranking lands,
+ *  so nothing below it jumps when the prices arrive. */
+function MoverSkeleton() {
+  return (
+    <div className="flex flex-col rounded-lg border p-3">
+      <div className="flex items-center gap-1.5">
+        <Skeleton className="size-4 rounded-full" />
+        <Skeleton className="h-3 w-16" />
+      </div>
+      <Skeleton className="mt-2 h-5 w-24" />
+      <Skeleton className="mt-1.5 h-3 w-20" />
+      <Skeleton className="mt-2 h-8 w-full" />
+    </div>
+  )
+}
+
+function Markets({ onOpen }: { onOpen: (asset: string) => void }) {
   const [rows, setRows] = useState<Row[]>([])
+  // the feed is someone else's server: it can be slow, and it can be down. Both used to look
+  // identical from here — four tiles of em-dashes that never filled in.
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [nonce, setNonce] = useState(0)
   useEffect(() => {
     let live = true
-    Promise.all(WATCH.map(async (w) => {
-      // catch per symbol — one failed request must not blank the other three tiles
-      try {
-        const ks = await fetch(`https://api.binance.com/api/v3/klines?symbol=${w.id}&interval=1h&limit=24`).then((r) => r.json())
-        const closes = Array.isArray(ks) ? ks.map((k: (string | number)[]) => +k[4]) : []
-        const price = closes.at(-1) ?? 0
-        const open = Array.isArray(ks) && ks.length ? +ks[0][1] : price
-        return { ...w, closes, price, change: open ? ((price - open) / open) * 100 : 0 }
-      } catch {
-        return { ...w, closes: [], price: 0, change: 0 }
-      }
-    })).then((res) => { if (live) setRows(res) }).catch(() => {})
+    setState('loading')
+    const syms = encodeURIComponent(JSON.stringify(CANDIDATES.map((a) => a.id)))
+    fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${syms}`)
+      .then((r) => r.json())
+      .then(async (tick: { symbol: string; lastPrice: string; priceChangePercent: string }[]) => {
+        if (!Array.isArray(tick)) throw new Error('no prices')
+        // biggest move either way — a 6% drop is as much news as a 6% rally
+        const top = tick
+          .map((t) => ({ id: t.symbol, price: +t.lastPrice, change: +t.priceChangePercent }))
+          .filter((t) => isFinite(t.change) && isFinite(t.price))
+          .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+          .slice(0, MOVERS)
+        // sparklines after the ranking, so only the tiles actually shown cost a request.
+        // Per-symbol catch: one failed line must not blank the other tiles.
+        const withLines = await Promise.all(top.map(async (t) => {
+          const label = ASSETS.find((a) => a.id === t.id)?.label ?? t.id
+          try {
+            const ks = await fetch(`https://api.binance.com/api/v3/klines?symbol=${t.id}&interval=1h&limit=24`).then((r) => r.json())
+            return { ...t, label, closes: Array.isArray(ks) ? ks.map((k: (string | number)[]) => +k[4]) : [] }
+          } catch {
+            return { ...t, label, closes: [] }
+          }
+        }))
+        if (live) { setRows(withLines); setState(withLines.length ? 'ready' : 'error') }
+      })
+      .catch(() => { if (live) setState('error') })
     return () => { live = false }
-  }, [])
-  const by = (id: string) => rows.find((r) => r.id === id)
+  }, [nonce])
+  if (state === 'error') {
+    return (
+      <div className="text-muted-foreground flex flex-col items-center gap-2 py-8 text-sm">
+        <p>Prices are not loading — the exchange feed didn't answer.</p>
+        <button type="button" onClick={() => setNonce((n) => n + 1)}
+          className="text-foreground hover:bg-accent rounded-md border px-2.5 py-1 text-xs">Try again</button>
+      </div>
+    )
+  }
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {WATCH.map((w) => {
-        const r = by(w.id)
-        const up = (r?.change ?? 0) >= 0
-        return (
-          <button key={w.id} type="button" onClick={onOpen}
-            className="hover:border-foreground/30 flex flex-col rounded-lg border p-3 text-left transition-colors">
-            <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
-              <img src={logoOf(w.id)} alt="" loading="lazy" className="size-4 rounded-full object-contain"
-                onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />
-              {w.label}
-            </span>
-            <p className="mt-1 tabular-nums">{r ? usd(r.price) : '—'}</p>
-            <p className={cn('text-xs tabular-nums', up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-              {r ? `${up ? '+' : ''}${r.change.toFixed(2)}% 24h` : ' '}
-            </p>
-            <div className="mt-2 h-8">{r && <Sparkline data={r.closes} up={up} id={w.id} />}</div>
-          </button>
-        )
-      })}
+      {state === 'loading'
+        ? Array.from({ length: MOVERS }, (_, i) => <MoverSkeleton key={i} />)
+        : rows.map((r) => {
+            const up = r.change >= 0
+            return (
+              <button key={r.id} type="button" onClick={() => onOpen(r.id)}
+                className="hover:border-foreground/30 flex flex-col rounded-lg border p-3 text-left transition-colors">
+                <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                  <img src={logoOf(r.id)} alt="" loading="lazy" className="size-4 rounded-full object-contain"
+                    onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />
+                  {r.label}
+                </span>
+                {/* the asset's own precision: $0.17 is three different Cardano prices rounded together */}
+                <p className="mt-1 tabular-nums">${fmtPrice(r.price)}</p>
+                <p className={cn('text-xs tabular-nums', up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {up ? '+' : ''}{r.change.toFixed(2)}% 24h
+                </p>
+                <div className="mt-2 h-8"><Sparkline data={r.closes} up={up} id={r.id} /></div>
+              </button>
+            )
+          })}
     </div>
   )
 }
@@ -407,8 +448,9 @@ export default function Overview({ onTag, onNavigate }: {
         </Panel>
       )}
 
-      <Panel title="Markets" sub="Live price and 24-hour move · tap through to the desk">
-        <Markets onOpen={() => onNavigate(MARKET)} />
+      <Panel title="Markets" sub="Biggest 24-hour moves · tap one through to the desk">
+        {/* the desk opens on whatever was tapped, rather than on Bitcoin and a hunt through the picker */}
+        <Markets onOpen={(id) => { setMarketAsset(id); onNavigate(MARKET) }} />
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-2">
