@@ -1,6 +1,7 @@
-import { useRef, useState, useSyncExternalStore } from 'react'
-import { CloudOff, LogOut, RefreshCw, Settings, UserPen, UserPlus } from 'lucide-react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { CloudOff, History, LogOut, RefreshCw, Settings, Users, UserPen } from 'lucide-react'
 import { toast } from 'sonner'
+import { AdminDialog } from '@/components/admin-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -11,8 +12,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SidebarMenuButton } from '@/components/ui/sidebar'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
-import { getSync, invite, logout, subscribeSync, syncNow, updateAccount } from '@/lib/sync'
+import {
+  changePassword, getSync, logout, restore, subscribeSync, syncNow, updateAccount, versions,
+  type Version,
+} from '@/lib/sync'
 
 const HINT: Record<string, string> = {
   ok: 'Synced',
@@ -40,6 +45,7 @@ function Avatar({ name, avatar, className }: { name: string, avatar: string | nu
 export function NavUser({ onSettings }: { onSettings: () => void }) {
   const { status, user } = useSyncExternalStore(subscribeSync, getSync)
   const [editing, setEditing] = useState(false)
+  const [people, setPeople] = useState(false)
 
   return (
     <>
@@ -65,15 +71,8 @@ export function NavUser({ onSettings }: { onSettings: () => void }) {
                 <RefreshCw /> Sync now
               </DropdownMenuItem>
               {!!user.admin && (
-                <DropdownMenuItem
-                  onClick={async () => {
-                    const c = await invite()
-                    if (!c) return toast('The server refused')
-                    try { await navigator.clipboard.writeText(c) } catch { /* the toast still shows it */ }
-                    toast(`Invite ${c} — copied`)
-                  }}
-                >
-                  <UserPlus /> New invite
+                <DropdownMenuItem onClick={() => setPeople(true)}>
+                  <Users /> People
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
@@ -102,6 +101,7 @@ export function NavUser({ onSettings }: { onSettings: () => void }) {
           avatar={user.avatar}
         />
       )}
+      {user?.admin && <AdminDialog open={people} onOpenChange={setPeople} me={user.name} />}
     </>
   )
 }
@@ -149,11 +149,19 @@ function AccountDialog({ open, onOpenChange, name: initial, avatar: initialAvata
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Account</DialogTitle>
           <DialogDescription>The name signs you in; both travel to every device.</DialogDescription>
         </DialogHeader>
+        <Tabs defaultValue="profile">
+          <TabsList className="w-full">
+            <TabsTrigger value="profile">Profile</TabsTrigger>
+            <TabsTrigger value="password">Password</TabsTrigger>
+            <TabsTrigger value="history">History</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="profile" className="grid gap-4 pt-3">
         <div className="flex items-center gap-3">
           <Avatar name={name || initial} avatar={avatar} className="size-14 text-lg" />
           <div className="grid gap-1.5">
@@ -188,7 +196,113 @@ function AccountDialog({ open, onOpenChange, name: initial, avatar: initialAvata
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={save} disabled={!name.trim() || busy}>Save</Button>
         </DialogFooter>
+          </TabsContent>
+
+          <TabsContent value="password" className="pt-3">
+            <PasswordForm />
+          </TabsContent>
+
+          <TabsContent value="history" className="pt-3">
+            <History_ onDone={() => onOpenChange(false)} />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** The current password again, because a borrowed unlocked laptop should not lock you out. */
+function PasswordForm() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  return (
+    <form
+      className="grid gap-3"
+      onSubmit={async (e) => {
+        e.preventDefault()
+        setBusy(true)
+        const err = await changePassword(current, next)
+        setBusy(false)
+        setError(err ?? '')
+        if (err) return
+        setCurrent(''); setNext('')
+        toast('Password changed')
+      }}
+    >
+      <div className="grid gap-2">
+        <Label htmlFor="pass-now">Current password</Label>
+        <Input id="pass-now" type="password" autoComplete="current-password"
+          value={current} onChange={(e) => setCurrent(e.target.value)} />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="pass-next">New password</Label>
+        <Input id="pass-next" type="password" autoComplete="new-password"
+          value={next} onChange={(e) => setNext(e.target.value)} />
+        <p className="text-muted-foreground text-xs">
+          Eight characters at least. Your other devices stay signed in — use <em>Sign out
+          everywhere</em> if that is not what you want.
+        </p>
+      </div>
+      {error && <p className="text-destructive text-xs">{error}</p>}
+      <Button type="submit" disabled={!current || next.length < 8 || busy}>Change password</Button>
+    </form>
+  )
+}
+
+const when = (ts: number) => new Date(ts).toLocaleString(undefined, {
+  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+})
+
+/**
+ * The fifty versions the server keeps, and the way back to one. Restoring writes the old document
+ * forward as a new version rather than deleting what came after, so it is itself undoable — which
+ * is the only reason a list like this is safe to put in front of anyone.
+ */
+function History_({ onDone }: { onDone: () => void }) {
+  const [list, setList] = useState<Version[] | null>(null)
+  const [busy, setBusy] = useState(0)
+  useEffect(() => { void versions().then(setList) }, [])
+
+  if (!list) return <p className="text-muted-foreground text-sm">Reading the history…</p>
+  if (!list.length) {
+    return <p className="text-muted-foreground text-sm">Nothing yet — the first sync starts the history.</p>
+  }
+
+  return (
+    <div className="grid gap-1">
+      <p className="text-muted-foreground pb-1 text-xs">
+        Every sync is a version, the last fifty kept. Restoring brings one back as a new version, so
+        you can always come forward again.
+      </p>
+      <div className="max-h-64 overflow-y-auto pr-1">
+        {list.map((v, i) => (
+          <div key={v.v} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+            <History className="text-muted-foreground size-3.5 shrink-0" />
+            <span className="truncate">{when(v.ts)}</span>
+            {i === 0 && <span className="text-muted-foreground text-xs">now</span>}
+            <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">
+              {Math.max(1, Math.round(v.size / 1024))} KB
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={i === 0 || busy === v.v}
+              onClick={async () => {
+                setBusy(v.v)
+                const err = await restore(v.v)
+                setBusy(0)
+                toast(err ?? `Restored ${when(v.ts)}`)
+                if (!err) onDone()
+              }}
+            >
+              Restore
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

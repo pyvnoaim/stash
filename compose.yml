@@ -3,6 +3,14 @@ services:
     build: .
     restart: unless-stopped
     volumes: ['stash:/data']
+    # 401 is the healthy answer from /api/me without a cookie: the process is up and the database
+    # is answering. Docker restarts it if that stops being true; uptime-kuma watches the domain.
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/api/me').then(r=>process.exit(r.status===401?0:1),()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     # nginx proxy manager terminates TLS: join its docker network and point a proxy host at
     # stash:8787. No published ports — the proxy is the only way in. `docker network ls` says
     # what your proxy network is called; set PROXY_NET if it is not npm_default.

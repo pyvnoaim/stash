@@ -5,6 +5,7 @@ import {
 import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
+import { toggleBox } from '@/lib/markdown'
 import { patch, type Item } from '@/lib/store'
 
 /**
@@ -146,7 +147,7 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
             {it.note.trim()
-              ? <Markdown text={it.note} />
+              ? <Markdown text={it.note} onToggle={(line) => patch(it.id, { note: toggleBox(it.note, line) })} />
               : <p className="text-muted-foreground text-sm">Nothing written yet.</p>}
           </div>
         )}

@@ -134,8 +134,15 @@ export function start({
     invite: db.prepare('select * from invites where code = ? and used is null'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code) values (?)'),
+    openInvites: db.prepare('select code from invites where used is null'),
+    dropInvite: db.prepare('delete from invites where code = ? and used is null'),
     rename: db.prepare('update users set name = ? where id = ?'),
     setAvatar: db.prepare('update users set avatar = ? where id = ?'),
+    setPass: db.prepare('update users set salt = ?, hash = ?, n = ? where id = ?'),
+    userById: db.prepare('select * from users where id = ?'),
+    versions: db.prepare(`select v, ts, device, length(json) as size from docs
+      where user = ? order by v desc`),
+    version: db.prepare('select v, json from docs where user = ? and v = ?'),
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen) values (?, ?, ?, ?)'),
@@ -333,7 +340,77 @@ export function start({
         log('delete-user', `${name} by ${user.name}`, via(req))
         return send(res, 200, {})
       }
+      if (path === '/api/admin/promote' && req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const name = String(b?.user ?? '').trim().toLowerCase()
+        if (!q.promote.run(name).changes) return send(res, 400, { error: 'no such user' })
+        log('promote', `${name} by ${user.name}`, via(req))
+        return send(res, 200, {})
+      }
+      // the codes cut but not yet spent, so an admin can see what is outstanding
+      if (path === '/api/admin/invites' && req.method === 'GET') {
+        return send(res, 200, { invites: q.openInvites.all() })
+      }
+      if (path === '/api/admin/invite' && req.method === 'DELETE') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        q.dropInvite.run(String(b?.code ?? ''))
+        return send(res, 200, {})
+      }
+      // every session of every user but yours — the button for the day something smells wrong
+      if (path === '/api/admin/revoke' && req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const name = String(b?.user ?? '').trim().toLowerCase()
+        const target = q.userByName.get(name) as { id: number } | undefined
+        if (!target) return send(res, 400, { error: 'no such user' })
+        q.dropAllSessions.run(target.id)
+        log('revoke', `${name} by ${user.name}`, via(req))
+        return send(res, 200, {})
+      }
       return send(res, 404, { error: 'not found' })
+    }
+
+    /* The fifty snapshots, and the way back to one. Restoring writes the old document forward as
+       a new version rather than deleting what came after — an undo you can undo. */
+    if (path === '/api/versions' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      return send(res, 200, { versions: q.versions.all(user.id) })
+    }
+
+    if (path === '/api/restore' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const row = q.version.get(user.id, Number(b?.version)) as { json: string } | undefined
+      if (!row) return send(res, 404, { error: 'no such version' })
+      const w = q.insert.run(user.id, Date.now(), 'restore', row.json)
+      q.prune.run(user.id, user.id, KEEP)
+      log('restore', `${user.name} -> v${b.version}`, via(req))
+      return send(res, 200, { version: Number(w.lastInsertRowid), state: JSON.parse(row.json) })
+    }
+
+    if (path === '/api/password' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const next = String(b?.next ?? '')
+      if (next.length < 8) return send(res, 400, { error: 'password: 8 characters at least' })
+      const u = q.userById.get(user.id) as { salt: Buffer, hash: Buffer, n: number }
+      // the current password, again — a borrowed unlocked laptop should not be able to lock you out
+      if (!timingSafeEqual(hashPass(String(b?.current ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
+        log('password-fail', user.name, via(req))
+        return send(res, 401, { error: 'wrong password' })
+      }
+      const salt = randomBytes(16)
+      q.setPass.run(salt, hashPass(next, salt, SCRYPT_N), SCRYPT_N, user.id)
+      // every other device keeps its session; this one is fine, and a changed password is not a theft
+      log('password', user.name, via(req))
+      return send(res, 200, {})
     }
 
     if (path === '/state') {

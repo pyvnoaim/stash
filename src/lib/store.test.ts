@@ -30,8 +30,8 @@ for (const junk of [null, undefined, 42, 'nope', [], { items: 'no' }, { projects
 // projects: no id means dropped, no name means named
 const p = load({ projects: [{ id: 'a', name: 'Kova' }, { name: 'orphan' }, { id: 'b' }] }).projects
 assert.deepEqual(p, [
-  { id: 'a', name: 'Kova', color: null, parent: null },
-  { id: 'b', name: 'Project', color: null, parent: null },
+  { id: 'a', name: 'Kova', color: null, parent: null, note: '' },
+  { id: 'b', name: 'Project', color: null, parent: null, note: '' },
 ])
 
 /* A parent must exist, cannot be the project itself, and cannot have a parent of its own —

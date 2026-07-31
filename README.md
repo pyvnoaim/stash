@@ -137,6 +137,9 @@ HTML, so there is no escaping to get wrong and no dependency to pull. Markdown h
 `mailto`, or a same-page `/` or `#` — and anything else, `javascript:` or `data:`, is defanged to
 `#`.
 
+`- [ ]` and `- [x]` render as real checkboxes in the preview, and ticking one rewrites that line
+in the note. A checklist is therefore just text, with nothing to keep in step with it.
+
 ## Sidebar and settings
 
 **Overview** sits on top on its own, since it is the home dashboard rather than one more list.
@@ -144,6 +147,11 @@ Under it the lists come in the order work moves through them — **Quick notes**
 **Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Calendar,
 Subscriptions, Markets and PDF sit apart at the bottom under **Tools**: none of them is a list of
 items.
+
+A project opens as a place of its own: a header above the list carries how far along it is —
+finished against everything filed under it and its sub-projects, derived rather than stored — and
+**Brief**, a markdown note for what the project is, what done looks like and what is still open.
+The pencil edits it, the chevron folds it away, and a checklist inside it ticks like any other.
 
 Edit a project from the pencil on its row or from its right-click menu. A project can carry a
 colour: eight presets, a square and a hue slider behind the wheel, or a hex typed in — `#39f`,
@@ -219,7 +227,9 @@ separately at all.
 
 The month, with the work sitting on the days it is due — the thing a list down a page cannot show.
 Items live in the cells, each carrying its project's colour; finished ones are struck through, and
-a busy day scrolls inside its own cell. Click one to open whichever list actually holds it.
+a busy day scrolls inside its own cell. Click one to open whichever list actually holds it, or drag
+it onto another day to move its due date — the one thing a month can do that a list down a page
+cannot. The day you are over is outlined.
 
 Subscriptions land on the days they bill, generated across the visible weeks only — income reads
 green with a `+`, an expense stays quiet behind a `€`. A charge is not an item, so clicking one
@@ -458,10 +468,18 @@ server keeps per user are the undo for the day that rule picks wrong. There is n
 recovery over prevention, at a fraction of the code. The Twelve Data key is stripped from every
 push, the same promise the backup export makes: it never leaves the machine you typed it on.
 
-Signup wants an invite code. The first account through the door is the admin and cuts codes from
-the footer menu; everyone else gets **Account** — a new name, a picture shrunk to a 128px square
-before it ever leaves the browser — and **Sign out everywhere** for a lost device, and nothing
-else to manage. There is no email anywhere in the system — a forgotten password is the admin deleting the
+Signup wants an invite code. **Account** in the footer menu holds the three things a person owns:
+a name and a picture — shrunk to a 128px square before it ever leaves the browser — a password
+change that asks for the current one first, and **History**, the fifty versions the server keeps.
+Restoring one writes it forward as a new version rather than deleting what came after, so taking
+a snapshot back is itself undoable, which is the only reason the list is safe to put in front of
+anyone. **Sign out everywhere** is there for a lost device.
+
+The first account through the door is the admin, and gets **People**: who has an account, how many
+devices each is signed in on and when they last synced, a code cut for one more, the codes still
+outstanding, and the two blunt instruments — sign every device of theirs out, or delete the account
+and its versions with it. Deleting yourself is refused, since the last admin closing the door
+behind them is not a state anyone recovers from. There is no email anywhere in the system — a forgotten password is the admin deleting the
 row and cutting a new invite. Sessions live in an `HttpOnly` cookie for 180 days, idle out after
 30 unused, and are stored hashed, so a copied database file logs nobody in.
 

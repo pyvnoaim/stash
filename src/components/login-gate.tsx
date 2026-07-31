@@ -185,6 +185,19 @@ function Row({ text, rail, tag, due, flag, done, className = '' }: {
   )
 }
 
+/** Height from 0 to whatever the content is, in CSS alone: a grid row going 0fr → 1fr. */
+function Reveal({ open, children }: { open: boolean, children: React.ReactNode }) {
+  return (
+    <div
+      className={`grid transition-all duration-200 ease-out motion-reduce:transition-none ${
+        open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+      }`}
+    >
+      <div className="overflow-hidden">{children}</div>
+    </div>
+  )
+}
+
 /** Two doors, one form — the toggle decides whether the invite field is part of it. */
 export function SignIn() {
   const [mode, setMode] = useState<'in' | 'up'>('in')
@@ -207,7 +220,7 @@ export function SignIn() {
 
   return (
     <div className="grid gap-5">
-      <div className="grid gap-1">
+      <div key={mode} className="gate-in grid gap-1">
         <h2 className="font-heading text-xl tracking-wide">
           {up ? 'Create account' : 'Welcome back'}
         </h2>
@@ -216,17 +229,21 @@ export function SignIn() {
         </p>
       </div>
 
-      {/* one segmented switch, the quiet kind */}
-      <div className="bg-muted grid grid-cols-2 gap-1 rounded-lg p-1">
+      {/* one segmented switch: the lit half slides across rather than blinking to the other side */}
+      <div className="bg-muted relative grid grid-cols-2 rounded-lg p-1">
+        <span
+          aria-hidden
+          className={`bg-background absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md shadow-xs
+            transition-transform duration-200 ease-out motion-reduce:transition-none
+            ${up ? 'translate-x-[calc(100%+0.5rem)]' : ''}`}
+        />
         {([['in', 'Sign in'], ['up', 'Create account']] as const).map(([id, label]) => (
           <button
             key={id}
             type="button"
-            className={
-              mode === id
-                ? 'bg-background rounded-md py-1.5 text-sm font-medium shadow-xs'
-                : 'text-muted-foreground hover:text-foreground rounded-md py-1.5 text-sm transition-colors'
-            }
+            className={`relative rounded-md py-1.5 text-sm transition-colors ${
+              mode === id ? 'font-medium' : 'text-muted-foreground hover:text-foreground'
+            }`}
             onClick={() => { setMode(id); setError('') }}
           >
             {label}
@@ -237,16 +254,17 @@ export function SignIn() {
         className="grid gap-3"
         onSubmit={(e) => { e.preventDefault(); go() }}
       >
-        {up && (
-          <div className="grid gap-2">
+        {/* the invite field opens and closes rather than appearing — 0fr→1fr is the CSS-only height */}
+        <Reveal open={up}>
+          <div className="grid gap-2 pb-3">
             <Label htmlFor="sync-code">Invite code</Label>
-            <Input id="sync-code" autoFocus autoComplete="off" placeholder="from whoever runs this"
-              value={code} onChange={(e) => setCode(e.target.value)} />
+            <Input id="sync-code" autoComplete="off" placeholder="from whoever runs this"
+              tabIndex={up ? undefined : -1} value={code} onChange={(e) => setCode(e.target.value)} />
           </div>
-        )}
+        </Reveal>
         <div className="grid gap-2">
           <Label htmlFor="sync-name">Name</Label>
-          <Input id="sync-name" autoFocus={!up} autoComplete="username" placeholder="leon"
+          <Input id="sync-name" autoFocus autoComplete="username" placeholder="leon"
             value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="grid gap-2">
@@ -254,7 +272,11 @@ export function SignIn() {
           <Input id="sync-pass" type="password" value={pass}
             autoComplete={up ? 'new-password' : 'current-password'}
             onChange={(e) => setPass(e.target.value)} />
-          {up && <p className="text-muted-foreground text-xs">Eight characters at least. There is no reset by mail — it lives in your keychain or nowhere.</p>}
+          <Reveal open={up}>
+            <p className="text-muted-foreground pb-1 text-xs">
+              Eight characters at least. There is no reset by mail — it lives in your keychain or nowhere.
+            </p>
+          </Reveal>
         </div>
         {error && <p className="text-destructive text-xs">{error}</p>}
         <Button type="submit" disabled={!ready}>

@@ -130,6 +130,48 @@ for (let i = 0; i < 10; i++) await post('/api/login', { user: 'mia', pass: 'wron
 assert.equal((await post('/api/login', { user: 'mia', pass: 'longenough' })).status, 429)
 assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 200)
 
+// versions: every accepted write is one, and restoring writes the old document forward
+const versions = (c: string) => get('/api/versions', c).then((x) => x.json()).then((j) => j.versions)
+let vs = await versions(leon)
+assert.ok(vs.length >= 2 && vs[0].v > vs[1].v)          // newest first
+assert.ok(vs[0].size > 0 && typeof vs[0].ts === 'number')
+r = await post('/api/restore', { version: vs[vs.length - 1].v }, leon)
+assert.equal(r.status, 200)
+assert.deepEqual((await r.json()).state, { items: ['a'] })   // the first document leon ever pushed
+assert.deepEqual((await (await get('/state', leon)).json()).state, { items: ['a'] })
+assert.equal((await versions(leon)).length, vs.length + 1)   // ...as a new version, not a rollback
+assert.equal((await post('/api/restore', { version: 9999 }, leon)).status, 404)
+// and never anyone else's: a fresh account cannot restore into leon's history
+const nia = jar(await post('/api/signup', { user: 'nia', pass: 'longenough', invite: server.invite() }))
+assert.equal((await post('/api/restore', { version: vs[0].v }, nia)).status, 404)
+assert.deepEqual(await (await get('/api/versions', nia)).json(), { versions: [] })
+
+// password: the current one is required, the new one has a floor, and the old one stops working
+assert.equal((await post('/api/password', { current: 'wrong', next: 'newlongenough' }, leon)).status, 401)
+assert.equal((await post('/api/password', { current: 'longenough', next: 'short' }, leon)).status, 400)
+assert.equal((await post('/api/password', { current: 'longenough', next: 'newlongenough' }, leon)).status, 200)
+assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 401)
+assert.equal((await post('/api/login', { user: 'leon', pass: 'newlongenough' })).status, 200)
+assert.equal((await get('/api/me', leon)).status, 200)   // the session that changed it survives
+
+// admin: promote, revoke, and the open invites
+const kim3 = jar(await post('/api/signup', { user: 'kim3', pass: 'longenough', invite: server.invite() }))
+assert.equal((await post('/api/admin/promote', { user: 'kim3' }, kim3)).status, 403)
+assert.equal((await post('/api/admin/promote', { user: 'kim3' }, leon)).status, 200)
+assert.equal((await (await get('/api/me', kim3)).json()).admin, 1)
+assert.equal((await post('/api/admin/promote', { user: 'ghost' }, leon)).status, 400)
+
+const code2 = (await (await post('/api/admin/invite', {}, leon)).json()).code
+let open = (await (await get('/api/admin/invites', leon)).json()).invites.map((i: any) => i.code)
+assert.ok(open.includes(code2))
+await fetch(`${url}/api/admin/invite`, { method: 'DELETE', headers: { cookie: leon }, body: JSON.stringify({ code: code2 }) })
+open = (await (await get('/api/admin/invites', leon)).json()).invites.map((i: any) => i.code)
+assert.ok(!open.includes(code2))
+assert.equal((await post('/api/signup', { user: 'nope', pass: 'longenough', invite: code2 })).status, 403)
+
+assert.equal((await post('/api/admin/revoke', { user: 'kim3' }, leon)).status, 200)
+assert.equal((await get('/api/me', kim3)).status, 401)
+
 // static, and no climbing out of it — the page carries its own security headers,
 // so they hold whatever terminates TLS in front
 r = await fetch(`${url}/`)

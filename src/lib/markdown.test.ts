@@ -1,5 +1,17 @@
 // npm test
 import assert from 'node:assert/strict'
+import { toggleBox } from './markdown.ts'
+
+// ticking a box rewrites that line and nothing else
+const note = '# plan\n- [ ] one\n- [x] two\n- plain\n\ntext'
+assert.equal(toggleBox(note, 1), '# plan\n- [x] one\n- [x] two\n- plain\n\ntext')
+assert.equal(toggleBox(note, 2), '# plan\n- [ ] one\n- [ ] two\n- plain\n\ntext')
+// a line that is not a box, and a line that is not there, come back unchanged
+assert.equal(toggleBox(note, 3), note)
+assert.equal(toggleBox(note, 0), note)
+assert.equal(toggleBox(note, 99), note)
+// indented and numbered boxes count too, and the indent survives
+assert.equal(toggleBox('  1. [ ] a', 0), '  1. [x] a')
 import { safeHref } from './markdown.ts'
 
 // safe schemes pass through, trimmed

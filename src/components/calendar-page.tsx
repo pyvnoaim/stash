@@ -3,7 +3,8 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { today } from '@/lib/parse'
-import { chargesBetween, project, select, SUBS, useStash, type Item, type Sub } from '@/lib/store'
+import { PROJECT_DRAG } from '@/lib/utils'
+import { chargesBetween, patch, project, select, SUBS, useStash, type Item, type Sub } from '@/lib/store'
 
 const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -66,6 +67,25 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
   const shift = (n: number) => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + n, 1))
   const label = cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 
+  /* A row dropped on a day is due that day — the one thing a month view can do that a list
+     cannot. Projects drag in the sidebar and have no meaning here, so they get no target. */
+  const [over, setOver] = useState<string | null>(null)
+  const dropProps = (key: string) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes(PROJECT_DRAG)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move' as const
+      setOver(key)
+    },
+    onDragLeave: () => setOver((o) => (o === key ? null : o)),
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault()
+      setOver(null)
+      const id = e.dataTransfer.getData('text/plain')
+      if (id) patch(id, { due: key })
+    },
+  })
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <div className="flex items-center gap-2">
@@ -109,10 +129,13 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
               return (
                 <div
                   key={key}
+                  {...dropProps(key)}
                   className={cn(
                     'bg-background flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1.5',
                     // the dimmed number already says it is another month; a fill as well is loud
                     outside && 'bg-muted/20',
+                    // the target you are over, outlined the same way the sidebar's are
+                    over === key && 'ring-primary bg-accent ring-1 ring-inset',
                   )}
                 >
                   <span
@@ -131,6 +154,11 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                       <button
                         key={it.id}
                         type="button"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', it.id)
+                          e.dataTransfer.effectAllowed = 'move'
+                        }}
                         onClick={() => onOpen(it)}
                         title={it.text}
                         className={cn(

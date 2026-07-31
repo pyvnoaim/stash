@@ -7,6 +7,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
+import { ProjectBrief } from '@/components/project-brief'
 import { Inspector, Selection } from '@/components/inspector'
 import { ItemRow } from '@/components/item-row'
 import { NotePage } from '@/components/note-page'
@@ -67,6 +68,7 @@ export default function App() {
 
   // a search pulls you back to the list from whichever page you were on
   const page = !query && isPage(s.sel) ? s.sel : null
+  const openProject = s.projects.find((p) => p.id === s.sel)
   const items = useMemo(() => visible(s, query), [s, query])
   // sticks once true: the PDF tab keeps its document between visits, see below
   const [seenPdf, setSeenPdf] = useState(false)
@@ -400,6 +402,9 @@ export default function App() {
             }}
           >
             <Capture inputRef={boxRef} />
+
+            {/* a project is a place, so it gets a header of its own: how far along, and what for */}
+            {!query && openProject && <ProjectBrief p={openProject} />}
 
             {/* scrollbars are hidden app-wide, so this is the only sign the list runs on; it
                 pages down on click and hides once there is nothing left below */}

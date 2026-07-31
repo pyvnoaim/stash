@@ -7,3 +7,17 @@ const SAFE = /^(https?:|mailto:|#|\/(?!\/))/i
 
 /** The href a rendered link is allowed to point at — unsafe schemes collapse to '#'. */
 export const safeHref = (href: string) => (SAFE.test(href.trim()) ? href.trim() : '#')
+
+/**
+ * Tick or untick the `- [ ]` on one line of a note, leaving every other character where it was —
+ * the checkbox in the rendered note edits the note itself, so there is no checklist to keep in
+ * step with the text. A line that is not a box comes back unchanged.
+ */
+export function toggleBox(text: string, line: number): string {
+  const lines = text.split('\n')
+  const at = lines[line]
+  if (at === undefined) return text
+  lines[line] = at.replace(/^(\s*(?:[-*]|\d+\.)\s+\[)([ xX])(\])/, (_, a, box, b) =>
+    `${a}${box === ' ' ? 'x' : ' '}${b}`)
+  return lines.join('\n')
+}

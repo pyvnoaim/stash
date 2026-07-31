@@ -153,6 +153,57 @@ export async function invite(): Promise<string | null> {
   }
 }
 
+/** Every call below returns an error string to show, or null. One shape, one way to handle it. */
+async function call(path: string, init?: RequestInit): Promise<any> {
+  const r = await fetch(path, init)
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(String(j.error ?? `error ${r.status}`))
+  return j
+}
+const errorOf = (e: unknown) => (e instanceof Error ? e.message : 'no connection')
+
+export const changePassword = (current: string, next: string) =>
+  call('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
+    .then(() => null).catch(errorOf)
+
+export interface Version { v: number, ts: number, device: string, size: number }
+
+export const versions = (): Promise<Version[]> =>
+  call('/api/versions').then((j) => j.versions as Version[]).catch(() => [])
+
+/** Take an old snapshot back. It lands as a new version, so restoring is itself undoable. */
+export async function restore(v: number): Promise<string | null> {
+  try {
+    const j = await call('/api/restore', { method: 'POST', body: JSON.stringify({ version: v }) })
+    adoptRemote(j.state)
+    setMeta({ v: j.version, dirty: false })
+    setSnap({ status: 'ok' })
+    return null
+  } catch (e) {
+    return errorOf(e)
+  }
+}
+
+/* ---------- admin ---------- */
+
+export interface AdminUser {
+  id: number, name: string, admin: number, ts: number, sessions: number, synced: number | null
+}
+
+export const adminUsers = (): Promise<AdminUser[]> =>
+  call('/api/admin/users').then((j) => j.users as AdminUser[]).catch(() => [])
+
+export const adminInvites = (): Promise<string[]> =>
+  call('/api/admin/invites').then((j) => (j.invites as { code: string }[]).map((i) => i.code)).catch(() => [])
+
+const adminPost = (path: string, body: object, method = 'POST') =>
+  call(path, { method, body: JSON.stringify(body) }).then(() => null).catch(errorOf)
+
+export const adminDelete = (user: string) => adminPost('/api/admin/user', { user }, 'DELETE')
+export const adminPromote = (user: string) => adminPost('/api/admin/promote', { user })
+export const adminRevoke = (user: string) => adminPost('/api/admin/revoke', { user })
+export const adminDropInvite = (code: string) => adminPost('/api/admin/invite', { code }, 'DELETE')
+
 /** Who does the server think we are? Only an explicit 401 means "nobody" — that raises the gate. */
 async function me() {
   try {

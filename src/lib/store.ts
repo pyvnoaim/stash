@@ -32,6 +32,8 @@ export interface Project {
    * a parent cannot be given children. Two levels is a sidebar; more is a file tree.
    */
   parent: string | null
+  /** What the project is for, in markdown — the brief that lives where the work does. */
+  note: string
 }
 
 /** How often a subscription bills. */
@@ -230,6 +232,8 @@ export function load(data: unknown): State {
       name: String(p.name || 'Project'),
       color: cleanColor(p.color),
       parent: typeof p.parent === 'string' ? p.parent : null,
+      // a backup from before briefs existed simply has none
+      note: typeof p.note === 'string' ? p.note : '',
     }))
 
   /* A parent has to exist, cannot be the project itself, and cannot have a parent of its own.
@@ -749,7 +753,7 @@ export function moveProject(dragId: string, targetId: string, where: 'above' | '
 }
 
 export const addProject = (name: string, color: string | null = null, parent: string | null = null) => {
-  const p = { id: uid(), name, color: cleanColor(color), parent }
+  const p = { id: uid(), name, color: cleanColor(color), parent, note: '' }
   set((s) => ({ ...s, projects: [...s.projects, p], sel: p.id }))
   return p
 }

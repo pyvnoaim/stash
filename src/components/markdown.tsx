@@ -43,19 +43,43 @@ function inline(text: string) {
 const softLines = (lines: string[]) =>
   lines.map((l, i) => <Fragment key={i}>{i > 0 && <br />}{inline(l)}</Fragment>)
 
-export function Markdown({ text }: { text: string }) {
+/**
+ * `- [ ]` and `- [x]` render as real checkboxes when the note is editable: ticking one rewrites
+ * that line in the note itself, so a checklist needs no model of its own. Without `onToggle` —
+ * anywhere the note is only being read — they stay as glyphs.
+ */
+export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: number) => void }) {
   const blocks: React.ReactNode[] = []
-  let list: { ordered: boolean; items: string[] } | null = null
+  let list: { ordered: boolean; items: { text: string, box?: boolean, line: number }[] } | null = null
   let para: string[] = []
   let quote: string[] | null = null
   let code: string[] | null = null // collecting lines inside a ``` fence
 
   const flushList = () => {
     if (!list) return
-    const items = list.items.map((t, i) => <li key={i}>{inline(t)}</li>)
+    // a list where every item is a box is a checklist, not a bullet list — drop the discs
+    const boxes = list.items.every((it) => it.box !== undefined)
+    const items = list.items.map((it, i) => (
+      it.box === undefined
+        ? <li key={i}>{inline(it.text)}</li>
+        : (
+            <li key={i} className="-ml-5 flex list-none items-start gap-2">
+              <input
+                type="checkbox"
+                checked={it.box}
+                disabled={!onToggle}
+                onChange={() => onToggle?.(it.line)}
+                className="accent-foreground mt-[0.28em] size-3.5 shrink-0"
+              />
+              <span className={it.box ? 'text-muted-foreground line-through' : undefined}>
+                {inline(it.text)}
+              </span>
+            </li>
+          )
+    ))
     blocks.push(list.ordered
       ? <ol key={blocks.length} className="ml-5 list-decimal space-y-0.5">{items}</ol>
-      : <ul key={blocks.length} className="ml-5 list-disc space-y-0.5">{items}</ul>)
+      : <ul key={blocks.length} className={cn('ml-5 space-y-0.5', boxes ? 'list-none' : 'list-disc')}>{items}</ul>)
     list = null
   }
   const flushPara = () => {
@@ -74,7 +98,9 @@ export function Markdown({ text }: { text: string }) {
   }
   const flush = () => { flushList(); flushPara(); flushQuote() }
 
-  for (const raw of text.split('\n')) {
+  const lines = text.split('\n')
+  for (let n = 0; n < lines.length; n++) {
+    const raw = lines[n]
     const line = raw.trimEnd()
     if (line.trim().startsWith('```')) {
       if (code) {
@@ -101,7 +127,11 @@ export function Markdown({ text }: { text: string }) {
       flushPara(); flushQuote()
       const ordered = !!ol
       if (!list || list.ordered !== ordered) { flushList(); list = { ordered, items: [] } }
-      list.items.push((ul ?? ol)![1])
+      const body = (ul ?? ol)![1]
+      const box = body.match(/^\[([ xX])\]\s+(.*)$/)
+      list.items.push(box
+        ? { text: box[2], box: box[1] !== ' ', line: n }
+        : { text: body, line: n })
     } else if (q) {
       flushList(); flushPara()
       quote ??= []
