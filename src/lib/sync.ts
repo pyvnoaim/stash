@@ -19,7 +19,7 @@ import { adoptRemote, getState, KEY, setOnPersist, uid } from './store.ts'
 export type SyncStatus = 'off' | 'out' | 'busy' | 'ok'
 export interface Sync {
   status: SyncStatus
-  user: { name: string, admin: boolean } | null
+  user: { name: string, admin: boolean, avatar: string | null } | null
 }
 
 const META = 'stash.sync.v1'
@@ -105,14 +105,30 @@ async function pull(): Promise<void> {
 
 /* ---------- the account ---------- */
 
+const asUser = (j: any) =>
+  ({ name: String(j.user), admin: !!j.admin, avatar: typeof j.avatar === 'string' ? j.avatar : null })
+
 /** Returns an error to show, or null on success — after which the first sync has already run. */
 async function account(path: string, body: object): Promise<string | null> {
   try {
     const r = await fetch(path, { method: 'POST', body: JSON.stringify(body) })
     const j = await r.json().catch(() => ({}))
     if (!r.ok) return String(j.error ?? `error ${r.status}`)
-    setSnap({ user: { name: String(j.user), admin: !!j.admin } })
+    setSnap({ user: asUser(j) })
     await syncNow()
+    return null
+  } catch {
+    return 'no connection'
+  }
+}
+
+/** A new name, a new picture ('' clears it), or both. Returns an error to show, or null. */
+export async function updateAccount(patch: { name?: string, avatar?: string }): Promise<string | null> {
+  try {
+    const r = await fetch('/api/account', { method: 'POST', body: JSON.stringify(patch) })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) return String(j.error ?? `error ${r.status}`)
+    setSnap({ user: asUser(j) })
     return null
   } catch {
     return 'no connection'
@@ -144,7 +160,7 @@ async function me() {
     if (r.status === 401) return setSnap({ status: 'out', user: null })
     if (!r.ok) return setSnap({ status: 'off' })
     const j = await r.json()
-    setSnap({ user: { name: String(j.user), admin: !!j.admin } })
+    setSnap({ user: asUser(j) })
     await syncNow()
   } catch {
     // no server behind this origin, or an offline start — the app runs local, no gate

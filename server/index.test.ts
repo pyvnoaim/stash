@@ -51,8 +51,8 @@ assert.equal((await fetch(`${url}/api/logout`, {
 
 // first through the door is admin, the second is not
 const mia = jar(await post('/api/signup', { user: 'mia', pass: 'longenough', invite: server.invite() }))
-assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leon', admin: 1 })
-assert.deepEqual(await (await get('/api/me', mia)).json(), { user: 'mia', admin: 0 })
+assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leon', admin: 1, avatar: null })
+assert.deepEqual(await (await get('/api/me', mia)).json(), { user: 'mia', admin: 0, avatar: null })
 
 // the document: absent, then versioned, then scoped to its owner
 const put = (cookie: string, version: number, state: unknown) => fetch(`${url}/state`, {
@@ -77,6 +77,22 @@ assert.equal((await put(leon, 2, 'nope')).status, 400)
 assert.deepEqual(await (await get('/state', mia)).json(), { version: 0, state: null })
 await put(mia, 0, { items: ['hers'] })
 assert.deepEqual((await (await get('/state', leon)).json()).state, { items: ['a', 'b'] })
+
+// the account: a new name, a new picture, both survive a fresh /api/me
+const px = `data:image/png;base64,${'A'.repeat(64)}`
+r = await post('/api/account', { name: 'Leo n', pass: 'x' }, leon)      // spaces never were allowed
+assert.equal(r.status, 400)
+assert.equal((await post('/api/account', { name: 'mia' }, leon)).status, 409)
+r = await post('/api/account', { name: 'leonc', avatar: px }, leon)
+assert.deepEqual(await r.json(), { user: 'leonc', admin: 1, avatar: px })
+assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leonc', admin: 1, avatar: px })
+// the old name is free again, junk and oversized pictures are refused, '' clears
+assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 401)
+assert.equal((await post('/api/account', { avatar: 'data:text/html;base64,PGI+' }, leon)).status, 400)
+assert.equal((await post('/api/account', { avatar: `data:image/png;base64,${'A'.repeat(140000)}` }, leon)).status, 400)
+r = await post('/api/account', { avatar: '' }, leon)
+assert.equal((await r.json()).avatar, null)
+await post('/api/account', { name: 'leon' }, leon)                      // back, for the tests below
 
 // admin gating: mia may not, leon may
 assert.equal((await post('/api/admin/invite', {}, mia)).status, 403)

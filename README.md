@@ -459,8 +459,9 @@ recovery over prevention, at a fraction of the code. The Twelve Data key is stri
 push, the same promise the backup export makes: it never leaves the machine you typed it on.
 
 Signup wants an invite code. The first account through the door is the admin and cuts codes from
-the footer menu; everyone else gets **Sign out everywhere** for a lost device, and nothing else to
-manage. There is no email anywhere in the system — a forgotten password is the admin deleting the
+the footer menu; everyone else gets **Account** — a new name, a picture shrunk to a 128px square
+before it ever leaves the browser — and **Sign out everywhere** for a lost device, and nothing
+else to manage. There is no email anywhere in the system — a forgotten password is the admin deleting the
 row and cutting a new invite. Sessions live in an `HttpOnly` cookie for 180 days, idle out after
 30 unused, and are stored hashed, so a copied database file logs nobody in.
 

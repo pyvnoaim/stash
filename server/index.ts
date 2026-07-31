@@ -96,7 +96,8 @@ const SCHEMA = `
   create table if not exists users (
     id integer primary key autoincrement, name text unique not null,
     salt blob not null, hash blob not null, n integer not null,
-    admin integer not null default 0, ts integer not null
+    admin integer not null default 0, ts integer not null,
+    avatar text
   );
   create table if not exists sessions (
     hash text primary key,
@@ -118,6 +119,8 @@ export function start({
 } = {}) {
   const db = new DatabaseSync(dbPath)
   db.exec(SCHEMA)
+  // a database from before avatars existed grows the column; a fresh one already has it
+  try { db.exec('alter table users add column avatar text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -131,7 +134,9 @@ export function start({
     invite: db.prepare('select * from invites where code = ? and used is null'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code) values (?)'),
-    session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin
+    rename: db.prepare('update users set name = ? where id = ?'),
+    setAvatar: db.prepare('update users set avatar = ? where id = ?'),
+    session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen) values (?, ?, ?, ?)'),
     touchSession: db.prepare('update sessions set seen = ? where hash = ?'),
@@ -179,11 +184,12 @@ export function start({
     /(?:^|;\s*)stash_s=([a-f0-9]{64})/.exec(req.headers.cookie ?? '')?.[1]
 
   /** The session's user, or null. Every route trusts only this — never an id off the request. */
-  const auth = (req: IncomingMessage): { id: number, name: string, admin: number } | null => {
+  const auth = (req: IncomingMessage):
+    { id: number, name: string, admin: number, avatar: string | null } | null => {
     const t = cookieToken(req)
     if (!t) return null
     const s = q.session.get(hashToken(t)) as
-      { hash: string, created: number, seen: number, id: number, name: string, admin: number } | undefined
+      { hash: string, created: number, seen: number, id: number, name: string, admin: number, avatar: string | null } | undefined
     if (!s) return null
     const now = Date.now()
     // idle out unused sessions, and cap even a busy one — a stolen cookie is not a lifetime pass
@@ -192,7 +198,7 @@ export function start({
       return null
     }
     if (now - s.seen > 3600_000) q.touchSession.run(now, s.hash)
-    return { id: s.id, name: s.name, admin: s.admin }
+    return { id: s.id, name: s.name, admin: s.admin, avatar: s.avatar }
   }
 
   const base = resolve(root)
@@ -226,7 +232,7 @@ export function start({
       const id = Number(q.addUser.run(name, salt, hashPass(pass, salt, SCRYPT_N), SCRYPT_N, admin, Date.now()).lastInsertRowid)
       q.useInvite.run(id, String(b.invite))
       log('signup', name, via(req))
-      return send(res, 200, { user: name, admin }, { 'set-cookie': cookie(newSession(id)) })
+      return send(res, 200, { user: name, admin, avatar: null }, { 'set-cookie': cookie(newSession(id)) })
     }
 
     if (path === '/api/login' && req.method === 'POST') {
@@ -245,7 +251,8 @@ export function start({
       tries.delete(`${ip}:${name}`)
       q.pruneSessions.run(Date.now() - IDLE_DAYS * 86400_000, Date.now() - MAX_DAYS * 86400_000)
       log('login', name, via(req))
-      return send(res, 200, { user: name, admin: u.admin }, { 'set-cookie': cookie(newSession(u.id)) })
+      return send(res, 200, { user: name, admin: u.admin, avatar: (u as any).avatar ?? null },
+        { 'set-cookie': cookie(newSession(u.id)) })
     }
 
     if (path === '/api/logout' && req.method === 'POST') {
@@ -266,8 +273,42 @@ export function start({
     if (path === '/api/me') {
       const user = auth(req)
       return user
-        ? send(res, 200, { user: user.name, admin: user.admin })
+        ? send(res, 200, { user: user.name, admin: user.admin, avatar: user.avatar })
         : send(res, 401, { error: 'unauthorized' })
+    }
+
+    /* The account itself: a new name, a new picture, or both. The picture arrives as a small
+       data URL the client already shrank — the server only holds it to the shapes an <img>
+       can safely carry and a size the users table should be asked to. */
+    if (path === '/api/account' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+
+      let name = user.name
+      if (typeof b?.name === 'string' && b.name.trim().toLowerCase() !== user.name) {
+        name = b.name.trim().toLowerCase()
+        if (!/^[a-z0-9_-]{2,32}$/.test(name)) return send(res, 400, { error: 'name: 2–32 of a–z 0–9 _ -' })
+        if (q.userByName.get(name)) return send(res, 409, { error: 'name taken' })
+        q.rename.run(name, user.id)
+        log('rename', `${user.name} -> ${name}`, via(req))
+      }
+
+      let avatar = user.avatar
+      if (typeof b?.avatar === 'string') {
+        if (b.avatar === '') {
+          avatar = null
+        } else {
+          if (b.avatar.length > 131072
+            || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(b.avatar)) {
+            return send(res, 400, { error: 'picture: a small png, jpeg or webp' })
+          }
+          avatar = b.avatar
+        }
+        q.setAvatar.run(avatar, user.id)
+      }
+      return send(res, 200, { user: name, admin: user.admin, avatar })
     }
 
     if (path.startsWith('/api/admin/')) {
