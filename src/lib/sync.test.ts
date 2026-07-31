@@ -1,0 +1,89 @@
+// The sync engine against the real server — no mocks, the same wire the app uses.
+import assert from 'node:assert/strict'
+import { start } from '../../server/index.ts'
+
+// store.ts and sync.ts expect a browser; give them just enough of one
+const disk = new Map<string, string>()
+let cookie = ''
+Object.assign(globalThis, {
+  localStorage: {
+    getItem: (k: string) => disk.get(k) ?? null,
+    setItem: (k: string, v: string) => disk.set(k, String(v)),
+  },
+  addEventListener: () => {},
+  location: { hash: '' },
+})
+
+const server = start({ port: 0, db: ':memory:', root: '.' })
+await new Promise((ok) => server.on('listening', ok))
+const { port } = server.address() as { port: number }
+const url = `http://127.0.0.1:${port}`
+
+// node's fetch has no cookie jar and no base URL — pin both, so sync.ts runs unmodified
+const real = fetch
+globalThis.fetch = (async (path: any, init?: RequestInit) => {
+  const r = await real(url + path, { ...init, headers: { ...init?.headers as any, cookie } })
+  const c = /stash_s=[a-f0-9]{64}/.exec(r.headers.get('set-cookie') ?? '')?.[0]
+  if (c) cookie = c
+  return r
+}) as typeof fetch
+
+const { addItem, getState, uid } = await import('./store.ts')
+const { getSync, login, logout, signup, startSync, syncNow } = await import('./sync.ts')
+startSync()  // wires onPersist, asks /api/me (nobody yet — 'out')
+const flush = () => new Promise((r) => setTimeout(r, 250))  // store's 200ms save debounce
+const add = (text: string) => addItem({
+  id: uid(), type: 'task', text, note: '', pid: null, due: null, repeat: null,
+  flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
+})
+
+// an account, with a first document pushed on signup because local data already existed
+add('first')
+await flush()
+assert.equal(await signup('leon', 'longenough', server.invite()), null)
+assert.equal(getSync().status, 'ok')
+
+// an edit lands on the server via push
+add('second')
+await flush()
+await syncNow()
+const onServer = async () => (await (await fetch('/state')).json()).state
+assert.deepEqual((await onServer()).items.map((i: any) => i.text), ['second', 'first'])
+
+// ...and the key never travels
+assert.equal((await onServer()).apiKey, '')
+
+// a second device: empty local, pulls what the first pushed
+disk.clear()
+cookie = ''
+assert.equal(await login('leon', 'longenough'), null)
+assert.equal(getSync().status, 'ok')
+assert.deepEqual(getState().items.map((i) => i.text), ['second', 'first'])
+
+// both edit while apart: this device pushes into a 409 and wins; the other's write is a snapshot
+await real(`${url}/state`, {
+  method: 'PUT',
+  headers: { cookie, 'if-match': String(JSON.parse(disk.get('stash.sync.v1')!).v) },
+  body: JSON.stringify({ state: { items: [] }, device: 'other' }),
+})
+add('third')
+await flush()
+await syncNow()
+assert.equal(getSync().status, 'ok')
+assert.deepEqual((await onServer()).items.map((i: any) => i.text), ['third', 'second', 'first'])
+
+// signed out, the engine goes quiet instead of erroring
+await logout()
+assert.equal(getSync().status, 'out')
+add('offline edit')
+await flush()
+await syncNow()
+assert.equal(getSync().user, null)
+
+// ...and the edit waits as dirty for whoever signs in next
+assert.equal(await login('leon', 'longenough'), null)
+assert.deepEqual((await onServer()).items.map((i: any) => i.text),
+  ['offline edit', 'third', 'second', 'first'])
+
+server.close()
+console.log('sync ok')

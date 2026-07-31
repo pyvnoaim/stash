@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "for f in src/lib/parse.test.ts src/lib/store.test.ts src/lib/markdown.test.ts src/lib/treemap.test.ts src/lib/market.test.ts src/lib/notify.test.ts src/pdf/doc.test.ts; do node --experimental-strip-types --disable-warning=ExperimentalWarning $f || exit 1; done"
+    "test": "for f in src/lib/parse.test.ts src/lib/store.test.ts src/lib/markdown.test.ts src/lib/treemap.test.ts src/lib/market.test.ts src/lib/notify.test.ts src/lib/sync.test.ts src/pdf/doc.test.ts server/index.test.ts; do node --experimental-strip-types --disable-warning=ExperimentalWarning $f || exit 1; done"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.7.4",
@@ -36,6 +36,7 @@
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "vite-plugin-pwa": "^1.3.0"
   }
 }

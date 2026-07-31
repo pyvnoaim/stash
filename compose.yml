@@ -1,0 +1,15 @@
+services:
+  stash:
+    build: .
+    restart: unless-stopped
+    volumes: ['stash:/data']
+    # nginx proxy manager terminates TLS: join its docker network and point a proxy host at
+    # stash:8787. No published ports — the proxy is the only way in. `docker network ls` says
+    # what your proxy network is called; set PROXY_NET if it is not npm_default.
+    networks: [proxy]
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NET:-npm_default}
+volumes:
+  stash:

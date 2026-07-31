@@ -1,0 +1,126 @@
+import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+process.env.NODE_ENV = 'production'   // assert the cookie as the container serves it
+const { start } = await import('./index.ts')
+
+const root = mkdtempSync(join(tmpdir(), 'stash-'))
+writeFileSync(join(root, 'index.html'), '<!doctype html>hi')
+
+const server = start({ port: 0, db: ':memory:', root })
+await new Promise((ok) => server.on('listening', ok))
+const { port } = server.address() as { port: number }
+const url = `http://127.0.0.1:${port}`
+
+/** node's fetch keeps no cookie jar, so each "browser" is a captured Set-Cookie value. */
+const jar = (r: Response) => /stash_s=[a-f0-9]{64}/.exec(r.headers.get('set-cookie') ?? '')?.[0] ?? ''
+const post = (path: string, body: unknown, cookie = '') =>
+  fetch(url + path, { method: 'POST', headers: { cookie }, body: JSON.stringify(body) })
+const get = (path: string, cookie = '') => fetch(url + path, { headers: { cookie } })
+
+// the door is shut without a session
+assert.equal((await get('/state')).status, 401)
+assert.equal((await get('/api/me')).status, 401)
+
+// signup wants an invite, a sane name and a real password
+assert.equal((await post('/api/signup', { user: 'leon', pass: 'longenough', invite: 'nope' })).status, 403)
+const inv = server.invite()
+assert.equal((await post('/api/signup', { user: 'l!', pass: 'longenough', invite: inv })).status, 400)
+assert.equal((await post('/api/signup', { user: 'leon', pass: 'short', invite: inv })).status, 400)
+let r = await post('/api/signup', { user: 'Leon ', pass: 'longenough', invite: inv })
+assert.equal(r.status, 200)
+const leon = jar(r)
+assert.match(r.headers.get('set-cookie') ?? '', /HttpOnly; Secure; SameSite=Strict/)
+assert.equal(r.headers.get('cache-control'), 'no-store')
+
+// the invite is spent, the name is taken
+assert.equal((await post('/api/signup', { user: 'other', pass: 'longenough', invite: inv })).status, 403)
+assert.equal((await post('/api/signup', { user: 'leon', pass: 'longenough', invite: server.invite() })).status, 409)
+
+// login: wrong password and unknown user read the same
+assert.equal((await post('/api/login', { user: 'leon', pass: 'wrong' })).status, 401)
+assert.equal((await post('/api/login', { user: 'ghost', pass: 'wrong' })).status, 401)
+assert.equal((await post('/api/login', { user: 'LEON', pass: 'longenough' })).status, 200)
+
+// a cross-site write is refused even with the cookie
+assert.equal((await fetch(`${url}/api/logout`, {
+  method: 'POST', headers: { cookie: leon, origin: 'https://evil.example' },
+})).status, 403)
+
+// first through the door is admin, the second is not
+const mia = jar(await post('/api/signup', { user: 'mia', pass: 'longenough', invite: server.invite() }))
+assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leon', admin: 1 })
+assert.deepEqual(await (await get('/api/me', mia)).json(), { user: 'mia', admin: 0 })
+
+// the document: absent, then versioned, then scoped to its owner
+const put = (cookie: string, version: number, state: unknown) => fetch(`${url}/state`, {
+  method: 'PUT', headers: { cookie, 'if-match': String(version) }, body: JSON.stringify({ state }),
+})
+assert.deepEqual(await (await get('/state', leon)).json(), { version: 0, state: null })
+r = await put(leon, 0, { items: ['a'] })
+const v1 = (await r.json()).version
+assert.deepEqual(await (await get('/state', leon)).json(), { version: v1, state: { items: ['a'] } })
+
+// a device that never saw v1 is refused, and gets v1 back to decide with
+r = await put(leon, 0, { items: ['stale'] })
+assert.equal(r.status, 409)
+assert.deepEqual(await r.json(), { version: v1, state: { items: ['a'] } })
+assert.equal((await put(leon, v1, { items: ['a', 'b'] })).status, 200)
+
+// no version at all is a client bug, not a conflict; nor is a document that isn't one
+assert.equal((await fetch(`${url}/state`, { method: 'PUT', headers: { cookie: leon }, body: '{}' })).status, 428)
+assert.equal((await put(leon, 2, 'nope')).status, 400)
+
+// mia sees her own empty document, never leon's
+assert.deepEqual(await (await get('/state', mia)).json(), { version: 0, state: null })
+await put(mia, 0, { items: ['hers'] })
+assert.deepEqual((await (await get('/state', leon)).json()).state, { items: ['a', 'b'] })
+
+// admin gating: mia may not, leon may
+assert.equal((await post('/api/admin/invite', {}, mia)).status, 403)
+assert.equal((await get('/api/admin/users', mia)).status, 403)
+r = await post('/api/admin/invite', {}, leon)
+const code = (await r.json()).code
+assert.match(code, /^[a-f0-9]{16}$/)
+const kim = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', invite: code }))
+const users = (await (await get('/api/admin/users', leon)).json()).users
+assert.deepEqual(users.map((u: any) => [u.name, u.admin]), [['leon', 1], ['mia', 0], ['kim', 0]])
+assert.ok(users[0].synced && users[1].synced && !users[2].synced)
+
+// deleting a user cascades: their session dies with the row — and never yourself
+const del = (name: string, cookie: string) => fetch(`${url}/api/admin/user`, {
+  method: 'DELETE', headers: { cookie }, body: JSON.stringify({ user: name }),
+})
+assert.equal((await del('leon', leon)).status, 400)
+assert.equal((await del('kim', leon)).status, 200)
+assert.equal((await get('/api/me', kim)).status, 401)
+
+// ...and their document went too: the name signed up fresh starts empty
+const kim2 = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', invite: server.invite() }))
+assert.deepEqual(await (await get('/state', kim2)).json(), { version: 0, state: null })
+
+// logout kills the session; logout-all sweeps every device at once
+await post('/api/logout', {}, kim2)
+assert.equal((await get('/state', kim2)).status, 401)
+const mia2 = jar(await post('/api/login', { user: 'mia', pass: 'longenough' }))
+await post('/api/logout-all', {}, mia)
+assert.equal((await get('/api/me', mia)).status, 401)
+assert.equal((await get('/api/me', mia2)).status, 401)
+
+// hammering a login cools off — and only for that name
+for (let i = 0; i < 10; i++) await post('/api/login', { user: 'mia', pass: 'wrong' })
+assert.equal((await post('/api/login', { user: 'mia', pass: 'longenough' })).status, 429)
+assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 200)
+
+// static, and no climbing out of it — the page carries its own security headers,
+// so they hold whatever terminates TLS in front
+r = await fetch(`${url}/`)
+assert.equal(await r.text(), '<!doctype html>hi')
+assert.match(r.headers.get('content-security-policy') ?? '', /default-src 'self'/)
+assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
+assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`)).status, 403)
+
+server.close()
+console.log('server ok')

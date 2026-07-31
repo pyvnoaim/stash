@@ -1,7 +1,8 @@
 # Stash
 
 Tasks, ideas and quick notes across projects. React + Vite + Tailwind + shadcn/ui, monochrome,
-Geist Pixel. No account, no server — everything lives in your browser's localStorage.
+Geist Pixel. Everything lives in your browser's localStorage and works with no server at all; an
+account — optional, invite-only, self-hosted — syncs that same data between your devices.
 
 Type is one cut of Geist Pixel — **Square**, self-hosted in `src/fonts/` from Vercel's release
 under OFL-1.1 — for text, headings and labels alike. Geist Sans stays in the stack underneath to
@@ -25,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the sync engine against the real server, and the server itself |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -413,6 +414,8 @@ is still in the file and still copies out.
 - `src/lib/market.ts` — the price feeds and every signal the Markets desk shows, free of React
 - `src/lib/treemap.ts` — squarified treemap, pure geometry, for Overview's spend panel
 - `src/lib/notify.ts` — the alerts the bell shows, derived from state
+- `src/lib/sync.ts` — the sync engine: push on edit, pull on focus, never a dropped local edit
+- `server/index.ts` — accounts, sessions and one versioned document per user; Node + SQLite, no dependencies
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
@@ -441,6 +444,49 @@ credential of yours, and an import without one leaves the key already on this de
 than wiping it. Backups from the original pre-React version import fine. It stored a project's
 colour as an HSL hue rather than a hex, so those are dropped and the projects come in uncoloured;
 nothing else is.
+
+## Accounts and sync
+
+localStorage stays the source of truth — the app never reads from the network, which is why every
+view opens instantly and why it works offline at all. An account adds a second place the data
+lands: each local edit is pushed to the server a couple of seconds later, and opening or focusing
+the app pulls whatever another device pushed while this one was away. The account lives in the
+sidebar footer, next to where Settings went; without one, everything simply stays on this machine.
+
+One rule decides every conflict: the device that edited last wins, and the fifty versions the
+server keeps per user are the undo for the day that rule picks wrong. There is no merge engine —
+recovery over prevention, at a fraction of the code. The Twelve Data key is stripped from every
+push, the same promise the backup export makes: it never leaves the machine you typed it on.
+
+Signup wants an invite code. The first account through the door is the admin and cuts codes from
+the footer menu; everyone else gets **Sign out everywhere** for a lost device, and nothing else to
+manage. There is no email anywhere in the system — a forgotten password is the admin deleting the
+row and cutting a new invite. Sessions live in an `HttpOnly` cookie for 180 days, idle out after
+30 unused, and are stored hashed, so a copied database file logs nobody in.
+
+The server is `server/index.ts`: Node and SQLite, both from the runtime, zero dependencies — at
+ten users the whole story is one blob per person and three routes, and the smallest possible
+surface is the security strategy. `npm test` runs the sync engine against it over real HTTP.
+
+## Hosting it
+
+The built app is a PWA: the service worker caches the whole bundle, so once visited it opens with
+no network — installed on a phone's home screen or Safari's Dock, it is the app. That, the
+`Secure` cookie and the install prompt all require HTTPS, so the container expects a TLS proxy in
+front — it joins the proxy's docker network and publishes no ports, which makes the proxy the
+only way in. With nginx proxy manager: a proxy host for the domain, forwarded to `stash:8787`,
+with **Force SSL**, **HTTP/2**, **HSTS** and **Websockets** on. The security headers travel in
+the app's own responses, so nothing else needs configuring in the proxy.
+
+```sh
+docker compose up -d --build                            # PROXY_NET names the proxy's network if not npm_default
+docker compose exec stash node server/index.ts invite   # the first code; the rest come from the menu
+```
+
+Data sits in one named volume; backing it up is copying one SQLite file.
+
+Local dev runs the same server beside Vite — `node server/index.ts` with `STASH_DB` somewhere
+writable, and the dev proxy in `vite.config.ts` does the rest.
 
 ## License
 

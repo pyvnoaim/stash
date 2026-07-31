@@ -2,7 +2,7 @@ import { Fragment, useRef, useState } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowRight, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
-  ChevronRight, Layers, PencilLine, Plus, Settings, Trash2,
+  ChevronRight, Layers, PencilLine, Plus, Trash2,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -21,6 +21,7 @@ import {
   SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, useSidebar,
 } from '@/components/ui/sidebar'
 import { Hint } from '@/components/ui/tooltip'
+import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
@@ -421,15 +422,11 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         </SidebarGroup>
       </SidebarContent>
 
-      {/* the same row the nav above is made of, so it sits at the same height with the same icon
-          and the same hover — a bare Button here read as a different kind of thing */}
+      {/* who you are and where your data stands — the account and Settings live in its menu */}
       <SidebarFooter className="border-t">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton isActive={settings} onClick={() => setSettings(true)}>
-              <Settings />
-              <span>Settings</span>
-            </SidebarMenuButton>
+            <NavUser onSettings={() => setSettings(true)} />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

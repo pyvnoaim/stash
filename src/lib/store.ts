@@ -207,7 +207,7 @@ export const isPage = (id: string) => PAGES.includes(id)
 export const isRoute = (s: Pick<State, 'projects'>, id: string) =>
   isPage(id) || isView(id) || s.projects.some((p) => p.id === id)
 
-const KEY = 'stash.v1'
+export const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
@@ -340,10 +340,16 @@ let warned = false
 
 let pending: ReturnType<typeof setTimeout> | undefined
 
+/** sync.ts hangs here: told after a local edit lands on disk, never about an adopted document. */
+let onPersist: (() => void) | null = null
+export const setOnPersist = (fn: (() => void) | null) => { onPersist = fn }
+let adopting = false
+
 function save() {
   pending = undefined
   try {
     localStorage.setItem(KEY, JSON.stringify(state))
+    if (!adopting) onPersist?.()
   } catch {
     // quota exceeded, or Safari private mode. The session keeps working and the disk doesn't,
     // which is the one failure worth interrupting for — App turns this into a toast, once.
@@ -414,6 +420,27 @@ export function redo() {
   edited = 0
   commit(rewind(next))
   return true
+}
+
+/**
+ * The server's document takes the place of ours — the same rules as another window writing:
+ * the undo history goes with it, and the view, the focus and this machine's API key stay put.
+ * Runs through `load`, because a document off the network is as untrusted as an imported backup.
+ */
+export function adoptRemote(data: unknown) {
+  if (pending !== undefined) { clearTimeout(pending); pending = undefined }
+  past.length = future.length = 0
+  const next = load(data)
+  state = {
+    ...next,
+    sel: isRoute(next, state.sel) ? state.sel : 'today',
+    focus: null,
+    apiKey: next.apiKey || state.apiKey,
+  }
+  listeners.forEach((fn) => fn())
+  adopting = true
+  save()
+  adopting = false
 }
 
 // another window (the dock app and a tab) wrote — take its state rather than clobber it on our next write
