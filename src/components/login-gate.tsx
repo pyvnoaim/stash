@@ -21,23 +21,27 @@ export function LoginGate() {
   useEffect(() => { applyTheme(getState().theme) }, [])
 
   return (
-    <div className="bg-background min-h-svh md:grid md:grid-cols-[1.1fr_1fr]">
+    <div className="bg-background min-h-svh md:grid md:grid-cols-2">
       <style>{`
         @keyframes gate-type { from { width: 0 } to { width: 100% } }
         @keyframes gate-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
+        @keyframes gate-caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+        @keyframes gate-drift { to { background-position: 8px 8px } }
         .gate-type { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: bottom;
           animation: gate-type 1.5s steps(41) .4s both }
         .gate-in { animation: gate-in .4s ease-out both }
+        .gate-caret { animation: gate-caret 1.1s steps(1) infinite }
+        .gate-drift { animation: gate-drift 7s linear infinite }
         @media (prefers-reduced-motion: reduce) {
-          .gate-type, .gate-in { animation: none }
+          .gate-type, .gate-in, .gate-caret, .gate-drift { animation: none }
         }
       `}</style>
 
       <div className="bg-muted/30 relative hidden flex-col justify-between overflow-hidden border-r p-10 md:flex">
-        {/* the texture: a pixel grid, barely there — currentColor so both themes carry it */}
+        {/* the texture: a pixel grid, barely there, drifting one cell at a time */}
         <div
           aria-hidden
-          className="absolute inset-0 opacity-[0.05]"
+          className="gate-drift absolute inset-0 opacity-[0.05]"
           style={{ backgroundImage: 'radial-gradient(currentColor 1px, transparent 1px)', backgroundSize: '8px 8px' }}
         />
         <Wordmark />
@@ -50,7 +54,7 @@ export function LoginGate() {
       <div className="flex min-h-svh flex-col md:min-h-0">
         <div className="p-6 md:hidden"><Wordmark /></div>
         <div className="flex flex-1 items-start justify-center p-6 pt-10 md:items-center md:pt-6">
-          <div className="w-full max-w-sm">
+          <div className="w-full max-w-sm md:rounded-xl md:border md:p-6">
             <p className="text-muted-foreground mb-6 text-sm md:hidden">
               Tasks, ideas and quick notes — signed in, yours follows you between devices.
             </p>
@@ -77,9 +81,10 @@ function Wordmark() {
 /** The capture line, and what the parser makes of it — the app demonstrating itself. */
 function Teaser() {
   return (
-    <div className="relative w-full max-w-md">
+    <div className="relative mx-auto w-full max-w-md">
       <div className="bg-background rounded-lg border px-3.5 py-2.5 text-sm shadow-xs">
         <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
+        <span aria-hidden className="gate-caret bg-foreground/70 ml-px inline-block h-[1.05em] w-px align-text-bottom" />
       </div>
 
       <div className="text-muted-foreground my-3 flex flex-wrap items-center gap-1.5 text-xs">
@@ -130,18 +135,31 @@ export function SignIn() {
   }
 
   return (
-    <div className="grid gap-4">
-      {/* the same two-button switch Settings uses for the theme — one design language */}
-      <div className="grid grid-cols-2 gap-1.5">
+    <div className="grid gap-5">
+      <div className="grid gap-1">
+        <h2 className="font-heading text-xl tracking-wide">
+          {up ? 'Create account' : 'Welcome back'}
+        </h2>
+        <p className="text-muted-foreground text-sm">
+          {up ? 'An invite gets you a stash of your own.' : 'Sign in to pick up where you left off.'}
+        </p>
+      </div>
+
+      {/* one segmented switch, the quiet kind */}
+      <div className="bg-muted grid grid-cols-2 gap-1 rounded-lg p-1">
         {([['in', 'Sign in'], ['up', 'Create account']] as const).map(([id, label]) => (
-          <Button
+          <button
             key={id}
-            size="sm"
-            variant={mode === id ? 'default' : 'outline'}
+            type="button"
+            className={
+              mode === id
+                ? 'bg-background rounded-md py-1.5 text-sm font-medium shadow-xs'
+                : 'text-muted-foreground hover:text-foreground rounded-md py-1.5 text-sm transition-colors'
+            }
             onClick={() => { setMode(id); setError('') }}
           >
             {label}
-          </Button>
+          </button>
         ))}
       </div>
       <form
