@@ -158,8 +158,12 @@ export function start({
   // one line per auth event into docker logs — the audit trail this scale needs, and no more
   const log = (ev: string, who: string, ip: string) =>
     console.log(`${new Date().toISOString()} ${ev} ${who} ${ip}`)
-  const addr = (req: IncomingMessage) =>
-    // trust x-forwarded-for: only Caddy can reach this socket, and it always sets it
+  /* The limiter keys on the socket address, never on x-forwarded-for — a header anyone can type
+     is a key anyone can rotate. Behind the proxy every request shares its address, and the name
+     in the key is what keeps one hammered account from cooling the rest off. */
+  const addr = (req: IncomingMessage) => String(req.socket.remoteAddress)
+  // the forwarded chain is still worth reading in the log — as a claim, not an identity
+  const via = (req: IncomingMessage) =>
     String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()
 
   const newSession = (user: number) => {
@@ -221,7 +225,7 @@ export function start({
       const admin = q.anyUser.get() ? 0 : 1
       const id = Number(q.addUser.run(name, salt, hashPass(pass, salt, SCRYPT_N), SCRYPT_N, admin, Date.now()).lastInsertRowid)
       q.useInvite.run(id, String(b.invite))
-      log('signup', name, addr(req))
+      log('signup', name, via(req))
       return send(res, 200, { user: name, admin }, { 'set-cookie': cookie(newSession(id)) })
     }
 
@@ -235,12 +239,12 @@ export function start({
         { id: number, salt: Buffer, hash: Buffer, n: number, admin: number } | undefined
       const h = hashPass(String(b?.pass ?? ''), u ? Buffer.from(u.salt) : DUMMY_SALT, u?.n ?? SCRYPT_N)
       if (!u || !timingSafeEqual(h, Buffer.from(u.hash))) {
-        log('login-fail', name, ip)
+        log('login-fail', name, via(req))
         return send(res, 401, { error: 'wrong name or password' })
       }
       tries.delete(`${ip}:${name}`)
       q.pruneSessions.run(Date.now() - IDLE_DAYS * 86400_000, Date.now() - MAX_DAYS * 86400_000)
-      log('login', name, ip)
+      log('login', name, via(req))
       return send(res, 200, { user: name, admin: u.admin }, { 'set-cookie': cookie(newSession(u.id)) })
     }
 
@@ -255,7 +259,7 @@ export function start({
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       q.dropAllSessions.run(user.id)
-      log('logout-all', user.name, addr(req))
+      log('logout-all', user.name, via(req))
       return send(res, 200, {}, { 'set-cookie': cookie('', 0) })
     }
 
@@ -272,7 +276,7 @@ export function start({
       if (!user.admin) return send(res, 403, { error: 'admin only' })
 
       if (path === '/api/admin/invite' && req.method === 'POST') {
-        log('invite', user.name, addr(req))
+        log('invite', user.name, via(req))
         return send(res, 200, { code: invite() })
       }
       if (path === '/api/admin/users' && req.method === 'GET') {
@@ -285,7 +289,7 @@ export function start({
         // never yourself: deleting the only admin would weld the door shut
         const gone = q.delUser.run(name, user.id).changes
         if (!gone) return send(res, 400, { error: 'no such user, or it is you' })
-        log('delete-user', `${name} by ${user.name}`, addr(req))
+        log('delete-user', `${name} by ${user.name}`, via(req))
         return send(res, 200, {})
       }
       return send(res, 404, { error: 'not found' })

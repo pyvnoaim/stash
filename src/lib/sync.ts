@@ -137,22 +137,30 @@ export async function invite(): Promise<string | null> {
   }
 }
 
+/** Who does the server think we are? Only an explicit 401 means "nobody" — that raises the gate. */
+async function me() {
+  try {
+    const r = await fetch('/api/me')
+    if (r.status === 401) return setSnap({ status: 'out', user: null })
+    if (!r.ok) return setSnap({ status: 'off' })
+    const j = await r.json()
+    setSnap({ user: { name: String(j.user), admin: !!j.admin } })
+    await syncNow()
+  } catch {
+    // no server behind this origin, or an offline start — the app runs local, no gate
+    setSnap({ status: 'off' })
+  }
+}
+
 /** Called once from main.tsx. Asks the server who we are, then keeps the two sides level. */
 export function startSync() {
   setOnPersist(schedule)
-  addEventListener('focus', () => { if (snap.user) syncNow() })
-  addEventListener('online', () => { if (snap.user) syncNow() })
-  void (async () => {
-    try {
-      const r = await fetch('/api/me')
-      if (r.status === 401) return setSnap({ status: 'out' })
-      if (!r.ok) return setSnap({ status: 'off' })
-      const j = await r.json()
-      setSnap({ user: { name: String(j.user), admin: !!j.admin } })
-      await syncNow()
-    } catch {
-      // no server behind this origin (plain `vite dev`, or offline start) — stay local
-      setSnap({ status: 'off' })
-    }
-  })()
+  // signed in: catch up. Not signed in because the network was down: ask again now that it isn't.
+  const wake = () => {
+    if (snap.user) syncNow()
+    else if (snap.status === 'off') me()
+  }
+  addEventListener('focus', wake)
+  addEventListener('online', wake)
+  void me()
 }
