@@ -70,7 +70,8 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <div className="flex items-center gap-2">
         <h2 className="font-heading mr-auto text-sm tracking-wide uppercase">{label}</h2>
-        <Button variant="outline" size="sm" onClick={() => setCursor(monthOf(new Date()))}>
+        {/* default size, not sm — sm is h-7 and would sit shorter than the h-8 icon buttons beside it */}
+        <Button variant="outline" onClick={() => setCursor(monthOf(new Date()))}>
           Today
         </Button>
         <Button variant="outline" size="icon" className="size-8" aria-label="Previous month" onClick={() => shift(-1)}>
