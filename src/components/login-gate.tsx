@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import { CornerDownRight, Flag } from 'lucide-react'
+import {
+  CalendarClock, CalendarDays, ChartColumn, CheckCheck, Flag, Inbox, Layers, Search,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,9 +14,9 @@ import { applyTheme } from '@/lib/utils'
  * no connection is not a refusal, so an offline start goes straight to the app and the data
  * this machine already holds. Real sessions run 180 days; a stranger runs into this instead.
  *
- * The left half is the pitch, and the pitch is the parser: a capture line types itself and
- * becomes the task it describes, because that transformation is the whole product. The rail is
- * the one piece of colour, which is also the app's own rule.
+ * The left half is the pitch, and the pitch is the app itself: a small true-to-life window with
+ * the sidebar, the list and the capture bar, where a line types itself and lands as the task it
+ * describes. Anyone arriving with an invite can see what they are signing into before they do.
  */
 export function LoginGate() {
   // App normally owns the theme; it is not mounted yet, and the gate should not flash light
@@ -78,38 +80,107 @@ function Wordmark() {
   )
 }
 
-/** The capture line, and what the parser makes of it — the app demonstrating itself. */
+const NAV = [
+  { icon: ChartColumn, label: 'Overview' },
+  { icon: Inbox, label: 'Quick notes', count: 4 },
+  { icon: CalendarDays, label: 'Today', count: 3, active: true },
+  { icon: CalendarClock, label: 'Upcoming', count: 9 },
+  { icon: Flag, label: 'Flagged', count: 1 },
+  { icon: Layers, label: 'Everything', count: 26 },
+  { icon: CheckCheck, label: 'Done' },
+]
+
+const PROJECTS = [
+  { name: 'Kova', color: '#3b82f6', count: 7 },
+  { name: 'Flat', color: '#f59e0b', count: 2 },
+]
+
+/** Already in the list before the demo runs — the app is not empty when you arrive. */
+const ROWS = [
+  { text: 'master bus click', rail: '#3b82f6', tag: '#audio', due: '' },
+  { text: 'call the landlord', rail: '#f59e0b', tag: '', due: '18:00' },
+  { text: 'read the Yjs docs', rail: '', tag: '#read', due: '' },
+  { text: 'send the invoice', rail: '', tag: '', due: '', done: true },
+]
+
+/** A small, true-to-life window: the sidebar, the list, and one capture typing itself in. */
 function Teaser() {
   return (
-    <div className="relative mx-auto w-full max-w-md">
-      <div className="bg-background rounded-lg border px-3.5 py-2.5 text-sm shadow-xs">
-        <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
-        <span aria-hidden className="gate-caret bg-foreground/70 ml-px inline-block h-[1.05em] w-px align-text-bottom" />
-      </div>
-
-      <div className="text-muted-foreground my-3 flex flex-wrap items-center gap-1.5 text-xs">
-        <CornerDownRight className="gate-in size-3.5 [animation-delay:2.1s]" />
-        {['Flagged', 'Kova', '#audio', 'Due tomorrow'].map((chip, i) => (
-          <span
-            key={chip}
-            className="gate-in rounded border px-1.5 py-0.5"
-            style={{ animationDelay: `${2.2 + i * 0.12}s` }}
-          >
-            {chip}
-          </span>
-        ))}
-      </div>
-
-      <div className="gate-in bg-background relative overflow-hidden rounded-lg border p-3 pl-4 [animation-delay:2.8s]">
-        {/* the project's rail — the one piece of colour on this page, as in the app */}
-        <span aria-hidden className="absolute inset-y-0 left-0 w-1 bg-[#3b82f6]" />
-        <div className="flex items-center gap-2.5 text-sm">
-          <span aria-hidden className="border-muted-foreground/50 size-4 shrink-0 rounded border" />
-          <span className="truncate">fix preset loader</span>
-          <Flag aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
-          <span className="text-muted-foreground ml-auto shrink-0 text-xs">tomorrow</span>
+    <div
+      aria-hidden
+      className="bg-background relative mx-auto w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl select-none"
+    >
+      {/* header: the view, its count, and the search that sits in the real one */}
+      <div className="flex h-8 items-center gap-2 border-b px-3">
+        <span className="font-heading text-[11px] tracking-wide uppercase">Today</span>
+        <span className="text-muted-foreground font-mono text-[10px]">3</span>
+        <div className="text-muted-foreground/60 ml-auto flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px]">
+          <Search className="size-2.5" /> Search
         </div>
       </div>
+
+      <div className="grid grid-cols-[104px_1fr]">
+        <div className="bg-muted/40 space-y-px border-r p-1.5">
+          {NAV.map(({ icon: Icon, label, count, active }) => (
+            <div
+              key={label}
+              className={`flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] ${
+                active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
+              }`}
+            >
+              <Icon className="size-2.5 shrink-0" />
+              <span className="truncate">{label}</span>
+              {!!count && <span className="ml-auto font-mono text-[9px] opacity-60">{count}</span>}
+            </div>
+          ))}
+          <div className="text-muted-foreground/60 px-1.5 pt-2 pb-1 text-[8px] tracking-wide uppercase">
+            Projects
+          </div>
+          {PROJECTS.map((p) => (
+            <div key={p.name} className="text-muted-foreground flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px]">
+              <span className="size-2 shrink-0 rounded-[3px]" style={{ background: p.color }} />
+              <span className="truncate">{p.name}</span>
+              <span className="ml-auto font-mono text-[9px] opacity-60">{p.count}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="min-h-[236px] space-y-1.5 p-2.5">
+          {/* the capture bar, typing the line that becomes the first row below */}
+          <div className="bg-muted/50 rounded-md border px-2 py-1.5 text-[11px]">
+            <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
+            <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
+          </div>
+
+          <Row
+            className="gate-in [animation-delay:2.1s]"
+            text="fix preset loader" rail="#3b82f6" tag="#audio" due="tomorrow" flag
+          />
+          {ROWS.map((r) => <Row key={r.text} {...r} />)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Row({ text, rail, tag, due, flag, done, className = '' }: {
+  text: string
+  rail?: string
+  tag?: string
+  due?: string
+  flag?: boolean
+  done?: boolean
+  className?: string
+}) {
+  return (
+    <div className={`relative flex items-center gap-2 overflow-hidden rounded-md border px-2 py-1.5 pl-2.5 text-[11px] ${className}`}>
+      {/* the project's rail, the one piece of colour a row ever carries */}
+      {rail && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: rail }} />}
+      <span className={`size-2.5 shrink-0 rounded-[3px] border ${done ? 'bg-muted-foreground/40 border-transparent' : 'border-muted-foreground/50'}`} />
+      <span className={`truncate ${done ? 'text-muted-foreground line-through' : ''}`}>{text}</span>
+      {flag && <Flag className="text-muted-foreground size-2.5 shrink-0" />}
+      {tag && <span className="text-muted-foreground/70 shrink-0 text-[10px]">{tag}</span>}
+      {due && <span className="text-muted-foreground ml-auto shrink-0 text-[10px]">{due}</span>}
     </div>
   )
 }
