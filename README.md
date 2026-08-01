@@ -547,4 +547,8 @@ writable, and the dev proxy in `vite.config.ts` does the rest.
 
 All rights reserved — see [LICENSE](LICENSE). The source is here to be read; nothing is granted
 beyond that, so ask if you want to use it. Geist Pixel keeps its own OFL-1.1 terms, in
-`src/fonts/OFL.txt`, and every dependency keeps whichever licence it arrived with.
+`src/fonts/OFL.txt`, and every dependency keeps whichever licence it arrived with. The asset logos
+in `public/logos/` are third-party marks, kept locally rather than hotlinked so no reader's address
+is handed to a CDN: the crypto set is [spothq/cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons)
+under CC0, and the company logos are each their owner's trademark, used here only to name the thing
+they stand for.

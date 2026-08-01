@@ -291,7 +291,7 @@ export function start({
   }
   const inviteFloor = () => Date.now() - INVITE_DAYS * 86400_000
 
-  const server = createServer(async (req, res) => {
+  const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0]
     const api = path === '/state' || path.startsWith('/api/')
 
@@ -299,7 +299,8 @@ export function start({
       /* Sessions ride a SameSite=Strict cookie, which is already the CSRF answer; checking Origin
          on top costs one line and catches the browsers that predate it. */
       const origin = req.headers.origin
-      if (origin && new URL(origin).host !== req.headers.host) return send(res, 403, { error: 'forbidden' })
+      // URL.parse over new URL: a header anyone can type is not a thing to throw on
+      if (origin && URL.parse(origin)?.host !== req.headers.host) return send(res, 403, { error: 'forbidden' })
     }
 
     if (path === '/api/signup' && req.method === 'POST') {
@@ -674,6 +675,18 @@ export function start({
     } catch {
       return send(res, 404, { error: 'not found' })
     }
+  }
+
+  /* The handler is async, so anything it throws is an unhandled rejection and the process goes
+     down with it — a malformed Origin header was enough. One catch here is the whole answer; the
+     stack goes to the log in full, the client is told nothing but that it broke. The second catch
+     is for the reply itself failing on a socket that has already gone. */
+  const server = createServer((req, res) => {
+    handle(req, res).catch((e) => {
+      console.error(`${new Date().toISOString()} error ${req.method} ${req.url}`, e)
+      if (res.headersSent) res.destroy()
+      else send(res, 500, { error: 'server error' })
+    }).catch(() => res.destroy())
   })
 
   server.listen(port)

@@ -65,7 +65,7 @@ const localClock = (ms: number, tz: string) => {
 }
 
 
-// hotlinked logo; a miss just renders nothing (no broken-image box). Error is tracked in state and
+// logo out of public/logos; a miss just renders nothing (no broken-image box). Error is tracked in state and
 // reset whenever src changes, so the one persistent <img> in the header/trigger can't get stuck hidden
 // after a transient failure the way an inline display:none would.
 function AssetLogo({ src, className }: { src: string; className?: string }) {

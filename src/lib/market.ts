@@ -10,32 +10,34 @@ export type Candle = { t: number; o: number; h: number; l: number; c: number; v?
 export type Source = 'binance' | 'twelvedata'
 export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
 
-// logos are hotlinked (the Markets tool is online anyway); a miss just fails the <img> and the
-// label stands alone. Crypto: the open-source spothq icon set. Stocks: Clearbit by domain.
-const coin = (sym: string) => `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${sym}.png`
-const logo = (domain: string) => `https://icons.duckduckgo.com/ip3/${domain}.ico`
+/* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
+   address is a lot to pay for 150KB of icons, and a CDN that moves a file breaks them silently.
+   Crypto came from the spothq icon set, stocks from favicons — both one-time, into public/logos.
+   A plain path, not an import: this module is also read by node in the tests, where a bundler is
+   nowhere to be found. */
+const logo = (name: string) => `/logos/${name}.png`
 
 // Crypto + gold ride Binance (keyless, 24/7). Stocks ride Twelve Data (needs a free key).
 export const ASSETS: Asset[] = [
-  { id: 'PAXGUSDT', label: 'Gold', source: 'binance', group: 'Metals', logo: coin('paxg') },
-  { id: 'BTCUSDT', label: 'Bitcoin', source: 'binance', group: 'Crypto', logo: coin('btc') },
-  { id: 'ETHUSDT', label: 'Ethereum', source: 'binance', group: 'Crypto', logo: coin('eth') },
-  { id: 'SOLUSDT', label: 'Solana', source: 'binance', group: 'Crypto', logo: coin('sol') },
-  { id: 'XRPUSDT', label: 'XRP', source: 'binance', group: 'Crypto', logo: coin('xrp') },
-  { id: 'DOGEUSDT', label: 'Dogecoin', source: 'binance', group: 'Crypto', logo: coin('doge') },
-  { id: 'ADAUSDT', label: 'Cardano', source: 'binance', group: 'Crypto', logo: coin('ada') },
-  { id: 'AVAXUSDT', label: 'Avalanche', source: 'binance', group: 'Crypto', logo: coin('avax') },
-  { id: 'LINKUSDT', label: 'Chainlink', source: 'binance', group: 'Crypto', logo: coin('link') },
-  { id: 'ALGOUSDT', label: 'Algorand', source: 'binance', group: 'Crypto', logo: coin('algo') },
-  { id: 'HBARUSDT', label: 'HBAR', source: 'binance', group: 'Crypto', logo: 'https://cryptologos.cc/logos/hedera-hbar-logo.png' },
-  { id: 'NVDA', label: 'Nvidia', source: 'twelvedata', group: 'Stocks', logo: logo('nvidia.com') },
-  { id: 'TSLA', label: 'Tesla', source: 'twelvedata', group: 'Stocks', logo: logo('tesla.com') },
-  { id: 'AAPL', label: 'Apple', source: 'twelvedata', group: 'Stocks', logo: logo('apple.com') },
-  { id: 'AMD', label: 'AMD', source: 'twelvedata', group: 'Stocks', logo: logo('amd.com') },
-  { id: 'META', label: 'Meta', source: 'twelvedata', group: 'Stocks', logo: logo('meta.com') },
-  { id: 'AMZN', label: 'Amazon', source: 'twelvedata', group: 'Stocks', logo: logo('amazon.com') },
-  { id: 'MSFT', label: 'Microsoft', source: 'twelvedata', group: 'Stocks', logo: logo('microsoft.com') },
-  { id: 'GOOGL', label: 'Alphabet', source: 'twelvedata', group: 'Stocks', logo: logo('google.com') },
+  { id: 'PAXGUSDT', label: 'Gold', source: 'binance', group: 'Metals', logo: logo('paxg') },
+  { id: 'BTCUSDT', label: 'Bitcoin', source: 'binance', group: 'Crypto', logo: logo('btc') },
+  { id: 'ETHUSDT', label: 'Ethereum', source: 'binance', group: 'Crypto', logo: logo('eth') },
+  { id: 'SOLUSDT', label: 'Solana', source: 'binance', group: 'Crypto', logo: logo('sol') },
+  { id: 'XRPUSDT', label: 'XRP', source: 'binance', group: 'Crypto', logo: logo('xrp') },
+  { id: 'DOGEUSDT', label: 'Dogecoin', source: 'binance', group: 'Crypto', logo: logo('doge') },
+  { id: 'ADAUSDT', label: 'Cardano', source: 'binance', group: 'Crypto', logo: logo('ada') },
+  { id: 'AVAXUSDT', label: 'Avalanche', source: 'binance', group: 'Crypto', logo: logo('avax') },
+  { id: 'LINKUSDT', label: 'Chainlink', source: 'binance', group: 'Crypto', logo: logo('link') },
+  { id: 'ALGOUSDT', label: 'Algorand', source: 'binance', group: 'Crypto', logo: logo('algo') },
+  { id: 'HBARUSDT', label: 'HBAR', source: 'binance', group: 'Crypto', logo: logo('hbar') },
+  { id: 'NVDA', label: 'Nvidia', source: 'twelvedata', group: 'Stocks', logo: logo('nvidia') },
+  { id: 'TSLA', label: 'Tesla', source: 'twelvedata', group: 'Stocks', logo: logo('tesla') },
+  { id: 'AAPL', label: 'Apple', source: 'twelvedata', group: 'Stocks', logo: logo('apple') },
+  { id: 'AMD', label: 'AMD', source: 'twelvedata', group: 'Stocks', logo: logo('amd') },
+  { id: 'META', label: 'Meta', source: 'twelvedata', group: 'Stocks', logo: logo('meta') },
+  { id: 'AMZN', label: 'Amazon', source: 'twelvedata', group: 'Stocks', logo: logo('amazon') },
+  { id: 'MSFT', label: 'Microsoft', source: 'twelvedata', group: 'Stocks', logo: logo('microsoft') },
+  { id: 'GOOGL', label: 'Alphabet', source: 'twelvedata', group: 'Stocks', logo: logo('google') },
 ]
 
 export const INTERVALS = ['15m', '1h', '4h', '1d', '1w'] as const
