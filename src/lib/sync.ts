@@ -210,14 +210,14 @@ export const adminDropInvite = (code: string) => adminPost('/api/admin/invite', 
 
 /* ---------- sharing ---------- */
 
-export interface Member { pid: string, name: string, avatar: string | null, edit: number }
-export interface SharedWithMe { pid: string, edit: number, owner: string }
+export interface Member { pid: string, name: string, avatar: string | null, edit: number, subs: number }
+export interface SharedWithMe { pid: string, edit: number, subs: number, owner: string }
 
 export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[] }> =>
   call('/api/shares').catch(() => ({ mine: [], with_me: [] }))
 
-export const share = (pid: string, user: string, edit: boolean) =>
-  call('/api/share', { method: 'POST', body: JSON.stringify({ pid, user, edit }) })
+export const share = (pid: string, user: string, edit: boolean, subs?: boolean) =>
+  call('/api/share', { method: 'POST', body: JSON.stringify({ pid, user, edit, subs }) })
     .then(() => null).catch(errorOf)
 
 /** The owner drops a member (or the whole share); a member names whose project they are leaving. */
@@ -237,14 +237,14 @@ const docUrl = (pid: string, owner?: string) =>
  * slice; everyone pulls the newest and merges it in. Last writer wins per project — a smaller
  * blast radius than per user, and the server keeps fifty of these too.
  */
-async function syncProject(pid: string, mine: boolean, edit: boolean, owner?: string) {
+async function syncProject(pid: string, mine: boolean, edit: boolean, subs: boolean, owner?: string) {
   const key = `${owner ?? ''}:${pid}`
   try {
     const r = await fetch(docUrl(pid, owner))
     if (!r.ok) return                       // unshared while we were away; the next /api/shares says so
     const { version, state } = await r.json()
 
-    const local = sliceOf(getState(), pid)
+    const local = sliceOf(getState(), pid, subs)
     const behind = version > (pv.get(key) ?? 0)
     // nothing of ours to send, or someone else's newer write to take: adopt and stop
     if (behind && state) {
@@ -271,7 +271,8 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, owner?: st
 /** Every project either shared by you or with you, exchanged after the personal document. */
 async function syncShares() {
   const { mine, with_me } = await shares()
-  const owned = new Set(mine.map((m) => m.pid))
+  // one row per member: the project's own settings are the same on each, so the first will do
+  const owned = new Map(mine.map((m) => [m.pid, !!m.subs]))
   // a project someone shared with you must exist locally before its slice can land in it
   for (const s of with_me) {
     if (!getState().projects.some((p) => p.id === s.pid)) {
@@ -279,13 +280,14 @@ async function syncShares() {
     }
   }
   await Promise.all([
-    ...[...owned].map((pid) => syncProject(pid, true, true)),
-    ...with_me.map((s) => syncProject(s.pid, false, !!s.edit, s.owner)),
+    ...[...owned].map(([pid, subs]) => syncProject(pid, true, true, subs)),
+    ...with_me.map((s) => syncProject(s.pid, false, !!s.edit, !!s.subs, s.owner)),
   ])
   // one left behind: a project that says it is shared but no longer is, dropped from the sidebar
-  const live = new Set([...owned, ...with_me.map((s) => s.pid)])
+  const live = new Set([...owned.keys(), ...with_me.map((s) => s.pid)])
   for (const p of getState().projects) {
-    if (p.share && !live.has(p.id)) adoptShared(p.id, null, null)
+    // a sub-project of a shared one is covered by its parent's slice, so only the roots are checked
+    if (p.share && !p.parent && !live.has(p.id)) adoptShared(p.id, null, null)
   }
 }
 

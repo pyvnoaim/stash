@@ -117,6 +117,10 @@ const SCHEMA = `
     owner integer not null references users(id) on delete cascade,
     member integer not null references users(id) on delete cascade,
     edit integer not null default 0,
+    /* whether the sub-projects go with it. Set by the owner on the project, so it is the same
+       answer for everyone on it — a share where one member sees the children and another does
+       not would be two different projects wearing one name. */
+    subs integer not null default 0,
     ts integer not null,
     primary key (owner, pid, member)
   );
@@ -139,6 +143,7 @@ export function start({
   db.exec(SCHEMA)
   // a database from before avatars existed grows the column; a fresh one already has it
   try { db.exec('alter table users add column avatar text') } catch { /* already there */ }
+  try { db.exec('alter table shares add column subs integer not null default 0') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -174,8 +179,10 @@ export function start({
       (select v from docs where user = ? order by v desc limit ?)`),
 
     /* sharing */
-    addShare: db.prepare(`insert into shares (pid, owner, member, edit, ts) values (?, ?, ?, ?, ?)
-      on conflict (owner, pid, member) do update set edit = excluded.edit`),
+    addShare: db.prepare(`insert into shares (pid, owner, member, edit, subs, ts) values (?, ?, ?, ?, ?, ?)
+      on conflict (owner, pid, member) do update set edit = excluded.edit, subs = excluded.subs`),
+    /** One project, one answer: setting it on the share sets it for everyone on that project. */
+    setSubs: db.prepare('update shares set subs = ? where owner = ? and pid = ?'),
     dropShare: db.prepare('delete from shares where pid = ? and member = ? and owner = ?'),
     dropShares: db.prepare('delete from shares where pid = ? and owner = ?'),
     leaveShare: db.prepare('delete from shares where pid = ? and member = ? and owner = ?'),
@@ -184,10 +191,10 @@ export function start({
     /** Am I already on someone else's project under this id? Then it is not mine to hand out. */
     notMine: db.prepare('select 1 from shares where pid = ? and member = ? and owner <> ?'),
     /** Projects I own and have shared, with who is on them. */
-    myShares: db.prepare(`select s.pid, u.name, u.avatar, s.edit from shares s
+    myShares: db.prepare(`select s.pid, u.name, u.avatar, s.edit, s.subs from shares s
       join users u on u.id = s.member where s.owner = ? and s.member <> ? order by u.name`),
     /** Projects shared with me by someone else. */
-    sharedWithMe: db.prepare(`select s.pid, s.edit, u.name as owner from shares s
+    sharedWithMe: db.prepare(`select s.pid, s.edit, s.subs, u.name as owner from shares s
       join users u on u.id = s.owner where s.member = ? and s.owner <> ?`),
     pdoc: db.prepare('select v, json from pdocs where owner = ? and pid = ? order by v desc limit 1'),
     addPdoc: db.prepare('insert into pdocs (owner, pid, ts, device, json) values (?, ?, ?, ?, ?)'),
@@ -480,9 +487,12 @@ export function start({
       if (!target) return send(res, 404, { error: 'no such person' })
       if (target.id === user.id) return send(res, 400, { error: 'it is already yours' })
       const now = Date.now()
+      const subs = b?.subs ? 1 : 0
       // the owner's own row goes in with it, so one table answers every permission question
-      q.addShare.run(pid, user.id, user.id, 1, now)
-      q.addShare.run(pid, user.id, target.id, b?.edit ? 1 : 0, now)
+      q.addShare.run(pid, user.id, user.id, 1, subs, now)
+      q.addShare.run(pid, user.id, target.id, b?.edit ? 1 : 0, subs, now)
+      // it is a property of the project, not of this one invitation
+      if ('subs' in (b ?? {})) q.setSubs.run(subs, user.id, pid)
       log('share', `${pid} ${user.name} -> ${name}${b?.edit ? ' (edit)' : ''}`, via(req))
       return send(res, 200, { members: q.myShares.all(user.id, user.id) })
     }

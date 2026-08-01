@@ -499,11 +499,27 @@ console.log('store: ok')
 
   // a slice travels without the permission on it — that is this device's view, not their data
   const slice = sliceOf(getState(), yours.id)!
-  assert.equal('share' in slice.project, false)
+  assert.equal('share' in slice.projects[0], false)
   assert.deepEqual(slice.items.map((i) => i.id), ['rw'])
 
+  // sub-projects only travel when the share says so
+  const kid = addProject('Under yours', null, yours.id)
+  addItem(item({ id: 'kidItem', pid: kid.id }))
+  assert.deepEqual(sliceOf(getState(), yours.id)!.projects.map((p) => p.id), [yours.id])
+  assert.deepEqual(sliceOf(getState(), yours.id)!.items.map((i) => i.id), ['rw'])
+  const wide = sliceOf(getState(), yours.id, true)!
+  assert.deepEqual(wide.projects.map((p) => p.id).sort(), [kid.id, yours.id].sort())
+  assert.deepEqual(wide.items.map((i) => i.id).sort(), ['kidItem', 'rw'])
+
+  // a child dropped out of the share leaves with its items, and the permission covers the rest
+  adoptShared(yours.id, wide, { by: 'ada', edit: true })
+  assert.ok(getState().projects.find((p) => p.id === kid.id)?.share)
+  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null, note: '' }], items: [] })
+  assert.ok(!getState().projects.some((p) => p.id === kid.id))
+  assert.ok(!getState().items.some((i) => i.id === 'kidItem'))
+
   // adopting a slice replaces what was filed under that project and keeps the permission
-  adoptShared(yours.id, { project: { id: yours.id, name: 'Yours', color: null, parent: null, note: 'brief' },
+  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null, note: 'brief' }],
     items: [item({ id: 'fromThem', pid: yours.id, text: 'theirs now' })] })
   const after = getState()
   assert.deepEqual(after.items.filter((i) => i.pid === yours.id).map((i) => i.id), ['fromThem'])

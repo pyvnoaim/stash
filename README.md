@@ -490,10 +490,12 @@ surface is the security strategy. `npm test` runs the sync engine against it ove
 ## Sharing a project
 
 Right-click a project → **Share…**, name someone with an account on this server, and choose **Can
-view** or **Can edit**. They get the project and the items filed directly under it — nothing else
-of yours, and not its sub-projects, which stay private. The chip on their row can be flipped
-between view and edit at any time, and removing someone takes it off their sidebar on their next
-sync.
+view** or **Can edit**. They get the project and the items filed under it — nothing else of yours.
+A project holding sub-projects offers to include them; that is the project's own setting rather
+than each invitation's, so everyone on it sees the same thing, and turning it off takes the
+children back off their sidebars along with everything filed under them. The chip on a member's
+row flips between view and edit at any time, and removing someone takes the project off their
+sidebar on their next sync.
 
 A shared project moves into a document of its own that everyone on it syncs against, versioned
 exactly like a personal one and kept fifty deep. That makes the blast radius one project rather

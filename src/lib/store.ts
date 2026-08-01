@@ -434,15 +434,24 @@ export function redo() {
   return true
 }
 
-/** What travels for a shared project: the project itself and the items filed directly under it. */
-export interface Slice { project: Project, items: Item[], owner?: string }
+/**
+ * What travels for a shared project: the project, its sub-projects when the share includes them,
+ * and every item filed under any of those.
+ */
+export interface Slice { projects: Project[], items: Item[] }
 
-export const sliceOf = (s: State, pid: string): Slice | null => {
+/** `share` is this device's view of the permission, not the project's data — it never travels. */
+const bare = ({ share: _drop, ...p }: Project) => p
+
+export const sliceOf = (s: State, pid: string, subs = false): Slice | null => {
   const project = s.projects.find((p) => p.id === pid)
   if (!project) return null
-  // `share` is this device's view of the permission, not part of the project — it never travels
-  const { share: _drop, ...clean } = project
-  return { project: clean, items: s.items.filter((i) => i.pid === pid) }
+  const kids = subs ? childProjects(s, pid) : []
+  const ids = new Set([pid, ...kids.map((k) => k.id)])
+  return {
+    projects: [bare(project), ...kids.map(bare)],
+    items: s.items.filter((i) => i.pid && ids.has(i.pid)),
+  }
 }
 
 /**
@@ -453,32 +462,52 @@ export const sliceOf = (s: State, pid: string): Slice | null => {
  */
 export function adoptShared(pid: string, slice: unknown, share?: { by: string, edit: boolean } | null) {
   set((s) => {
+    // everything of this project's that is here now: itself, and whatever sits under it
+    const localIds = new Set([pid, ...s.projects.filter((p) => p.parent === pid).map((p) => p.id)])
+
     if (slice === null && share === null) {
       return {
         ...s,
-        projects: s.projects.filter((p) => p.id !== pid),
-        items: s.items.filter((i) => i.pid !== pid),
-        sel: s.sel === pid ? 'today' : s.sel,
+        projects: s.projects.filter((p) => !localIds.has(p.id)),
+        items: s.items.filter((i) => !(i.pid && localIds.has(i.pid))),
+        sel: localIds.has(s.sel) ? 'today' : s.sel,
       }
     }
+
     // the slice is someone else's document: through load(), like every other untrusted input
-    const clean = slice ? load({ projects: [(slice as Slice).project], items: (slice as Slice).items }) : null
-    const project = clean?.projects[0]
-    const at = s.projects.findIndex((p) => p.id === pid)
-    const kept = at < 0 ? undefined : s.projects[at]
-    const next: Project = {
-      ...(kept ?? { id: pid, name: 'Shared project', color: null, parent: null, note: '' }),
-      ...(project ?? {}),
-      id: pid,
-      ...(share === undefined ? (kept?.share ? { share: kept.share } : {}) : share ? { share } : {}),
+    const raw = slice as { projects?: Project[], items?: Item[] } | null
+    const clean = raw?.projects ? load({ projects: raw.projects, items: raw.items ?? [] }) : null
+    const kept = s.projects.find((p) => p.id === pid)
+    const mark = share === undefined ? kept?.share : (share ?? undefined)
+
+    if (!clean) {
+      // no document yet: keep the placeholder, only set whose it is and what may be done in it
+      const blank: Project = { id: pid, name: 'Shared project', color: null, parent: null, note: '' }
+      const next = { ...(kept ?? blank), ...(mark ? { share: mark } : {}) }
+      return {
+        ...s,
+        projects: kept ? s.projects.map((p) => (p.id === pid ? next : p)) : [...s.projects, next],
+      }
     }
-    const projects = at < 0 ? [...s.projects, next] : s.projects.map((p) => (p.id === pid ? next : p))
+
+    // the shared set replaces what was here: sub-projects dropped from the share go with it
+    const incoming = clean.projects.map((p) => ({ ...p, ...(mark ? { share: mark } : {}) }))
+    const ids = new Set(incoming.map((p) => p.id))
+    const gone = [...localIds].filter((id) => !ids.has(id))
+    const projects = [
+      ...s.projects
+        .filter((p) => !localIds.has(p.id) && !ids.has(p.id))
+        .map((p) => p),
+      ...incoming,
+    ]
     return {
       ...s,
       projects,
-      items: clean
-        ? [...clean.items.map((i) => ({ ...i, pid })), ...s.items.filter((i) => i.pid !== pid)]
-        : s.items,
+      items: [
+        ...clean.items,
+        ...s.items.filter((i) => !(i.pid && (ids.has(i.pid) || gone.includes(i.pid)))),
+      ],
+      sel: gone.includes(s.sel) ? 'today' : s.sel,
     }
   })
 }

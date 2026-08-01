@@ -197,6 +197,12 @@ assert.equal((await post('/api/share', { pid: 'p1', user: 'bo' }, ada)).status, 
 r = await post('/api/share', { pid: 'p1', user: 'cy', edit: true }, ada)
 assert.deepEqual((await r.json()).members.map((m: any) => [m.name, m.edit]), [['bo', 0], ['cy', 1]])
 
+// sub-projects travel only when the share says so, and it is the project's answer, not each member's
+assert.equal((await post('/api/share', { pid: 'p1', user: 'bo', subs: true }, ada)).status, 200)
+assert.deepEqual((await (await get('/api/shares', ada)).json()).mine.map((m: any) => [m.name, m.subs]),
+  [['bo', 1], ['cy', 1]])
+assert.equal((await post('/api/share', { pid: 'p1', user: 'bo', subs: false }, ada)).status, 200)
+
 // the owner writes it; both members can read it
 assert.equal((await putPdoc('p1', 0, { project: { id: 'p1', name: 'Kova' }, items: ['a'] }, ada)).status, 200)
 let d = await (await pdoc('p1', bo, 'ada')).json()
@@ -220,7 +226,7 @@ assert.equal((await post('/api/share', { pid: 'p1', user: 'dee' }, cy)).status, 
 
 // both sides see the share
 assert.deepEqual((await (await get('/api/shares', bo)).json()).with_me,
-  [{ pid: 'p1', edit: 0, owner: 'ada' }])
+  [{ pid: 'p1', edit: 0, subs: 0, owner: 'ada' }])
 assert.deepEqual((await (await get('/api/shares', bo)).json()).mine, [])
 
 // a member can leave, and takes nothing with them
