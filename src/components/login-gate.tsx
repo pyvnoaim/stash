@@ -284,7 +284,8 @@ function Reveal({ open, children }: { open: boolean, children: React.ReactNode }
         open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
       }`}
     >
-      <div className="overflow-hidden">{children}</div>
+      {/* the clip needs room, or it shaves the focus ring off whatever is inside it */}
+      <div className="overflow-hidden p-1 -m-1">{children}</div>
     </div>
   )
 }

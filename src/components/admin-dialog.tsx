@@ -111,7 +111,7 @@ export function AdminDialog({ open, onOpenChange, me }: {
               </Button>
             </div>
             {codes.length === 0
-              ? <p className="text-muted-foreground text-xs">None. A code is spent the moment someone signs up with it.</p>
+              ? <p className="text-muted-foreground text-xs">None. A code is spent the moment someone signs up with it, and expires after a week either way.</p>
               : codes.map((c) => (
                   <div key={c} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5">
                     <code className="truncate font-mono text-xs select-all">{c}</code>

@@ -36,6 +36,8 @@ const MAX_DAYS = 180
 /** Failed logins allowed per user-and-address before a cool-off. */
 const TRIES = 10
 const COOL_OFF = 15 * 60_000
+/** How long a signup code stays good. A code that leaks is a code that expires. */
+const INVITE_DAYS = 7
 /**
  * scrypt cost, stored per user so it can be raised later without breaking old hashes.
  * ponytail: 2^15 is OWASP's floor, not its ceiling — raise N here when hardware moves; old
@@ -104,7 +106,8 @@ const SCHEMA = `
     user integer not null references users(id) on delete cascade,
     created integer not null, seen integer not null
   );
-  create table if not exists invites (code text primary key, used integer);
+  /* A code is one-use and short-lived: used holds the account it made, ts when it was cut. */
+  create table if not exists invites (code text primary key, used integer, ts integer not null default 0);
   create table if not exists docs (
     v integer primary key autoincrement,
     user integer not null references users(id) on delete cascade,
@@ -161,6 +164,11 @@ export function start({
   db.exec(SCHEMA)
   // a database from before avatars existed grows the column; a fresh one already has it
   try { db.exec('alter table users add column avatar text') } catch { /* already there */ }
+  try {
+    db.exec('alter table invites add column ts integer not null default 0')
+    // codes cut before they had a date get their full window from now rather than expiring at once
+    db.prepare('update invites set ts = ? where ts = 0').run(Date.now())
+  } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -171,10 +179,10 @@ export function start({
       (select count(*) from sessions s where s.user = u.id) as sessions,
       (select max(d.ts) from docs d where d.user = u.id) as synced
       from users u order by u.id`),
-    invite: db.prepare('select * from invites where code = ? and used is null'),
+    invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
-    addInvite: db.prepare('insert into invites (code) values (?)'),
-    openInvites: db.prepare('select code from invites where used is null'),
+    addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
+    openInvites: db.prepare('select code, ts from invites where used is null and ts > ? order by ts desc'),
     dropInvite: db.prepare('delete from invites where code = ? and used is null'),
     rename: db.prepare('update users set name = ? where id = ?'),
     setAvatar: db.prepare('update users set avatar = ? where id = ?'),
@@ -275,7 +283,13 @@ export function start({
   const base = resolve(root)
 
   /** One-use signup code — the admin API and the CLI both come through here, tests too. */
-  const invite = () => { const code = randomBytes(8).toString('hex'); q.addInvite.run(code); return code }
+  const invite = () => {
+    // 64 bits: not a code anyone guesses, and it is one-use and expiring on top of that
+    const code = randomBytes(8).toString('hex')
+    q.addInvite.run(code, Date.now())
+    return code
+  }
+  const inviteFloor = () => Date.now() - INVITE_DAYS * 86400_000
 
   const server = createServer(async (req, res) => {
     const path = (req.url ?? '/').split('?')[0]
@@ -291,12 +305,20 @@ export function start({
     if (path === '/api/signup' && req.method === 'POST') {
       let b: any
       try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      // no session to key on here, so the address alone: enough to stop a script working through
+      // the code space, and 64 bits was never going to fall to one anyway
+      if (limited(`signup:${addr(req)}`)) return send(res, 429, { error: 'too many tries — wait 15 minutes' })
       const name = String(b?.user ?? '').trim().toLowerCase()
       const pass = String(b?.pass ?? '')
       if (!/^[a-z0-9_-]{2,32}$/.test(name)) return send(res, 400, { error: 'name: 2–32 of a–z 0–9 _ -' })
       if (pass.length < 8) return send(res, 400, { error: 'password: 8 characters at least' })
-      if (!q.invite.get(String(b?.invite ?? ''))) return send(res, 403, { error: 'bad invite' })
+      if (!q.invite.get(String(b?.invite ?? ''), inviteFloor())) {
+        return send(res, 403, { error: 'that invite is not valid — ask for a new one' })
+      }
       if (q.userByName.get(name)) return send(res, 409, { error: 'name taken' })
+      // a code that worked clears the count: the limiter is here to stop guessing, and a real
+      // signup is the opposite of a guess
+      tries.delete(`signup:${addr(req)}`)
       const salt = randomBytes(16)
       // the first account through the door is the admin — it is yours, you deployed this
       const admin = q.anyUser.get() ? 0 : 1
@@ -414,7 +436,7 @@ export function start({
       }
       // the codes cut but not yet spent, so an admin can see what is outstanding
       if (path === '/api/admin/invites' && req.method === 'GET') {
-        return send(res, 200, { invites: q.openInvites.all() })
+        return send(res, 200, { invites: q.openInvites.all(inviteFloor()) })
       }
       if (path === '/api/admin/invite' && req.method === 'DELETE') {
         let b: any

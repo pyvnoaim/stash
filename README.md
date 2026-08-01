@@ -468,7 +468,12 @@ server keeps per user are the undo for the day that rule picks wrong. There is n
 recovery over prevention, at a fraction of the code. The Twelve Data key is stripped from every
 push, the same promise the backup export makes: it never leaves the machine you typed it on.
 
-Signup wants an invite code. **Account** in the footer menu holds the three things a person owns:
+Signup wants an invite code: sixteen hex characters out of `randomBytes`, good once and dead after
+a week, so a code that leaks somewhere is a code that stops working. Wrong codes from one address
+cool off after ten tries. There is no open signup and no way to ask for an invite — the only way
+to get one is for an admin to hand it to you.
+
+ **Account** in the footer menu holds the three things a person owns:
 a name and a picture — shrunk to a 128px square before it ever leaves the browser — a password
 change that asks for the current one first, and **History**, the fifty versions the server keeps.
 Restoring one writes it forward as a new version rather than deleting what came after, so taking

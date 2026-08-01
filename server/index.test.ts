@@ -9,7 +9,11 @@ const { start } = await import('./index.ts')
 const root = mkdtempSync(join(tmpdir(), 'stash-'))
 writeFileSync(join(root, 'index.html'), '<!doctype html>hi')
 
-const server = start({ port: 0, db: ':memory:', root })
+// the same file the server opens, so a test can age an invite the way a week would
+const dbFile = join(root, 'test.db')
+const server = start({ port: 0, db: dbFile, root })
+const { DatabaseSync } = await import('node:sqlite')
+const db = new DatabaseSync(dbFile)
 await new Promise((ok) => server.on('listening', ok))
 const { port } = server.address() as { port: number }
 const url = `http://127.0.0.1:${port}`
@@ -24,6 +28,7 @@ const get = (path: string, cookie = '') => fetch(url + path, { headers: { cookie
 assert.equal((await get('/state')).status, 401)
 assert.equal((await get('/api/me')).status, 401)
 
+// an invite is one-use, expiring, and never guessable: 64 bits of hex, dead after a week
 // signup wants an invite, a sane name and a real password
 assert.equal((await post('/api/signup', { user: 'leon', pass: 'longenough', invite: 'nope' })).status, 403)
 const inv = server.invite()
@@ -172,6 +177,12 @@ assert.equal((await post('/api/signup', { user: 'nope', pass: 'longenough', invi
 assert.equal((await post('/api/admin/revoke', { user: 'kim3' }, leon)).status, 200)
 assert.equal((await get('/api/me', kim3)).status, 401)
 
+// an invite older than its window is no longer an invite, and does not clutter the open list
+const oldCode = (await (await post('/api/admin/invite', {}, leon)).json()).code
+db.prepare('update invites set ts = ? where code = ?').run(Date.now() - 8 * 86400_000, oldCode)
+assert.equal((await post('/api/signup', { user: 'late', pass: 'longenough', invite: oldCode })).status, 403)
+assert.ok(!(await (await get('/api/admin/invites', leon)).json()).invites.some((i: any) => i.code === oldCode))
+
 /* ---------- sharing ---------- */
 const del2 = (path: string, body: unknown, cookie: string) =>
   fetch(url + path, { method: 'DELETE', headers: { cookie }, body: JSON.stringify(body) })
@@ -252,6 +263,13 @@ assert.equal((await pdoc('same', bo, 'dee')).status, 404)
 assert.equal((await pdoc('same', cy, 'ada')).status, 404)
 // a member may not pass on what is not theirs
 assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, bo)).status, 403)
+
+/* a run of wrong codes from one address cools off — the invite space is 64 bits wide, but nothing
+   should be free to work through it. Last, because the cool-off outlives the test that trips it. */
+for (let i = 0; i < 11; i++) {
+  await post('/api/signup', { user: `x${i}`, pass: 'longenough', invite: 'deadbeefdeadbeef' })
+}
+assert.equal((await post('/api/signup', { user: 'blocked', pass: 'longenough', invite: server.invite() })).status, 429)
 
 // static, and no climbing out of it — the page carries its own security headers,
 // so they hold whatever terminates TLS in front
