@@ -542,7 +542,7 @@ export default function App() {
       <ProjectDialog
         open={newProject}
         onOpenChange={setNewProject}
-        onSubmit={(name) => addProject(name)}
+        onSubmit={(name, color, parent) => addProject(name, color, parent).id}
       />
 
       <input

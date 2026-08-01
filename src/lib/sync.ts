@@ -61,6 +61,22 @@ export const getSync = () => snap
 /* ---------- push and pull ---------- */
 
 let timer: ReturnType<typeof setTimeout> | undefined
+
+/* A failed sync has nothing standing behind it but the next edit, a focus, or an `online` event —
+   and a phone left open on one screen produces none of the three. Worse, `online` never fires for
+   the failures that don't change what the browser thinks of the network: a captive portal, a VPN
+   dropping, a server restarting. So a failure winds itself back up, doubling to five minutes.
+   Only with a session: a device running the app with no server at all has nothing to retry. */
+const RETRY_MIN = 5000, RETRY_MAX = 5 * 60_000
+let backoff = RETRY_MIN
+function retry() {
+  if (!snap.user) return
+  clearTimeout(timer)
+  timer = setTimeout(syncNow, backoff)
+  backoff = Math.min(backoff * 2, RETRY_MAX)
+}
+const settled = () => { backoff = RETRY_MIN } // the connection answered; the next failure starts over
+
 function schedule() {
   setMeta({ ...meta(), dirty: true })
   clearTimeout(timer)
@@ -84,12 +100,14 @@ export async function syncNow(): Promise<void> {
       r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(cur.version) }, body })
     }
     if (r.status === 401) return setSnap({ status: 'out', user: null })
-    if (!r.ok) return setSnap({ status: 'off' })
+    if (!r.ok) { setSnap({ status: 'off' }); return retry() }
     setMeta({ v: (await r.json()).version, dirty: false })
+    settled()
     setSnap({ status: 'ok' })
     await syncShares()
   } catch {
-    setSnap({ status: 'off' })  // still dirty — the next edit, focus or reconnect retries
+    setSnap({ status: 'off' })  // still dirty — a retry, the next edit, focus or reconnect gets it
+    retry()
   }
 }
 
@@ -100,14 +118,16 @@ async function pull(): Promise<void> {
   try {
     const r = await fetch('/state')
     if (r.status === 401) return setSnap({ status: 'out', user: null })
-    if (!r.ok) return setSnap({ status: 'off' })
+    if (!r.ok) { setSnap({ status: 'off' }); return retry() }
     const { version, state } = await r.json()
     if (version !== m.v && state) adoptRemote(state)
     setMeta({ v: version, dirty: false })
+    settled()
     setSnap({ status: 'ok' })
     await syncShares()
   } catch {
     setSnap({ status: 'off' })
+    retry()
   }
 }
 
@@ -317,10 +337,14 @@ export function startSync() {
   setOnPersist(schedule)
   // signed in: catch up. Not signed in because the network was down: ask again now that it isn't.
   const wake = () => {
+    backoff = RETRY_MIN // a deliberate return to the app should not wait out a five-minute backoff
     if (snap.user) syncNow()
     else if (snap.status === 'off') me()
   }
   addEventListener('focus', wake)
   addEventListener('online', wake)
+  // a phone coming back to the app fires this and does not reliably fire focus; it is dispatched
+  // at the document and bubbles, so the window hears it too
+  addEventListener('visibilitychange', () => { if (!document.hidden) wake() })
   void me()
 }

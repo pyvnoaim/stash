@@ -278,6 +278,14 @@ so silver sits it out. The nine stocks ride Twelve Data, which needs a free key:
 Settings or into the prompt the page shows, and it stays on this machine and never travels in a
 backup.
 
+The bars you have already loaded are kept by the service worker, so the desk still draws with no
+network — every signal here is maths over bars that closed, and those read the same on a plane as
+at a desk. The feed is asked first and answers whenever it can; the cache is what is left when it
+cannot. The live price is deliberately **not** kept: alerts fire on that number, and an alert about
+a level the market never reached is worse than no alert. So when the feed goes quiet the page says
+so next to the price — *Offline — as of …* — the pulse beside **Live** goes out, and the figure you
+are looking at is dated rather than dressed up as current.
+
 Pick an asset, an interval — `15m` to `1w` — and a horizon. **Investing** rides the classic 50/200
 moving averages, a wide support band and daily bars; **Trading** uses 9/21, a tight band and hourly
 bars, so it flips far sooner. Picking a horizon switches the interval with it; the interval row still
@@ -471,6 +479,14 @@ view opens instantly and why it works offline at all. An account adds a second p
 lands: each local edit is pushed to the server a couple of seconds later, and opening or focusing
 the app pulls whatever another device pushed while this one was away. The account lives in the
 sidebar footer, next to where Settings went; without one, everything simply stays on this machine.
+
+A push that fails changes nothing but the footer, which says *No connection — working locally*: the
+edit stays marked unsent and is tried again five seconds later, then ten, up to five minutes, until
+the server answers. Coming back to the app resets that wait, and on a phone it is the app becoming
+visible that counts — returning to a PWA does not reliably raise a focus event. None of it runs
+without an account, so a copy with no server behind it never reaches for one. Starting the app
+while the server is unreachable opens your own data rather than the sign-in screen; only a real
+*signed out* answer, or a device holding nothing of its own yet, shows the gate.
 
 One rule decides every conflict: the device that edited last wins, and the fifty versions the
 server keeps per user are the undo for the day that rule picks wrong. There is no merge engine —

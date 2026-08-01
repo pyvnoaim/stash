@@ -470,10 +470,11 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         initialColor={dialog?.color}
         initialParent={dialog?.parent}
         onSubmit={(name, color, parent) => {
-          if (dialog?.id) { patchProject(dialog.id, { name, color, parent }); return }
-          addProject(name, color, parent)
+          if (dialog?.id) { patchProject(dialog.id, { name, color, parent }); return undefined }
+          const made = addProject(name, color, parent)
           // unfold the parent so the freshly added child is visible, not hidden under a shut fold
           if (parent && s.collapsed.includes(parent)) toggleCollapsed(parent)
+          return made.id
         }}
       />
 

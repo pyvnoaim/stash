@@ -73,6 +73,23 @@ await syncNow()
 assert.equal(getSync().status, 'ok')
 assert.deepEqual((await onServer()).items.map((i: any) => i.text), ['third', 'second', 'first'])
 
+/* the wire drops with an edit in hand: the push fails, the edit stays dirty rather than being
+   counted as sent, and the same call that failed carries it once the connection answers. The
+   backoff timer that retries this on its own is left to setTimeout; what is asserted here is the
+   part that would cost you the note — that nothing is marked pushed which wasn't. */
+const wire = globalThis.fetch
+globalThis.fetch = (() => Promise.reject(new Error('offline'))) as typeof fetch
+add('written on a plane')
+await flush()
+await syncNow()
+assert.equal(getSync().status, 'off')
+assert.equal(JSON.parse(disk.get('stash.sync.v1')!).dirty, true)
+globalThis.fetch = wire
+await syncNow()
+assert.equal(getSync().status, 'ok')
+assert.deepEqual((await onServer()).items.map((i: any) => i.text),
+  ['written on a plane', 'third', 'second', 'first'])
+
 // signed out, the engine goes quiet instead of erroring
 await logout()
 assert.equal(getSync().status, 'out')
@@ -84,7 +101,7 @@ assert.equal(getSync().user, null)
 // ...and the edit waits as dirty for whoever signs in next
 assert.equal(await login('leon', 'longenough'), null)
 assert.deepEqual((await onServer()).items.map((i: any) => i.text),
-  ['offline edit', 'third', 'second', 'first'])
+  ['offline edit', 'written on a plane', 'third', 'second', 'first'])
 
 server.close()
 console.log('sync ok')

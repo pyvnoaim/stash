@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, BellRing, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Bell, BellRing, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -65,6 +65,17 @@ const localClock = (ms: number, tz: string) => {
 }
 
 
+/* The service worker keeps the last candles it fetched, so the chart still draws with no network.
+   Which means the page has to say so: bars that closed yesterday under a price that reads as live
+   is the one way this tool could cost someone money. */
+const useOnline = () => useSyncExternalStore(
+  (cb) => {
+    addEventListener('online', cb); addEventListener('offline', cb)
+    return () => { removeEventListener('online', cb); removeEventListener('offline', cb) }
+  },
+  () => navigator.onLine,
+)
+
 // logo out of public/logos; a miss just renders nothing (no broken-image box). Error is tracked in state and
 // reset whenever src changes, so the one persistent <img> in the header/trigger can't get stuck hidden
 // after a transient failure the way an inline display:none would.
@@ -116,6 +127,13 @@ export default function MarketPage() {
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
   const [guide, setGuide] = useState<Signal | null>(null) // the reading whose explainer is open
+  const online = useOnline()
+  /* navigator.onLine only knows whether there is *a* network — a captive wifi or a dead uplink
+     still reads as online, and the service worker would answer those from cache without a word.
+     The ticker poll below is never cached, so a tick that comes back with no price is the one
+     honest signal that the feed is not answering. Either way the page stops claiming to be live. */
+  const [notLive, setNotLive] = useState(false)
+  const stale = !online || notLive
   const cfg = HORIZONS[horizon]
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
@@ -137,7 +155,13 @@ export default function MarketPage() {
     nextRoll.current = 0
     fetchCandles(current, interval, apiKey)
       .then((c) => { if (mine === seq.current) { setCandles(c); setLoading(false) } })
-      .catch((e) => { if (mine === seq.current) { setError(e.message); setCandles([]); setLoading(false) } })
+      // offline the fetch fails on the browser's own message ("Load failed", "Failed to fetch"),
+      // which reads as a bug rather than the plain fact that this view was never cached
+      .catch((e) => {
+        if (mine !== seq.current) return
+        setError(navigator.onLine ? e.message : 'Offline — no saved bars for this view')
+        setCandles([]); setLoading(false)
+      })
   }, [asset, interval, nonce, apiKey, needKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The timeframe one step up, purely for the "don't fight the bigger picture" card. Its own small
@@ -167,7 +191,8 @@ export default function MarketPage() {
   const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
   useEffect(() => {
-    if (needKey || !live) return
+    setNotLive(false) // a new view has not probed yet, so it makes no claim either way
+    if (needKey || !live || !online) return // nothing to poll for with no feed to poll
     let on = true
     const tick = () => {
       const t = lastAt.current
@@ -186,7 +211,11 @@ export default function MarketPage() {
       }
       fetchPrices([current.id], apiKey).then((pr) => {
         const px = pr[current.id]
-        if (!on || !px) return
+        if (!on) return
+        // fetchPrices resolves either way and simply omits what it could not get, so an absent
+        // price is the probe failing: no network, or a feed refusing to answer for this one
+        setNotLive(!px)
+        if (!px) return
         setCandles((prev) => {
           const bar = prev.at(-1)
           if (!bar) return prev
@@ -196,7 +225,7 @@ export default function MarketPage() {
     }
     const h = window.setInterval(tick, current.source === 'twelvedata' ? LIVE_SLOW : LIVE)
     return () => { on = false; window.clearInterval(h) }
-  }, [asset, interval, apiKey, needKey, live]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asset, interval, apiKey, needKey, live, online]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const view = useMemo(() => (candles.length ? signals(candles, cfg) : null), [candles, cfg])
 
@@ -434,9 +463,11 @@ export default function MarketPage() {
           ))}
         </div>
         {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
-        <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', !live && 'text-muted-foreground')}
-          onClick={() => setLive((v) => !v)} title={live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
-          <span className={cn('size-1.5 rounded-full', live ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
+        <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', (!live || stale) && 'text-muted-foreground')}
+          onClick={() => setLive((v) => !v)}
+          title={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
+            : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
+          <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
           Live
         </Button>
         <Button size="icon" variant="ghost" className="size-8" onClick={() => setNonce((n) => n + 1)} title="Refresh">
@@ -453,6 +484,14 @@ export default function MarketPage() {
         {price != null && (
           <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
             {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
+          </span>
+        )}
+        {/* the price above is the last bar the feed gave us, and off the network that bar is however
+            old the cache is — say which, rather than let a stale number pass for the current one */}
+        {stale && candles.length > 0 && (
+          <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+            <CloudOff className="size-3.5" />
+            {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
           </span>
         )}
         {view && (

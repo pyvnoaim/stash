@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "for f in src/lib/parse.test.ts src/lib/store.test.ts src/lib/markdown.test.ts src/lib/treemap.test.ts src/lib/market.test.ts src/lib/notify.test.ts src/lib/sync.test.ts src/pdf/doc.test.ts server/index.test.ts server/migrate.test.ts; do node --experimental-strip-types --disable-warning=ExperimentalWarning $f || exit 1; done"
+    "test": "for f in src/lib/parse.test.ts src/lib/store.test.ts src/lib/markdown.test.ts src/lib/treemap.test.ts src/lib/market.test.ts src/lib/notify.test.ts src/lib/sw-routes.test.ts src/lib/sync.test.ts src/pdf/doc.test.ts server/index.test.ts server/migrate.test.ts; do node --experimental-strip-types --disable-warning=ExperimentalWarning $f || exit 1; done"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.7.4",
