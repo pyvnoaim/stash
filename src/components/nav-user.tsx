@@ -20,6 +20,7 @@ import {
 } from '@/lib/sync'
 
 const HINT: Record<string, string> = {
+  init: 'Checking…',
   ok: 'Synced',
   busy: 'Syncing…',
   out: 'Signed out',

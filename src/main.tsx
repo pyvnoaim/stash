@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { LoginGate } from './components/login-gate.tsx'
-import { getSync, startSync, subscribeSync } from './lib/sync.ts'
+import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 
 // ask the browser not to evict localStorage under storage pressure — Safari can, after a week
 // unused. Chrome and Safari decide silently; Firefox puts a prompt up, so never ask in dev and
@@ -13,11 +13,19 @@ if (import.meta.env.PROD) {
 }
 startSync()
 
-/* The gate: an explicit 401 blocks the app until someone signs in. No connection is not a
-   refusal — an offline start goes straight to the app and the data this machine holds. */
+/**
+ * The gate stands until the server has said who you are. Three answers, three doors:
+ *  - it has not answered yet: nothing, rather than a flash of someone else's app
+ *  - 401, or unreachable on a device holding no stash of its own: the gate
+ *  - unreachable with data already here: the app, offline, on your own data
+ * The third is the whole point of local-first; the second is what stops a stranger walking in
+ * when the check merely fails.
+ */
 function Root() {
   const { status, user } = useSyncExternalStore(subscribeSync, getSync)
-  return status === 'out' && !user ? <LoginGate /> : <App />
+  if (status === 'init') return null
+  if (user) return <App />
+  return status === 'off' && hasLocal() ? <App /> : <LoginGate />
 }
 
 createRoot(document.getElementById('root')!).render(

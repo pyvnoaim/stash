@@ -18,7 +18,8 @@ import {
   adoptRemote, adoptShared, getState, KEY, setOnPersist, sliceOf, uid, type Project,
 } from './store.ts'
 
-export type SyncStatus = 'off' | 'out' | 'busy' | 'ok'
+/** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
+export type SyncStatus = 'init' | 'off' | 'out' | 'busy' | 'ok'
 export interface Sync {
   status: SyncStatus
   user: { name: string, admin: boolean, avatar: string | null } | null
@@ -36,6 +37,9 @@ const meta = (): { v: number, dirty: boolean } => {
 }
 const setMeta = (m: { v: number, dirty: boolean }) => localStorage.setItem(META, JSON.stringify(m))
 
+/** Whether this device has a stash of its own — what makes an offline start worth showing. */
+export const hasLocal = () => localStorage.getItem(KEY) !== null
+
 /** Names this browser in the server's snapshot log, nothing more. */
 const device = (() => {
   const d = localStorage.getItem('stash.device') ?? uid()
@@ -45,7 +49,7 @@ const device = (() => {
 
 /* ---------- a tiny external store, the same shape store.ts hands React ---------- */
 
-let snap: Sync = { status: 'off', user: null }
+let snap: Sync = { status: 'init', user: null }
 const listeners = new Set<() => void>()
 const setSnap = (s: Partial<Sync>) => {
   snap = { ...snap, ...s }

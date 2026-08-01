@@ -31,6 +31,7 @@ globalThis.fetch = (async (path: any, init?: RequestInit) => {
 const { addItem, getState, uid } = await import('./store.ts')
 const { getSync, login, logout, signup, startSync, syncNow } = await import('./sync.ts')
 startSync()  // wires onPersist, asks /api/me (nobody yet — 'out')
+await new Promise((r) => setTimeout(r, 50))   // let that first answer land before asserting on it
 const flush = () => new Promise((r) => setTimeout(r, 250))  // store's 200ms save debounce
 const add = (text: string) => addItem({
   id: uid(), type: 'task', text, note: '', pid: null, due: null, repeat: null,
@@ -87,3 +88,12 @@ assert.deepEqual((await onServer()).items.map((i: any) => i.text),
 
 server.close()
 console.log('sync ok')
+
+/* the gate's rule, asserted where it is decided: only a real 401 (or a failed check on a device
+   holding nothing) may show a stranger the door — a dropped connection with data here must not */
+{
+  const { getSync: g } = await import('./sync.ts')
+  await logout()
+  assert.equal(g().status, 'out')       // signed out is signed out: the gate
+  assert.equal(g().user, null)
+}
