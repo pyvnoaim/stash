@@ -651,8 +651,14 @@ export function start({
     try {
       const buf = await readFile(file)
       const ext = file.slice(file.lastIndexOf('.') + 1)
+      /* Vite fingerprints everything under /assets, so those may be kept forever. The page, the
+         service worker and the manifest never may: a proxy holding yesterday's index.html hands
+         out a build with yesterday's service worker, and the app stops updating for everyone
+         behind it. */
+      const forever = path.startsWith('/assets/')
       res.writeHead(200, {
         'content-type': MIME[ext] ?? 'application/octet-stream',
+        'cache-control': forever ? 'public, max-age=31536000, immutable' : 'no-cache',
         'x-content-type-options': 'nosniff',
         // set here rather than in the proxy, so they hold whatever terminates TLS in front.
         // wasm-unsafe-eval is pdf.js; the two hosts are the market feeds; nothing else may load.

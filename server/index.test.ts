@@ -277,6 +277,8 @@ r = await fetch(`${url}/`)
 assert.equal(await r.text(), '<!doctype html>hi')
 assert.match(r.headers.get('content-security-policy') ?? '', /default-src 'self'/)
 assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
+// the page must never be held by a proxy: a stale index.html pins a stale service worker
+assert.equal(r.headers.get('cache-control'), 'no-cache')
 assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`)).status, 403)
 
 server.close()
