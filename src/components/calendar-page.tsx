@@ -106,16 +106,17 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
           The weekday strip is the first row rather than its own grid, so the two cannot drift.
           minmax keeps a week readable on a short window and stops cells ballooning on a tall one. */}
       <div
-        className="bg-border grid min-h-0 flex-1 gap-px overflow-y-auto rounded-lg border"
-        style={{ gridTemplateRows: `auto repeat(${weeks.length}, minmax(5.5rem, 1fr))` }}
+        className="bg-border grid min-h-0 flex-1 gap-px overflow-y-auto rounded-lg border [--cal-row:4rem] sm:[--cal-row:5.5rem]"
+        style={{ gridTemplateRows: `auto repeat(${weeks.length}, minmax(var(--cal-row), 1fr))` }}
       >
         <div className="grid grid-cols-7 gap-px">
           {WEEKDAYS.map((d) => (
             <div
               key={d}
-              className="bg-background text-muted-foreground font-heading px-2 py-1.5 text-[11px] tracking-wider uppercase"
+              className="bg-background text-muted-foreground font-heading px-1 py-1.5 text-[10px] tracking-wider uppercase sm:px-2 sm:text-[11px]"
             >
-              {d}
+              <span className="sm:hidden">{d[0]}</span>
+              <span className="hidden sm:inline">{d}</span>
             </div>
           ))}
         </div>
@@ -131,7 +132,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                   key={key}
                   {...dropProps(key)}
                   className={cn(
-                    'bg-background flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1.5',
+                    'bg-background flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1 sm:p-1.5',
                     // the dimmed number already says it is another month; a fill as well is loud
                     outside && 'bg-muted/20',
                     // the target you are over, outlined the same way the sidebar's are
@@ -162,7 +163,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                         onClick={() => onOpen(it)}
                         title={it.text}
                         className={cn(
-                          'hover:bg-muted flex shrink-0 items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs',
+                          'hover:bg-muted flex shrink-0 items-center gap-1 rounded px-0.5 py-0.5 text-left text-[10px] sm:gap-1.5 sm:px-1 sm:text-xs',
                           it.done && 'text-muted-foreground line-through',
                         )}
                       >
@@ -187,7 +188,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                       onClick={() => select(SUBS)}
                       title={`${sub.name} — ${euro(sub.cost)} ${sub.cycle}`}
                       className={cn(
-                        'hover:bg-muted flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-left text-xs tabular-nums',
+                        'hover:bg-muted flex shrink-0 items-center gap-1 rounded px-0.5 py-0.5 text-left text-[10px] tabular-nums sm:px-1 sm:text-xs',
                         sub.kind === 'income' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground',
                       )}
                     >

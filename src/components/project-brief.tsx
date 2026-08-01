@@ -40,7 +40,7 @@ export function ProjectBrief({ p }: { p: Project }) {
 
         {/* whose project this is, and what you may do in it — said once, at the top of it */}
         {p.share && (
-          <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
+          <span className="text-muted-foreground hidden items-center gap-1.5 text-xs sm:flex">
             {locked ? <Eye className="size-3.5" /> : <Users className="size-3.5" />}
             {locked ? `${p.share.by}'s project — view only` : `Shared by ${p.share.by}`}
           </span>
@@ -52,7 +52,7 @@ export function ProjectBrief({ p }: { p: Project }) {
               <span className="text-muted-foreground text-xs tabular-nums">
                 {done}/{mine.length}
               </span>
-              <div className="bg-muted h-1.5 w-24 overflow-hidden rounded-full">
+              <div className="bg-muted h-1.5 w-16 overflow-hidden rounded-full sm:w-24">
                 <div
                   className="h-full rounded-full transition-[width] duration-300"
                   style={{ width: `${pct}%`, background: p.color ?? 'var(--foreground)' }}

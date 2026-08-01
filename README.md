@@ -176,6 +176,15 @@ of every key. The theme is also a single button in the header that cycles system
 and the switch opens as a circle from whatever you clicked, using the browser's own View
 Transitions — Firefox and *reduce motion* get the plain switch.
 
+## On a phone
+
+The sidebar was already a drawer at that width; the rest now follows. The search field is an icon
+that takes the header's whole row when you open it, rather than a permanent field crowding it out.
+The capture bar keeps its three kinds as icons and gives the space back to the field. The details
+panel is not a column at that width — it comes up over the list as a sheet, and the backdrop or
+dropping the selection closes it. The calendar keeps all seven days, on shorter rows with
+single-letter headings, because a week that scrolls sideways is not a week.
+
 ## Undo
 
 `⌘Z` walks the list back and `⇧⌘Z` walks it forward again, fifty steps deep — the same as the PDF

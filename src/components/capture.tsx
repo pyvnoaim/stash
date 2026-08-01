@@ -87,7 +87,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
             type="single"
             value={type}
             onValueChange={(v) => { if (v) { setType(v as ItemType); inputRef.current?.focus() } }}
-            className="relative grid grid-cols-3 gap-0"
+            className="relative grid shrink-0 grid-cols-3 gap-0"
           >
             <span
               aria-hidden
@@ -107,7 +107,7 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
                 onMouseDown={(e) => e.preventDefault()}
               >
                 <Icon className="size-3.5" />
-                <span className="text-xs">{label}</span>
+                <span className="hidden text-xs sm:inline">{label}</span>
               </ToggleGroupItem>
             ))}
           </ToggleGroup>

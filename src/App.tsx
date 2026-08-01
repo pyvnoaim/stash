@@ -16,6 +16,7 @@ import Overview from '@/components/overview'
 import SubsPage from '@/components/subs-page'
 import MarketPage from '@/components/market-page'
 import { ProjectDialog } from '@/components/project-dialog'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
@@ -55,6 +56,8 @@ export default function App() {
   // rows picked out alongside the focused one. The focused row is the anchor and stays in it.
   const [marked, setMarked] = useState<string[]>([])
   const [searching, setSearching] = useState(false)
+  // on a phone the search field is not permanently in the header; this is whether it is open
+  const [phoneSearch, setPhoneSearch] = useState(false)
   // an item opened to fill the main area; navigating away or deleting it drops back to the list
   const [pageItem, setPageItem] = useState<string | null>(null)
   // scrollbars are hidden, so a chevron says the list runs on past the bottom edge
@@ -321,7 +324,21 @@ export default function App() {
             </span>
             <NotificationBell onNavigate={goTo} />
             <ThemeToggle />
-            <div className="relative">
+            {/* a phone has no room for a permanent field: the icon opens it, and it takes the
+                whole row while it is open, which is also where the results are read */}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Search"
+              className="size-8 sm:hidden"
+              onClick={() => { setPhoneSearch(true); requestAnimationFrame(() => searchRef.current?.focus()) }}
+            >
+              <Search />
+            </Button>
+            <div className={cn('relative', phoneSearch
+              ? 'absolute inset-x-2 z-20 sm:static sm:inset-auto'
+              : 'hidden sm:block')}
+            >
               <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
               <Input
                 ref={searchRef}
@@ -329,10 +346,11 @@ export default function App() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onFocus={() => setSearching(true)}
-                onBlur={() => setSearching(false)}
+                onBlur={() => { setSearching(false); if (!query) setPhoneSearch(false) }}
                 placeholder="Search"
                 aria-label="Search all items"
-                className="h-8 w-44 pl-8"
+                onKeyDown={(e) => { if (e.key === 'Escape') setPhoneSearch(false) }}
+                className="h-8 w-full pl-8 sm:w-44"
               />
               {/* hidden once you type, so it never sits under the search field's own clear button */}
               {!query && (
@@ -481,12 +499,33 @@ export default function App() {
             : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => setPageItem(selected.id)} /> : null
           if (panel) panelRef.current = panel
           return (
-            <div className={cn(
-              'flex shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]',
-              open ? 'w-[300px]' : 'w-0',
-            )}>
-              {panelRef.current}
-            </div>
+            <>
+              {/* a phone has no room for a column beside the list, so the panel comes up over it
+                  from the bottom — tapping the backdrop or dropping the selection closes it */}
+              <div
+                onPointerDown={() => { setMarked([]); focus(null) }}
+                className={cn(
+                  'fixed inset-0 z-40 bg-black/40 transition-opacity duration-200 md:hidden',
+                  open ? 'opacity-100' : 'pointer-events-none opacity-0',
+                )}
+              />
+              <div className={cn(
+                'bg-background fixed inset-x-0 bottom-0 z-50 max-h-[75svh] overflow-y-auto rounded-t-xl border-t',
+                'transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] md:hidden',
+                open ? 'translate-y-0' : 'translate-y-full',
+              )}>
+                {/* the grab handle every sheet on a phone has, so it reads as one */}
+                <div className="bg-muted-foreground/30 mx-auto my-2 h-1 w-10 shrink-0 rounded-full" />
+                {panelRef.current}
+              </div>
+
+              <div className={cn(
+                'hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] md:flex',
+                open ? 'w-[300px]' : 'w-0',
+              )}>
+                {panelRef.current}
+              </div>
+            </>
           )
         })()}
       </SidebarInset>
