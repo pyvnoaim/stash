@@ -140,10 +140,27 @@ export function start({
   root = process.env.STASH_ROOT ?? 'dist',
 } = {}) {
   const db = new DatabaseSync(dbPath)
+
+  /* Sharing changed shape twice in its first day — ownership moved into both keys, and the
+     sub-project flag arrived. `create table if not exists` cannot reshape a table that is already
+     there, and the statements below would then fail to prepare and take the whole server down on
+     boot. These two tables hold who-may-see-what, never anyone's work, so a stale one is dropped
+     and rebuilt rather than migrated: the shares are set again in a dialog, and every document is
+     still in `docs`. */
+  const columns = (t: string) => {
+    try { return (db.prepare(`pragma table_info(${t})`).all() as { name: string }[]).map((c) => c.name) }
+    catch { return [] }
+  }
+  const stale = (t: string, needs: string) => {
+    const cols = columns(t)
+    return cols.length > 0 && !cols.includes(needs)
+  }
+  if (stale('shares', 'subs')) db.exec('drop table shares')
+  if (stale('pdocs', 'owner')) db.exec('drop table pdocs')
+
   db.exec(SCHEMA)
   // a database from before avatars existed grows the column; a fresh one already has it
   try { db.exec('alter table users add column avatar text') } catch { /* already there */ }
-  try { db.exec('alter table shares add column subs integer not null default 0') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
