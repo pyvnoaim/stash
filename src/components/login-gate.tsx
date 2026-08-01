@@ -27,11 +27,13 @@ export function LoginGate() {
   return (
     <div className="bg-background min-h-svh md:grid md:grid-cols-2">
       <style>{`
-        @keyframes gate-type { from { width: 0 } to { width: 47ch } }
+        @keyframes gate-type { from { width: 0 } to { width: 100% } }
         @keyframes gate-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
         @keyframes gate-caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
         @keyframes gate-drift { to { background-position: 8px 8px } }
-        .gate-type { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: bottom;
+        /* the box is sized by an invisible copy of the line, so 100% is exactly the text's own
+           width — ch would be the width of a zero, and this face is not monospaced */
+        .gate-type { position: absolute; inset: 0; overflow: hidden; white-space: nowrap;
           animation: gate-type 1.5s steps(47) .4s both }
         .gate-in { animation: gate-in .4s ease-out both }
         .gate-caret { animation: gate-caret 1.1s steps(1) infinite }
@@ -217,9 +219,12 @@ function Teaser() {
               </span>
             ))}
             <span className="text-border">|</span>
-            <span className="flex items-baseline whitespace-nowrap text-[11px]">
-              <span className="gate-type">! fix the preset loader @studio #audio tomorrow</span>
-              <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
+            <span className="relative inline-block whitespace-nowrap text-[11px]">
+              <span className="invisible">! fix the preset loader @studio #audio tomorrow</span>
+              <span className="gate-type">
+                ! fix the preset loader @studio #audio tomorrow
+                <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
+              </span>
             </span>
           </div>
 
