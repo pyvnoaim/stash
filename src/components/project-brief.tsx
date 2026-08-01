@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRight, PencilLine } from 'lucide-react'
+import { ChevronRight, Eye, PencilLine, Users } from 'lucide-react'
 import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -23,6 +23,8 @@ export function ProjectBrief({ p }: { p: Project }) {
   const done = mine.filter((i) => i.done).length
   const pct = mine.length ? Math.round((done / mine.length) * 100) : 0
 
+  const locked = !!p.share && !p.share.edit
+
   return (
     <div className="border-b px-3 py-2.5">
       <div className="flex items-center gap-2">
@@ -35,6 +37,14 @@ export function ProjectBrief({ p }: { p: Project }) {
           <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
           Brief
         </button>
+
+        {/* whose project this is, and what you may do in it — said once, at the top of it */}
+        {p.share && (
+          <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
+            {locked ? <Eye className="size-3.5" /> : <Users className="size-3.5" />}
+            {locked ? `${p.share.by}'s project — view only` : `Shared by ${p.share.by}`}
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           {mine.length > 0 && (
@@ -50,15 +60,17 @@ export function ProjectBrief({ p }: { p: Project }) {
               </div>
             </>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            aria-label={editing ? 'Done editing' : 'Edit brief'}
-            onClick={() => { setEditing((v) => !v); setOpen(true) }}
-          >
-            <PencilLine />
-          </Button>
+          {!locked && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              aria-label={editing ? 'Done editing' : 'Edit brief'}
+              onClick={() => { setEditing((v) => !v); setOpen(true) }}
+            >
+              <PencilLine />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -75,7 +87,7 @@ export function ProjectBrief({ p }: { p: Project }) {
         <div className="mt-2">
           <Markdown
             text={p.note}
-            onToggle={(line) => patchProject(p.id, { note: toggleBox(p.note, line) })}
+            onToggle={locked ? undefined : (line) => patchProject(p.id, { note: toggleBox(p.note, line) })}
           />
         </div>
       ) : null)}

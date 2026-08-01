@@ -34,6 +34,12 @@ export interface Project {
   parent: string | null
   /** What the project is for, in markdown — the brief that lives where the work does. */
   note: string
+  /**
+   * Set when the project is someone else's, shared with you: who owns it and whether you may
+   * write. Absent on your own projects, shared or not — what you own, you may always edit.
+   * sync.ts writes it on every pull; the store's actions read it and refuse where they must.
+   */
+  share?: { by: string, edit: boolean }
 }
 
 /** How often a subscription bills. */
@@ -234,6 +240,8 @@ export function load(data: unknown): State {
       parent: typeof p.parent === 'string' ? p.parent : null,
       // a backup from before briefs existed simply has none
       note: typeof p.note === 'string' ? p.note : '',
+      ...(p.share && typeof p.share === 'object' && typeof p.share.by === 'string'
+        && { share: { by: String(p.share.by), edit: !!p.share.edit } }),
     }))
 
   /* A parent has to exist, cannot be the project itself, and cannot have a parent of its own.
@@ -426,6 +434,55 @@ export function redo() {
   return true
 }
 
+/** What travels for a shared project: the project itself and the items filed directly under it. */
+export interface Slice { project: Project, items: Item[], owner?: string }
+
+export const sliceOf = (s: State, pid: string): Slice | null => {
+  const project = s.projects.find((p) => p.id === pid)
+  if (!project) return null
+  // `share` is this device's view of the permission, not part of the project — it never travels
+  const { share: _drop, ...clean } = project
+  return { project: clean, items: s.items.filter((i) => i.pid === pid) }
+}
+
+/**
+ * A shared project's slice lands in the local document: the project's own fields come from the
+ * slice, its items replace whatever was filed under it here, and `share` records whose it is and
+ * whether this device may write. Passing `null` for the slice keeps the project and only sets the
+ * permission; `null` for both takes the project out — it stopped being shared with you.
+ */
+export function adoptShared(pid: string, slice: unknown, share?: { by: string, edit: boolean } | null) {
+  set((s) => {
+    if (slice === null && share === null) {
+      return {
+        ...s,
+        projects: s.projects.filter((p) => p.id !== pid),
+        items: s.items.filter((i) => i.pid !== pid),
+        sel: s.sel === pid ? 'today' : s.sel,
+      }
+    }
+    // the slice is someone else's document: through load(), like every other untrusted input
+    const clean = slice ? load({ projects: [(slice as Slice).project], items: (slice as Slice).items }) : null
+    const project = clean?.projects[0]
+    const at = s.projects.findIndex((p) => p.id === pid)
+    const kept = at < 0 ? undefined : s.projects[at]
+    const next: Project = {
+      ...(kept ?? { id: pid, name: 'Shared project', color: null, parent: null, note: '' }),
+      ...(project ?? {}),
+      id: pid,
+      ...(share === undefined ? (kept?.share ? { share: kept.share } : {}) : share ? { share } : {}),
+    }
+    const projects = at < 0 ? [...s.projects, next] : s.projects.map((p) => (p.id === pid ? next : p))
+    return {
+      ...s,
+      projects,
+      items: clean
+        ? [...clean.items.map((i) => ({ ...i, pid })), ...s.items.filter((i) => i.pid !== pid)]
+        : s.items,
+    }
+  })
+}
+
 /**
  * The server's document takes the place of ours — the same rules as another window writing:
  * the undo history goes with it, and the view, the focus and this machine's API key stay put.
@@ -603,9 +660,22 @@ export function visible(s: State, query: string): Item[] {
 
 /* ---------- actions ---------- */
 
-const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => ({
-  ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)),
-})
+/**
+ * A project shared with you read-only is read-only everywhere, not only where the buttons are
+ * hidden — so the guard sits here, on the path every edit already takes, rather than in each of
+ * the thirty places that can start one. The server refuses the write as well; this is what keeps
+ * the screen honest in between.
+ */
+export const readOnly = (s: State, pid: string | null | undefined): boolean => {
+  if (!pid) return false
+  const p = s.projects.find((x) => x.id === pid)
+  return !!p?.share && !p.share.edit
+}
+const frozen = (s: State, id: string) => readOnly(s, s.items.find((i) => i.id === id)?.pid)
+
+const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => (
+  frozen(s, id) ? s : { ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)) }
+)
 
 // every edit routes through here, which is the one place that can hold the rules: a repeat needs
 // something to finish, so an item turned into an idea or a note drops it rather than keeping a
@@ -637,14 +707,15 @@ export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s,
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
 /** A pasted list is one write, not one per line — each `set` serialises the whole store. */
-export const addItems = (list: Item[]) => set((s) => ({ ...s, items: [...list, ...s.items] }))
+export const addItems = (list: Item[]) =>
+  set((s) => ({ ...s, items: [...list.filter((i) => !readOnly(s, i.pid)), ...s.items] }))
 
 export const addItem = (it: Item) => addItems([it])
 
 export function toggleDone(id: string) {
   set((s) => {
     const at = s.items.findIndex((i) => i.id === id)
-    if (at < 0) return s
+    if (at < 0 || frozen(s, id)) return s
     const it = s.items[at]
     const closing = !it.done
     const items = s.items.map((i) =>
@@ -669,7 +740,7 @@ export function toggleDone(id: string) {
 /** Returns the removed item and its index so the caller can offer an undo. */
 export function removeItem(id: string) {
   const at = state.items.findIndex((i) => i.id === id)
-  if (at < 0) return null
+  if (at < 0 || frozen(state, id)) return null
   const it = state.items[at]
   set((s) => ({
     ...s,
@@ -690,7 +761,7 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
 
 /** Returns the cleared items so the caller can offer an undo, or null if there were none. */
 export function clearDone() {
-  const gone = state.items.filter((i) => i.done)
+  const gone = state.items.filter((i) => i.done && !readOnly(state, i.pid))
   if (!gone.length) return null
   set((s) => ({ ...s, items: s.items.filter((i) => !i.done) }))
   // put back by appending: finished items sink in every view anyway, so position was never meaningful
@@ -760,7 +831,7 @@ export const addProject = (name: string, color: string | null = null, parent: st
 
 /** Name and colour are the whole of a project, so one function edits it. */
 export const patchProject = (id: string, p: Partial<Project>) =>
-  set((s) => ({
+  set((s) => (readOnly(s, id) ? s : {
     ...s,
     projects: s.projects.map((x) => (x.id === id
       // 'color' in p, not p.color: clearing it is passing null, which a truthiness check would skip

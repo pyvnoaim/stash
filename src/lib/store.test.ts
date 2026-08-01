@@ -11,7 +11,7 @@ Object.assign(globalThis, {
 const {
   addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
-  toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
+  toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -461,3 +461,58 @@ assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
 assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
 
 console.log('store: ok')
+
+/* ---------- sharing: what a read-only project refuses ---------- */
+{
+  const mine = addProject('Mine')
+  const theirs = addProject('Theirs')
+  const yours = addProject('Yours')
+
+  // the items arrive with the project still writable — a share that lands later freezes them
+  addItem(item({ id: 'ro', pid: theirs.id, text: 'read only' }))
+  addItem(item({ id: 'rw', pid: yours.id, text: 'writable' }))
+  addItem(item({ id: 'own', pid: mine.id, text: 'mine' }))
+  patchProject(theirs.id, { share: { by: 'ada', edit: false } })
+  patchProject(yours.id, { share: { by: 'ada', edit: true } })
+
+  // the guard is on the path every edit takes, so one check covers all of them
+  patch('ro', { text: 'changed' })
+  assert.equal(getState().items.find((i) => i.id === 'ro')!.text, 'read only')
+  toggleDone('ro')
+  assert.equal(getState().items.find((i) => i.id === 'ro')!.done, false)
+  assert.equal(removeItem('ro'), null)
+  assert.ok(getState().items.some((i) => i.id === 'ro'))
+
+  // ...and nowhere else: an editable share and your own project behave normally
+  patch('rw', { text: 'changed' })
+  assert.equal(getState().items.find((i) => i.id === 'rw')!.text, 'changed')
+  toggleDone('own')
+  assert.equal(getState().items.find((i) => i.id === 'own')!.done, true)
+
+  // nothing new lands in a read-only project either
+  addItem(item({ id: 'nope', pid: theirs.id }))
+  assert.ok(!getState().items.some((i) => i.id === 'nope'))
+
+  // the project itself is not yours to rename
+  patchProject(theirs.id, { name: 'Renamed' })
+  assert.equal(getState().projects.find((p) => p.id === theirs.id)!.name, 'Theirs')
+
+  // a slice travels without the permission on it — that is this device's view, not their data
+  const slice = sliceOf(getState(), yours.id)!
+  assert.equal('share' in slice.project, false)
+  assert.deepEqual(slice.items.map((i) => i.id), ['rw'])
+
+  // adopting a slice replaces what was filed under that project and keeps the permission
+  adoptShared(yours.id, { project: { id: yours.id, name: 'Yours', color: null, parent: null, note: 'brief' },
+    items: [item({ id: 'fromThem', pid: yours.id, text: 'theirs now' })] })
+  const after = getState()
+  assert.deepEqual(after.items.filter((i) => i.pid === yours.id).map((i) => i.id), ['fromThem'])
+  assert.equal(after.projects.find((p) => p.id === yours.id)!.note, 'brief')
+  assert.deepEqual(after.projects.find((p) => p.id === yours.id)!.share, { by: 'ada', edit: true })
+
+  // unshared: the project and its items leave with it, and nothing of yours goes with them
+  adoptShared(yours.id, null, null)
+  assert.ok(!getState().projects.some((p) => p.id === yours.id))
+  assert.ok(!getState().items.some((i) => i.id === 'fromThem'))
+  assert.ok(getState().items.some((i) => i.id === 'own'))
+}

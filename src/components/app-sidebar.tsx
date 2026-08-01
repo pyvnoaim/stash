@@ -2,7 +2,7 @@ import { Fragment, useRef, useState } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowRight, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
-  ChevronRight, Layers, PencilLine, Plus, Trash2,
+  ChevronRight, Eye, Layers, PencilLine, Plus, Trash2, UserMinus, Users,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -23,7 +23,9 @@ import {
 import { Hint } from '@/components/ui/tooltip'
 import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
+import { ShareDialog } from '@/components/share-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
+import { syncNow, unshare } from '@/lib/sync'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
@@ -63,6 +65,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   const [dialog, setDialog] =
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [sharing, setSharing] = useState<Project | null>(null)
   const [settings, setSettings] = useState(false)
   const [over, setOver] = useState<string | null>(null)
   const [edge, setEdge] = useState<{ id: string; where: 'above' | 'below' | 'in' } | null>(null)
@@ -190,6 +193,14 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                 : <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />}
             </span>
             <span className="truncate">{p.name}</span>
+            {/* shared either way: an eye when you may only read it, people when you may write */}
+            {p.share && (
+              <Hint label={p.share.edit ? `Shared by ${p.share.by}` : `Shared by ${p.share.by} — view only`}>
+                {p.share.edit
+                  ? <Users className="text-muted-foreground size-3 shrink-0" />
+                  : <Eye className="text-muted-foreground size-3 shrink-0" />}
+              </Hint>
+            )}
           </SidebarMenuButton>
           {/* a shut parent says how much is folded under it — same badge as the tag counts,
               faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
@@ -208,11 +219,13 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
               <PencilLine />
             </SidebarMenuAction>
           </Hint>
-          <Hint label="Delete project">
-            <SidebarMenuAction aria-label="Delete project" showOnHover onClick={() => setConfirmDelete(p.id)}>
-              <Trash2 />
-            </SidebarMenuAction>
-          </Hint>
+          {!p.share && (
+            <Hint label="Delete project">
+              <SidebarMenuAction aria-label="Delete project" showOnHover onClick={() => setConfirmDelete(p.id)}>
+                <Trash2 />
+              </SidebarMenuAction>
+            </Hint>
+          )}
         </SidebarMenuItem>
       </ContextMenuTrigger>
       {/* the colour lived behind a double-click and nothing said so */}
@@ -225,6 +238,18 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           <ArrowRight />
           Open
         </ContextMenuItem>
+        {/* someone else's project is theirs to share on; yours opens the dialog */}
+        {p.share ? (
+          <ContextMenuItem onSelect={async () => { await unshare(p.id); void syncNow() }}>
+            <UserMinus />
+            Leave project
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem onSelect={() => setSharing(p)}>
+            <Users />
+            Share…
+          </ContextMenuItem>
+        )}
         {/* one level deep, so only a top-level project can take a subproject */}
         {!p.parent && (
           <ContextMenuItem onSelect={() => setDialog({ parent: p.id })}>
@@ -432,6 +457,10 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
       </SidebarFooter>
 
       <SettingsDialog open={settings} onOpenChange={setSettings} />
+
+      {sharing && (
+        <ShareDialog open onOpenChange={(v) => !v && setSharing(null)} p={sharing} />
+      )}
 
       <ProjectDialog
         open={!!dialog}

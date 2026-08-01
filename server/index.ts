@@ -110,6 +110,23 @@ const SCHEMA = `
     user integer not null references users(id) on delete cascade,
     ts integer not null, device text, json text not null
   );
+  /* Who may reach a shared project, and whether they may write to it. The owner gets a row too,
+     with edit — so one query answers "may this person touch it" for everyone involved. */
+  create table if not exists shares (
+    pid text not null,
+    owner integer not null references users(id) on delete cascade,
+    member integer not null references users(id) on delete cascade,
+    edit integer not null default 0,
+    ts integer not null,
+    primary key (pid, member)
+  );
+  /* A shared project's own document: the project and its items, versioned exactly like a user's,
+     so the conflict story and the snapshots are the ones already built rather than new ones. */
+  create table if not exists pdocs (
+    v integer primary key autoincrement,
+    pid text not null, ts integer not null, device text, json text not null
+  );
+  create index if not exists pdocs_pid on pdocs (pid, v desc);
 `
 
 export function start({
@@ -154,6 +171,27 @@ export function start({
     insert: db.prepare('insert into docs (user, ts, device, json) values (?, ?, ?, ?)'),
     prune: db.prepare(`delete from docs where user = ? and v not in
       (select v from docs where user = ? order by v desc limit ?)`),
+
+    /* sharing */
+    addShare: db.prepare(`insert into shares (pid, owner, member, edit, ts) values (?, ?, ?, ?, ?)
+      on conflict (pid, member) do update set edit = excluded.edit`),
+    dropShare: db.prepare('delete from shares where pid = ? and member = ? and owner = ?'),
+    dropShares: db.prepare('delete from shares where pid = ? and owner = ?'),
+    leaveShare: db.prepare('delete from shares where pid = ? and member = ? and owner <> ?'),
+    /** The one question every shared route asks: may this person touch this project, and how. */
+    access: db.prepare('select owner, edit from shares where pid = ? and member = ?'),
+    ownerOf: db.prepare('select owner from shares where pid = ? limit 1'),
+    /** Projects I own and have shared, with who is on them. */
+    myShares: db.prepare(`select s.pid, u.name, u.avatar, s.edit from shares s
+      join users u on u.id = s.member where s.owner = ? and s.member <> ? order by u.name`),
+    /** Projects shared with me by someone else. */
+    sharedWithMe: db.prepare(`select s.pid, s.edit, u.name as owner from shares s
+      join users u on u.id = s.owner where s.member = ? and s.owner <> ?`),
+    pdoc: db.prepare('select v, json from pdocs where pid = ? order by v desc limit 1'),
+    addPdoc: db.prepare('insert into pdocs (pid, ts, device, json) values (?, ?, ?, ?)'),
+    prunePdoc: db.prepare(`delete from pdocs where pid = ? and v not in
+      (select v from pdocs where pid = ? order by v desc limit ?)`),
+    dropPdoc: db.prepare('delete from pdocs where pid = ?'),
   }
 
   /* ponytail: in-memory, per-process — a restart forgives everyone, which at ten users is fine.
@@ -411,6 +449,107 @@ export function start({
       // every other device keeps its session; this one is fine, and a changed password is not a theft
       log('password', user.name, via(req))
       return send(res, 200, {})
+    }
+
+    /* ---------- sharing: a project of your own, opened to someone else ---------- */
+
+    if (path === '/api/shares' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      return send(res, 200, {
+        mine: q.myShares.all(user.id, user.id),
+        with_me: q.sharedWithMe.all(user.id, user.id),
+      })
+    }
+
+    if (path === '/api/share' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const pid = String(b?.pid ?? '')
+      const name = String(b?.user ?? '').trim().toLowerCase()
+      if (!pid) return send(res, 400, { error: 'which project' })
+      // only the owner shares it on: a member cannot pass your project around
+      const owned = q.ownerOf.get(pid) as { owner: number } | undefined
+      if (owned && owned.owner !== user.id) return send(res, 403, { error: 'not yours to share' })
+      const target = q.userByName.get(name) as { id: number } | undefined
+      if (!target) return send(res, 404, { error: 'no such person' })
+      if (target.id === user.id) return send(res, 400, { error: 'it is already yours' })
+      const now = Date.now()
+      // the owner's own row goes in with it, so one table answers every permission question
+      q.addShare.run(pid, user.id, user.id, 1, now)
+      q.addShare.run(pid, user.id, target.id, b?.edit ? 1 : 0, now)
+      log('share', `${pid} ${user.name} -> ${name}${b?.edit ? ' (edit)' : ''}`, via(req))
+      return send(res, 200, { members: q.myShares.all(user.id, user.id) })
+    }
+
+    if (path === '/api/share' && req.method === 'DELETE') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const pid = String(b?.pid ?? '')
+      const owned = q.ownerOf.get(pid) as { owner: number } | undefined
+      if (!owned) return send(res, 404, { error: 'not shared' })
+
+      if (owned.owner === user.id) {
+        // the owner: drop one member, or stop sharing altogether and take the document with it
+        if (b?.user) {
+          const target = q.userByName.get(String(b.user).trim().toLowerCase()) as { id: number } | undefined
+          if (target) q.dropShare.run(pid, target.id, user.id)
+          // the last member gone means it is a private project again
+          if (!(q.myShares.all(user.id, user.id) as unknown[]).length) {
+            q.dropShares.run(pid, user.id)
+            q.dropPdoc.run(pid)
+          }
+        } else {
+          q.dropShares.run(pid, user.id)
+          q.dropPdoc.run(pid)
+        }
+        log('unshare', `${pid} by ${user.name}`, via(req))
+        return send(res, 200, { members: q.myShares.all(user.id, user.id) })
+      }
+      // a member: leaving is theirs to do, and takes nothing with it
+      q.leaveShare.run(pid, user.id, user.id)
+      log('leave-share', `${pid} by ${user.name}`, via(req))
+      return send(res, 200, {})
+    }
+
+    // the shared project's document — the same versioned exchange /state runs, one project wide
+    if (path === '/api/pdoc') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const pid = new URL(req.url ?? '/', 'http://x').searchParams.get('pid') ?? ''
+      const may = q.access.get(pid, user.id) as { owner: number, edit: number } | undefined
+      if (!may) return send(res, 404, { error: 'not shared with you' })
+      const row = q.pdoc.get(pid) as { v: number, json: string } | undefined
+
+      if (req.method === 'GET') {
+        return send(res, 200, {
+          version: row?.v ?? 0,
+          state: row ? JSON.parse(row.json) : null,
+          edit: !!may.edit,
+        })
+      }
+      if (req.method === 'PUT') {
+        // read-only is enforced here, not only in the interface that hides the buttons
+        if (!may.edit) return send(res, 403, { error: 'read-only' })
+        const have = Number(req.headers['if-match'])
+        if (!Number.isInteger(have)) return send(res, 428, { error: 'If-Match required' })
+        if (have !== (row?.v ?? 0)) {
+          return send(res, 409, { version: row?.v ?? 0, state: row ? JSON.parse(row.json) : null })
+        }
+        let body: any
+        try { body = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        if (typeof body?.state !== 'object' || body.state === null) {
+          return send(res, 400, { error: 'state must be an object' })
+        }
+        const w = q.addPdoc.run(pid, Date.now(), String(body.device ?? ''), JSON.stringify(body.state))
+        q.prunePdoc.run(pid, pid, KEEP)
+        return send(res, 200, { version: Number(w.lastInsertRowid) })
+      }
+      return send(res, 405, { error: 'method not allowed' })
     }
 
     if (path === '/state') {

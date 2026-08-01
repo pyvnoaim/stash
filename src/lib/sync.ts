@@ -14,7 +14,9 @@
  * The version-and-dirty record lives in localStorage too, beside the data, so tabs share it and
  * a closed tab's unpushed edit is pushed by whoever opens the app next.
  */
-import { adoptRemote, getState, KEY, setOnPersist, uid } from './store.ts'
+import {
+  adoptRemote, adoptShared, getState, KEY, setOnPersist, sliceOf, uid, type Project,
+} from './store.ts'
 
 export type SyncStatus = 'off' | 'out' | 'busy' | 'ok'
 export interface Sync {
@@ -81,6 +83,7 @@ export async function syncNow(): Promise<void> {
     if (!r.ok) return setSnap({ status: 'off' })
     setMeta({ v: (await r.json()).version, dirty: false })
     setSnap({ status: 'ok' })
+    await syncShares()
   } catch {
     setSnap({ status: 'off' })  // still dirty — the next edit, focus or reconnect retries
   }
@@ -98,6 +101,7 @@ async function pull(): Promise<void> {
     if (version !== m.v && state) adoptRemote(state)
     setMeta({ v: version, dirty: false })
     setSnap({ status: 'ok' })
+    await syncShares()
   } catch {
     setSnap({ status: 'off' })
   }
@@ -203,6 +207,83 @@ export const adminDelete = (user: string) => adminPost('/api/admin/user', { user
 export const adminPromote = (user: string) => adminPost('/api/admin/promote', { user })
 export const adminRevoke = (user: string) => adminPost('/api/admin/revoke', { user })
 export const adminDropInvite = (code: string) => adminPost('/api/admin/invite', { code }, 'DELETE')
+
+/* ---------- sharing ---------- */
+
+export interface Member { pid: string, name: string, avatar: string | null, edit: number }
+export interface SharedWithMe { pid: string, edit: number, owner: string }
+
+export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[] }> =>
+  call('/api/shares').catch(() => ({ mine: [], with_me: [] }))
+
+export const share = (pid: string, user: string, edit: boolean) =>
+  call('/api/share', { method: 'POST', body: JSON.stringify({ pid, user, edit }) })
+    .then(() => null).catch(errorOf)
+
+export const unshare = (pid: string, user?: string) =>
+  call('/api/share', { method: 'DELETE', body: JSON.stringify({ pid, user }) })
+    .then(() => null).catch(errorOf)
+
+/** Versions of the shared-project documents, keyed by project — the same If-Match ledger. */
+const pv = new Map<string, number>()
+
+/**
+ * One shared project, both ways. The owner and every editor push the project and its items as a
+ * slice; everyone pulls the newest and merges it in. Last writer wins per project — a smaller
+ * blast radius than per user, and the server keeps fifty of these too.
+ */
+async function syncProject(pid: string, mine: boolean, edit: boolean) {
+  try {
+    const r = await fetch(`/api/pdoc?pid=${encodeURIComponent(pid)}`)
+    if (!r.ok) return                       // unshared while we were away; the next /api/shares says so
+    const { version, state } = await r.json()
+
+    const local = sliceOf(getState(), pid)
+    const behind = version > (pv.get(pid) ?? 0)
+    // nothing of ours to send, or someone else's newer write to take: adopt and stop
+    if (behind && state) {
+      pv.set(pid, version)
+      adoptShared(pid, state, mine ? undefined : { by: state.owner ?? '', edit })
+      return
+    }
+    if (!edit && !mine) return              // read-only: never push, only ever take
+    if (!local) return
+    const body = JSON.stringify({ state: local, device })
+    let w = await fetch(`/api/pdoc?pid=${encodeURIComponent(pid)}`, {
+      method: 'PUT', headers: { 'if-match': String(version) }, body,
+    })
+    if (w.status === 409) {
+      const cur = await w.json()
+      w = await fetch(`/api/pdoc?pid=${encodeURIComponent(pid)}`, {
+        method: 'PUT', headers: { 'if-match': String(cur.version) }, body,
+      })
+    }
+    if (w.ok) pv.set(pid, (await w.json()).version)
+  } catch { /* offline: the next sync tries again */ }
+}
+
+/** Every project either shared by you or with you, exchanged after the personal document. */
+async function syncShares() {
+  const { mine, with_me } = await shares()
+  const owned = new Set(mine.map((m) => m.pid))
+  // a project someone shared with you must exist locally before its slice can land in it
+  for (const s of with_me) {
+    if (!getState().projects.some((p) => p.id === s.pid)) {
+      adoptShared(s.pid, null, { by: s.owner, edit: !!s.edit })
+    }
+  }
+  await Promise.all([
+    ...[...owned].map((pid) => syncProject(pid, true, true)),
+    ...with_me.map((s) => syncProject(s.pid, false, !!s.edit)),
+  ])
+  // one left behind: a project that says it is shared but no longer is, dropped from the sidebar
+  const live = new Set([...owned, ...with_me.map((s) => s.pid)])
+  for (const p of getState().projects) {
+    if (p.share && !live.has(p.id)) adoptShared(p.id, null, null)
+  }
+}
+
+export type { Project }
 
 /** Who does the server think we are? Only an explicit 401 means "nobody" — that raises the gate. */
 async function me() {

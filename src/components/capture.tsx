@@ -68,6 +68,9 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
   }
 
   const here = project(s, s.sel)
+  // a project shared with you read-only takes nothing new — the field says so rather than
+  // swallowing what you type and dropping it at the store's guard
+  const locked = !!here?.share && !here.share.edit
 
   return (
     <form onSubmit={submit} autoComplete="off" className="px-3 pt-2">
@@ -118,7 +121,10 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
           onChange={(e) => setRaw(e.target.value)}
           onPaste={paste}
           aria-label="Add an item"
-          placeholder={here ? `Add to ${here.name}` : 'Add to Stash'}
+          disabled={locked}
+          placeholder={locked
+            ? `${here!.share!.by} shared this to read`
+            : here ? `Add to ${here.name}` : 'Add to Stash'}
           className="pl-3!"   // beats the group's own [&>input]:pl-1.5
         />
 

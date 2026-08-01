@@ -172,6 +172,66 @@ assert.equal((await post('/api/signup', { user: 'nope', pass: 'longenough', invi
 assert.equal((await post('/api/admin/revoke', { user: 'kim3' }, leon)).status, 200)
 assert.equal((await get('/api/me', kim3)).status, 401)
 
+/* ---------- sharing ---------- */
+const del2 = (path: string, body: unknown, cookie: string) =>
+  fetch(url + path, { method: 'DELETE', headers: { cookie }, body: JSON.stringify(body) })
+const pdoc = (pid: string, cookie: string) => get(`/api/pdoc?pid=${pid}`, cookie)
+const putPdoc = (pid: string, version: number, state: unknown, cookie: string) =>
+  fetch(`${url}/api/pdoc?pid=${pid}`, {
+    method: 'PUT', headers: { cookie, 'if-match': String(version) }, body: JSON.stringify({ state }),
+  })
+
+const ada = jar(await post('/api/signup', { user: 'ada', pass: 'longenough', invite: server.invite() }))
+const bo = jar(await post('/api/signup', { user: 'bo', pass: 'longenough', invite: server.invite() }))
+const cy = jar(await post('/api/signup', { user: 'cy', pass: 'longenough', invite: server.invite() }))
+
+// nothing is shared until it is
+assert.equal((await pdoc('p1', ada)).status, 404)
+assert.deepEqual(await (await get('/api/shares', ada)).json(), { mine: [], with_me: [] })
+
+// ada shares p1 with bo read-only, and with cy to edit
+assert.equal((await post('/api/share', { pid: 'p1', user: 'ghost' }, ada)).status, 404)
+assert.equal((await post('/api/share', { pid: 'p1', user: 'ada' }, ada)).status, 400)
+assert.equal((await post('/api/share', { pid: 'p1', user: 'bo' }, ada)).status, 200)
+r = await post('/api/share', { pid: 'p1', user: 'cy', edit: true }, ada)
+assert.deepEqual((await r.json()).members.map((m: any) => [m.name, m.edit]), [['bo', 0], ['cy', 1]])
+
+// the owner writes it; both members can read it
+assert.equal((await putPdoc('p1', 0, { project: { id: 'p1', name: 'Kova' }, items: ['a'] }, ada)).status, 200)
+let d = await (await pdoc('p1', bo)).json()
+assert.deepEqual(d.state, { project: { id: 'p1', name: 'Kova' }, items: ['a'] })
+assert.equal(d.edit, false)
+assert.equal((await (await pdoc('p1', cy)).json()).edit, true)
+
+// read-only means read-only on the wire, not just in the buttons
+assert.equal((await putPdoc('p1', d.version, { items: ['bo was here'] }, bo)).status, 403)
+// the editor may write, and the owner sees it
+assert.equal((await putPdoc('p1', d.version, { items: ['a', 'b'] }, cy)).status, 200)
+assert.deepEqual((await (await pdoc('p1', ada)).json()).state, { items: ['a', 'b'] })
+// ...against a version, like everything else here
+assert.equal((await putPdoc('p1', 0, { items: ['stale'] }, cy)).status, 409)
+
+// a stranger cannot reach it at all, nor share it on
+const dee = jar(await post('/api/signup', { user: 'dee', pass: 'longenough', invite: server.invite() }))
+assert.equal((await pdoc('p1', dee)).status, 404)
+assert.equal((await putPdoc('p1', 1, { items: [] }, dee)).status, 404)
+assert.equal((await post('/api/share', { pid: 'p1', user: 'dee' }, cy)).status, 403)
+
+// both sides see the share
+assert.deepEqual((await (await get('/api/shares', bo)).json()).with_me,
+  [{ pid: 'p1', edit: 0, owner: 'ada' }])
+assert.deepEqual((await (await get('/api/shares', bo)).json()).mine, [])
+
+// a member can leave, and takes nothing with them
+assert.equal((await del2('/api/share', { pid: 'p1' }, bo)).status, 200)
+assert.equal((await pdoc('p1', bo)).status, 404)
+assert.equal((await pdoc('p1', cy)).status, 200)
+
+// the owner unshares: the document goes with the last member
+assert.equal((await del2('/api/share', { pid: 'p1', user: 'cy' }, ada)).status, 200)
+assert.equal((await pdoc('p1', cy)).status, 404)
+assert.equal((await pdoc('p1', ada)).status, 404)
+
 // static, and no climbing out of it — the page carries its own security headers,
 // so they hold whatever terminates TLS in front
 r = await fetch(`${url}/`)

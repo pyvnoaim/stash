@@ -487,6 +487,26 @@ The server is `server/index.ts`: Node and SQLite, both from the runtime, zero de
 ten users the whole story is one blob per person and three routes, and the smallest possible
 surface is the security strategy. `npm test` runs the sync engine against it over real HTTP.
 
+## Sharing a project
+
+Right-click a project → **Share…**, name someone with an account on this server, and choose **Can
+view** or **Can edit**. They get the project and the items filed directly under it — nothing else
+of yours, and not its sub-projects, which stay private. The chip on their row can be flipped
+between view and edit at any time, and removing someone takes it off their sidebar on their next
+sync.
+
+A shared project moves into a document of its own that everyone on it syncs against, versioned
+exactly like a personal one and kept fifty deep. That makes the blast radius one project rather
+than one person: two people working in different projects never meet, and two people in the same
+project overwrite each other only if they write inside the same few seconds — where the last write
+wins and the one it replaced is still in that project's history. Proper character-by-character
+merging is a different data layer, and this is the seam it would replace.
+
+Read-only means read-only in three places, not one: the capture field says whose project it is
+instead of taking dictation, the store refuses every edit that reaches it, and the server refuses
+the write even if something got past both. A project shared with you carries an eye or a pair of
+people in the sidebar, and **Leave project** in its menu — leaving takes nothing with it.
+
 ## Hosting it
 
 The built app is a PWA: the service worker caches the whole bundle, so once visited it opens with
