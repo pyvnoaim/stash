@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  CalendarClock, CalendarDays, ChartColumn, CheckCheck, Flag, Inbox, Layers, Search,
+  Bell, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck,
+  FileText, Flag, Inbox, Layers, Lightbulb, ListTodo, Monitor, PanelLeft, Plus, Search, StickyNote,
+  Wallet,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -80,8 +82,7 @@ function Wordmark() {
   )
 }
 
-const NAV = [
-  { icon: ChartColumn, label: 'Overview' },
+const LISTS = [
   { icon: Inbox, label: 'Quick notes', count: 4 },
   { icon: CalendarDays, label: 'Today', count: 3, active: true },
   { icon: CalendarClock, label: 'Upcoming', count: 9 },
@@ -89,73 +90,139 @@ const NAV = [
   { icon: Layers, label: 'Everything', count: 26 },
   { icon: CheckCheck, label: 'Done' },
 ]
-
 const PROJECTS = [
-  { name: 'Kova', color: '#3b82f6', count: 7 },
-  { name: 'Flat', color: '#f59e0b', count: 2 },
+  { name: 'datadiorama', color: '#3b82f6', count: 3 },
+  { name: 'development', color: '#f59e0b', count: 2 },
+]
+const TAGS = [{ name: 'audio', count: 3 }, { name: 'wartung', count: 2 }]
+const TOOLS = [
+  { icon: CalendarRange, label: 'Calendar' },
+  { icon: Wallet, label: 'Subscriptions' },
+  { icon: CandlestickChart, label: 'Markets' },
+  { icon: FileText, label: 'PDF' },
 ]
 
 /** Already in the list before the demo runs — the app is not empty when you arrive. */
 const ROWS = [
-  { text: 'master bus click', rail: '#3b82f6', tag: '#audio', due: '' },
-  { text: 'call the landlord', rail: '#f59e0b', tag: '', due: '18:00' },
-  { text: 'read the Yjs docs', rail: '', tag: '#read', due: '' },
-  { text: 'send the invoice', rail: '', tag: '', due: '', done: true },
+  { text: 'master bus click', rail: '#3b82f6', tag: '#audio' },
+  { text: 'call the landlord', rail: '#f59e0b', due: '18:00' },
+  { text: 'sketch the export dialog', note: 'PDF first, CSV if anyone asks', extra: 2 },
+  { text: 'send the invoice', done: true },
 ]
 
-/** A small, true-to-life window: the sidebar, the list, and one capture typing itself in. */
+const Item = ({ icon: Icon, label, count, active }: {
+  icon: React.ElementType, label: string, count?: number, active?: boolean
+}) => (
+  <div className={`flex items-center gap-2 rounded-md px-2 py-1 text-[11px] ${
+    active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
+  }`}>
+    <Icon className="size-3 shrink-0" />
+    <span className="truncate">{label}</span>
+    {!!count && <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{count}</span>}
+  </div>
+)
+
+const GroupLabel = ({ children, action }: { children: React.ReactNode, action?: boolean }) => (
+  <div className="text-muted-foreground/70 font-heading flex items-center px-2 pt-2.5 pb-1 text-[9px] tracking-wider uppercase">
+    {children}
+    {action && <Plus className="ml-auto size-2.5" />}
+  </div>
+)
+
+/** A small, true-to-life window: the real sidebar, the real capture bar, the real rows. */
 function Teaser() {
   return (
     <div
       aria-hidden
-      className="bg-background relative mx-auto w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl select-none"
+      className="bg-background relative mx-auto grid w-full max-w-xl grid-cols-[132px_1fr] overflow-hidden rounded-xl border shadow-2xl select-none"
     >
-      {/* header: the view, its count, and the search that sits in the real one */}
-      <div className="flex h-8 items-center gap-2 border-b px-3">
-        <span className="font-heading text-[11px] tracking-wide uppercase">Today</span>
-        <span className="text-muted-foreground font-mono text-[10px]">3</span>
-        <div className="text-muted-foreground/60 ml-auto flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px]">
-          <Search className="size-2.5" /> Search
+      <div className="bg-sidebar flex flex-col border-r">
+        {/* STASH shares a baseline with the page title, the way the real header does */}
+        <div className="flex h-9 items-center gap-1.5 border-b px-3">
+          <div className="bg-foreground h-3 w-[2px] rounded-full" />
+          <span className="font-heading text-[10px] tracking-[0.18em] uppercase">Stash</span>
+        </div>
+
+        <div className="flex-1 p-1.5">
+          <Item icon={ChartColumn} label="Overview" />
+          <GroupLabel>Lists</GroupLabel>
+          {LISTS.map((l) => <Item key={l.label} {...l} />)}
+          <GroupLabel action>Projects</GroupLabel>
+          {PROJECTS.map((p) => (
+            <div key={p.name} className="text-muted-foreground flex items-center gap-2 rounded-md px-2 py-1 text-[11px]">
+              {/* a project's mark is a rail, not a dot — the same bar its rows carry */}
+              <span className="h-3 w-[2px] shrink-0 rounded-full" style={{ background: p.color }} />
+              <span className="truncate">{p.name}</span>
+              <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{p.count}</span>
+            </div>
+          ))}
+          <GroupLabel>Tags</GroupLabel>
+          {TAGS.map((t) => (
+            <div key={t.name} className="text-muted-foreground flex items-center gap-2 rounded-md px-2 py-1 text-[11px]">
+              <span className="shrink-0 opacity-70">#</span>
+              <span className="truncate">{t.name}</span>
+              <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{t.count}</span>
+            </div>
+          ))}
+          <GroupLabel>Tools</GroupLabel>
+          {TOOLS.map((t) => <Item key={t.label} {...t} />)}
+        </div>
+
+        <div className="flex items-center gap-2 border-t px-2.5 py-2">
+          <span className="bg-muted text-muted-foreground grid size-5 shrink-0 place-items-center rounded text-[9px] uppercase">
+            l
+          </span>
+          <div className="grid leading-tight">
+            <span className="text-[10px]">leon</span>
+            <span className="text-muted-foreground text-[9px]">Synced</span>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-[104px_1fr]">
-        <div className="bg-muted/40 space-y-px border-r p-1.5">
-          {NAV.map(({ icon: Icon, label, count, active }) => (
-            <div
-              key={label}
-              className={`flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] ${
-                active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-              }`}
-            >
-              <Icon className="size-2.5 shrink-0" />
-              <span className="truncate">{label}</span>
-              {!!count && <span className="ml-auto font-mono text-[9px] opacity-60">{count}</span>}
+      <div className="flex flex-col">
+        <div className="flex h-9 items-center gap-2 border-b px-3">
+          <PanelLeft className="text-muted-foreground size-3" />
+          <span className="text-border">|</span>
+          <span className="font-heading text-[10px] tracking-wider uppercase">Today</span>
+          <span className="text-muted-foreground text-[10px] tabular-nums">3</span>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="relative">
+              <Bell className="text-muted-foreground size-3" />
+              <span className="bg-destructive absolute -top-1 -right-1 size-2 rounded-full" />
+            </span>
+            <Monitor className="text-muted-foreground size-3" />
+            <div className="text-muted-foreground/60 flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px]">
+              <Search className="size-2.5" /> Search
             </div>
-          ))}
-          <div className="text-muted-foreground/60 px-1.5 pt-2 pb-1 text-[8px] tracking-wide uppercase">
-            Projects
           </div>
-          {PROJECTS.map((p) => (
-            <div key={p.name} className="text-muted-foreground flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px]">
-              <span className="size-2 shrink-0 rounded-[3px]" style={{ background: p.color }} />
-              <span className="truncate">{p.name}</span>
-              <span className="ml-auto font-mono text-[9px] opacity-60">{p.count}</span>
-            </div>
-          ))}
         </div>
 
-        <div className="min-h-[236px] space-y-1.5 p-2.5">
-          {/* the capture bar, typing the line that becomes the first row below */}
-          <div className="bg-muted/50 rounded-md border px-2 py-1.5 text-[11px]">
-            <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
-            <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
+        <div className="min-h-[248px] space-y-1 p-2.5">
+          {/* the capture bar: the three kinds, then the line typing itself into the field */}
+          <div className="mb-2 flex items-center gap-2 rounded-lg border px-2 py-1.5">
+            {[
+              { icon: ListTodo, label: 'Task', on: true },
+              { icon: Lightbulb, label: 'Idea' },
+              { icon: StickyNote, label: 'Note' },
+            ].map(({ icon: Icon, label, on }) => (
+              <span
+                key={label}
+                className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${
+                  on ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                <Icon className="size-2.5" /> {label}
+              </span>
+            ))}
+            <span className="text-border">|</span>
+            <span className="text-[11px]">
+              <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
+              <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
+            </span>
           </div>
 
-          <Row
-            className="gate-in [animation-delay:2.1s]"
-            text="fix preset loader" rail="#3b82f6" tag="#audio" due="tomorrow" flag
-          />
+          <Row className="gate-in [animation-delay:2.1s]"
+            text="fix preset loader" rail="#3b82f6" tag="#audio" due="tomorrow" flag />
           {ROWS.map((r) => <Row key={r.text} {...r} />)}
         </div>
       </div>
@@ -163,24 +230,37 @@ function Teaser() {
   )
 }
 
-function Row({ text, rail, tag, due, flag, done, className = '' }: {
+/** Rows carry no border of their own in the real list — the rail and the spacing do the work. */
+function Row({ text, rail, tag, due, flag, done, note, extra, className = '' }: {
   text: string
   rail?: string
   tag?: string
   due?: string
   flag?: boolean
   done?: boolean
+  note?: string
+  extra?: number
   className?: string
 }) {
   return (
-    <div className={`relative flex items-center gap-2 overflow-hidden rounded-md border px-2 py-1.5 pl-2.5 text-[11px] ${className}`}>
-      {/* the project's rail, the one piece of colour a row ever carries */}
-      {rail && <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: rail }} />}
-      <span className={`size-2.5 shrink-0 rounded-[3px] border ${done ? 'bg-muted-foreground/40 border-transparent' : 'border-muted-foreground/50'}`} />
-      <span className={`truncate ${done ? 'text-muted-foreground line-through' : ''}`}>{text}</span>
-      {flag && <Flag className="text-muted-foreground size-2.5 shrink-0" />}
-      {tag && <span className="text-muted-foreground/70 shrink-0 text-[10px]">{tag}</span>}
-      {due && <span className="text-muted-foreground ml-auto shrink-0 text-[10px]">{due}</span>}
+    <div className={`relative flex items-start gap-2 rounded-md py-1 pl-2.5 text-[11px] ${className}`}>
+      {rail && <span className="absolute inset-y-1 left-0 w-[2px] rounded-full" style={{ background: rail }} />}
+      <span className={`mt-[3px] size-2.5 shrink-0 rounded-[3px] border ${
+        done ? 'bg-muted-foreground/40 border-transparent' : 'border-muted-foreground/50'
+      }`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className={`truncate ${done ? 'text-muted-foreground line-through' : ''}`}>{text}</span>
+          {flag && <Flag className="text-muted-foreground size-2.5 shrink-0" />}
+          {tag && <span className="text-muted-foreground/70 shrink-0 text-[10px]">{tag}</span>}
+          {due && <span className="text-muted-foreground ml-auto shrink-0 text-[10px]">{due}</span>}
+        </div>
+        {note && (
+          <div className="text-muted-foreground truncate text-[10px]">
+            {note} {!!extra && <span className="opacity-70">+{extra}</span>}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
