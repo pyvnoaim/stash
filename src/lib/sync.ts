@@ -220,45 +220,51 @@ export const share = (pid: string, user: string, edit: boolean) =>
   call('/api/share', { method: 'POST', body: JSON.stringify({ pid, user, edit }) })
     .then(() => null).catch(errorOf)
 
-export const unshare = (pid: string, user?: string) =>
-  call('/api/share', { method: 'DELETE', body: JSON.stringify({ pid, user }) })
+/** The owner drops a member (or the whole share); a member names whose project they are leaving. */
+export const unshare = (pid: string, user?: string, owner?: string) =>
+  call('/api/share', { method: 'DELETE', body: JSON.stringify({ pid, user, owner }) })
     .then(() => null).catch(errorOf)
 
-/** Versions of the shared-project documents, keyed by project — the same If-Match ledger. */
+/** Versions of the shared-project documents, keyed by owner and project — the same If-Match ledger. */
 const pv = new Map<string, number>()
+/* A project id belongs to whoever owns it: the same string under two people is two projects, so
+   every request names both. Nobody can reach a document by guessing an id alone. */
+const docUrl = (pid: string, owner?: string) =>
+  `/api/pdoc?pid=${encodeURIComponent(pid)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`
 
 /**
  * One shared project, both ways. The owner and every editor push the project and its items as a
  * slice; everyone pulls the newest and merges it in. Last writer wins per project — a smaller
  * blast radius than per user, and the server keeps fifty of these too.
  */
-async function syncProject(pid: string, mine: boolean, edit: boolean) {
+async function syncProject(pid: string, mine: boolean, edit: boolean, owner?: string) {
+  const key = `${owner ?? ''}:${pid}`
   try {
-    const r = await fetch(`/api/pdoc?pid=${encodeURIComponent(pid)}`)
+    const r = await fetch(docUrl(pid, owner))
     if (!r.ok) return                       // unshared while we were away; the next /api/shares says so
     const { version, state } = await r.json()
 
     const local = sliceOf(getState(), pid)
-    const behind = version > (pv.get(pid) ?? 0)
+    const behind = version > (pv.get(key) ?? 0)
     // nothing of ours to send, or someone else's newer write to take: adopt and stop
     if (behind && state) {
-      pv.set(pid, version)
-      adoptShared(pid, state, mine ? undefined : { by: state.owner ?? '', edit })
+      pv.set(key, version)
+      adoptShared(pid, state, mine ? undefined : { by: owner ?? '', edit })
       return
     }
     if (!edit && !mine) return              // read-only: never push, only ever take
     if (!local) return
     const body = JSON.stringify({ state: local, device })
-    let w = await fetch(`/api/pdoc?pid=${encodeURIComponent(pid)}`, {
+    let w = await fetch(docUrl(pid, owner), {
       method: 'PUT', headers: { 'if-match': String(version) }, body,
     })
     if (w.status === 409) {
       const cur = await w.json()
-      w = await fetch(`/api/pdoc?pid=${encodeURIComponent(pid)}`, {
+      w = await fetch(docUrl(pid, owner), {
         method: 'PUT', headers: { 'if-match': String(cur.version) }, body,
       })
     }
-    if (w.ok) pv.set(pid, (await w.json()).version)
+    if (w.ok) pv.set(key, (await w.json()).version)
   } catch { /* offline: the next sync tries again */ }
 }
 
@@ -274,7 +280,7 @@ async function syncShares() {
   }
   await Promise.all([
     ...[...owned].map((pid) => syncProject(pid, true, true)),
-    ...with_me.map((s) => syncProject(s.pid, false, !!s.edit)),
+    ...with_me.map((s) => syncProject(s.pid, false, !!s.edit, s.owner)),
   ])
   // one left behind: a project that says it is shared but no longer is, dropped from the sidebar
   const live = new Set([...owned, ...with_me.map((s) => s.pid)])

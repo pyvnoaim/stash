@@ -240,7 +240,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         </ContextMenuItem>
         {/* someone else's project is theirs to share on; yours opens the dialog */}
         {p.share ? (
-          <ContextMenuItem onSelect={async () => { await unshare(p.id); void syncNow() }}>
+          <ContextMenuItem onSelect={async () => { await unshare(p.id, undefined, p.share?.by); void syncNow() }}>
             <UserMinus />
             Leave project
           </ContextMenuItem>

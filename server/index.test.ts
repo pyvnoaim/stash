@@ -175,9 +175,10 @@ assert.equal((await get('/api/me', kim3)).status, 401)
 /* ---------- sharing ---------- */
 const del2 = (path: string, body: unknown, cookie: string) =>
   fetch(url + path, { method: 'DELETE', headers: { cookie }, body: JSON.stringify(body) })
-const pdoc = (pid: string, cookie: string) => get(`/api/pdoc?pid=${pid}`, cookie)
-const putPdoc = (pid: string, version: number, state: unknown, cookie: string) =>
-  fetch(`${url}/api/pdoc?pid=${pid}`, {
+const pdoc = (pid: string, cookie: string, owner = '') =>
+  get(`/api/pdoc?pid=${pid}${owner ? `&owner=${owner}` : ''}`, cookie)
+const putPdoc = (pid: string, version: number, state: unknown, cookie: string, owner = '') =>
+  fetch(`${url}/api/pdoc?pid=${pid}${owner ? `&owner=${owner}` : ''}`, {
     method: 'PUT', headers: { cookie, 'if-match': String(version) }, body: JSON.stringify({ state }),
   })
 
@@ -198,23 +199,23 @@ assert.deepEqual((await r.json()).members.map((m: any) => [m.name, m.edit]), [['
 
 // the owner writes it; both members can read it
 assert.equal((await putPdoc('p1', 0, { project: { id: 'p1', name: 'Kova' }, items: ['a'] }, ada)).status, 200)
-let d = await (await pdoc('p1', bo)).json()
+let d = await (await pdoc('p1', bo, 'ada')).json()
 assert.deepEqual(d.state, { project: { id: 'p1', name: 'Kova' }, items: ['a'] })
 assert.equal(d.edit, false)
-assert.equal((await (await pdoc('p1', cy)).json()).edit, true)
+assert.equal((await (await pdoc('p1', cy, 'ada')).json()).edit, true)
 
 // read-only means read-only on the wire, not just in the buttons
-assert.equal((await putPdoc('p1', d.version, { items: ['bo was here'] }, bo)).status, 403)
+assert.equal((await putPdoc('p1', d.version, { items: ['bo was here'] }, bo, 'ada')).status, 403)
 // the editor may write, and the owner sees it
-assert.equal((await putPdoc('p1', d.version, { items: ['a', 'b'] }, cy)).status, 200)
+assert.equal((await putPdoc('p1', d.version, { items: ['a', 'b'] }, cy, 'ada')).status, 200)
 assert.deepEqual((await (await pdoc('p1', ada)).json()).state, { items: ['a', 'b'] })
 // ...against a version, like everything else here
-assert.equal((await putPdoc('p1', 0, { items: ['stale'] }, cy)).status, 409)
+assert.equal((await putPdoc('p1', 0, { items: ['stale'] }, cy, 'ada')).status, 409)
 
 // a stranger cannot reach it at all, nor share it on
 const dee = jar(await post('/api/signup', { user: 'dee', pass: 'longenough', invite: server.invite() }))
-assert.equal((await pdoc('p1', dee)).status, 404)
-assert.equal((await putPdoc('p1', 1, { items: [] }, dee)).status, 404)
+assert.equal((await pdoc('p1', dee, 'ada')).status, 404)
+assert.equal((await putPdoc('p1', 1, { items: [] }, dee, 'ada')).status, 404)
 assert.equal((await post('/api/share', { pid: 'p1', user: 'dee' }, cy)).status, 403)
 
 // both sides see the share
@@ -223,14 +224,28 @@ assert.deepEqual((await (await get('/api/shares', bo)).json()).with_me,
 assert.deepEqual((await (await get('/api/shares', bo)).json()).mine, [])
 
 // a member can leave, and takes nothing with them
-assert.equal((await del2('/api/share', { pid: 'p1' }, bo)).status, 200)
-assert.equal((await pdoc('p1', bo)).status, 404)
-assert.equal((await pdoc('p1', cy)).status, 200)
+assert.equal((await del2('/api/share', { pid: 'p1', owner: 'ada' }, bo)).status, 200)
+assert.equal((await pdoc('p1', bo, 'ada')).status, 404)
+assert.equal((await pdoc('p1', cy, 'ada')).status, 200)
 
 // the owner unshares: the document goes with the last member
 assert.equal((await del2('/api/share', { pid: 'p1', user: 'cy' }, ada)).status, 200)
-assert.equal((await pdoc('p1', cy)).status, 404)
+assert.equal((await pdoc('p1', cy, 'ada')).status, 404)
 assert.equal((await pdoc('p1', ada)).status, 404)
+
+/* the id alone grants nothing: two people may hold the same project id and never meet, and
+   nobody can claim an id before its owner shares it */
+assert.equal((await post('/api/share', { pid: 'same', user: 'bo' }, ada)).status, 200)
+assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, dee)).status, 200)
+await putPdoc('same', 0, { items: ['ada'] }, ada)
+await putPdoc('same', 0, { items: ['dee'] }, dee)
+assert.deepEqual((await (await pdoc('same', bo, 'ada')).json()).state, { items: ['ada'] })
+assert.deepEqual((await (await pdoc('same', cy, 'dee')).json()).state, { items: ['dee'] })
+// ...and neither one's members can reach the other's
+assert.equal((await pdoc('same', bo, 'dee')).status, 404)
+assert.equal((await pdoc('same', cy, 'ada')).status, 404)
+// a member may not pass on what is not theirs
+assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, bo)).status, 403)
 
 // static, and no climbing out of it — the page carries its own security headers,
 // so they hold whatever terminates TLS in front

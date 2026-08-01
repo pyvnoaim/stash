@@ -27,7 +27,7 @@ export function LoginGate() {
   return (
     <div className="bg-background min-h-svh md:grid md:grid-cols-2">
       <style>{`
-        @keyframes gate-type { from { width: 0 } to { width: 100% } }
+        @keyframes gate-type { from { width: 0 } to { width: 41ch } }
         @keyframes gate-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
         @keyframes gate-caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
         @keyframes gate-drift { to { background-position: 8px 8px } }
@@ -134,7 +134,7 @@ function Teaser() {
   return (
     <div
       aria-hidden
-      className="bg-background relative mx-auto grid w-full max-w-xl grid-cols-[132px_1fr] overflow-hidden rounded-xl border shadow-2xl select-none"
+      className="bg-background relative mx-auto grid w-full max-w-2xl grid-cols-[132px_1fr] overflow-hidden rounded-xl border shadow-2xl select-none"
     >
       <div className="bg-sidebar flex flex-col border-r">
         {/* STASH shares a baseline with the page title, the way the real header does */}
@@ -215,7 +215,7 @@ function Teaser() {
               </span>
             ))}
             <span className="text-border">|</span>
-            <span className="text-[11px]">
+            <span className="flex items-baseline whitespace-nowrap text-[11px]">
               <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
               <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
             </span>
