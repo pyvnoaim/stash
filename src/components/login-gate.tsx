@@ -27,12 +27,12 @@ export function LoginGate() {
   return (
     <div className="bg-background min-h-svh md:grid md:grid-cols-2">
       <style>{`
-        @keyframes gate-type { from { width: 0 } to { width: 41ch } }
+        @keyframes gate-type { from { width: 0 } to { width: 47ch } }
         @keyframes gate-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
         @keyframes gate-caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
         @keyframes gate-drift { to { background-position: 8px 8px } }
         .gate-type { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: bottom;
-          animation: gate-type 1.5s steps(41) .4s both }
+          animation: gate-type 1.5s steps(47) .4s both }
         .gate-in { animation: gate-in .4s ease-out both }
         .gate-caret { animation: gate-caret 1.1s steps(1) infinite }
         .gate-drift { animation: gate-drift 7s linear infinite }
@@ -90,11 +90,13 @@ const LISTS = [
   { icon: Layers, label: 'Everything', count: 26 },
   { icon: CheckCheck, label: 'Done' },
 ]
+/* Invented, and deliberately so — the gate is a public page, and the names of real projects,
+   real tags and a real account are nobody else's business. */
 const PROJECTS = [
-  { name: 'datadiorama', color: '#3b82f6', count: 3 },
-  { name: 'development', color: '#f59e0b', count: 2 },
+  { name: 'Studio', color: '#3b82f6', count: 3 },
+  { name: 'Flat', color: '#f59e0b', count: 2 },
 ]
-const TAGS = [{ name: 'audio', count: 3 }, { name: 'wartung', count: 2 }]
+const TAGS = [{ name: 'audio', count: 3 }, { name: 'errands', count: 2 }]
 const TOOLS = [
   { icon: CalendarRange, label: 'Calendar' },
   { icon: Wallet, label: 'Subscriptions' },
@@ -170,10 +172,10 @@ function Teaser() {
 
         <div className="flex items-center gap-2 border-t px-2.5 py-2">
           <span className="bg-muted text-muted-foreground grid size-5 shrink-0 place-items-center rounded text-[9px] uppercase">
-            l
+            s
           </span>
           <div className="grid leading-tight">
-            <span className="text-[10px]">leon</span>
+            <span className="text-[10px]">sam</span>
             <span className="text-muted-foreground text-[9px]">Synced</span>
           </div>
         </div>
@@ -216,13 +218,13 @@ function Teaser() {
             ))}
             <span className="text-border">|</span>
             <span className="flex items-baseline whitespace-nowrap text-[11px]">
-              <span className="gate-type">! fix preset loader @kova #audio tomorrow</span>
+              <span className="gate-type">! fix the preset loader @studio #audio tomorrow</span>
               <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
             </span>
           </div>
 
           <Row className="gate-in [animation-delay:2.1s]"
-            text="fix preset loader" rail="#3b82f6" tag="#audio" due="tomorrow" flag />
+            text="fix the preset loader" rail="#3b82f6" tag="#audio" due="tomorrow" flag />
           {ROWS.map((r) => <Row key={r.text} {...r} />)}
         </div>
       </div>
