@@ -220,7 +220,11 @@ function Teaser() {
             ))}
             <span className="text-border">|</span>
             <span className="relative inline-block whitespace-nowrap text-[11px]">
-              <span className="invisible">! fix the preset loader @studio #audio tomorrow</span>
+              {/* the sizer carries the caret's own width too, or the clip would cut it off */}
+              <span className="invisible">
+                ! fix the preset loader @studio #audio tomorrow
+                <span className="ml-px inline-block w-px" />
+              </span>
               <span className="gate-type">
                 ! fix the preset loader @studio #audio tomorrow
                 <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
