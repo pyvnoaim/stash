@@ -834,7 +834,11 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
 export function clearDone() {
   const gone = state.items.filter((i) => i.done && !readOnly(state, i.pid))
   if (!gone.length) return null
-  set((s) => ({ ...s, items: s.items.filter((i) => !i.done) }))
+  // by id, not by `done` again: the two have to name the same rows, or finished work in a project
+  // shared read-only is swept off this device by a broom that never picked it up — and the undo,
+  // which only holds what `gone` collected, cannot put it back
+  const ids = new Set(gone.map((i) => i.id))
+  set((s) => ({ ...s, items: s.items.filter((i) => !ids.has(i.id)) }))
   // put back by appending: finished items sink in every view anyway, so position was never meaningful
   return { n: gone.length, undo: () => set((s) => ({ ...s, items: [...s.items, ...gone] })) }
 }
@@ -857,6 +861,9 @@ export function moveBefore(dragId: string, targetId: string, after = false) {
     const done = reorder(s.items, dragId, targetId, after)
     const target = s.items.find((i) => i.id === targetId)
     if (!done || !target) return s
+    // a drop is a write to two projects: the one the row lands in, and the one it is leaving.
+    // Neither may be a share you only read — dropping into one files work where you cannot push it
+    if (readOnly(s, target.pid) || frozen(s, dragId)) return s
     done.next[done.at] = { ...done.moving, pid: target.pid }
     return { ...s, items: done.next }
   })

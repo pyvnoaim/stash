@@ -502,6 +502,7 @@ console.log('store: ok')
 
   // the items arrive with the project still writable — a share that lands later freezes them
   addItem(item({ id: 'ro', pid: theirs.id, text: 'read only' }))
+  addItem(item({ id: 'rodone', pid: theirs.id, text: 'their finished work', done: true }))
   addItem(item({ id: 'rw', pid: yours.id, text: 'writable' }))
   addItem(item({ id: 'own', pid: mine.id, text: 'mine' }))
   patchProject(theirs.id, { share: { by: 'ada', edit: false } })
@@ -528,6 +529,18 @@ console.log('store: ok')
   // the project itself is not yours to rename
   patchProject(theirs.id, { name: 'Renamed' })
   assert.equal(getState().projects.find((p) => p.id === theirs.id)!.name, 'Theirs')
+
+  // clearing finished work leaves theirs alone: it is not yours to throw away, and the undo it
+  // hands back only knows about what it collected — anything cleared past that is gone for good
+  const swept = clearDone()        // 'own' was finished above; it is the only row that may go
+  assert.equal(swept?.n, 1)
+  assert.ok(getState().items.some((i) => i.id === 'rodone'))
+  assert.ok(!getState().items.some((i) => i.id === 'own'))
+  swept?.undo()
+
+  // and a row cannot be dragged into a project you may not write to
+  moveBefore('rw', 'ro')
+  assert.equal(getState().items.find((i) => i.id === 'rw')!.pid, yours.id)
 
   // a slice travels without the permission on it — that is this device's view, not their data
   const slice = sliceOf(getState(), yours.id)!
