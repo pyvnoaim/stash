@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -75,6 +76,22 @@ r = await put(leon, 0, { items: ['stale'] })
 assert.equal(r.status, 409)
 assert.deepEqual(await r.json(), { version: v1, state: { items: ['a'] } })
 assert.equal((await put(leon, v1, { items: ['a', 'b'] })).status, 200)
+
+/* Two devices matching the same version at the same moment: exactly one may land. Reading the
+   body is where the handler yields, so both used to get past a check made before it and the
+   second wrote silently over the first — the lost update If-Match exists to refuse. */
+const at = (await (await get('/state', leon)).json()).version
+// a connection each, headers first: both handlers are parked in readBody before either body lands
+const race = (state: unknown) => new Promise<number>((ok) => {
+  const rq = request(`${url}/state`, {
+    method: 'PUT', agent: false,
+    headers: { cookie: leon, 'if-match': String(at), 'content-type': 'application/json' },
+  }, (rs) => { rs.resume(); ok(rs.statusCode!) })
+  rq.flushHeaders()
+  setTimeout(() => rq.end(JSON.stringify({ state })), 60)
+})
+assert.deepEqual((await Promise.all([race({ items: ['x'] }), race({ items: ['y'] })])).sort(), [200, 409])
+await put(leon, (await (await get('/state', leon)).json()).version, { items: ['a', 'b'] })
 
 // no version at all is a client bug, not a conflict; nor is a document that isn't one
 assert.equal((await fetch(`${url}/state`, { method: 'PUT', headers: { cookie: leon }, body: '{}' })).status, 428)

@@ -696,13 +696,17 @@ export function start({
         if (!may.edit) return send(res, 403, { error: 'read-only' })
         const have = Number(req.headers['if-match'])
         if (!Number.isInteger(have)) return send(res, 428, { error: 'If-Match required' })
-        if (have !== (row?.v ?? 0)) {
-          return send(res, 409, { version: row?.v ?? 0, state: row ? JSON.parse(row.json) : null })
-        }
         let body: any
         try { body = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
         if (typeof body?.state !== 'object' || body.state === null) {
           return send(res, 400, { error: 'state must be an object' })
+        }
+        // read again, with nothing awaited between here and the insert: two people editing one
+        // shared project both matched the version read above, then both wrote — and If-Match, the
+        // whole point of which is that the second one is told to look, let the first one vanish
+        const now = q.pdoc.get(owner, pid) as { v: number, json: string } | undefined
+        if (have !== (now?.v ?? 0)) {
+          return send(res, 409, { version: now?.v ?? 0, state: now ? JSON.parse(now.json) : null })
         }
         const w = q.addPdoc.run(owner, pid, Date.now(), String(body.device ?? ''), JSON.stringify(body.state))
         q.prunePdoc.run(owner, pid, owner, pid, KEEP)
@@ -722,14 +726,18 @@ export function start({
       if (req.method === 'PUT') {
         const have = Number(req.headers['if-match'])
         if (!Number.isInteger(have)) return send(res, 428, { error: 'If-Match required' })
-        // Stale: hand back what is actually there so the client can decide, rather than a bare 409.
-        if (have !== (row?.v ?? 0)) {
-          return send(res, 409, { version: row?.v ?? 0, state: row ? JSON.parse(row.json) : null })
-        }
         let body: any
         try { body = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
         if (typeof body?.state !== 'object' || body.state === null) {
           return send(res, 400, { error: 'state must be an object' })
+        }
+        /* Read again, with nothing awaited between here and the insert. Reading the body is where
+           this handler yields, so two devices that both matched the version above both got here
+           and both wrote — the second silently over the first, which is the one thing If-Match is
+           for. Stale: hand back what is actually there so the client can decide, not a bare 409. */
+        const now = q.latest.get(user.id) as { v: number, json: string } | undefined
+        if (have !== (now?.v ?? 0)) {
+          return send(res, 409, { version: now?.v ?? 0, state: now ? JSON.parse(now.json) : null })
         }
         const w = q.insert.run(user.id, Date.now(), String(body.device ?? ''), JSON.stringify(body.state))
         q.prune.run(user.id, user.id, KEEP)
