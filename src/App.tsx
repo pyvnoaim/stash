@@ -8,7 +8,7 @@ import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
 import { Faces } from '@/components/faces'
-import { ProjectHeader } from '@/components/project-header'
+import { ProjectHeader, ProjectProgress } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
 import { ItemRow } from '@/components/item-row'
 import { NotePage } from '@/components/note-page'
@@ -315,8 +315,12 @@ export default function App() {
             </h1>
             {/* whose company this project is in, next to the name of it */}
             {!query && openProject && <Faces p={openProject} />}
-            <span className="text-muted-foreground mr-auto font-mono text-xs tabular-nums">
-              {page ? '' : items.length || ''}
+            {/* how many, or — in a project, where the fraction is the more useful number — how
+                many of how many, with the bar that draws it */}
+            <span className="text-muted-foreground mr-auto flex items-center gap-2 font-mono text-xs tabular-nums">
+              {!query && openProject
+                ? <ProjectProgress p={openProject} />
+                : (page ? '' : items.length || '')}
             </span>
             <NotificationBell onNavigate={goTo} />
             <ThemeToggle />
@@ -419,7 +423,8 @@ export default function App() {
           >
             <Capture inputRef={boxRef} />
 
-            {/* a project is a place, so it gets a header of its own: how far along, and what for */}
+            {/* only a shared project has anything left to say down here — the progress moved up
+                beside the name, where it has something to sit next to */}
             {!query && openProject && <ProjectHeader p={openProject} />}
 
             {/* scrollbars are hidden app-wide, so this is the only sign the list runs on; it
