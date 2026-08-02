@@ -110,6 +110,99 @@ async function fetchTwelve(symbol: string, interval: Interval, apiKey: string): 
     .reverse()
 }
 
+/* The memecoin end of the market. These never reach Binance and have no ticker: they are pools,
+   keyed by address on a chain, and they live and die inside a day. GeckoTerminal's trending list is
+   keyless and sends `access-control-allow-origin: *`, so it sits on the same footing as Binance —
+   the browser calls it directly, no server, no key, nothing to leak.
+   ponytail: Solana only, which is where the memecoins are. One more entry here plus a picker if
+   base or bsc ever start mattering; the parser is chain-agnostic already. */
+export const TREND_NETWORK = 'solana'
+
+export type Trend = {
+  /** Base token symbol — the pool is named 'CATE / SOL', and CATE is the thing you care about. */
+  symbol: string
+  /** Pool address. Also the alert id and the link, so it has to be the pool and not the token. */
+  pool: string
+  price: number
+  /** Percent change over the last hour, and over the last day. */
+  h1: number
+  h24: number
+  vol24: number
+  /** Pool liquidity in dollars — what separates a market from a chart with nobody behind it. */
+  liq: number
+  /** Hours since the pool opened. Unparseable reads as Infinity: old, which is the quiet answer. */
+  age: number
+  url: string
+}
+
+/** Shape of one row of GeckoTerminal's response; every field optional because it is someone else's. */
+type Pool = {
+  attributes?: {
+    name?: string
+    address?: string
+    base_token_price_usd?: string
+    pool_created_at?: string
+    reserve_in_usd?: string
+    price_change_percentage?: Record<string, string>
+    volume_usd?: Record<string, string>
+  }
+}
+
+/** Pure, so the tests can hold a real payload without a network. A row missing what it takes to be
+ *  acted on — no name, no address, no price — is dropped rather than rendered as zeroes. */
+export function parseTrending(json: unknown, now = Date.now()): Trend[] {
+  const rows = (json as { data?: Pool[] } | null)?.data
+  if (!Array.isArray(rows)) return []
+  const num = (v: unknown) => { const n = Number(v); return isFinite(n) ? n : 0 }
+  return rows.flatMap((p): Trend[] => {
+    const a = p?.attributes
+    const price = num(a?.base_token_price_usd)
+    if (!a?.name || !a.address || !(price > 0)) return []
+    // a pool named '/ SOL' would alert as " up 30%", which names nothing
+    const symbol = a.name.split('/')[0].trim()
+    if (!symbol) return []
+    const opened = Date.parse(a.pool_created_at ?? '')
+    return [{
+      symbol,
+      pool: a.address,
+      price,
+      h1: num(a.price_change_percentage?.h1),
+      h24: num(a.price_change_percentage?.h24),
+      vol24: num(a.volume_usd?.h24),
+      liq: num(a.reserve_in_usd),
+      age: isFinite(opened) ? Math.max(0, (now - opened) / 36e5) : Infinity,
+      // the address is someone else's string going into a URL — encoded, even though a real
+      // base58 address passes through untouched. The https prefix is what fixes the scheme.
+      url: `https://www.geckoterminal.com/${TREND_NETWORK}/pools/${encodeURIComponent(a.address)}`,
+    }]
+  })
+}
+
+/* Two callers want this list on the same minute and it is the same list: the panel on the Markets
+   page, and the bell that polls whether or not you ever open that page. Without this they were two
+   requests a minute for one answer. A caller arriving mid-flight joins the request already going;
+   one arriving just after gets what it returned. Failures are deliberately not cached — a feed that
+   was down a second ago is allowed to be up now. */
+let cache: { at: number; rows: Trend[] } | null = null
+let flight: Promise<Trend[]> | null = null
+const TREND_TTL = 50_000   // under the 60s both callers poll at, so a real tick always refetches
+
+/** Trending pools, ranked by the last hour rather than the last day — a memecoin's day is over. */
+export function fetchTrending(): Promise<Trend[]> {
+  if (cache && Date.now() - cache.at < TREND_TTL) return Promise.resolve(cache.rows)
+  if (flight) return flight
+  const url = `https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}/trending_pools?duration=1h`
+  flight = fetch(url)
+    .then((r) => r.json())
+    .then((j) => {
+      const rows = parseTrending(j)
+      cache = { at: Date.now(), rows }
+      return rows
+    })
+    .finally(() => { flight = null })
+  return flight
+}
+
 /**
  * How many decimals a price needs to stay meaningful. Two is right for Bitcoin and wrong for a coin
  * that trades at 0.17, where entry, stop and target all round to the same number and the whole card
@@ -119,6 +212,11 @@ async function fetchTwelve(symbol: string, interval: Interval, apiKey: string): 
  */
 export const priceDigits = (ref: number) => {
   const a = Math.abs(ref)
+  // below a ten-thousandth the fixed ladder runs out and every memecoin formats as "0.000000".
+  // Chase the magnitude instead: enough decimals for three significant figures, capped where
+  // toLocaleString stops caring. Nothing the desk lists trades down here, so the ladder above
+  // is untouched — this is the tail the trending pools land in.
+  if (a > 0 && a < 0.0001) return Math.min(12, 2 - Math.floor(Math.log10(a)))
   return a >= 1 ? 2 : a >= 0.1 ? 4 : a >= 0.01 ? 5 : a > 0 ? 6 : 2
 }
 

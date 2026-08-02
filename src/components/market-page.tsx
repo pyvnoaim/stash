@@ -10,9 +10,9 @@ import { GuideDialog } from '@/components/guide-dialog'
 import { cn } from '@/lib/utils'
 import { addWatch, removeWatch, setApiKey, setMarketAsset, uid, useStash } from '@/lib/store'
 import {
-  ASSETS, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb, PLAN_WORDS,
-  signals, tradePlan, trendFilter,
-  type Asset, type Candle, type Horizon, type Interval, type Signal,
+  ASSETS, fetchCandles, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
+  PLAN_WORDS, signals, tradePlan, trendFilter, TREND_NETWORK,
+  type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -28,6 +28,8 @@ const VISIBLE = 60 // bars drawn by default; MAs/signals still use every fetched
 const MIN_BARS = 20, MAX_BARS = 400 // how far the wheel can zoom in and out
 const LIVE = 5000 // how often the forming candle is repriced
 const LIVE_SLOW = 15_000 // …and how often for stocks, whose free tier allows 8 calls a minute
+const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a minute, this asks 1
+const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 const BAR_MS: Record<Interval, number> = { '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -771,8 +773,79 @@ export default function MarketPage() {
       )}
       </>
       )}
+
+      {/* outside the fragment above, so it is there while the desk loads, errors, or waits for a
+          stock key — it needs none of those things */}
+      <Trending />
+
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
+  )
+}
+
+/**
+ * The other market: whatever opened this morning and is already moving. Nothing here is in ASSETS
+ * and nothing here gets a chart — these live hours, and a moving average over a six-hour pool is a
+ * line through noise. The panel's whole job is to say what is happening and get you to the pool.
+ * The bell (trendAlerts) is what makes it fast; this is what makes it readable.
+ */
+function Trending() {
+  const [rows, setRows] = useState<Trend[] | null>(null)
+  const [err, setErr] = useState(false)
+
+  useEffect(() => {
+    let on = true
+    const tick = () => fetchTrending()
+      .then((t) => { if (on) { setRows(t); setErr(false) } })
+      .catch(() => { if (on) setErr(true) })
+    tick()
+    const h = window.setInterval(tick, TREND_LIVE)
+    return () => { on = false; window.clearInterval(h) }
+  }, [])
+
+  const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+  const usd = (n: number) => n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1e3)}k`
+  const age = (h: number) => !isFinite(h) ? '' : h < 1 ? `${Math.round(h * 60)}m` : h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`
+
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-heading text-sm tracking-wide uppercase">Trending on {TREND_NETWORK}</span>
+          <span className="text-muted-foreground text-xs">by the last hour</span>
+        </div>
+        {err && <p className="text-muted-foreground py-4 text-sm">Could not reach the pool feed.</p>}
+        {!err && !rows && <p className="text-muted-foreground py-4 text-sm">Loading pools…</p>}
+        {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">Nothing trending right now.</p>}
+        {rows?.slice(0, TREND_ROWS).map((t) => (
+          /* straight out to the pool: this app has no chart for it and pretending otherwise would
+             be the dishonest kind of feature. New tab, noreferrer — same terms as the item links. */
+          <a
+            key={t.pool}
+            href={t.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="hover:bg-accent -mx-1.5 flex items-baseline gap-2 rounded-md px-1.5 py-1 text-sm"
+          >
+            <span className="w-24 shrink-0 truncate font-medium">{t.symbol}</span>
+            <span className="text-muted-foreground w-24 shrink-0 font-mono text-xs tabular-nums">
+              {fmtPrice(t.price)}
+            </span>
+            <span className={cn('w-16 shrink-0 text-right font-mono text-xs tabular-nums',
+              t.h1 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {pct(t.h1)}
+            </span>
+            {/* liquidity is the honest column here — a 300% hour on $4k of pool is not a market */}
+            <span className="text-muted-foreground ml-auto shrink-0 font-mono text-xs tabular-nums">
+              {usd(t.liq)}
+            </span>
+            <span className="text-muted-foreground w-10 shrink-0 text-right font-mono text-xs tabular-nums">
+              {age(t.age)}
+            </span>
+          </a>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 

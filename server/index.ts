@@ -757,11 +757,11 @@ export function start({
         'cache-control': forever ? 'public, max-age=31536000, immutable' : 'no-cache',
         'x-content-type-options': 'nosniff',
         // set here rather than in the proxy, so they hold whatever terminates TLS in front.
-        // wasm-unsafe-eval is pdf.js; the two hosts are the market feeds; nothing else may load.
+        // wasm-unsafe-eval is pdf.js; the three hosts are the market feeds; nothing else may load.
         ...(ext === 'html' && {
           'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
             + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            + "connect-src 'self' https://api.binance.com https://api.twelvedata.com; "
+            + "connect-src 'self' https://api.binance.com https://api.twelvedata.com https://api.geckoterminal.com; "
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 // type-only, so it's erased and store still loads lazily below, after the globals are stubbed
 import type { Item, State, Watch } from './store.ts'
+import type { Trend } from './market.ts'
 
 // notify imports store, which touches localStorage and listeners at import time
 Object.assign(globalThis, {
@@ -10,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alerts, watchAlerts } = await import('./notify.ts')
+const { alerts, watchAlerts, trendAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
 
 const t = today()
@@ -72,3 +73,37 @@ assert.deepEqual(watchAlerts([long], {}), [])
 assert.deepEqual(watchAlerts([long], { BTCUSDT: NaN }), [])
 
 console.log('notify ok')
+
+// trendAlerts: the memecoin bell. Liquidity is the gate, then hard move or fresh pool.
+const mc = (over: Partial<Trend> = {}): Trend => ({
+  symbol: 'CATE', pool: 'pool1', price: 0.029, h1: 0, h24: 0, vol24: 1e6,
+  liq: 500_000, age: 100, url: 'https://example.test/pool1', ...over,
+})
+
+// a thin pool says nothing however violently it moves — that is a chart, not a market
+assert.deepEqual(trendAlerts([mc({ h1: 900, liq: TREND_LIQ - 1 })]), [])
+// nor does a liquid pool that is neither moving nor new
+assert.deepEqual(trendAlerts([mc()]), [])
+
+// a hard hour, both ways round
+const [up] = trendAlerts([mc({ h1: TREND_MOVE + 5 })])
+assert.equal(up.tone, 'info')
+assert.match(up.title, /CATE up 30%/)
+const [down] = trendAlerts([mc({ h1: -(TREND_MOVE + 5) })])
+assert.equal(down.tone, 'warn')
+assert.match(down.title, /CATE down 30%/)
+
+// a fresh pool with money in it is worth a word even while it sits still
+const [fresh] = trendAlerts([mc({ age: TREND_FRESH - 1 })])
+assert.match(fresh.title, /is new/)
+assert.match(fresh.detail, /5h old/)
+assert.match(trendAlerts([mc({ age: 0.5 })])[0].detail, /under an hour/)
+
+// both true at once reads as the move: a four-hour-old pool dumping 40% is being left, not launched
+assert.match(trendAlerts([mc({ age: 1, h1: -40 })])[0].title, /down 40%/)
+
+// ids carry the pool and the reading, so dismissing one doesn't silence the other
+assert.equal(trendAlerts([mc({ h1: 40 })])[0].id, 'trend-pool1-move')
+assert.equal(trendAlerts([mc({ age: 1 })])[0].id, 'trend-pool1-new')
+// and none of them claims an asset — no ASSETS id exists, so the desk must not be pointed anywhere
+assert.equal(trendAlerts([mc({ h1: 40 })])[0].asset, undefined)

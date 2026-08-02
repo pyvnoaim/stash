@@ -1,6 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { nextCharge, SUBS, MARKET, type State, type Watch } from './store.ts'
+import type { Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -43,6 +44,51 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>): A
     }[hit]
     // the level is in the id, so dismissing "at entry" doesn't also silence the stop that follows
     return [{ id: `watch-${w.id}-${hit}`, ...a, target: MARKET, asset: w.asset }]
+  })
+}
+
+/* Thresholds for the memecoin bell. All three are dials and all three are here: the numbers that
+   read as "worth interrupting you" depend entirely on what the chain is doing that week, and no
+   amount of cleverness in the rule below substitutes for turning them. Bell too loud? Raise
+   TREND_LIQ first — it is the one that separates a market from a rug with a chart on it. */
+export const TREND_MOVE = 25      // percent in an hour
+export const TREND_FRESH = 6      // hours old and still counting as new
+export const TREND_LIQ = 50_000   // dollars in the pool before it is worth a word
+
+/**
+ * The trending pools, turned into things worth looking up from whatever you were doing. Two of
+ * them qualify: something moved hard in the last hour, or something opened in the last few hours
+ * and already has real money in it. Pure, like watchAlerts — the bell fetches and passes them in.
+ *
+ * No `asset`: a memecoin has no ASSETS id, and setMarketAsset with a pool address would land the
+ * desk on Bitcoin (see the note on State.marketAsset). The alert opens Markets, where the panel
+ * lists it with a link out to the pool — which is as far as this app can honestly take you.
+ */
+export function trendAlerts(trends: Trend[]): Alert[] {
+  return trends.flatMap((t): Alert[] => {
+    if (t.liq < TREND_LIQ) return []
+    const moved = Math.abs(t.h1) >= TREND_MOVE
+    const fresh = t.age <= TREND_FRESH
+    if (!moved && !fresh) return []
+    const up = t.h1 >= 0
+    const liq = '$' + Math.round(t.liq).toLocaleString()
+    /* a move reads over a launch when both are true: a pool four hours old dumping 40% is not a
+       new coin to look at, it is one being left, and "New pool" would be the wrong word for it */
+    const a = moved
+      ? {
+        id: 'move',
+        title: `${t.symbol} ${up ? 'up' : 'down'} ${Math.abs(t.h1).toFixed(0)}%`,
+        detail: `last hour · ${liq} liquidity`,
+        tone: up ? ('info' as const) : ('warn' as const),
+      }
+      : {
+        id: 'new',
+        title: `${t.symbol} is new`,
+        detail: `${t.age < 1 ? 'under an hour' : `${Math.round(t.age)}h`} old · ${liq} liquidity`,
+        tone: 'info' as const,
+      }
+    // the pool and the reading are both in the id, so dismissing the launch doesn't silence the dump
+    return [{ id: `trend-${t.pool}-${a.id}`, title: a.title, detail: a.detail, tone: a.tone, target: MARKET }]
   })
 }
 

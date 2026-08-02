@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { MARKET, setMarketAsset, useStash } from '@/lib/store'
-import { fetchPrices } from '@/lib/market'
-import { alerts, watchAlerts, type Alert } from '@/lib/notify'
+import { fetchPrices, fetchTrending } from '@/lib/market'
+import { alerts, trendAlerts, watchAlerts, type Alert } from '@/lib/notify'
 
 // a coloured dot stands in for a per-kind icon; keeps the row compact
 const DOT: Record<Alert['tone'], string> = {
@@ -72,7 +72,21 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   }, [assets, s.apiKey])
   const setups = useMemo(() => watchAlerts(s.watches, live), [s.watches, live])
 
-  const shown = [...stateAlerts, ...setups, ...movers].filter((a) => !dismissed.has(a.id))
+  /* the memecoin end, on the same timer. This is the half that has to be a poll rather than the
+     movers' one-shot: a pool that opened twenty minutes ago stops being news within the hour, and
+     an answer fetched when the tab opened is no answer at all. Keyless, so it costs nothing to ask. */
+  const [trends, setTrends] = useState<Alert[]>([])
+  useEffect(() => {
+    let on = true
+    const tick = () => fetchTrending()
+      .then((t) => { if (on) setTrends(trendAlerts(t)) })
+      .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
+    tick()
+    const h = setInterval(tick, POLL)
+    return () => { on = false; clearInterval(h) }
+  }, [])
+
+  const shown = [...stateAlerts, ...setups, ...movers, ...trends].filter((a) => !dismissed.has(a.id))
   const drop = (ids: string[]) => setDismissed((prev) => new Set([...prev, ...ids]))
 
   return (

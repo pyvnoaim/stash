@@ -29,7 +29,7 @@ globalThis.fetch = ((url: string) => {
   seen.push(url)
   return Promise.resolve({ json: () => Promise.resolve([]) })
 }) as typeof fetch
-const { ASSETS, fetchCandles, fetchPrices } = await import('./market.ts')
+const { ASSETS, fetchCandles, fetchPrices, fetchTrending } = await import('./market.ts')
 const asked = async (fn: () => Promise<unknown>) => {
   seen.length = 0
   await fn().catch(() => {})
@@ -50,5 +50,13 @@ for (const url of [
   ...(await asked(() => fetchPrices([crypto.id], ''))),
   ...(await asked(() => fetchPrices([stock.id], 'KEY'))),
 ]) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
+
+/* Trending pools are on the same footing as the ticker, and for the same reason: the bell alerts
+   off this list. A cached one would announce a launch that already happened and a mover that has
+   since died — the two things a memecoin alert is least able to survive being wrong about.
+   Asserted non-empty, or a fetcher that quietly stopped asking would pass this by saying nothing. */
+const trendUrls = await asked(() => fetchTrending())
+assert.ok(trendUrls.length, 'fetchTrending asked for nothing')
+for (const url of trendUrls) assert.ok(!cached(url), `trending must never be served from cache: ${url}`)
 
 console.log('sw routes ok')

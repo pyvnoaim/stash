@@ -1,7 +1,7 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, tradePlan, divergence,
-  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS } = await import('./market.ts')
+  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS } = await import('./market.ts')
 
 // sma: nulls until the window fills, then the trailing average
 const s = sma([1, 2, 3, 4, 5], 3)
@@ -220,3 +220,43 @@ for (const key of Object.keys(GUIDES) as (keyof typeof GUIDES)[]) {
 }
 
 console.log('market ok')
+
+// parseTrending against a row shaped like GeckoTerminal's real one (captured from the live feed)
+const pool = (over: Record<string, unknown> = {}) => ({
+  attributes: {
+    name: 'CATE / SOL',
+    address: 'HMzvsEEmtzHhvZNw9uwbaG85HCTmFnkbhzUx16cy7ca3',
+    base_token_price_usd: '0.02899118516956116851',
+    pool_created_at: '2026-07-26T16:32:43Z',
+    reserve_in_usd: '781168.8473',
+    price_change_percentage: { h1: '-8.57', h24: '151.456' },
+    volume_usd: { h24: '12509216.4691434' },
+    ...over,
+  },
+})
+const now = Date.parse('2026-07-26T20:32:43Z')   // four hours after that pool opened
+const [tr] = parseTrending({ data: [pool()] }, now)
+assert.equal(tr.symbol, 'CATE')                  // the base side of 'CATE / SOL', not the whole name
+assert.equal(tr.pool, 'HMzvsEEmtzHhvZNw9uwbaG85HCTmFnkbhzUx16cy7ca3')
+assert.equal(tr.h1, -8.57)
+assert.equal(tr.liq, 781168.8473)
+assert.equal(tr.age, 4)
+assert.ok(tr.url.includes('HMzvsEEmtzHhvZNw9uwbaG85HCTmFnkbhzUx16cy7ca3'))
+
+// a row with nothing to act on is dropped, not rendered as zeroes
+assert.deepEqual(parseTrending({ data: [pool({ base_token_price_usd: '0' })] }, now), [])
+assert.deepEqual(parseTrending({ data: [pool({ address: undefined })] }, now), [])
+// an unparseable open date reads as old rather than as brand new — the quiet way round
+assert.equal(parseTrending({ data: [pool({ pool_created_at: 'nonsense' })] }, now)[0].age, Infinity)
+// a feed that answers with an error object, or with nothing, is empty rather than a throw
+assert.deepEqual(parseTrending({ errors: [{ status: '404' }] }), [])
+assert.deepEqual(parseTrending(null), [])
+
+// priceDigits: the desk's own range is untouched, and memecoin prices stop collapsing to 0.000000
+assert.equal(priceDigits(65000), 2)
+assert.equal(priceDigits(0.17), 4)
+assert.equal(priceDigits(0.0001), 6)     // the boundary still belongs to the fixed ladder
+assert.equal(priceDigits(0.0000004), 9)  // three significant figures, not six zeroes
+// the digit survives instead of rounding away; the trailing zeros are minimumFractionDigits padding
+assert.equal(fmtPrice(0.0000004), '0.000000400')
+assert.equal(fmtPrice(0.000001), '0.00000100')
