@@ -194,6 +194,17 @@ export const changePassword = (current: string, next: string) =>
   call('/api/password', { method: 'POST', body: JSON.stringify({ current, next }) })
     .then(() => null).catch(errorOf)
 
+export interface Device { created: number, seen: number, device: string | null, current: boolean }
+
+/** Where this account is signed in. Empty when the server cannot be reached. */
+export const devices = (): Promise<Device[]> =>
+  call('/api/sessions').then((j) => j.sessions as Device[]).catch(() => [])
+
+/** Your account off the server, password in hand. What this machine holds locally stays put. */
+export const deleteAccount = (pass: string) =>
+  call('/api/account', { method: 'DELETE', body: JSON.stringify({ pass }) })
+    .then(() => { setSnap({ user: null, status: 'out' }); return null }).catch(errorOf)
+
 export interface Version { v: number, ts: number, device: string, size: number }
 
 export const versions = (): Promise<Version[]> =>
@@ -239,6 +250,10 @@ export interface SharedWithMe { pid: string, edit: number, subs: number, owner: 
 
 export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[] }> =>
   call('/api/shares').catch(() => ({ mine: [], with_me: [] }))
+
+/** Everyone else with an account here, for a share field to complete against. Empty when offline. */
+export const people = (): Promise<string[]> =>
+  call('/api/users').then((j) => j.users as string[]).catch(() => [])
 
 export const share = (pid: string, user: string, edit: boolean, subs?: boolean) =>
   call('/api/share', { method: 'POST', body: JSON.stringify({ pid, user, edit, subs }) })

@@ -12,8 +12,8 @@ import {
 import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
-  CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, select, SUBS, useStash,
-  viewName, VIEWS, visible, type Item, type State,
+  CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
+  SUBS, useStash, viewName, VIEWS, visible, type Item, type State,
 } from '@/lib/store'
 
 const VIEW_ICONS = {
@@ -63,6 +63,22 @@ export function exportBackup() {
   const a = Object.assign(document.createElement('a'), { href: url, download: `stash-${today()}.json` })
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 5000)
+}
+
+/**
+ * A backup back in, whole: the file replaces what is here rather than merging into it, which is
+ * why it says how many landed. Beside the export because they are one pair — the palette offers
+ * them, Settings offers them, and neither owns the reading of the file.
+ */
+export function importBackup(file: File) {
+  return file.text()
+    .then((t) => {
+      const data = JSON.parse(t)
+      if (!Array.isArray(data.items)) throw new Error('not a Stash backup')
+      replaceAll(data)
+      toast(`Loaded ${data.items.length} items`)
+    })
+    .catch((err: Error) => toast('Import failed', { description: err.message }))
 }
 
 /** Everything a search should look at, written the way you would type it. */

@@ -519,8 +519,12 @@ surface is the security strategy. `npm test` runs the sync engine against it ove
 
 ## Sharing a project
 
-Right-click a project → **Share…**, name someone with an account on this server, and choose **Can
-view** or **Can edit**. They get the project and the items filed under it — nothing else of yours.
+Right-click a project → **Edit**. Who is on it sits under the colour, in the same window as its
+name — one of the project's settings rather than a second dialog to find. Name someone with an
+account on this server and choose **Can view** or **Can edit**; the field completes against the
+other accounts as you type, minus whoever is already on it. Everything there takes effect as you
+do it — the **Save** below is for the name and the colour. A project someone shared with *you*
+has **Leave project** on the menu instead: it is not yours to share on. They get the project and the items filed under it — nothing else of yours.
 A project holding sub-projects offers to include them; that is the project's own setting rather
 than each invitation's, so everyone on it sees the same thing, and turning it off takes the
 children back off their sidebars along with everything filed under them. The chip on a member's
@@ -539,10 +543,35 @@ instead of taking dictation, the store refuses every edit that reaches it, and t
 the write even if something got past both. A project shared with you carries an eye or a pair of
 people in the sidebar, and **Leave project** in its menu — leaving takes nothing with it.
 
+## Settings
+
+One window, reached from your name in the sidebar footer, opening on **Account**: the name and
+picture, the password, the devices this account is signed in on with one button to end all of them,
+and deleting the account — which asks for the password and refuses if you are the last admin, since
+nobody could ever cut an invite again. **History** is the fifty versions the server keeps.
+**People** is there for an admin. **Data** is the backup out and back in, clearing what is finished,
+and what the browser will admit about keeping any of it. **About** says which build this is and
+looks for a newer one. **Markets** and **Hotkeys** are kept on this machine and never travel.
+
+No Appearance: the theme cycles from the button in the header — system, light, dark — and ⌘K lists
+all three, so a third way to set it would be a setting for its own sake.
+
+Hotkeys are yours to change: press one, then press the keys you want. Anything that opens something
+needs ⌘, anything that acts on the rows may not have it — the handler drops modified keys before it
+reaches them — and nothing may take a key the list already walks on. **Reset to defaults** forgets
+every change at once. Moving through a list, extending a selection, reordering a row, undo and Esc
+stay as they are: they read the selection as they go, and a table that could describe them would be
+harder to follow than the code.
+
 ## Hosting it
 
 The built app is a PWA: the service worker caches the whole bundle, so once visited it opens with
-no network — installed on a phone's home screen or Safari's Dock, it is the app. That, the
+no network — installed on a phone's home screen or Safari's Dock, it is the app. A deploy does
+not push itself into a tab that is already open: the new bundle downloads and waits, and *New
+version available* sits there with **Reload** until you take it, rather than swapping the app out
+from under a half-typed line. Nothing checks on its own, so it asks hourly and whenever you come
+back to the window — a PWA left open on one screen never navigates, and navigation is the only
+time a browser would otherwise look. That, the
 `Secure` cookie and the install prompt all require HTTPS, so the container expects a TLS proxy in
 front — it joins the proxy's docker network and publishes no ports, which makes the proxy the
 only way in. With nginx proxy manager: a proxy host for the domain, forwarded to `stash:8787`,
@@ -556,8 +585,10 @@ docker compose exec stash node server/index.ts invite   # the first code; the re
 
 Data sits in one named volume; backing it up is copying one SQLite file.
 
-Local dev runs the same server beside Vite — `node server/index.ts` with `STASH_DB` somewhere
-writable, and the dev proxy in `vite.config.ts` does the rest.
+Local dev runs the same server beside Vite — `STASH_DB=~/stash-dev.db npm run server`, and the dev
+proxy in `vite.config.ts` does the rest. The script is `node server/index.ts` plus the flag that
+strips the types, which the container's node 24 does on its own and anything before 22.18 does not.
+`npm run server -- invite` prints a code to sign up with, since the first account needs one too.
 
 ## License
 
