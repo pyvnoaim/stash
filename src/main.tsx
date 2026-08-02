@@ -15,7 +15,7 @@ const updateSW = registerSW({
   onNeedRefresh: () => toast('New version available', {
     id: 'update',   // one at a time: a second check while it is still up must not stack another
     duration: Infinity,
-    action: { label: 'Reload', onClick: () => void updateSW(true) },
+    action: { label: 'Reload', onClick: () => void hardReload() },
   }),
   /* Nothing checks on its own. The browser looks for a new worker on navigation, and a PWA left
      open on one screen for days never navigates — so ask, hourly and on coming back to it, which
@@ -28,6 +28,17 @@ const updateSW = registerSW({
     addEventListener('visibilitychange', check)
   },
 })
+
+/* Reload means reload: every cache goes before the waiting worker takes over, so what comes back
+   is fetched rather than remembered — a half-updated shell is the thing this button is for. Costs
+   the offline candle history, which refills on the next look. */
+async function hardReload() {
+  // ...unless there is nothing to fetch it back from. The toast sits until it is answered, which
+  // can be hours later on a train: offline the caches are the only copy of the app there is, and
+  // emptying them leaves a white screen. The new worker is already downloaded — just let it in.
+  if (navigator.onLine) await Promise.all((await caches.keys()).map((k) => caches.delete(k)))
+  await updateSW(true)
+}
 
 // ask the browser not to evict localStorage under storage pressure — Safari can, after a week
 // unused. Chrome and Safari decide silently; Firefox puts a prompt up, so never ask in dev and
