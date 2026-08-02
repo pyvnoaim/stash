@@ -2,6 +2,9 @@ services:
   stash:
     build: .
     restart: unless-stopped
+    # A volume that already existed before the container dropped to the node user is still owned by
+    # root, and Docker never re-stamps one it did not just create. Once, on an existing deployment:
+    #   docker compose run --rm --user root --entrypoint chown stash -R node:node /data
     volumes: ['stash:/data']
     # 401 is the healthy answer from /api/me without a cookie: the process is up and the database
     # is answering. Docker restarts it if that stops being true; uptime-kuma watches the domain.
