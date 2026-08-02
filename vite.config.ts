@@ -1,16 +1,30 @@
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+/* Which build this is, stamped in at build time — the update prompt tells you a new one is
+   waiting, and this is the other half: what you are on now. A checkout without git, or a source
+   tarball, still builds; it simply has nothing to call itself. */
+const build = (() => {
+  try { return execFileSync('git', ['rev-parse', '--short', 'HEAD']).toString().trim() } catch { return 'source' }
+})()
+
 export default defineConfig({
+  define: {
+    __BUILD__: JSON.stringify(build),
+    __BUILT_AT__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     tailwindcss(),
     // the offline half: precache the whole bundle so the app opens with no network at all
     VitePWA({
-      registerType: 'autoUpdate',
+      /* Not autoUpdate: it forces skipWaiting, so a new build replaces the running one under an
+         open tab and takes the half-typed line with it. The worker waits and main.tsx offers it. */
+      registerType: 'prompt',
       manifest: {
         name: 'Stash',
         short_name: 'Stash',
@@ -64,11 +78,14 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },
-  // dev talks to a locally running `node server/index.ts` the same way the container serves it
+  /* dev talks to a locally running `npm run server` the same way the container serves it — one
+     origin, which is what the server checks a write against. Left to itself the proxy rewrites
+     Host to its target, and then every POST from the browser is a cross-site one by that test:
+     Origin says localhost:5173 and Host says 127.0.0.1:8787. Keep the host the browser asked for. */
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8787',
-      '/state': 'http://127.0.0.1:8787',
+      '/api': { target: 'http://127.0.0.1:8787', changeOrigin: false },
+      '/state': { target: 'http://127.0.0.1:8787', changeOrigin: false },
     },
   },
 })

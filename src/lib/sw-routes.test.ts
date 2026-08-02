@@ -14,6 +14,11 @@ if (!existsSync('dist/sw.js')) {
 }
 
 const sw = readFileSync('dist/sw.js', 'utf8')
+
+/* The update toast only ever appears because the new worker waits. registerType 'autoUpdate' puts
+   clientsClaim and skipWaiting in here and there is nothing left to offer, so the prompt would go
+   quiet without a line of it changing. */
+assert(!sw.includes('clientsClaim'), 'worker claims clients — registerType is back to autoUpdate')
 const cachedBy = [...sw.matchAll(/registerRoute\((\/\^https[^,]+?\/),new e\.NetworkFirst/g)]
   .map((m) => new RegExp(m[1].slice(1, -1)))
 assert.equal(cachedBy.length, 2, 'expected the two candle routes in the built worker')
