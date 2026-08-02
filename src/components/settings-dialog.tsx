@@ -414,22 +414,21 @@ function HotkeysPanel() {
   )
 }
 
-/** Shrink whatever was picked to a 128px square — the server only accepts small pictures. */
-function shrink(file: File): Promise<string> {
-  return new Promise((ok, fail) => {
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      const c = document.createElement('canvas')
-      c.width = c.height = 128
-      const s = Math.min(img.width, img.height)   // cover-crop the middle square
-      c.getContext('2d')!.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 128, 128)
-      ok(c.toDataURL('image/jpeg', 0.85))
-    }
-    img.onerror = () => { URL.revokeObjectURL(url); fail(new Error('not an image')) }
-    img.src = url
-  })
+/**
+ * Shrink whatever was picked to a 128px square — the server only accepts small pictures.
+ *
+ * Decoded from the file itself rather than through an <img>: that wants a blob: URL, and the
+ * page is served under `img-src 'self' data:`, so the picture never loaded and every valid
+ * photo came back as "not an image". Orientation from the file, or every phone photo lies down.
+ */
+async function shrink(file: File): Promise<string> {
+  const img = await createImageBitmap(file, { imageOrientation: 'from-image' })
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const s = Math.min(img.width, img.height)   // cover-crop the middle square
+  c.getContext('2d')!.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 128, 128)
+  img.close()
+  return c.toDataURL('image/jpeg', 0.85)
 }
 
 /** The name that signs you in and the picture beside it, then the password, then the way out. */
@@ -477,9 +476,16 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
               className="hidden"
               onChange={async (e) => {
                 const f = e.target.files?.[0]
-                e.target.value = ''
                 if (!f) return
-                try { setAvatar(await shrink(f)) } catch { setError('That file is not an image') }
+                try {
+                  setAvatar(await shrink(f))
+                  setError('')      // a picture that opened answers whatever the last one said
+                } catch {
+                  setError(`${f.type || 'That file'} is not a picture this browser can open`)
+                }
+                // cleared last, and never before the file has been read: WebKit drops the blob
+                // behind a File the moment the input that produced it is reset
+                e.target.value = ''
               }}
             />
             <Button variant="outline" size="sm" onClick={() => file.current?.click()}>
