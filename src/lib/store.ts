@@ -33,8 +33,6 @@ export interface Project {
    * a parent cannot be given children. Two levels is a sidebar; more is a file tree.
    */
   parent: string | null
-  /** What the project is for, in markdown — the brief that lives where the work does. */
-  note: string
   /**
    * Set when the project is someone else's, shared with you: who owns it and whether you may
    * write. Absent on your own projects, shared or not — what you own, you may always edit.
@@ -243,8 +241,6 @@ export function load(data: unknown): State {
       name: String(p.name || 'Project'),
       color: cleanColor(p.color),
       parent: typeof p.parent === 'string' ? p.parent : null,
-      // a backup from before briefs existed simply has none
-      note: typeof p.note === 'string' ? p.note : '',
       ...(p.share && typeof p.share === 'object' && typeof p.share.by === 'string'
         && { share: { by: String(p.share.by), edit: !!p.share.edit } }),
     }))
@@ -493,7 +489,7 @@ export function adoptShared(pid: string, slice: unknown, share?: { by: string, e
 
     if (!clean) {
       // no document yet: keep the placeholder, only set whose it is and what may be done in it
-      const blank: Project = { id: pid, name: 'Shared project', color: null, parent: null, note: '' }
+      const blank: Project = { id: pid, name: 'Shared project', color: null, parent: null }
       const next = { ...(kept ?? blank), ...(mark ? { share: mark } : {}) }
       return {
         ...s,
@@ -872,7 +868,7 @@ export function moveProject(dragId: string, targetId: string, where: 'above' | '
 }
 
 export const addProject = (name: string, color: string | null = null, parent: string | null = null) => {
-  const p = { id: uid(), name, color: cleanColor(color), parent, note: '' }
+  const p = { id: uid(), name, color: cleanColor(color), parent }
   set((s) => ({ ...s, projects: [...s.projects, p], sel: p.id }))
   return p
 }

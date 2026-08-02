@@ -30,8 +30,8 @@ for (const junk of [null, undefined, 42, 'nope', [], { items: 'no' }, { projects
 // projects: no id means dropped, no name means named
 const p = load({ projects: [{ id: 'a', name: 'Kova' }, { name: 'orphan' }, { id: 'b' }] }).projects
 assert.deepEqual(p, [
-  { id: 'a', name: 'Kova', color: null, parent: null, note: '' },
-  { id: 'b', name: 'Project', color: null, parent: null, note: '' },
+  { id: 'a', name: 'Kova', color: null, parent: null },
+  { id: 'b', name: 'Project', color: null, parent: null },
 ])
 
 /* A parent must exist, cannot be the project itself, and cannot have a parent of its own —
@@ -514,16 +514,15 @@ console.log('store: ok')
   // a child dropped out of the share leaves with its items, and the permission covers the rest
   adoptShared(yours.id, wide, { by: 'ada', edit: true })
   assert.ok(getState().projects.find((p) => p.id === kid.id)?.share)
-  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null, note: '' }], items: [] })
+  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null }], items: [] })
   assert.ok(!getState().projects.some((p) => p.id === kid.id))
   assert.ok(!getState().items.some((i) => i.id === 'kidItem'))
 
   // adopting a slice replaces what was filed under that project and keeps the permission
-  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null, note: 'brief' }],
+  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null }],
     items: [item({ id: 'fromThem', pid: yours.id, text: 'theirs now' })] })
   const after = getState()
   assert.deepEqual(after.items.filter((i) => i.pid === yours.id).map((i) => i.id), ['fromThem'])
-  assert.equal(after.projects.find((p) => p.id === yours.id)!.note, 'brief')
   assert.deepEqual(after.projects.find((p) => p.id === yours.id)!.share, { by: 'ada', edit: true })
 
   // unshared: the project and its items leave with it, and nothing of yours goes with them

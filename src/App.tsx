@@ -8,7 +8,7 @@ import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
 import { Faces } from '@/components/faces'
-import { ProjectBrief } from '@/components/project-brief'
+import { ProjectHeader } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
 import { ItemRow } from '@/components/item-row'
 import { NotePage } from '@/components/note-page'
@@ -418,7 +418,7 @@ export default function App() {
             <Capture inputRef={boxRef} />
 
             {/* a project is a place, so it gets a header of its own: how far along, and what for */}
-            {!query && openProject && <ProjectBrief p={openProject} />}
+            {!query && openProject && <ProjectHeader p={openProject} />}
 
             {/* scrollbars are hidden app-wide, so this is the only sign the list runs on; it
                 pages down on click and hides once there is nothing left below */}

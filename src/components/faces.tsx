@@ -23,7 +23,7 @@ export function Faces({ p }: { p: Project }) {
   // a sub-project is not in the table itself — it is on the parent's share, when that share carries it
   const here = on(p.id).length ? on(p.id) : p.parent ? on(p.parent, true) : []
 
-  if (here.length < 2) return null   // alone on it is not company, and the brief already says whose it is
+  if (here.length < 2) return null   // alone on it is not company, and the header already says whose it is
 
   return (
     <div className="flex shrink-0 -space-x-1.5">
