@@ -254,6 +254,9 @@ export function start({
     const now = Date.now()
     const e = tries.get(key)
     if (e && now - e.t < COOL_OFF) { e.n++; return e.n > TRIES }
+    /* Every address that ever missed leaves a key behind, and nothing ever asks for it again.
+       ponytail: swept on write once the map is worth sweeping — no timer, no eviction policy. */
+    if (tries.size > 1000) for (const [k, v] of tries) if (now - v.t >= COOL_OFF) tries.delete(k)
     tries.set(key, { n: 1, t: now })
     return false
   }
