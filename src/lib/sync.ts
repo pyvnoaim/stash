@@ -319,15 +319,28 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
     const { version, state } = await r.json()
 
     const local = sliceOf(getState(), pid, subs)
+    /* The same document, whichever way it is about to travel. Both sides are `sliceOf` output, so
+       the comparison is on the same key order and a match means there is genuinely nothing to do. */
+    const same = JSON.stringify(state) === JSON.stringify(local)
     const behind = version > (pv.get(key) ?? 0)
     // nothing of ours to send, or someone else's newer write to take: adopt and stop
     if (behind && state) {
       pv.set(key, version)
-      adoptShared(pid, state, mine ? undefined : { by: owner ?? '', edit })
+      /* A project of your own carries no permission, so an identical slice is not news — adopting
+         it would rewrite the store and mark this device dirty over nothing. One shared with you is
+         adopted either way: the slice travels without the share on it, so an unchanged document is
+         still how a permission that changed reaches this device. */
+      if (!same || !mine) adoptShared(pid, state, mine ? undefined : { by: owner ?? '', edit })
       return
     }
     if (!edit && !mine) return              // read-only: never push, only ever take
     if (!local) return
+    /* The server already holds this exact slice. Pushing it anyway spends one of the fifty
+       snapshots on a document that did not change, and moves the version — which is the only
+       signal the other devices have. They adopt, which marks their own document dirty, which
+       pushes a /state version and their pdoc, which moves the version again. A loop with no edit
+       anywhere behind it, and it is what fills the version list on a quiet day. */
+    if (same) return
     const body = JSON.stringify({ state: local, device })
     let w = await fetch(docUrl(pid, owner), {
       method: 'PUT', headers: { 'if-match': String(version) }, body,

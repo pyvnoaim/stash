@@ -140,6 +140,41 @@ assert.equal(await count(), before + 1)
   assert.ok((await onServer()).items.some((i: any) => i.text === 'typed while it was in the air'))
 }
 
+/* A shared project's document is pushed on every sync, whether or not anything in it changed. On
+   its own that is a wasted write and a wasted snapshot; across two devices it is a loop, because a
+   pdoc whose version moved is what makes the other device think it is behind — it adopts, which
+   marks its personal document dirty, which pushes a /state version and its own pdoc, and round it
+   goes. Nothing was edited between these two syncs, so nothing should have been written. */
+{
+  const { addProject } = await import('./store.ts')
+  const { id: pid } = addProject('Shared')
+  addItem({
+    id: uid(), type: 'task', text: 'something to share', note: '', pid, due: null, repeat: null,
+    flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
+  })
+  await flush()
+  await syncNow()
+
+  // someone to share it with, on their own connection — this device stays signed in as leon
+  const mia = await real(`${url}/api/signup`, {
+    method: 'POST', body: JSON.stringify({ user: 'mia', pass: 'longenough', invite: server.invite() }),
+  })
+  assert.equal(mia.status, 200)
+  assert.ok((await (await fetch('/api/share', {
+    method: 'POST', body: JSON.stringify({ pid, user: 'mia', edit: false }),
+  })).json()).members.length)
+
+  const pdocV = async () => (await (await fetch(`/api/pdoc?pid=${pid}`)).json()).version
+  await syncNow()
+  const settledAt = await pdocV()
+  const stateAt = await count()
+
+  await syncNow()
+  await syncNow()
+  assert.equal(await pdocV(), settledAt)   // nothing changed, so nothing to write
+  assert.equal(await count(), stateAt)
+}
+
 server.close()
 console.log('sync ok')
 
