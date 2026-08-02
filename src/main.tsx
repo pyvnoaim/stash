@@ -29,15 +29,18 @@ const updateSW = registerSW({
   },
 })
 
-/* Reload means reload: every cache goes before the waiting worker takes over, so what comes back
-   is fetched rather than remembered — a half-updated shell is the thing this button is for. Costs
-   the offline candle history, which refills on the next look. */
+/* Reload means reload: every cache goes and the worker with it, so the page that comes back is
+   fetched rather than remembered, with nothing left in the middle to serve half the old build. The
+   next load registers a worker again and precaches the new one. Costs the offline candle history,
+   which refills on the next look. */
 async function hardReload() {
   // ...unless there is nothing to fetch it back from. The toast sits until it is answered, which
   // can be hours later on a train: offline the caches are the only copy of the app there is, and
   // emptying them leaves a white screen. The new worker is already downloaded — just let it in.
-  if (navigator.onLine) await Promise.all((await caches.keys()).map((k) => caches.delete(k)))
-  await updateSW(true)
+  if (!navigator.onLine) return void updateSW(true)
+  await Promise.all((await caches.keys()).map((k) => caches.delete(k)))
+  await (await navigator.serviceWorker?.getRegistration())?.unregister()
+  location.reload()
 }
 
 // ask the browser not to evict localStorage under storage pressure — Safari can, after a week
