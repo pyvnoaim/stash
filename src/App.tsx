@@ -331,8 +331,10 @@ export default function App() {
             >
               <Search />
             </Button>
+            {/* the field itself is transparent, so the overlay carries the background — without it
+                the title and the icons it covers read straight through what you are typing */}
             <div className={cn('relative', phoneSearch
-              ? 'absolute inset-x-2 z-20 sm:static sm:inset-auto'
+              ? 'bg-background absolute inset-x-2 z-20 rounded-lg sm:static sm:inset-auto sm:bg-transparent'
               : 'hidden sm:block')}
             >
               <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />

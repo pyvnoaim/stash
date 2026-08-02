@@ -63,7 +63,9 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
   return (
     <aside
       aria-label="Item details"
-      className="bg-background flex w-[300px] shrink-0 flex-col overflow-hidden border-l"
+      // on a phone it is the content of a full-width bottom sheet, so the fixed column
+      // (and the border that divides it from the list) only applies once there is a list beside it
+      className="bg-background flex w-full shrink-0 flex-col overflow-hidden md:w-[300px] md:border-l"
     >
       {/* h-14 header + border-b so the type toggle lines up with the main content header */}
       <div className="flex h-14 shrink-0 items-center border-b px-4">
@@ -246,7 +248,7 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
   return (
     <aside
       aria-label="Selection details"
-      className="bg-background flex w-[300px] shrink-0 flex-col overflow-hidden border-l"
+      className="bg-background flex w-full shrink-0 flex-col overflow-hidden md:w-[300px] md:border-l"
     >
       {/* h-14 header + border-b to line up with the main content header */}
       <div className="flex h-14 shrink-0 items-center border-b px-4">

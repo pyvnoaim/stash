@@ -120,7 +120,9 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
               onScroll={() => setBar(null)}
               placeholder="Write… markdown supported"
               aria-label="Note"
-              className="placeholder:text-muted-foreground min-h-0 flex-1 resize-none bg-transparent font-mono text-sm leading-relaxed outline-none"
+              // text-base until md, like every other field: under 16px iOS zooms the page in on
+              // focus and never zooms back out, which leaves the header off the left edge
+              className="placeholder:text-muted-foreground min-h-0 flex-1 resize-none bg-transparent font-mono text-base leading-relaxed outline-none md:text-sm"
             />
             {bar && (
               <div
