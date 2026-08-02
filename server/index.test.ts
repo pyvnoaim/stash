@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 process.env.NODE_ENV = 'production'   // assert the cookie as the container serves it
 const { start } = await import('./index.ts')
@@ -109,6 +111,22 @@ const kim = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', inv
 const users = (await (await get('/api/admin/users', leon)).json()).users
 assert.deepEqual(users.map((u: any) => [u.name, u.admin]), [['leon', 1], ['mia', 0], ['kim', 0]])
 assert.ok(users[0].synced && users[1].synced && !users[2].synced)
+
+/* the roster the share fields complete against: everyone but yourself, and nothing about them
+   beyond the name you would have typed anyway. Never to someone who is not signed in. */
+assert.equal((await get('/api/users')).status, 401)
+assert.deepEqual(await (await get('/api/users', leon)).json(), { users: ['kim', 'mia'] })
+assert.deepEqual(await (await get('/api/users', mia)).json(), { users: ['kim', 'leon'] })
+
+/* where you are signed in: yours only, the one asking marked, and never the hash that proves it —
+   a list that handed those out would be a list of working cookies. */
+assert.equal((await get('/api/sessions')).status, 401)
+const seats = (await (await get('/api/sessions', leon)).json()).sessions
+assert.equal(seats.filter((d: any) => d.current).length, 1, 'exactly one seat is the one asking')
+assert.ok(seats.every((d: any) => !('hash' in d)), 'a session hash left the server')
+// mia's own list is hers, and none of leon's is in it
+assert.ok((await (await get('/api/sessions', mia)).json()).sessions.length >= 1)
+assert.equal(seats.length, db.prepare('select count(*) as n from sessions where user = 1').get()!.n)
 
 // deleting a user cascades: their session dies with the row — and never yourself
 const del = (name: string, cookie: string) => fetch(`${url}/api/admin/user`, {
@@ -264,6 +282,30 @@ assert.equal((await pdoc('same', cy, 'ada')).status, 404)
 // a member may not pass on what is not theirs
 assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, bo)).status, 403)
 
+/* deleting your own account: the password again, and never the last admin — a server nobody can
+   cut an invite on can never let anyone in again. Everything of theirs goes on the cascade. */
+const bye = jar(await post('/api/signup', { user: 'zed', pass: 'longenough', invite: server.invite() }))
+await put(bye, 0, { items: ['zeds'] })
+const byebye = (cookie: string, pass: string) => fetch(`${url}/api/account`, {
+  method: 'DELETE', headers: { cookie }, body: JSON.stringify({ pass }),
+})
+assert.equal((await byebye('', 'longenough')).status, 401)
+assert.equal((await byebye(bye, 'wrong')).status, 401)
+assert.equal((await byebye(bye, 'longenough')).status, 200)
+assert.equal((await get('/api/me', bye)).status, 401)               // the session went with the row
+assert.equal(db.prepare('select count(*) as n from docs where user not in (select id from users)')
+  .get()!.n, 0, 'their documents outlived them')
+// and the name is free again, which is the proof the row itself is gone
+assert.equal((await post('/api/signup', { user: 'zed', pass: 'longenough', invite: server.invite() })).status, 200)
+
+/* a code off a terminal keeps its newline, and a phone capitalises hex — both are the code. It
+   has to be spent in the form it was checked in, or the padded one would be good forever. Down
+   here because it makes a user, and the roll call above counts them. */
+const messy = server.invite()
+r = await post('/api/signup', { user: 'ines', pass: 'longenough', invite: ` ${messy.toUpperCase()}\n` })
+assert.equal(r.status, 200)
+assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', invite: messy })).status, 403)
+
 /* a run of wrong codes from one address cools off — the invite space is 64 bits wide, but nothing
    should be free to work through it. Last, because the cool-off outlives the test that trips it. */
 for (let i = 0; i < 11; i++) {
@@ -282,4 +324,32 @@ assert.equal(r.headers.get('cache-control'), 'no-cache')
 assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`)).status, 403)
 
 server.close()
+
+/* The first account on a fresh install signs up with a code from the command line, and that is a
+   second insert — the server's own never runs. One that leaves the timestamp to its default prints
+   a code born older than the week it gets, so the install can never be opened. Through the door
+   rather than against the query, since it is the door that was shut. */
+const cliDb = join(root, 'cli.db')
+const cliCode = execFileSync(process.execPath, [
+  '--experimental-strip-types', '--disable-warning=ExperimentalWarning',
+  fileURLToPath(new URL('index.ts', import.meta.url)), 'invite',
+], { env: { ...process.env, STASH_DB: cliDb } }).toString().trim()
+const cli = start({ port: 0, db: cliDb, root })
+await new Promise((ok) => cli.on('listening', ok))
+const cliPort = (cli.address() as { port: number }).port
+const opened = await fetch(`http://127.0.0.1:${cliPort}/api/signup`, {
+  method: 'POST', body: JSON.stringify({ user: 'first', pass: 'longenough', invite: cliCode }),
+})
+assert.equal(opened.status, 200, 'the code the command line printed was refused')
+
+/* and on that server 'first' is the only admin there is, which is where the other half of the
+   self-delete rule holds: leaving would take the last person who can cut an invite with it. */
+const alone = await fetch(`http://127.0.0.1:${cliPort}/api/account`, {
+  method: 'DELETE',
+  headers: { cookie: jar(opened) },
+  body: JSON.stringify({ pass: 'longenough' }),
+})
+assert.equal(alone.status, 400, 'the only admin walked out and shut the door behind them')
+cli.close()
+
 console.log('server ok')

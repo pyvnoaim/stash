@@ -104,7 +104,10 @@ const SCHEMA = `
   create table if not exists sessions (
     hash text primary key,
     user integer not null references users(id) on delete cascade,
-    created integer not null, seen integer not null
+    created integer not null, seen integer not null,
+    /* roughly what signed in — "Safari on macOS". Enough to recognise your own phone in a list;
+       never the full user-agent, which is a fingerprint and answers a question nobody asked. */
+    device text
   );
   /* A code is one-use and short-lived: used holds the account it made, ts when it was cut. */
   create table if not exists invites (code text primary key, used integer, ts integer not null default 0);
@@ -169,16 +172,23 @@ export function start({
     // codes cut before they had a date get their full window from now rather than expiring at once
     db.prepare('update invites set ts = ? where ts = 0').run(Date.now())
   } catch { /* already there */ }
+  // sessions from before the list existed have no label, and read as the unknown device they are
+  try { db.exec('alter table sessions add column device text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
     anyUser: db.prepare('select 1 from users limit 1'),
     delUser: db.prepare('delete from users where name = ? and id <> ?'),
+    delUserById: db.prepare('delete from users where id = ?'),
+    admins: db.prepare('select count(*) as n from users where admin = 1'),
     promote: db.prepare('update users set admin = 1 where name = ?'),
     listUsers: db.prepare(`select u.id, u.name, u.admin, u.ts,
       (select count(*) from sessions s where s.user = u.id) as sessions,
       (select max(d.ts) from docs d where d.user = u.id) as synced
       from users u order by u.id`),
+    /* everyone but you, for the share fields to complete against. Names only, and a name here is
+       already public to anyone you might share with — it is what they type to reach you. */
+    people: db.prepare('select name from users where id <> ? order by name'),
     invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
@@ -193,7 +203,9 @@ export function start({
     version: db.prepare('select v, json from docs where user = ? and v = ?'),
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
-    addSession: db.prepare('insert into sessions (hash, user, created, seen) values (?, ?, ?, ?)'),
+    addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
+    sessions: db.prepare(`select hash, created, seen, device from sessions
+      where user = ? order by seen desc`),
     touchSession: db.prepare('update sessions set seen = ? where hash = ?'),
     dropSession: db.prepare('delete from sessions where hash = ?'),
     dropAllSessions: db.prepare('delete from sessions where user = ?'),
@@ -250,9 +262,27 @@ export function start({
   const via = (req: IncomingMessage) =>
     String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()
 
-  const newSession = (user: number) => {
+  /* What signed in, in the two words anyone would use for it. Read off the user-agent and thrown
+     away: the browser and the system, nothing that narrows it to one machine. */
+  const deviceOf = (req: IncomingMessage) => {
+    const ua = String(req.headers['user-agent'] ?? '')
+    if (!ua) return null
+    const app = /Edg\//.test(ua) ? 'Edge'
+      : /OPR\/|Opera/.test(ua) ? 'Opera'
+        : /Firefox\//.test(ua) ? 'Firefox'
+          : /Chrome\//.test(ua) ? 'Chrome'
+            : /Safari\//.test(ua) ? 'Safari' : 'A browser'
+    const os = /iPhone|iPad/.test(ua) ? 'iOS'
+      : /Android/.test(ua) ? 'Android'
+        : /Macintosh/.test(ua) ? 'macOS'
+          : /Windows/.test(ua) ? 'Windows'
+            : /Linux/.test(ua) ? 'Linux' : null
+    return os ? `${app} on ${os}` : app
+  }
+
+  const newSession = (user: number, device: string | null = null) => {
     const t = randomBytes(32).toString('hex')
-    q.addSession.run(hashToken(t), user, Date.now(), Date.now())
+    q.addSession.run(hashToken(t), user, Date.now(), Date.now(), device)
     return t
   }
   // Secure only in the container: Safari drops Secure cookies on the http://localhost dev proxy
@@ -313,7 +343,12 @@ export function start({
       const pass = String(b?.pass ?? '')
       if (!/^[a-z0-9_-]{2,32}$/.test(name)) return send(res, 400, { error: 'name: 2–32 of a–z 0–9 _ -' })
       if (pass.length < 8) return send(res, 400, { error: 'password: 8 characters at least' })
-      if (!q.invite.get(String(b?.invite ?? ''), inviteFloor())) {
+      /* Read the way the name above it is: a code arrives pasted out of a terminal with the
+         newline still on it, or capitalised by a phone keyboard that treats hex as a sentence.
+         Neither is a wrong code, and "ask for a new one" is no help to either. The same string
+         spends it below — checking one form and burning another leaves the code good forever. */
+      const invite = String(b?.invite ?? '').trim().toLowerCase()
+      if (!q.invite.get(invite, inviteFloor())) {
         return send(res, 403, { error: 'that invite is not valid — ask for a new one' })
       }
       if (q.userByName.get(name)) return send(res, 409, { error: 'name taken' })
@@ -324,9 +359,9 @@ export function start({
       // the first account through the door is the admin — it is yours, you deployed this
       const admin = q.anyUser.get() ? 0 : 1
       const id = Number(q.addUser.run(name, salt, hashPass(pass, salt, SCRYPT_N), SCRYPT_N, admin, Date.now()).lastInsertRowid)
-      q.useInvite.run(id, String(b.invite))
+      q.useInvite.run(id, invite)
       log('signup', name, via(req))
-      return send(res, 200, { user: name, admin, avatar: null }, { 'set-cookie': cookie(newSession(id)) })
+      return send(res, 200, { user: name, admin, avatar: null }, { 'set-cookie': cookie(newSession(id, deviceOf(req))) })
     }
 
     if (path === '/api/login' && req.method === 'POST') {
@@ -346,7 +381,7 @@ export function start({
       q.pruneSessions.run(Date.now() - IDLE_DAYS * 86400_000, Date.now() - MAX_DAYS * 86400_000)
       log('login', name, via(req))
       return send(res, 200, { user: name, admin: u.admin, avatar: (u as any).avatar ?? null },
-        { 'set-cookie': cookie(newSession(u.id)) })
+        { 'set-cookie': cookie(newSession(u.id, deviceOf(req))) })
     }
 
     if (path === '/api/logout' && req.method === 'POST') {
@@ -500,7 +535,51 @@ export function start({
       return send(res, 200, {})
     }
 
+    /* Where you are signed in. Yours only, and the one asking is marked so nobody signs out the
+       device in their hand by mistake. The hashes never leave: they are what a cookie proves. */
+    if (path === '/api/sessions' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const mine = hashToken(cookieToken(req) ?? '')
+      const rows = q.sessions.all(user.id) as
+        { hash: string, created: number, seen: number, device: string | null }[]
+      return send(res, 200, {
+        sessions: rows.map((r) => ({
+          created: r.created, seen: r.seen, device: r.device, current: r.hash === mine,
+        })),
+      })
+    }
+
+    /* Your own account, gone: the sessions, the documents and every share go with it on the
+       cascade. The password again, for the reason changing one asks for it — and the last admin
+       is refused, since a server with nobody who can cut an invite can never let anyone back in.
+       What is already on your devices stays there; this server simply stops knowing you. */
+    if (path === '/api/account' && req.method === 'DELETE') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const u = q.userById.get(user.id) as { salt: Buffer, hash: Buffer, n: number }
+      if (!timingSafeEqual(hashPass(String(b?.pass ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
+        log('delete-self-fail', user.name, via(req))
+        return send(res, 401, { error: 'wrong password' })
+      }
+      if (user.admin && (q.admins.get() as { n: number }).n < 2) {
+        return send(res, 400, { error: 'make someone else an admin first — this server would have none' })
+      }
+      q.delUserById.run(user.id)
+      log('delete-self', user.name, via(req))
+      return send(res, 200, {}, { 'set-cookie': cookie('', 0) })
+    }
+
     /* ---------- sharing: a project of your own, opened to someone else ---------- */
+
+    // who there is to share with. Signed in only: the roster of a private server is not public.
+    if (path === '/api/users' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      return send(res, 200, { users: (q.people.all(user.id) as { name: string }[]).map((u) => u.name) })
+    }
 
     if (path === '/api/shares' && req.method === 'GET') {
       const user = auth(req)
@@ -700,7 +779,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     db.exec(SCHEMA)
     if (cmd === 'invite') {
       const code = randomBytes(8).toString('hex')
-      db.prepare('insert into invites (code) values (?)').run(code)
+      // with the time on it: the column defaults to 0 to let the migration spot the old rows, and
+      // 0 is older than any floor, so a code minted without one is expired before it is printed
+      db.prepare('insert into invites (code, ts) values (?, ?)').run(code, Date.now())
       console.log(code)
     } else {
       const n = db.prepare('update users set admin = 1 where name = ?').run(String(process.argv[3] ?? '')).changes
