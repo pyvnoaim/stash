@@ -103,6 +103,43 @@ assert.equal(await login('leon', 'longenough'), null)
 assert.deepEqual((await onServer()).items.map((i: any) => i.text),
   ['offline edit', 'written on a plane', 'third', 'second', 'first'])
 
+/* Two syncs at once are one sync. A phone coming back to the app fires visibilitychange and focus
+   together, and both call in — unguarded that is two pushes of the same edit, the second landing
+   on a 409 it has to redo, burning two of the fifty snapshots for one change. */
+const count = async () => (await (await fetch('/api/versions')).json()).versions.length
+const before = await count()
+add('tapped back into the app')
+await flush()
+await Promise.all([syncNow(), syncNow()])
+assert.equal(await count(), before + 1)
+
+/* An edit typed while the push is in the air went out in no body — the state was serialised before
+   it existed. Marked clean by the reply it was never part of, it would sit on this device unsent
+   until some later edit happened to carry it, and a write from another phone would land on top. */
+{
+  const slow = globalThis.fetch
+  let landed: (() => void) | undefined
+  globalThis.fetch = ((path: any, init?: RequestInit) => {
+    const p = slow(path, init)
+    // the PUT holds open until the edit below has been through the store's debounce
+    return init?.method === 'PUT' ? new Promise((r) => { landed = () => r(p) }) : p
+  }) as typeof fetch
+
+  add('sent')
+  await flush()
+  const pushing = syncNow()
+  await new Promise((r) => setTimeout(r, 20))   // let the PUT reach the wire and park there
+  add('typed while it was in the air')
+  await flush()
+  landed!()
+  await pushing
+  globalThis.fetch = slow
+
+  assert.equal(JSON.parse(disk.get('stash.sync.v1')!).dirty, true)
+  await syncNow()
+  assert.ok((await onServer()).items.some((i: any) => i.text === 'typed while it was in the air'))
+}
+
 server.close()
 console.log('sync ok')
 

@@ -78,20 +78,42 @@ function retry() {
 }
 const settled = () => { backoff = RETRY_MIN } // the connection answered; the next failure starts over
 
+/* An edit that lands mid-flight is not in the body that went out — the state was serialised before
+   it. Clearing dirty on the reply marks it sent, and the pull that follows finds the very version
+   we just wrote, so there is nothing to adopt and nothing to notice: the note sits on this device
+   until some later edit happens to carry it, or another device writes and the pull lands on top of
+   it. Counting edits is the whole fix — bump here, compare across the round trip. */
+let rev = 0
+
 function schedule() {
+  rev++
   setMeta({ ...meta(), dirty: true })
   clearTimeout(timer)
   timer = setTimeout(syncNow, 2000)
 }
 
-/** Push if dirty, pull if not. Safe to call any time; does nothing without a session. */
-export async function syncNow(): Promise<void> {
+let inflight: Promise<void> | undefined
+
+/**
+ * Push if dirty, pull if not. Safe to call any time; does nothing without a session.
+ *
+ * Calls that arrive while one is in flight join it rather than starting a second. A phone coming
+ * back to the app fires visibilitychange and focus, and both wake the sync — two pushes of one
+ * edit, the second landing on a 409 it has to redo, and two of the fifty snapshots spent on a
+ * single change. Nothing is lost by joining: an edit made mid-flight re-arms its own timer.
+ */
+export function syncNow(): Promise<void> {
+  return inflight ??= run().finally(() => { inflight = undefined })
+}
+
+async function run(): Promise<void> {
   clearTimeout(timer)
   if (!snap.user) return
   const m = meta()
   if (!m.dirty) return pull()
   setSnap({ status: 'busy' })
   try {
+    const at = rev
     const body = JSON.stringify({ state: { ...getState(), apiKey: '' }, device })
     let r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(m.v) }, body })
     if (r.status === 409) {
@@ -102,7 +124,8 @@ export async function syncNow(): Promise<void> {
     }
     if (r.status === 401) return setSnap({ status: 'out', user: null })
     if (!r.ok) { setSnap({ status: 'off' }); return retry() }
-    setMeta({ v: (await r.json()).version, dirty: false })
+    // still dirty if an edit arrived while this was in the air — schedule() already armed its timer
+    setMeta({ v: (await r.json()).version, dirty: rev !== at })
     settled()
     setSnap({ status: 'ok' })
     await syncShares()
@@ -114,15 +137,20 @@ export async function syncNow(): Promise<void> {
 
 async function pull(): Promise<void> {
   const m = meta()
-  if (m.dirty) return syncNow()
+  // `run`, not `syncNow`: we are already inside the in-flight one, and joining it would be a cycle
+  if (m.dirty) return run()
   setSnap({ status: 'busy' })
   try {
+    const at = rev
     const r = await fetch('/state')
     if (r.status === 401) return setSnap({ status: 'out', user: null })
     if (!r.ok) { setSnap({ status: 'off' }); return retry() }
     const { version, state } = await r.json()
-    if (version !== m.v && state) adoptRemote(state)
-    setMeta({ v: version, dirty: false })
+    // typed into while the answer was on its way: adopting now would paint over it. The version is
+    // still recorded, so the push that follows carries our edit forward — ours is the newer one
+    const raced = rev !== at
+    if (version !== m.v && state && !raced) adoptRemote(state)
+    setMeta({ v: version, dirty: raced })
     settled()
     setSnap({ status: 'ok' })
     await syncShares()
