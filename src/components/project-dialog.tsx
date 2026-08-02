@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Eye, Pencil, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ColorPicker } from '@/components/color-picker'
+import { ShareControls } from '@/components/share-controls'
 import { Button } from '@/components/ui/button'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -12,7 +13,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { Hint } from '@/components/ui/tooltip'
-import { getSync, share, subscribeSync, syncNow } from '@/lib/sync'
+// `people` is the list being built on this form, so the roster of everyone comes in under its own name
+import { getSync, people as roster, share, subscribeSync, syncNow } from '@/lib/sync'
 import { useStash } from '@/lib/store'
 
 /** One dialog for both "New project" and "Edit project" — same fields, same rules. */
@@ -41,6 +43,7 @@ export function ProjectDialog({
      a name the server does not know should cost you the typing, not the project. */
   const [people, setPeople] = useState<{ name: string, edit: boolean }[]>([])
   const [who, setWho] = useState('')
+  const [all, setAll] = useState<string[]>([])
   useEffect(() => {
     if (!open) return
     setName(initial ?? '')
@@ -48,11 +51,14 @@ export function ProjectDialog({
     setParent(initialParent ?? null)
     setPeople([])
     setWho('')
+    void roster().then(setAll)   // offline it comes back empty, and the field is a plain one again
   }, [open, initial, initialColor, initialParent])
 
   // sharing is the server's half of the app: no account, nothing to share with, and no offer of it.
-  // An existing project has the Share dialog, which knows about members and sub-projects too.
+  // A project only being made has nobody on it yet and no id to put them on, so it collects names
+  // here and applies them on Create; an existing one gets the real controls, which read the server.
   const canShare = !id && !!user
+  const editing = id ? s.projects.find((p) => p.id === id) : undefined
   const offline = status === 'off'   // the share calls need the server; nothing here queues
   const addPerson = () => {
     const v = who.trim().toLowerCase()   // the server lowercases names; match it so a dupe reads as one
@@ -91,7 +97,9 @@ export function ProjectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      {/* wider than it was: a member's row carries a picture, a name, what they may do and the way
+          off the project, and the taller edit form scrolls rather than running off the screen */}
+      <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{initial ? 'Edit project' : 'New project'}</DialogTitle>
           <DialogDescription>
@@ -141,6 +149,10 @@ export function ProjectDialog({
               <Input
                 id="project-share"
                 placeholder="their name"
+                list="project-people"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={who}
                 disabled={offline}
                 onChange={(e) => setWho(e.target.value)}
@@ -148,6 +160,12 @@ export function ProjectDialog({
                 // project with the name still sitting unread in the field
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPerson() } }}
               />
+              {/* the browser's own completion, narrowing as you type: everyone but the ones already
+                  on the list below, so a name cannot be added to it twice */}
+              <datalist id="project-people">
+                {all.filter((n) => !people.some((p) => p.name === n))
+                  .map((n) => <option key={n} value={n} />)}
+              </datalist>
               <Button type="button" variant="outline" onClick={addPerson} disabled={offline || !who.trim()}>Add</Button>
             </div>
             {people.map((p, i) => (
@@ -178,6 +196,8 @@ export function ProjectDialog({
             </p>
           </div>
         )}
+        {/* Someone else's project is theirs to share on — the sidebar offers Leave, not this. */}
+        {editing && user && !editing.share && <ShareControls p={editing} />}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={commit} disabled={!name.trim()}>{initial ? 'Save' : 'Create'}</Button>

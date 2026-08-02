@@ -1,6 +1,6 @@
 import { Fragment, useRef, useState } from 'react'
 import {
-  ArrowDownAZ, ArrowDownZA, ArrowRight, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
+  ArrowDownAZ, ArrowDownZA, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
   ChevronRight, Eye, Layers, PencilLine, Plus, Trash2, UserMinus, Users,
 } from 'lucide-react'
@@ -23,7 +23,6 @@ import {
 import { Hint } from '@/components/ui/tooltip'
 import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
-import { ShareDialog } from '@/components/share-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { syncNow, unshare } from '@/lib/sync'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
@@ -65,7 +64,6 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   const [dialog, setDialog] =
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const [sharing, setSharing] = useState<Project | null>(null)
   const [settings, setSettings] = useState(false)
   const [over, setOver] = useState<string | null>(null)
   const [edge, setEdge] = useState<{ id: string; where: 'above' | 'below' | 'in' } | null>(null)
@@ -234,20 +232,13 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           <PencilLine />
           Edit
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => go(p.id)}>
-          <ArrowRight />
-          Open
-        </ContextMenuItem>
-        {/* someone else's project is theirs to share on; yours opens the dialog */}
-        {p.share ? (
+        {/* no Open: the row itself is the way in. No Share… either — it is inside Edit now, which
+            is where the project's own settings are. Leaving someone else's stays: that is not a
+            setting of theirs to find, and nothing else on the row does it. */}
+        {p.share && (
           <ContextMenuItem onSelect={async () => { await unshare(p.id, undefined, p.share?.by); void syncNow() }}>
             <UserMinus />
             Leave project
-          </ContextMenuItem>
-        ) : (
-          <ContextMenuItem onSelect={() => setSharing(p)}>
-            <Users />
-            Share…
           </ContextMenuItem>
         )}
         {/* one level deep, so only a top-level project can take a subproject */}
@@ -457,10 +448,6 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
       </SidebarFooter>
 
       <SettingsDialog open={settings} onOpenChange={setSettings} />
-
-      {sharing && (
-        <ShareDialog open onOpenChange={(v) => !v && setSharing(null)} p={sharing} />
-      )}
 
       <ProjectDialog
         open={!!dialog}
