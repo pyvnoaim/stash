@@ -21,7 +21,19 @@ export interface Item {
   ts: number
   /** Last time an edit went through `patch`. Null until something is actually changed. */
   editedAt: number | null
+  /**
+   * Who wrote it and who has touched it since — the two names a shared project needs, so a row
+   * that appeared overnight says whose it is. Absent on anything made while signed out, and on
+   * everything from before this existed: unattributed reads as "yours", which is what it was.
+   */
+  by?: string
+  editedBy?: string
 }
+
+/* Who is signed in, as far as the store is concerned. sync.ts owns the session and pushes the
+   name in — the store cannot import it back without a cycle, the same reason setOnPersist exists. */
+let me: string | null = null
+export const setMe = (name: string | null) => { me = name }
 
 export interface Project {
   id: string
@@ -277,6 +289,12 @@ export function load(data: unknown): State {
         ts: typeof i.ts === 'number' ? i.ts : Date.now(),
         // a backup from before this existed has never been edited as far as anyone can tell
         editedAt: typeof i.editedAt === 'number' ? i.editedAt : null,
+        // undefined rather than kept: `...i` is what a hand-edited backup arrives through, and a
+        // name is a name or it is nothing. JSON drops it again on the way back to disk. Cut to the
+        // length the server lets a name be — these arrive in someone else's shared document, and
+        // a novel in one would go straight into a tooltip.
+        by: typeof i.by === 'string' ? i.by.slice(0, 32) : undefined,
+        editedBy: typeof i.editedBy === 'string' ? i.editedBy.slice(0, 32) : undefined,
         // orphans land in Quick notes rather than becoming invisible
         pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
       }
@@ -718,7 +736,7 @@ const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => (
 // marker for a thing that will never come round — and being here at all is what "edited" means,
 // so a bulk command across twenty rows stamps all twenty
 export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
-  const next = { ...i, ...p, editedAt: Date.now() }
+  const next = { ...i, ...p, editedAt: Date.now(), ...(me && { editedBy: me }) }
   return next.type === 'task' ? next : { ...next, repeat: null }
 }))
 
@@ -752,7 +770,11 @@ export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, 
 
 /** A pasted list is one write, not one per line — each `set` serialises the whole store. */
 export const addItems = (list: Item[]) =>
-  set((s) => ({ ...s, items: [...list.filter((i) => !readOnly(s, i.pid)), ...s.items] }))
+  set((s) => ({
+    ...s,
+    // whose it is, decided here rather than at each of the places that can start a row
+    items: [...list.filter((i) => !readOnly(s, i.pid)).map((i) => (me ? { ...i, by: me } : i)), ...s.items],
+  }))
 
 export const addItem = (it: Item) => addItems([it])
 
@@ -762,8 +784,11 @@ export function toggleDone(id: string) {
     if (at < 0 || frozen(s, id)) return s
     const it = s.items[at]
     const closing = !it.done
+    // ticking someone else's task is working on it, so it counts as a touch like any other edit
     const items = s.items.map((i) =>
-      (i.id === id ? { ...i, done: closing, doneAt: closing ? Date.now() : null } : i))
+      (i.id === id
+        ? { ...i, done: closing, doneAt: closing ? Date.now() : null, ...(me && { editedBy: me }) }
+        : i))
 
     // A repeating task doesn't end when you finish it: the one you ticked stays finished, so it
     // still counts on Overview, and a fresh one takes its place at the same spot in the list.
@@ -772,9 +797,11 @@ export function toggleDone(id: string) {
       // step from the finished one's own date so the anchor day survives a late completion, but
       // never come back already overdue — nextAfter clears today either way
       const due = nextAfter(it.due ?? today(), it.repeat)
-      // a fresh occurrence, so it carries none of the finished one's history
+      // a fresh occurrence, so it carries none of the finished one's history — including who
+      // had been at the last one. Whoever set the repeat going still owns the series.
       items.splice(at, 0, {
         ...it, id: uid(), due, done: false, doneAt: null, ts: Date.now(), editedAt: null,
+        editedBy: undefined,
       })
     }
     return { ...s, items }

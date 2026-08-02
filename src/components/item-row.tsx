@@ -5,6 +5,8 @@ import {
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
+import { Avatar } from '@/components/settings-dialog'
+import { getSync } from '@/lib/sync'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
   ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
@@ -48,6 +50,17 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   // blank lines are spacing, not content — they must not inflate the "there is more" count
   const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
   const t = today()
+
+  /* Someone else's hand on this row: the last one to touch it, or whoever wrote it. Your own work
+     stays unmarked — in a shared list the question is never which of these are mine. With no
+     session there is no "someone else" to be: an offline start knows no name, and marking every
+     row you ever wrote as another person's is worse than saying nothing. Read without subscribing:
+     the name only changes when you rename yourself, which re-renders the app anyway.
+     ponytail: the last hand, not a history — a row three people edited names the most recent. */
+  const me = getSync().user?.name
+  const hand = !me ? null
+    : it.editedBy && it.editedBy !== me ? { name: it.editedBy, did: 'Edited' }
+      : it.by && it.by !== me ? { name: it.by, did: 'Added' } : null
 
   return (
     /* the menu is this row's own, so opening it drops any multi-row selection and takes just this one */
@@ -159,6 +172,18 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 </button>
               </Hint>
             ))}
+
+            {hand && (
+              <Hint label={`${hand.did} by ${hand.name}`}>
+                {/* focusable, or the name is a thing only a mouse can read.
+                    ponytail: initials, not their picture — the row has no roster to look one up in */}
+                <span tabIndex={0} role="img" aria-label={`${hand.did} by ${hand.name}`}
+                  className="focus-visible:ring-ring inline-flex rounded-md outline-none focus-visible:ring-2"
+                >
+                  <Avatar name={hand.name} avatar={null} className="size-5 text-[10px]" />
+                </span>
+              </Hint>
+            )}
 
             {/* an icon, like the repeat beside it — a bare “!” reads as a typo in the middle of a row */}
             {it.flag && (

@@ -10,7 +10,7 @@ Object.assign(globalThis, {
 
 const {
   addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
-  flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
+  flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
@@ -232,6 +232,38 @@ toggleDone('e1')
 assert.deepEqual(getState().items.map((i) => i.editedAt), [null, null])
 patch('e1', { text: 'renamed' })
 assert.ok((getState().items.find((i) => i.id === 'e1')?.editedAt ?? 0) > 0)
+
+/* ---------- whose row it is, and whose hand was on it last ---------- */
+
+wipe()
+setMe('ada')
+addItem(item({ id: 'w1', repeat: 'day', due: '2026-01-01' }))
+assert.equal(getState().items[0].by, 'ada')
+assert.equal(getState().items[0].editedBy, undefined)   // written is not edited
+
+setMe('bo')
+patch('w1', { text: 'theirs now' })
+const w1 = () => getState().items.find((i) => i.id === 'w1')!
+assert.equal(w1().by, 'ada')          // who wrote it does not change hands
+assert.equal(w1().editedBy, 'bo')
+toggleDone('w1')                      // ticking someone's task is working on it
+assert.equal(w1().editedBy, 'bo')
+// the occurrence that opens in its place is the series', not the last hand's
+assert.equal(getState().items.find((i) => i.id !== 'w1' && !i.done)!.editedBy, undefined)
+
+// signed out there is nobody to name, and an old row keeps whatever it came with
+setMe(null)
+patch('w1', { text: 'offline edit' })
+assert.equal(w1().editedBy, 'bo')
+wipe()
+addItem(item({ id: 'w2' }))
+assert.equal(getState().items[0].by, undefined)
+
+// a name is a name or it is nothing — someone else's document cannot smuggle an object, or a
+// novel, into the tooltip on your row
+const named = load({ items: [{ id: 'n', by: 'x'.repeat(500), editedBy: 7 }] }).items[0]
+assert.equal(named.by, 'x'.repeat(32))
+assert.equal(named.editedBy, undefined)
 
 /* ---------- #tag search is the tag, plain search is a substring ---------- */
 

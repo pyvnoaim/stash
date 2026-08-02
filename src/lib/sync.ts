@@ -15,7 +15,7 @@
  * a closed tab's unpushed edit is pushed by whoever opens the app next.
  */
 import {
-  adoptRemote, adoptShared, getState, KEY, setOnPersist, sliceOf, uid, type Project,
+  adoptRemote, adoptShared, getState, KEY, setMe, setOnPersist, sliceOf, uid, type Project,
 } from './store.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
@@ -53,6 +53,7 @@ let snap: Sync = { status: 'init', user: null }
 const listeners = new Set<() => void>()
 const setSnap = (s: Partial<Sync>) => {
   snap = { ...snap, ...s }
+  setMe(snap.user?.name ?? null)   // the store signs what you write with it
   listeners.forEach((fn) => fn())
 }
 export const subscribeSync = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
