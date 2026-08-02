@@ -28,7 +28,7 @@ import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { hit } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
+  addProject, CALENDAR, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
   openIn, redo, removeItem, restoreItem, select, tagCounts, toggleDone, undo, useStash,
   viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
@@ -75,6 +75,13 @@ export default function App() {
   const page = !query && isPage(s.sel) ? s.sel : null
   const openProject = s.projects.find((p) => p.id === s.sel)
   const items = useMemo(() => visible(s, query), [s, query])
+  /* The sidebar's own order, parents each followed by what sits under them — the raw array is
+     insertion order, which scatters a sub-project away from the project it belongs to.
+     ponytail: not re-derived when `edited` sort would reshuffle it on a keystroke. Every row holds
+     this array and compares it by identity, so a new one on each edit would undo the memo that
+     keeps the list from re-rendering in full; a menu that opens in the last-known order is a
+     trade nobody can see. */
+  const projectList = useMemo(() => flatProjects(s), [s.projects, s.projectSort])   // eslint-disable-line react-hooks/exhaustive-deps
   // sticks once true: the PDF tab keeps its document between visits, see below
   const [seenPdf, setSeenPdf] = useState(false)
   if (page === PDF && !seenPdf) setSeenPdf(true)
@@ -473,7 +480,7 @@ export default function App() {
                         selected={it.id === s.focus}
                         marked={marked.includes(it.id)}
                         reorder={!query && !isSorted(s)}
-                        projects={s.projects}
+                        projects={projectList}
                         sel={s.sel}
                         onSelect={(range) => pick(it.id, range)}
                         onTag={(t) => addTerm('#' + t)}

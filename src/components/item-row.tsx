@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import {
-  CalendarOff, CalendarPlus, Check, Copy, Flag, Inbox, Lightbulb, ListTodo, PencilLine,
+  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo, PencilLine,
   Repeat, RotateCcw, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -252,12 +252,16 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
             Move to
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
+            {/* the sidebar's order, so a sub-project is listed directly under the project it
+                belongs to — and indented, which is the only thing that says which of the two it is */}
             {projects.map((p) => (
               <ContextMenuItem
                 key={p.id}
                 disabled={p.id === it.pid}
                 onSelect={() => patch(it.id, { pid: p.id })}
+                className={cn(p.parent && 'pl-6')}
               >
+                {p.parent && <CornerDownRight className="text-muted-foreground size-3" />}
                 {p.name}
               </ContextMenuItem>
             ))}
