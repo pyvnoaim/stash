@@ -247,9 +247,15 @@ export const adminDropInvite = (code: string) => adminPost('/api/admin/invite', 
 
 export interface Member { pid: string, name: string, avatar: string | null, edit: number, subs: number }
 export interface SharedWithMe { pid: string, edit: number, subs: number, owner: string }
+/** One person on one project — the owner included, since they are working on it too. */
+export interface Face { pid: string, owner: string, name: string, avatar: string | null, subs: number }
 
 export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[] }> =>
   call('/api/shares').catch(() => ({ mine: [], with_me: [] }))
+
+/** Everyone on every project you are on. Its own request: the sync loop never wants the pictures. */
+export const roster = (): Promise<Face[]> =>
+  call('/api/roster').then((j) => j.roster as Face[]).catch(() => [])
 
 /** Everyone else with an account here, for a share field to complete against. Empty when offline. */
 export const people = (): Promise<string[]> =>

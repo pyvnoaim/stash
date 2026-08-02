@@ -7,6 +7,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
+import { Faces } from '@/components/faces'
 import { ProjectBrief } from '@/components/project-brief'
 import { Inspector, Selection } from '@/components/inspector'
 import { ItemRow } from '@/components/item-row'
@@ -312,6 +313,8 @@ export default function App() {
             <h1 className="font-heading truncate text-sm font-normal tracking-wide uppercase">
               {query ? `Search “${query}”` : viewName(s)}
             </h1>
+            {/* whose company this project is in, next to the name of it */}
+            {!query && openProject && <Faces p={openProject} />}
             <span className="text-muted-foreground mr-auto font-mono text-xs tabular-nums">
               {page ? '' : items.length || ''}
             </span>

@@ -233,6 +233,13 @@ export function start({
     /** Projects shared with me by someone else. */
     sharedWithMe: db.prepare(`select s.pid, s.edit, s.subs, u.name as owner from shares s
       join users u on u.id = s.owner where s.member = ? and s.owner <> ?`),
+    /* Everyone on every project I am on, mine or someone else's — the owner's own row is in the
+       table, so one query names the whole company of a project rather than half of it. */
+    roster: db.prepare(`select s.pid, o.name as owner, u.name, u.avatar, s.subs from shares s
+      join users u on u.id = s.member
+      join users o on o.id = s.owner
+      where exists (select 1 from shares x where x.pid = s.pid and x.owner = s.owner and x.member = ?)
+      order by u.name`),
     pdoc: db.prepare('select v, json from pdocs where owner = ? and pid = ? order by v desc limit 1'),
     addPdoc: db.prepare('insert into pdocs (owner, pid, ts, device, json) values (?, ?, ?, ?, ?)'),
     prunePdoc: db.prepare(`delete from pdocs where owner = ? and pid = ? and v not in
@@ -588,6 +595,15 @@ export function start({
         mine: q.myShares.all(user.id, user.id),
         with_me: q.sharedWithMe.all(user.id, user.id),
       })
+    }
+
+    /* Apart from /api/shares, which the sync loop asks for every time it runs: this one carries
+       pictures, and the loop has no use for them. */
+    if (path === '/api/roster' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      // asked again at every project you open, and half a minute stale is nobody's problem here
+      return send(res, 200, { roster: q.roster.all(user.id) }, { 'cache-control': 'private, max-age=30' })
     }
 
     if (path === '/api/share' && req.method === 'POST') {

@@ -218,6 +218,7 @@ const cy = jar(await post('/api/signup', { user: 'cy', pass: 'longenough', invit
 // nothing is shared until it is
 assert.equal((await pdoc('p1', ada)).status, 404)
 assert.deepEqual(await (await get('/api/shares', ada)).json(), { mine: [], with_me: [] })
+assert.deepEqual((await (await get('/api/roster', ada)).json()).roster, [])
 
 // ada shares p1 with bo read-only, and with cy to edit
 assert.equal((await post('/api/share', { pid: 'p1', user: 'ghost' }, ada)).status, 404)
@@ -257,6 +258,12 @@ assert.equal((await post('/api/share', { pid: 'p1', user: 'dee' }, cy)).status, 
 assert.deepEqual((await (await get('/api/shares', bo)).json()).with_me,
   [{ pid: 'p1', edit: 0, subs: 0, owner: 'ada' }])
 assert.deepEqual((await (await get('/api/shares', bo)).json()).mine, [])
+
+// a member sees the whole company of the project, the owner among them — and a stranger sees none
+assert.deepEqual((await (await get('/api/roster', bo)).json()).roster.map((f: any) => [f.owner, f.name]),
+  [['ada', 'ada'], ['ada', 'bo'], ['ada', 'cy']])
+assert.deepEqual((await (await get('/api/roster', dee)).json()).roster, [])
+assert.equal((await fetch(url + '/api/roster')).status, 401)
 
 // a member can leave, and takes nothing with them
 assert.equal((await del2('/api/share', { pid: 'p1', owner: 'ada' }, bo)).status, 200)
