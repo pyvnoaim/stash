@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
+import { cn, MONEY_IN } from '@/lib/utils'
 import { addDays, dayLabel, today } from '@/lib/parse'
 import { inProject, MARKET, monthlyCost, setMarketAsset, SUBS, tagCounts, useStash, type Item } from '@/lib/store'
 import { ASSETS, fmtPrice } from '@/lib/market'
@@ -148,11 +148,13 @@ const short = (d: string) =>
   new Date(d + 'T00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
 /** Headline numbers earn a tile, not a chart. Every one of them is a list you can open. */
-function Stat({ label, value, sub, onOpen }: {
+function Stat({ label, value, sub, onOpen, valueClass }: {
   label: string
   value: number | string
   sub?: string
   onOpen: () => void
+  /** Money reads as money here the way it does on Subscriptions — the same green, the same red. */
+  valueClass?: string
 }) {
   return (
     // h-full on both: the grid stretches the button, but the card inside was still sizing to its
@@ -161,7 +163,7 @@ function Stat({ label, value, sub, onOpen }: {
       <Card className="hover:border-foreground/30 h-full gap-0 py-4 transition-colors">
         <CardContent className="px-4">
           <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
-          <p className="mt-1 text-2xl tabular-nums">{value}</p>
+          <p className={cn('mt-1 text-2xl tabular-nums', valueClass)}>{value}</p>
           {sub && <p className="text-muted-foreground mt-0.5 text-xs">{sub}</p>}
         </CardContent>
       </Card>
@@ -436,9 +438,11 @@ export default function Overview({ onTag, onNavigate }: {
       {/* only once there's something to show — an empty money row is furniture */}
       {s.subs.length > 0 && (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <Stat label="Income / month" value={euro(money.income)} onOpen={() => onNavigate(SUBS)} />
+          <Stat label="Income / month" value={euro(money.income)} onOpen={() => onNavigate(SUBS)}
+            valueClass={MONEY_IN} />
           <Stat label="Expenses / month" value={euro(money.expense)} onOpen={() => onNavigate(SUBS)} />
-          <Stat label="Net / month" value={euro(money.net)} sub="income − expenses" onOpen={() => onNavigate(SUBS)} />
+          <Stat label="Net / month" value={euro(money.net)} sub="income − expenses" onOpen={() => onNavigate(SUBS)}
+            valueClass={money.net >= 0 ? MONEY_IN : 'text-destructive'} />
         </div>
       )}
 

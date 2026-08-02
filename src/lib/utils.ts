@@ -6,6 +6,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Money coming in, wherever it is shown. Overview and Subscriptions are the same numbers read at
+ * two distances, so the green that means "yours" has to be one string, not two that drift.
+ * Anything negative takes `text-destructive`, which the theme already owns.
+ */
+export const MONEY_IN = 'text-emerald-600 dark:text-emerald-400'
+
 /** The one place that decides whether the document is dark — shadcn switches on a .dark class. */
 export const applyTheme = (theme: Theme) =>
   document.documentElement.classList.toggle(

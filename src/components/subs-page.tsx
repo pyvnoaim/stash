@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/select'
 import { Hint } from '@/components/ui/tooltip'
 import { DueField } from '@/components/due-field'
-import { cn } from '@/lib/utils'
+import { cn, MONEY_IN } from '@/lib/utils'
 import {
   addSub, CYCLES, monthlyCost, nextCharge, patchSub, removeSub, restoreSub, setSubSort, setSubView,
   useStash, yearlyCost, type Cycle, type Kind, type Sub,
@@ -142,10 +142,10 @@ export default function SubsPage() {
     <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Income / month" value={money(totals.incomeM)} sub={`${money(totals.incomeY)} / year`}
-          valueClass="text-emerald-600 dark:text-emerald-400" />
+          valueClass={MONEY_IN} />
         <Stat label="Expenses / month" value={money(totals.expenseM)} sub={`${money(totals.expenseY)} / year`} />
         <Stat label="Net / month" value={money(totals.netM)} sub={`${money(totals.netM * 12)} / year`} strong
-          valueClass={totals.netM >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'} />
+          valueClass={totals.netM >= 0 ? MONEY_IN : 'text-destructive'} />
         <Stat label="Set aside / month" value={money(totals.reserve)} sub="for yearly & quarterly bills" />
       </div>
 
