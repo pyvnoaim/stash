@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Eye, Pencil, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { ColorPicker } from '@/components/color-picker'
+import { AccessToggle, PeopleSuggest } from '@/components/share-fields'
 import { ShareControls } from '@/components/share-controls'
 import { Button } from '@/components/ui/button'
 import {
@@ -43,6 +44,7 @@ export function ProjectDialog({
      a name the server does not know should cost you the typing, not the project. */
   const [people, setPeople] = useState<{ name: string, edit: boolean }[]>([])
   const [who, setWho] = useState('')
+  const [edit, setEdit] = useState(true)   // what the next name added may do
   const [all, setAll] = useState<string[]>([])
   useEffect(() => {
     if (!open) return
@@ -51,6 +53,7 @@ export function ProjectDialog({
     setParent(initialParent ?? null)
     setPeople([])
     setWho('')
+    setEdit(true)
     void roster().then(setAll)   // offline it comes back empty, and the field is a plain one again
   }, [open, initial, initialColor, initialParent])
 
@@ -60,10 +63,10 @@ export function ProjectDialog({
   const canShare = !id && !!user
   const editing = id ? s.projects.find((p) => p.id === id) : undefined
   const offline = status === 'off'   // the share calls need the server; nothing here queues
-  const addPerson = () => {
-    const v = who.trim().toLowerCase()   // the server lowercases names; match it so a dupe reads as one
+  const addPerson = (n = who) => {
+    const v = n.trim().toLowerCase()   // the server lowercases names; match it so a dupe reads as one
     if (!v || people.some((p) => p.name === v)) return setWho('')
-    setPeople((prev) => [...prev, { name: v, edit: true }])
+    setPeople((prev) => [...prev, { name: v, edit }])
     setWho('')
   }
 
@@ -149,7 +152,6 @@ export function ProjectDialog({
               <Input
                 id="project-share"
                 placeholder="their name"
-                list="project-people"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
@@ -160,14 +162,15 @@ export function ProjectDialog({
                 // project with the name still sitting unread in the field
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPerson() } }}
               />
-              {/* the browser's own completion, narrowing as you type: everyone but the ones already
-                  on the list below, so a name cannot be added to it twice */}
-              <datalist id="project-people">
-                {all.filter((n) => !people.some((p) => p.name === n))
-                  .map((n) => <option key={n} value={n} />)}
-              </datalist>
-              <Button type="button" variant="outline" onClick={addPerson} disabled={offline || !who.trim()}>Add</Button>
+              <Button type="button" variant="outline" onClick={() => addPerson()} disabled={offline || !who.trim()}>Add</Button>
             </div>
+            {/* everyone but the ones already on the list below, so a name cannot be added twice */}
+            <PeopleSuggest
+              names={all.filter((n) => !people.some((p) => p.name === n))}
+              q={who}
+              onPick={addPerson}
+            />
+            <AccessToggle edit={edit} onChange={setEdit} />
             {people.map((p, i) => (
               <div key={p.name} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
                 <span className="truncate">{p.name}</span>

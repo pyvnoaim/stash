@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Eye, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { AccessToggle, PeopleSuggest } from '@/components/share-fields'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -41,10 +42,10 @@ export function ShareControls({ p }: { p: Project }) {
     setError('')
   }, [p.id])
 
-  const add = async () => {
-    if (!name.trim() || busy) return
+  const add = async (n = name) => {
+    if (!n.trim() || busy) return
     setBusy(true)
-    const err = await share(p.id, name.trim(), edit, subs)
+    const err = await share(p.id, n.trim(), edit, subs)
     setBusy(false)
     setError(err ?? '')
     if (err) return
@@ -63,31 +64,18 @@ export function ShareControls({ p }: { p: Project }) {
         <Label htmlFor="share-user">Share with</Label>
         <div className="flex gap-2">
           {/* no autoFocus: the name at the top of the form is what you came to Edit for */}
-          <Input id="share-user" placeholder="their name" list="share-people"
+          <Input id="share-user" placeholder="their name"
             autoCapitalize="none" autoCorrect="off" spellCheck={false}
             value={name} onChange={(e) => setName(e.target.value)} />
-          {/* the browser's own completion: it narrows as you type and needs nothing from us but
-              the names. Everyone already on the project is left out — they are on the list below */}
-          <datalist id="share-people">
-            {roster.filter((n) => !members.some((m) => m.name === n))
-              .map((n) => <option key={n} value={n} />)}
-          </datalist>
           <Button type="submit" disabled={!name.trim() || busy}>Share</Button>
         </div>
-        <div className="bg-muted grid grid-cols-2 gap-1 rounded-lg p-1">
-          {([[false, 'Can view', Eye], [true, 'Can edit', Pencil]] as const).map(([v, label, Icon]) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => setEdit(v)}
-              className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-sm transition-colors ${
-                edit === v ? 'bg-background font-medium shadow-xs' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <Icon className="size-3.5" /> {label}
-            </button>
-          ))}
-        </div>
+        {/* everyone already on the project is left out — they are on the list below */}
+        <PeopleSuggest
+          names={roster.filter((n) => !members.some((m) => m.name === n))}
+          q={name}
+          onPick={add}
+        />
+        <AccessToggle edit={edit} onChange={setEdit} />
         {kids.length > 0 && (
           <label className="flex items-start gap-2 pt-1 text-sm">
             <input
