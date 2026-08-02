@@ -532,3 +532,41 @@ console.log('store: ok')
   assert.ok(!getState().items.some((i) => i.id === 'fromThem'))
   assert.ok(getState().items.some((i) => i.id === 'own'))
 }
+
+/* Hotkeys. `refuse` is what stands between a rebind and a key that quietly does nothing: the
+   handler drops every ⌘ press before the row shortcuts, and answers the arrows itself. */
+{
+  const { comboOf, pretty, refuse } = await import('./keys.ts')
+  const press = (key: string, mod = false) =>
+    comboOf({ key, metaKey: mod, ctrlKey: false } as KeyboardEvent)
+
+  assert.equal(press('K', true), 'mod+k')          // shift and caps must not change what it is
+  assert.equal(press(' '), ' ')
+  assert.equal(pretty('mod+backspace'), '⌘⌫')
+  assert.equal(pretty('t'), 'T')
+
+  // a row shortcut with ⌘ on it would never reach the branch that runs it
+  assert.ok(refuse('today', 'mod+t', {}))
+  // ...and one without ⌘ that opens something would fire mid-sentence
+  assert.ok(refuse('palette', 'p', {}))
+  assert.ok(refuse('today', 'j', {}), 'j walks the list')
+  /* ...but only bare: ⌘ never reaches the walking, so ⌘J is free and ⌘K — the palette's own
+     default — must stay offerable, or moving it off would be a one-way door. */
+  assert.equal(refuse('capture', 'mod+j', {}), null)
+  assert.equal(refuse('palette', 'mod+k', {}), null)
+  assert.ok(refuse('palette', 'escape', {}), 'escape is how you back out of recording')
+  assert.ok(refuse('palette', 'mod+f', {}), 'already the search')
+  // the one you are editing is not a clash with itself, and a free key is simply free
+  assert.equal(refuse('search', 'mod+f', {}), null)
+  assert.equal(refuse('today', 'd', {}), null)
+  // whatever is already set wins over the default it replaced
+  assert.equal(refuse('today', 'g', { tomorrow: 'g' }) === null, false)
+  assert.equal(refuse('today', 's', { tomorrow: 'g' }), null, 's was given up by tomorrow')
+}
+
+// the trust boundary keeps only bindings something answers to
+{
+  const st = load({ hotkeys: { today: 'g', nonesuch: 'q', done: 42 } })
+  assert.deepEqual(st.hotkeys, { today: 'g' })
+  assert.deepEqual(load({}).hotkeys, {})
+}

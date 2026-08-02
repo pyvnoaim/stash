@@ -20,8 +20,8 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // typed as State so the literal unions in it (v: 1, theme: 'auto', …) survive, and a field the
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', subSort: 'recent', subView: 'expense',
-  watches: [], marketAsset: 'BTCUSDT' }
+  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
+  subView: 'expense', watches: [], marketAsset: 'BTCUSDT' }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
 const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({

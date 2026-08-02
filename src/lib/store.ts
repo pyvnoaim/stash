@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { HOTKEYS } from './keys.ts'
 import { isRepeat, nextAfter, today, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
@@ -176,6 +177,9 @@ export interface State {
   chart: ChartStyle
   /** Twelve Data key for the Markets stock feeds. Stays local, never travels in a backup. */
   apiKey: string
+  /** Only the bindings that were changed; anything missing is the default in `HOTKEYS`. Local,
+   *  like the theme — a keyboard is a property of the machine, not of the stash. */
+  hotkeys: Record<string, string>
   subSort: SubSort
   /** Which side of Subscriptions is open — expenses or income. */
   subView: 'expense' | 'income'
@@ -220,7 +224,8 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', subSort: 'recent', subView: 'expense',
+  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
+  subSort: 'recent', subView: 'expense',
   watches: [], marketAsset: 'BTCUSDT',
 })
 
@@ -326,6 +331,12 @@ export function load(data: unknown): State {
   st.collapsed = Array.isArray(st.collapsed) ? st.collapsed.map(String) : []
   st.chart = st.chart === 'candles' ? 'candles' : 'line'
   st.apiKey = typeof st.apiKey === 'string' ? st.apiKey : ''
+  /* only bindings the app has an action for, and only strings: a hand-edited backup must not be
+     able to put a key on the keyboard that nothing will ever answer. */
+  st.hotkeys = Object.fromEntries(
+    Object.entries(st.hotkeys && typeof st.hotkeys === 'object' ? st.hotkeys : {})
+      .filter(([id, c]) => typeof c === 'string' && !!c && HOTKEYS.some((h) => h.id === id)),
+  )
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
@@ -721,6 +732,14 @@ export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
 export const setChart = (chart: ChartStyle) => set((s) => ({ ...s, chart }))
 export const setApiKey = (apiKey: string) => set((s) => ({ ...s, apiKey: apiKey.trim() }))
 export const setSubSort = (subSort: SubSort) => set((s) => ({ ...s, subSort }))
+
+/** The binding in force for one action: yours if you set one, otherwise the one it shipped with. */
+export const hotkey = (s: State, id: string) =>
+  s.hotkeys[id] ?? HOTKEYS.find((h) => h.id === id)!.def
+export const setHotkey = (id: string, combo: string) =>
+  set((s) => ({ ...s, hotkeys: { ...s.hotkeys, [id]: combo } }))
+/** Back to the shipped keys by forgetting yours, rather than by writing them out again. */
+export const resetHotkeys = () => set((s) => ({ ...s, hotkeys: {} }))
 
 /** One saved setup per asset, direction and horizon — re-saving replaces that one, and leaves the
  *  other horizon's alone: an hourly long and a daily long on the same coin are two different trades. */

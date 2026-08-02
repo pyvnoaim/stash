@@ -5,7 +5,7 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { NotificationBell } from '@/components/notification-bell'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
-import { CommandPalette, exportBackup } from '@/components/command-palette'
+import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
 import { ProjectBrief } from '@/components/project-brief'
 import { Inspector, Selection } from '@/components/inspector'
@@ -24,10 +24,11 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { dayLabel, today, tomorrow } from '@/lib/parse'
+import { hit } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, focus, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
-  openIn, redo, removeItem, replaceAll, restoreItem, select, tagCounts, toggleDone, undo, useStash,
+  addProject, CALENDAR, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
+  openIn, redo, removeItem, restoreItem, select, tagCounts, toggleDone, undo, useStash,
   viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
 
@@ -203,11 +204,14 @@ export default function App() {
       const cmd = e.metaKey || e.ctrlKey
       const key = e.key.toLowerCase()   // caps lock / shift must not kill a shortcut
 
-      if (cmd && key === 'k' && !e.repeat) { e.preventDefault(); setPalette((v) => !v); return }
+      // whatever these are bound to — the shipped keys until Settings says otherwise
+      const k = (id: string) => hit(e, hotkey(s, id))
+
+      if (k('palette') && !e.repeat) { e.preventDefault(); setPalette((v) => !v); return }
       if (palette) return               // the dialog owns every other key while it is open, esc included
 
-      if (cmd && key === 'f') { e.preventDefault(); searchRef.current?.select(); return }
-      if (cmd && key === 'n') { e.preventDefault(); boxRef.current?.focus(); return }
+      if (k('search')) { e.preventDefault(); searchRef.current?.select(); return }
+      if (k('capture')) { e.preventDefault(); boxRef.current?.focus(); return }
       // inside a field the browser's own text undo is the one you meant, and the PDF tab has its own
       if (cmd && key === 'z' && !typingIn(e.target) && (query || !isPage(s.sel))) {
         e.preventDefault()
@@ -223,7 +227,7 @@ export default function App() {
       }
       if (typingIn(e.target)) return
       // ⌘⌫, not a bare ⌫: reaching for the search field past a focused row should not wipe it
-      if (cmd && (e.key === 'Backspace' || e.key === 'Delete')) {
+      if (k('remove')) {
         if ((!query && isPage(s.sel)) || !chosen.length) return
         e.preventDefault()
         drop(chosen)
@@ -266,13 +270,14 @@ export default function App() {
         return
       }
       if (!chosen.length) return
-      // due dates, on the lot: t brings it forward to today, s pushes it to tomorrow
-      if (key === 't' || key === 's') {
+      // due dates, on the lot: one brings it forward to today, the other pushes it to tomorrow
+      if (k('today') || k('tomorrow')) {
         e.preventDefault()
-        chosen.forEach((id) => patch(id, { due: key === 't' ? today() : tomorrow() }))
+        const to = k('today') ? today() : tomorrow()
+        chosen.forEach((id) => patch(id, { due: to }))
         return
       }
-      if (e.key === ' ') {
+      if (k('done')) {
         e.preventDefault()
         chosen.forEach((id) => {
           if (s.items.find((i) => i.id === id)?.type === 'task') toggleDone(id)
@@ -282,18 +287,6 @@ export default function App() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   })
-
-  const importBackup = (file: File) => {
-    file.text()
-      .then((t) => {
-        const data = JSON.parse(t)
-        if (!Array.isArray(data.items)) throw new Error('not a Stash backup')
-        replaceAll(data)
-        setQuery('')
-        toast(`Loaded ${data.items.length} items`)
-      })
-      .catch((err: Error) => toast('Import failed', { description: err.message }))
-  }
 
   let group: string | null = null
 
@@ -552,7 +545,8 @@ export default function App() {
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0]
-          if (f) importBackup(f)
+          // the search was about the list that just got replaced
+          if (f) void importBackup(f).then(() => setQuery(''))
           e.target.value = ''
         }}
       />
