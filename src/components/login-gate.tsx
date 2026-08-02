@@ -4,6 +4,7 @@ import {
   FileText, Flag, Inbox, Layers, Lightbulb, ListTodo, Monitor, PanelLeft, Plus, Search, StickyNote,
   Wallet,
 } from 'lucide-react'
+import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -57,7 +58,9 @@ export function LoginGate() {
         </p>
       </div>
 
-      <div className="flex min-h-svh flex-col md:min-h-0">
+      {/* the flat side of the gate lifts a little at the top, so the card sits in something rather
+          than on nothing — the same muted the panel opposite is tinted with, faded out by halfway */}
+      <div className="from-muted/30 to-background flex min-h-svh flex-col bg-gradient-to-b to-50% md:min-h-0">
         <div className="p-6 md:hidden"><Wordmark /></div>
         <div className="flex flex-1 items-start justify-center p-6 pt-10 md:items-center md:pt-6">
           <div className="w-full max-w-sm md:rounded-xl md:border md:p-6">
@@ -301,6 +304,11 @@ export function SignIn() {
 
   const up = mode === 'up'
   const ready = name && pass && (!up || code) && !busy
+  // what the message was about has just been retyped, so it is no longer about anything
+  const field = (set: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value)
+    setError('')
+  }
   const go = async () => {
     if (!ready) return
     setBusy(true)
@@ -327,12 +335,14 @@ export function SignIn() {
           aria-hidden
           className={`bg-background absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md shadow-xs
             transition-transform duration-200 ease-out motion-reduce:transition-none
-            ${up ? 'translate-x-[calc(100%+0.5rem)]' : ''}`}
+            ${up ? 'translate-x-full' : ''}`}
         />
         {([['in', 'Sign in'], ['up', 'Create account']] as const).map(([id, label]) => (
           <button
             key={id}
             type="button"
+            // the lit half is a decoration the screen reader is told to skip, so the state lives here
+            aria-pressed={mode === id}
             className={`relative rounded-md py-1.5 text-sm transition-colors ${
               mode === id ? 'font-medium' : 'text-muted-foreground hover:text-foreground'
             }`}
@@ -350,29 +360,36 @@ export function SignIn() {
         <Reveal open={up}>
           <div className="grid gap-2 pb-3">
             <Label htmlFor="sync-code">Invite code</Label>
+            {/* sixteen of hex: a phone would capitalise it and a spellchecker would correct it,
+                and the server has to take that anyway — this is only asking it not to happen */}
             <Input id="sync-code" autoComplete="off" placeholder="from whoever runs this"
-              tabIndex={up ? undefined : -1} value={code} onChange={(e) => setCode(e.target.value)} />
+              autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              tabIndex={up ? undefined : -1} value={code} onChange={field(setCode)} />
           </div>
         </Reveal>
         <div className="grid gap-2">
           <Label htmlFor="sync-name">Name</Label>
-          <Input id="sync-name" autoFocus autoComplete="username" placeholder="leon"
-            value={name} onChange={(e) => setName(e.target.value)} />
+          {/* invented, like the rest of the gate — the account in the window opposite is this one */}
+          <Input id="sync-name" autoFocus autoComplete="username" placeholder="sam"
+            autoCapitalize="none" value={name} onChange={field(setName)} />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="sync-pass">Password</Label>
-          <Input id="sync-pass" type="password" value={pass}
+          <PasswordInput id="sync-pass" value={pass}
             autoComplete={up ? 'new-password' : 'current-password'}
-            onChange={(e) => setPass(e.target.value)} />
+            onChange={field(setPass)} />
           <Reveal open={up}>
             <p className="text-muted-foreground pb-1 text-xs">
               Eight characters at least. There is no reset by mail — it lives in your keychain or nowhere.
             </p>
           </Reveal>
         </div>
-        {error && <p className="text-destructive text-xs">{error}</p>}
+        {/* said out loud too: a refusal nobody can see is a form that simply did nothing */}
+        {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
+        {/* the password is hashed at a cost that is meant to be felt, so the button says it is
+            working rather than sitting there greyed out for a second with nothing to show */}
         <Button type="submit" disabled={!ready}>
-          {up ? 'Create account' : 'Sign in'}
+          {busy ? 'One moment…' : up ? 'Create account' : 'Sign in'}
         </Button>
       </form>
     </div>
