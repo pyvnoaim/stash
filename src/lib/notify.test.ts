@@ -72,6 +72,31 @@ assert.equal(fire(89, short)[0].title, 'Bitcoin · Trading hit target')
 assert.deepEqual(watchAlerts([long], {}), [])
 assert.deepEqual(watchAlerts([long], { BTCUSDT: NaN }), [])
 
+// the same setup, once its window has actually opened: it stops announcing its entry and starts
+// reporting what it is running at — 1R per 5 of price, and the money only if a stake was set
+const running: Watch = { ...long, entryAt: 1 }
+const run = (p: number, stake = 0) => watchAlerts([running], { BTCUSDT: p }, stake)
+assert.deepEqual(fire(104), []) // unopened and away from its levels — still nothing to say
+assert.equal(run(105)[0].title, 'Bitcoin · Trading is up 1.00R')
+assert.equal(run(105)[0].id, 'watch-w1-open')
+assert.equal(run(105)[0].tone, 'info')
+assert.ok(run(105)[0].detail.includes('from the long entry at')) // no stake → no euros invented
+assert.ok(run(105, 200)[0].detail.includes('+€200'))
+assert.ok(run(102.5, 200)[0].detail.includes('+€100')) // half the distance, half the money
+// a short runs the other way: open at 100, price 95 is 1R of profit
+const runShort = (p: number) => watchAlerts([{ ...short, entryAt: 1 }], { BTCUSDT: p })
+assert.equal(runShort(95)[0].title, 'Bitcoin · Trading is up 1.00R')
+// the gap this speaks for lies between the entry and the target, so it is always in profit — a
+// short at 102 has gone the other way, and that is the entry zone's word to say, not this one's
+assert.equal(runShort(102)[0].title, 'Bitcoin · Trading at entry')
+// the three levels still own their own ticks — openWatch fires on the same price test as the entry
+// alert, so a runner that spoke here would silence buy-now after one render
+assert.equal(run(97)[0].title, 'Bitcoin · Trading at entry')  // back in the zone, and says so
+assert.equal(run(111)[0].title, 'Bitcoin · Trading hit target')
+assert.equal(run(95)[0].title, 'Bitcoin · Trading setup broken')
+// never opened, and away from every level — still nothing to say, as before
+assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }, 200), [])
+
 /* ---------- what actually happened: the window opening, and the trade ending ---------- */
 
 const NOW = 1_700_000_000_000

@@ -74,7 +74,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     const h = setInterval(tick, POLL)
     return () => { on = false; clearInterval(h) }
   }, [assets, s.apiKey])
-  const setups = useMemo(() => watchAlerts(s.watches, live), [s.watches, live])
+  const setups = useMemo(() => watchAlerts(s.watches, live, s.stake), [s.watches, live, s.stake])
 
   /* The same prices, written down. A setup whose entry the price has really reached is marked as
      having opened, and one that has since run to its target or its stop leaves the live list for
