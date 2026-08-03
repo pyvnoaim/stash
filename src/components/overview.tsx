@@ -299,10 +299,10 @@ function Spend({ items, total, onOpen }: {
   total: number
   onOpen: () => void
 }) {
-  const W = 300, H = 100 // a 3:1 frame, so % positioning below matches the aspect-[3/1] box
+  const W = 400, H = 100 // a 4:1 frame, so % positioning below matches the aspect-[4/1] box
   const tiles = treemap(items, (d) => d.v, W, H)
   return (
-    <div className="relative aspect-[3/1] w-full">
+    <div className="relative aspect-[4/1] w-full">
       {tiles.map(({ item, x, y, w, h }) => {
         const wp = (w / W) * 100
         const hp = (h / H) * 100
