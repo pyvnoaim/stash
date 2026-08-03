@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createPublicKey, verify } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
-import { request } from 'node:http'
+import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -144,6 +145,184 @@ assert.ok(seats.every((d: any) => !('hash' in d)), 'a session hash left the serv
 // mia's own list is hers, and none of leon's is in it
 assert.ok((await (await get('/api/sessions', mia)).json()).sessions.length >= 1)
 assert.equal(seats.length, db.prepare('select count(*) as n from sessions where user = 1').get()!.n)
+
+/* ---------- the calendar feed ---------- */
+
+// a document with something in it worth putting in a calendar
+await put(leon, (await (await get('/state', leon)).json()).version, {
+  projects: [{ id: 'p1', name: 'Kova' }],
+  items: [
+    { id: 'i1', type: 'task', text: 'ship it, now', note: 'first line\nsecond', due: '2020-01-01', pid: 'p1' },
+    { id: 'i2', type: 'task', text: 'already done', due: '2020-01-02', done: true },
+    { id: 'i3', type: 'task', text: 'no date at all', due: null },
+  ],
+  subs: [{ id: 's1', kind: 'expense', name: 'Netflix', cost: 12.99, cycle: 'monthly', due: '2026-08-03' }],
+})
+
+// nothing until it is asked for, and never to someone who is not signed in
+assert.equal((await get('/api/feed')).status, 401)
+assert.deepEqual(await (await get('/api/feed', leon)).json(), { feed: null })
+const feed = (await (await post('/api/feed', {}, leon)).json()).feed
+assert.match(feed, /^[a-f0-9]{32}$/, 'a feed token is 128 bits of hex or it is guessable')
+
+// the link is the whole of the authorisation, and it carries one person's document
+r = await fetch(`${url}/ics/${feed}`)
+assert.equal(r.status, 200)
+assert.match(r.headers.get('content-type') ?? '', /^text\/calendar/)
+const ics = await r.text()
+assert.match(ics, /^BEGIN:VCALENDAR/)
+assert.match(ics, /END:VCALENDAR\r\n$/)
+// the open dated item, escaped the way the format wants and carrying its project and its note
+assert.match(ics, /SUMMARY:ship it\\, now/)
+assert.match(ics, /DESCRIPTION:@Kova\\nfirst line\\nsecond/)
+assert.match(ics, /DTSTART;VALUE=DATE:20200101\r\nDTEND;VALUE=DATE:20200102/)
+assert.match(ics, /BEGIN:VALARM/, 'a subscribed calendar says nothing without an alarm on the event')
+// finished work and undated work are not things a calendar can show
+assert.ok(!ics.includes('already done') && !ics.includes('no date at all'))
+// and a year of the monthly charge, rolled forward from an anchor that is already in the past
+assert.ok(ics.match(/SUMMARY:€12.99 Netflix/g)!.length >= 12)
+// every line inside what the format allows, continuations indented by one space
+assert.ok(ics.split('\r\n').every((l) => Buffer.byteLength(l) <= 75), 'an unfolded line went out')
+
+/* A line break that survives escaping is a note able to write its own events into the file — and
+   the text is not always the feed owner's, since a project shared with them is in their document.
+   Every flavour of break has to come out as the two characters \n. */
+await put(leon, (await (await get('/state', leon)).json()).version, {
+  items: [{ id: 'i9', type: 'task', due: '2020-03-01', text: 'ok', note: 'a\r\nb\rEND:VEVENT\nc' }],
+})
+const escaped = await (await fetch(`${url}/ics/${feed}`)).text()
+assert.ok(escaped.includes('DESCRIPTION:a\\nb\\nEND:VEVENT\\nc'), escaped)
+assert.equal(escaped.match(/BEGIN:VEVENT/g)!.length, 1, 'a note wrote itself a second event')
+
+// a token that is not one, and one that no longer is
+assert.equal((await fetch(`${url}/ics/nope`)).status, 404)
+assert.equal((await fetch(`${url}/ics/${'a'.repeat(32)}`)).status, 404)
+const feed2 = (await (await post('/api/feed', {}, leon)).json()).feed
+assert.notEqual(feed2, feed)
+assert.equal((await fetch(`${url}/ics/${feed}`)).status, 404, 'the old link still reads')
+assert.equal((await fetch(`${url}/ics/${feed2}`)).status, 200)
+const off = await fetch(`${url}/api/feed`, { method: 'DELETE', headers: { cookie: leon } })
+assert.deepEqual(await off.json(), { feed: null })
+assert.equal((await fetch(`${url}/ics/${feed2}`)).status, 404)
+
+/* ---------- push ---------- */
+
+// the key a browser has to subscribe with: an uncompressed P-256 point, public by definition
+assert.equal((await get('/api/push')).status, 401)
+const pushKey = (await (await get('/api/push', leon)).json()).key
+assert.match(pushKey, /^[A-Za-z0-9_-]{86,88}$/)
+assert.equal(Buffer.from(pushKey, 'base64url').length, 65)
+// the same key on the next call: a new one would unsubscribe every phone out there
+assert.equal((await (await get('/api/push', mia)).json()).key, pushKey)
+
+/* This process posts to whatever lands here every minute, so the endpoint is a forgery waiting to
+   happen: plain http, an address rather than a name, and anything only this network can resolve
+   are all refused. A real push service is a public hostname and nothing else. */
+for (const bad of [
+  'http://push.example/x',
+  'https://127.0.0.1/x',
+  'https://10.0.0.5/admin',
+  'https://[::1]/x',
+  'https://localhost/x',
+  'https://printer.local/x',
+  'https://vault.internal/x',
+  'https://intranet/x',
+  `https://push.example/${'x'.repeat(1100)}`,
+]) {
+  assert.equal((await post('/api/push', { endpoint: bad }, leon)).status, 400, `accepted ${bad}`)
+}
+assert.equal(db.prepare('select count(*) as n from pushes').get()!.n, 0)
+assert.equal((await post('/api/push', { endpoint: 'https://push.example/abc', tz: 120 }, leon)).status, 200)
+assert.equal(db.prepare('select count(*) as n from pushes').get()!.n, 1)
+// registering again is the same row with a fresh timezone, not a second knock on one phone
+assert.equal((await post('/api/push', { endpoint: 'https://push.example/abc', tz: -420 }, leon)).status, 200)
+assert.equal(db.prepare('select tz from pushes').get()!.tz, -420)
+
+// what the worker asks the moment it is knocked — derived, never stored
+assert.equal((await get('/api/alerts')).status, 401)
+const woke = (await (await get('/api/alerts?tz=0', leon)).json()).alerts
+assert.ok(woke.some((a: any) => a.target === 'today' && /overdue/.test(a.title)), 'the overdue line')
+assert.ok(woke.every((a: any) => a.key && a.title && a.target), 'an alert with nothing to show')
+
+// an endpoint is a string anyone could send: only the account holding it may drop it
+const unsub = (cookie: string) => fetch(`${url}/api/push`, {
+  method: 'DELETE', headers: { cookie }, body: JSON.stringify({ endpoint: 'https://push.example/abc' }),
+})
+assert.equal((await unsub(mia)).status, 200)
+assert.equal(db.prepare('select count(*) as n from pushes').get()!.n, 1, 'mia dropped leon’s phone')
+assert.equal((await unsub(leon)).status, 200)
+assert.equal(db.prepare('select count(*) as n from pushes').get()!.n, 0)
+
+/* The knock itself, against a push service that is really just a socket here. This is the one
+   path that cannot be checked by using the app — a malformed VAPID header is a notification that
+   silently never arrives — so the JWT is verified against the public key the browser subscribes
+   with, which is the same check Apple's and Google's ends of this make. */
+{
+  const seen: { auth: string, ttl: string, body: string }[] = []
+  let answer = 201
+  const service = createServer((rq, rs) => {
+    const chunks: Buffer[] = []
+    rq.on('data', (c: Buffer) => chunks.push(c))
+    rq.on('end', () => {
+      seen.push({
+        auth: String(rq.headers.authorization ?? ''),
+        ttl: String(rq.headers.ttl ?? ''),
+        body: Buffer.concat(chunks).toString(),
+      })
+      rs.writeHead(answer).end()
+    })
+  })
+  service.listen(0, '127.0.0.1')
+  await new Promise((ok) => service.on('listening', ok))
+  const at = `http://127.0.0.1:${(service.address() as { port: number }).port}`
+
+  /* Straight into the table: the route only takes an https endpoint, and rightly — this process
+     posts to whatever is in that column. The subscription is the thing under test, not the URL. */
+  const noon = new Date()
+  // a timezone where it is the middle of the day, since the digest is deliberately a morning thing
+  const tz = (12 - noon.getUTCHours()) * 60
+  db.prepare('insert into pushes (endpoint, user, tz, ts) values (?, 1, ?, ?)')
+    .run(`${at}/sub`, tz, Date.now())
+
+  await server.push.tick()
+  assert.equal(seen.length, 1, 'the overdue item was worth a knock and nobody knocked')
+  assert.equal(seen[0].body, '', 'a payload rode along — this push is deliberately empty')
+  assert.equal(seen[0].ttl, '86400')
+
+  const [, t, k] = /^vapid t=([\w.-]+), k=([\w-]+)$/.exec(seen[0].auth) ?? []
+  assert.ok(t && k, `not a VAPID header: ${seen[0].auth}`)
+  assert.equal(k, pushKey, 'signed with a key no browser subscribed to')
+  const [head, body, sig] = t.split('.')
+  const claim = JSON.parse(Buffer.from(body, 'base64url').toString())
+  assert.equal(claim.aud, at, 'the token names a different service than the one being asked')
+  assert.ok(claim.exp * 1000 > Date.now(), 'expired before it was sent')
+  const point = Buffer.from(k, 'base64url')
+  const pub = createPublicKey({
+    format: 'jwk',
+    key: {
+      kty: 'EC', crv: 'P-256',
+      x: point.subarray(1, 33).toString('base64url'),
+      y: point.subarray(33).toString('base64url'),
+    },
+  })
+  assert.ok(
+    verify('sha256', Buffer.from(`${head}.${body}`), { key: pub, dsaEncoding: 'ieee-p1363' },
+      Buffer.from(sig, 'base64url')),
+    'the signature does not check out — every push would be refused',
+  )
+
+  // the same news is not knocked about twice: the keys it sent are remembered against the device
+  await server.push.tick()
+  assert.equal(seen.length, 1, 'it said the same thing twice')
+
+  // and a service saying the browser is gone takes the subscription with it
+  db.prepare('update pushes set seen = ?').run('[]')
+  answer = 410
+  await server.push.tick()
+  assert.equal(seen.length, 2)
+  assert.equal(db.prepare('select count(*) as n from pushes').get()!.n, 0, 'a dead subscription lived on')
+  service.close()
+}
 
 // deleting a user cascades: their session dies with the row — and never yourself
 const del = (name: string, cookie: string) => fetch(`${url}/api/admin/user`, {

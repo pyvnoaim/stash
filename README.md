@@ -26,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the sync engine against the real server, and the server itself |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the sync engine against the real server, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -257,6 +257,18 @@ Only the weeks the month needs, five or six, so there is never a dead row. Days 
 are tinted back, today's number is filled in, and the grid is ruled by its own gaps rather than by
 a border on every cell.
 
+### Somebody else's calendar
+
+**Settings → Account → Calendar feed** cuts a link — `/ics/<128 bits of hex>` — that any calendar
+app can subscribe to: every dated item that is still open, and every subscription charge for a year
+ahead, as all-day events with an alert at nine in the morning. It is built fresh on every fetch out
+of the same document sync holds, so nothing about it can go stale, and it only ever reads.
+
+A calendar app cannot sign in, so the link is the whole of the authorisation — which is why it is
+128 bits, why it is the only route on the server with no session behind it, and why cutting a new
+one is what revokes the old. **Turn off** leaves no link at all. Finished work is not in it: a
+calendar is what is coming, and a struck-through event is not a thing the format can say.
+
 ## Subscriptions
 
 What goes out every month, and what comes in. Add a name, a cost and a cycle — **Weekly**,
@@ -400,6 +412,27 @@ watched assets that moved more than 3% in twenty-four hours, and any saved Marke
 stop or target the live price has reached. Clicking one goes where it lives.
 Dismissing is for the session — a reload brings back whatever is still true.
 
+That bell needs the app to be open. **Settings → Account → Notifications** is the other half: the
+server keeps the subscription, does the watching, and knocks. A saved Markets setup reaching its
+entry, its stop or its target goes out whenever it happens, since a level is exactly the thing that
+cannot wait for office hours; everything else — what is due, what is overdue, what is about to be
+charged — is one line once a day, in the morning where the phone is rather than where the server
+is. Nothing is knocked about twice: each alert is a key, and the daily one carries its date, so
+tomorrow's is a new one. Crypto and gold only, because a stock price needs the Twelve Data key and
+that key deliberately never leaves the browser it was typed into.
+
+The push carries nothing at all. Encrypting a payload for each subscription is the bulk of the Web
+Push specification, and it delivers a sentence that was true a minute ago — so the server knocks
+empty and the service worker asks `/api/alerts` what the matter is, with the session cookie it
+already has. What the phone shows is what is true when it is shown, no payload of anyone's is ever
+handed to Apple or Google to carry, and the whole of the crypto here is the VAPID keypair that
+identifies this server, out of `node:crypto`, still no dependencies. `npm test` signs one and
+verifies it against a push service that is really a socket, because a malformed header is a
+notification that silently never arrives.
+
+Push needs HTTPS, which the container already assumes, and on an iPhone it needs Stash on the home
+screen — Safari offers it to installed apps only. The switch asks for nothing until it is pressed.
+
 ## PDF
 
 **PDF** in the sidebar, under **Tools**. Open a PDF, add and delete pages, merge another file in,
@@ -451,7 +484,10 @@ is still in the file and still copies out.
 - `src/lib/treemap.ts` — squarified treemap, pure geometry, for Overview's spend panel
 - `src/lib/notify.ts` — the alerts the bell shows, derived from state
 - `src/lib/sync.ts` — the sync engine: push on edit, pull on focus, never a dropped local edit
-- `server/index.ts` — accounts, sessions and one versioned document per user; Node + SQLite, no dependencies
+- `src/lib/push.ts` — the browser's half of notifications: permission, the endpoint, and letting go
+- `public/push-sw.js` — the two service-worker handlers a notification needs, imported into the generated worker
+- `server/index.ts` — accounts, sessions and one versioned document per user, plus the calendar feed; Node + SQLite, no dependencies
+- `server/push.ts` — VAPID, the minute loop, and the rule that decides whether a phone is worth waking
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
@@ -563,8 +599,8 @@ people in the sidebar, and **Leave project** in its menu — leaving takes nothi
 ## Settings
 
 One window, reached from your name in the sidebar footer, opening on **Account**: the name and
-picture, the password, the devices this account is signed in on with one button to end all of them,
-and deleting the account — which asks for the password and refuses if you are the last admin, since
+picture, the password, **Notifications** and the **Calendar feed**, the devices this account is
+signed in on with one button to end all of them, and deleting the account — which asks for the password and refuses if you are the last admin, since
 nobody could ever cut an invite again. **History** is the fifty versions the server keeps.
 **People** is there for an admin. **Data** is the backup out and back in, clearing what is finished,
 and what the browser will admit about keeping any of it. **About** says which build this is and
@@ -600,7 +636,10 @@ docker compose up -d --build                            # PROXY_NET names the pr
 docker compose exec stash node server/index.ts invite   # the first code; the rest come from the menu
 ```
 
-Data sits in one named volume; backing it up is copying one SQLite file.
+Data sits in one named volume; backing it up is copying one SQLite file. The push keypair is a row
+in it, so restoring that file keeps every phone subscribed — a new keypair would quietly
+unsubscribe all of them. `STASH_PUSH_SUB` sets the address a push service would complain to;
+nothing is ever sent there, and the default is fine.
 
 Local dev runs the same server beside Vite — `STASH_DB=~/stash-dev.db npm run server`, and the dev
 proxy in `vite.config.ts` does the rest. The script is `node server/index.ts` plus the flag that

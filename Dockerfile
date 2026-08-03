@@ -9,7 +9,7 @@ RUN npm run build
 FROM node:24-alpine
 WORKDIR /app
 COPY --from=build /app/dist ./dist
-COPY server/index.ts ./server/index.ts
+COPY server/index.ts server/push.ts ./server/
 # The database is the only thing this process writes, and it does not need to be root to do it.
 # Docker stamps a freshly created named volume with the ownership the image has on that path, so
 # /data belongs to node from the first `up`. An existing volume keeps whatever it already had —
