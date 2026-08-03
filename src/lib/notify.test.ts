@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
+const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
 
 const t = today()
@@ -22,7 +22,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT' }
+  subView: 'expense', watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
 const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({
@@ -183,3 +183,34 @@ assert.equal(trendAlerts([mc({ h1: 40 })])[0].id, 'trend-pool1-move')
 assert.equal(trendAlerts([mc({ age: 1 })])[0].id, 'trend-pool1-new')
 // and none of them claims an asset — no ASSETS id exists, so the desk must not be pointed anywhere
 assert.equal(trendAlerts([mc({ h1: 40 })])[0].asset, undefined)
+
+/* moverAlerts: the listed assets, measured against their own day. The first case is the one this
+   rule exists for — Bitcoin's 13:00 hour on 3 Aug 2026, the pump the old 24-hour reading missed
+   entirely (it showed +0.8% for the day while price ran 2.2% in two hours). Real figures. */
+const btc = { asset: 'BTCUSDT', label: 'Bitcoin', open: 62700.01, last: 63351.09, high: 64059.75, low: 62300 }
+const [pump] = moverAlerts([btc])
+assert.equal(pump.tone, 'info')
+assert.equal(pump.asset, 'BTCUSDT')
+assert.match(pump.title, /Bitcoin up 1.0% in an hour/)
+assert.match(pump.detail, /37% of the day's range/)
+
+// the hour after it, still running — the alert does not need the move to be finished to fire
+assert.equal(moverAlerts([{ ...btc, open: 63351.09, last: 63967.19 }]).length, 1)
+
+// the same 1% hour inside a day that has already swung 20% is an alt going about its business
+assert.deepEqual(moverAlerts([{ ...btc, high: 70000, low: 58000 }]), [])
+// and a big share of a day where nothing happened is a rounding error, not news
+assert.deepEqual(moverAlerts([{ ...btc, last: 62800, high: 62810, low: 62690 }]), [])
+
+// down reads as down, and carries its own id so dismissing the run up doesn't silence the fall
+const [drop] = moverAlerts([{ ...btc, open: 63351.09, last: 62700.01 }])
+assert.equal(drop.tone, 'warn')
+assert.match(drop.title, /Bitcoin down 1.0%/)
+assert.equal(drop.id, 'mkt-BTCUSDT-down')
+assert.equal(pump.id, 'mkt-BTCUSDT-up')
+
+// a feed that answered with nothing usable says nothing — never a 100% move off a missing open
+assert.deepEqual(moverAlerts([{ ...btc, open: 0 }]), [])
+assert.deepEqual(moverAlerts([{ ...btc, high: 63000, low: 63000 }]), [])
+
+console.log('movers ok')

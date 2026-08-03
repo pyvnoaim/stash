@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { nextCharge, SUBS, MARKET, type Result, type State, type Watch } from './store.ts'
-import type { Trend } from './market.ts'
+import { fmtPrice, moverMove, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -127,6 +127,49 @@ export function resultAlerts(results: Result[], stake: number, at = Date.now()):
       target: MARKET,
       asset: r.asset,
     }
+  })
+}
+
+/* ---------- the listed assets, while they are moving ---------- */
+
+/**
+ * One asset's last hour, and the day it happened in. The bell fetches these; the rule below is
+ * what decides whether any of it is worth interrupting someone for.
+ */
+export type Mover = {
+  asset: string
+  label: string
+  /** Where the hour opened and where price is now. */
+  open: number
+  last: number
+  /** The 24-hour high and low — the yardstick, not a signal of their own. */
+  high: number
+  low: number
+}
+
+/**
+ * The listed assets that are actually moving, right now — the rule is moverMove, in market.ts,
+ * because the push server answers with the same one. Pure, like watchAlerts and trendAlerts: the
+ * bell does the fetching and hands the numbers in.
+ *
+ * This used to read the 24-hour change once, when the app started. Both halves of that were wrong:
+ * a pump that happens at five in the afternoon is not in an answer fetched at nine, and by the time
+ * a two-hour run shows up in a 24-hour percentage it is over. It is asked every minute now, about
+ * the hour just gone.
+ */
+export function moverAlerts(rows: Mover[]): Alert[] {
+  return rows.flatMap((m): Alert[] => {
+    const mv = moverMove(m.open, m.last, m.high, m.low)
+    if (!mv) return []
+    // the direction is in the id, so dismissing a run up doesn't silence the give-back after it
+    return [{
+      id: `mkt-${m.asset}-${mv.up ? 'up' : 'down'}`,
+      title: `${m.label} ${mv.up ? 'up' : 'down'} ${Math.abs(mv.pct).toFixed(1)}% in an hour`,
+      detail: `${fmtPrice(m.last)} — ${Math.round(mv.bite * 100)}% of the day's range, in one hour`,
+      tone: mv.up ? 'info' : 'warn',
+      target: MARKET,
+      asset: m.asset,
+    }]
   })
 }
 
