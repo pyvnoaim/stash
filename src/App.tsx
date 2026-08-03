@@ -47,6 +47,11 @@ const Waiting = ({ name }: { name: string }) => (
 const typingIn = (el: EventTarget | null) =>
   el instanceof HTMLElement && (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName) || el.isContentEditable)
 
+// an empty field has no text of its own to walk back — which is exactly where the capture box
+// leaves you after a submit, so ⌘Z there means the item you just added
+const emptyField = (el: EventTarget | null) =>
+  (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && !el.value
+
 /** Section headers for Everything, where the list reads as kinds rather than one flat run. */
 const TYPE_HEADS: Record<ItemType, string> = { task: 'Tasks', idea: 'Ideas', note: 'Notes' }
 
@@ -221,7 +226,7 @@ export default function App() {
       if (k('search')) { e.preventDefault(); searchRef.current?.select(); return }
       if (k('capture')) { e.preventDefault(); boxRef.current?.focus(); return }
       // inside a field the browser's own text undo is the one you meant, and the PDF tab has its own
-      if (cmd && key === 'z' && !typingIn(e.target) && (query || !isPage(s.sel))) {
+      if (cmd && key === 'z' && (!typingIn(e.target) || emptyField(e.target)) && (query || !isPage(s.sel))) {
         e.preventDefault()
         if (e.shiftKey ? redo() : undo()) { setMarked([]); toast(e.shiftKey ? 'Redone' : 'Undone') }
         return
