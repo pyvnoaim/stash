@@ -24,19 +24,47 @@ const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits
  *
  * Order matters: for a long, price through the stop is also past the entry, so the worst news wins.
  * An asset with no price yet (feed down, stock without a key) says nothing rather than guessing.
+ *
+ * A setup whose window has already opened reads differently from one still waiting: it is running,
+ * and what it is running at is the answer — the same arithmetic the finished record uses, on a
+ * price that hasn't finished yet.
  */
-export function watchAlerts(watches: Watch[], prices: Record<string, number>): Alert[] {
+export function watchAlerts(watches: Watch[], prices: Record<string, number>, stake = 0): Alert[] {
   return watches.flatMap((w) => {
     const p = prices[w.asset]
     if (typeof p !== 'number' || !isFinite(p)) return []
     const below = w.dir === 'long' // which way price has to travel for a level to be "reached"
     const reached = (lvl: number) => (below ? p <= lvl : p >= lvl)
     const hit = reached(w.stop) ? 'stop' : (below ? p >= w.target : p <= w.target) ? 'target' : reached(w.entry) ? 'entry' : null
-    if (!hit) return []
     const side = w.dir === 'long' ? 'Long' : 'Short'
     // the horizon is in the title: two setups on one asset can fire at once, and "which chart is
     // this?" is the first thing you'd ask of an alert that just said the coin's name
     const who = w.horizon ? `${w.label} · ${w.horizon}` : w.label
+    /* An opened setup that has since moved off all three of its levels. This is the case that used
+       to say nothing at all, and it is the only one it may speak for: openWatch fires on the same
+       price test as the entry alert, on the same tick, so a runner that also outranked 'entry'
+       would replace the most actionable alert here after a single render — buy-now silenced by an
+       ambient read-out. A stop or a target still ends it, because a setup that is over is not
+       running. Price back in the entry zone is still the entry zone, and reads as it always did.
+       Which leaves only the gap between the entry and the target — so this alert is always in
+       profit, and there is no losing case to write. A trade going the other way is either back at
+       its entry or through its stop, and both of those already have the word for it. */
+    if (w.entryAt && !hit) {
+      const money = moneyOf(rOf(w, p), stake)
+      return [{
+        // no level in the id: this one alert is the whole running read-out, and dismissing it is
+        // saying "stop telling me about this trade until it ends", which it then does
+        id: `watch-${w.id}-open`,
+        title: `${who} is up ${rOf(w, p).toFixed(2)}R`,
+        detail: money === null
+          ? `${price(p)} — from the ${side.toLowerCase()} entry at ${price(w.entry)}`
+          : `${price(p)} — ${signedEuro(money)} had you taken it`,
+        tone: 'info' as const,
+        target: MARKET,
+        asset: w.asset,
+      }]
+    }
+    if (!hit) return []
     const a = {
       entry: { title: `${who} at entry`, detail: `${price(p)} — the ${side.toLowerCase()} entry ${price(w.entry)} is here`, tone: 'due' as const },
       target: { title: `${who} hit target`, detail: `${price(p)} — ${side} target ${price(w.target)} reached`, tone: 'info' as const },
