@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { HOTKEYS } from './keys.ts'
-import { isRepeat, nextAfter, today, type Repeat } from './parse.ts'
+import { isRepeat, nextAfter, parseList, today, type Parsed, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
 export type Theme = 'auto' | 'light' | 'dark'
@@ -768,6 +768,22 @@ export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watche
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
+/**
+ * A parsed line as an item. The capture field, a pasted list and a line shared in from outside the
+ * app all build one, so a share sheet on a phone produces exactly what typing it would have.
+ * `extra` is whatever the caller knows and the line cannot say: which kind it is, which project it
+ * lands in, whether a pasted checkbox had already been ticked.
+ */
+export function itemOf(line: Parsed, extra: Partial<Item> = {}): Item {
+  const it: Item = {
+    id: uid(), type: 'task', text: line.text, note: '', pid: line.pid, due: line.due,
+    repeat: line.repeat, flag: line.flag, tags: line.tags, done: false, doneAt: null,
+    ts: Date.now(), editedAt: null, ...extra,
+  }
+  // only tasks repeat, the same rule patch holds — finishing is what brings the next one round
+  return it.type === 'task' ? it : { ...it, repeat: null }
+}
+
 /** A pasted list is one write, not one per line — each `set` serialises the whole store. */
 export const addItems = (list: Item[]) =>
   set((s) => ({
@@ -777,6 +793,27 @@ export const addItems = (list: Item[]) =>
   }))
 
 export const addItem = (it: Item) => addItems([it])
+
+/**
+ * A line handed in from outside the app — the phone's share sheet, a shortcut, a bookmarklet —
+ * as `?text=…`, with `title` and `url` alongside it when a share sheet is what sent it. Read by
+ * the same parser the capture field uses, so `@project`, `#tag`, `!` and a date all mean what
+ * they mean when typed, and several lines land as several items.
+ *
+ * Returns the view it went into, for the caller to open, or null when there was nothing in it.
+ */
+export function addShared(search: string): string | null {
+  const q = new URLSearchParams(search)
+  // a share sheet sends the three apart; together they are the line you would have typed
+  const line = [q.get('title'), q.get('text'), q.get('url')].filter(Boolean).join('\n')
+  if (!line.trim()) return null
+  const lines = parseList(line, state.projects)
+  if (!lines.length) return null
+  addItems(lines.map((l) => itemOf(l)))
+  // land where it went, or it reads as nothing having happened: the project the line named, or
+  // Quick notes, which is where anything unfiled goes
+  return lines.length === 1 && lines[0].pid ? lines[0].pid : 'inbox'
+}
 
 export function toggleDone(id: string) {
   set((s) => {

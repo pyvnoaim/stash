@@ -5,7 +5,7 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { dayLabel, parseCapture, parseList, repeatLabel, type Parsed } from '@/lib/parse'
-import { addItem, addItems, project, uid, useStash, type Item, type ItemType } from '@/lib/store'
+import { addItem, addItems, itemOf, project, useStash, type Item, type ItemType } from '@/lib/store'
 
 const TYPES = [
   { id: 'task', label: 'Task', icon: ListTodo },
@@ -30,24 +30,13 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
   ].filter(Boolean) as string[]
 
   // a line off the clipboard brought its own checkbox, a typed one is whatever the toggle says
-  const make = (line: Parsed, done: boolean | null = null): Item => {
-    const kind = done === null ? type : 'task'
-    return {
-      id: uid(),
-      type: kind,
-      text: line.text,
-      note: '',
-      pid: line.pid ?? (project(s, s.sel) ? s.sel : null),
-      due: line.due,
-      repeat: kind === 'task' ? line.repeat : null,
-      flag: line.flag,
-      tags: line.tags,
-      done: !!done,
-      doneAt: done ? Date.now() : null,
-      ts: Date.now(),
-      editedAt: null,
-    }
-  }
+  const make = (line: Parsed, done: boolean | null = null): Item => itemOf(line, {
+    type: done === null ? type : 'task',
+    // the line names a project or the one you are standing in does
+    pid: line.pid ?? (project(s, s.sel) ? s.sel : null),
+    done: !!done,
+    doneAt: done ? Date.now() : null,
+  })
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()

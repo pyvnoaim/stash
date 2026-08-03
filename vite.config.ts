@@ -36,6 +36,14 @@ export default defineConfig({
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
         ],
+        /* Stash in the phone's share sheet. The three fields arrive as a query on the app's own
+           URL and main.tsx reads them with the capture parser, so sharing a page is capturing a
+           line. GET, so there is nothing to post at and no service worker in the middle of it. */
+        share_target: {
+          action: '/',
+          method: 'GET',
+          params: { title: 'title', text: 'text', url: 'url' },
+        },
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],

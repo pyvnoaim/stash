@@ -9,7 +9,7 @@ Object.assign(globalThis, {
 })
 
 const {
-  addItem, addProject, clearDone, getState, load, moveBefore, moveProject, patch, redo,
+  addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
 } = await import('./store.ts')
@@ -264,6 +264,44 @@ assert.equal(getState().items[0].by, undefined)
 const named = load({ items: [{ id: 'n', by: 'x'.repeat(500), editedBy: 7 }] }).items[0]
 assert.equal(named.by, 'x'.repeat(32))
 assert.equal(named.editedBy, undefined)
+
+/* ---------- one parsed line, one item: capture, a paste and a shared link all build it ---------- */
+
+const line = { text: 'ship it', tags: ['audio'], pid: null, flag: true, due: '2026-09-01', repeat: 'week' as const }
+const built = itemOf(line)
+assert.equal(built.type, 'task')                  // a line says nothing about its kind
+assert.deepEqual([built.text, built.flag, built.due, built.tags, built.repeat],
+  ['ship it', true, '2026-09-01', ['audio'], 'week'])
+assert.equal(built.done, false)
+// only tasks repeat, the same rule patch holds — finishing is what brings the next one round
+assert.equal(itemOf(line, { type: 'note' }).repeat, null)
+// and what the line could not say is the caller's to add
+assert.equal(itemOf(line, { pid: 'k' }).pid, 'k')
+assert.notEqual(itemOf(line).id, itemOf(line).id)
+
+/* ---------- a line shared in from outside is a line typed into the field ---------- */
+
+wipe()
+const ferry = addProject('Ferry')
+assert.equal(addShared(''), null)
+assert.equal(addShared('?text=%20%20'), null, 'whitespace is not a note')
+assert.equal(addShared('?nothing=here'), null)
+
+// the parser is the capture field's, so the sigils mean what they always mean — and it lands in
+// the project the line named, since that is where it would be if it had been typed
+assert.equal(addShared('?text=' + encodeURIComponent('! fix the loader @ferry #audio tomorrow')), ferry.id)
+const shared = getState().items[0]
+assert.deepEqual([shared.text, shared.flag, shared.tags, shared.pid],
+  ['fix the loader', true, ['audio'], ferry.id])
+assert.ok(shared.due)
+
+// a share sheet sends the three apart, and they are read as one line each
+assert.equal(addShared('?title=Read+this&text=later&url=https%3A%2F%2Fx.example'), 'inbox')
+assert.deepEqual(getState().items.slice(0, 3).map((i) => i.text),
+  ['Read this', 'later', 'https://x.example'])
+// unfiled lands in Quick notes, which is where anything without a project goes
+assert.equal(getState().items[0].pid, null)
+removeProject(ferry.id)
 
 /* ---------- #tag search is the tag, plain search is a substring ---------- */
 
