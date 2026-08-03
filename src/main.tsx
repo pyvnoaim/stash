@@ -6,6 +6,7 @@ import './index.css'
 import App from './App.tsx'
 import { LoginGate } from './components/login-gate.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
+import { addShared, select } from './lib/store.ts'
 import { holdRegistration } from './lib/update.ts'
 
 /* A new build is live, downloaded and waiting, while this tab still runs the old one. It says so
@@ -41,6 +42,21 @@ async function hardReload() {
   await Promise.all((await caches.keys()).map((k) => caches.delete(k)))
   await (await navigator.serviceWorker?.getRegistration())?.unregister()
   location.reload()
+}
+
+/* A line handed in from outside the app — the phone's share sheet (see `share_target` in
+   vite.config.ts), an iOS shortcut, a bookmarklet, anything that can open a URL:
+
+     /?text=call%20the%20bank%20tomorrow%20@kova
+
+   The query comes off the URL the moment it is read, before anything can reload it back into a
+   second copy of the same note. */
+{
+  const landed = addShared(location.search)
+  if (landed) {
+    history.replaceState(null, '', location.pathname + location.hash)
+    select(landed)
+  }
 }
 
 // ask the browser not to evict localStorage under storage pressure — Safari can, after a week

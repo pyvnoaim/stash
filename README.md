@@ -49,6 +49,14 @@ so a Markdown list off a page or an issue lands as a list. `- ` and `1. ` bullet
 `[ ]` or `[x]` box sets whether it is already finished, and headings and blank lines are not
 items. One line pastes as text, the way it always did.
 
+A line can also arrive from outside the app. `?text=…` on the app's own URL is read by the same
+parser, so `/?text=call%20the%20bank%20tomorrow%20@kova` files a Kova task due tomorrow and opens
+the list it landed in — and several lines in one share are several items, the way a paste is. The
+query comes off the URL as it is read, so a reload never makes a second copy. That is one iOS
+Shortcut (**Open URL**, with the text you dictated on the end), one bookmarklet, and one entry in
+the manifest: Stash is in Android's share sheet, where a page's title, its selected text and its
+link arrive as the three lines you would have typed.
+
 A search is any number of narrowings plus whatever text is left over, in any order. `#audio`
 matches the tag itself rather than the letters, so it skips what merely mentions the word. `@kova`
 is the project, matched on the start of its name the same way capture matches it, finished work
