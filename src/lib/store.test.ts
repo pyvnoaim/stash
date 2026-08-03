@@ -12,6 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
+  openWatch, closeWatch, clearResults,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -544,6 +545,59 @@ assert.equal(geometry('long', 100, 105, 110), 0)  // stop above the entry
 assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
 assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
 assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
+
+/* ---------- the record of how they went ---------- */
+{
+  const w = { ...mkWatch('Trading', 100), id: 'r1', stop: 95, target: 110 }
+  addWatch(w)
+  // the window opening is stamped once: a price sitting at the entry for an hour is one opening,
+  // not sixty, and the second call must not rewrite the first one's time to now
+  openWatch('r1', 1000)
+  openWatch('r1', 2000)
+  assert.equal(getState().watches.find((x) => x.id === 'r1')?.entryAt, 1000)
+
+  const done = { ...w, entryAt: 1000, closedAt: 5000, level: 'target' as const, exit: 110, r: 2 }
+  closeWatch(done)
+  // off the live list and into the record — a finished setup must stop being watched, or the bell
+  // shouts about a trade that is over for as long as the price stays past the level
+  assert.equal(getState().watches.some((x) => x.id === 'r1'), false)
+  assert.deepEqual(getState().results.map((r) => r.id), ['r1'])
+  // filed twice (two ticks landing on one crossing) is filed once
+  closeWatch({ ...done, r: 99 })
+  assert.equal(getState().results.length, 1)
+  assert.equal(getState().results[0].r, 2)
+
+  const cleared = clearResults()
+  assert.equal(cleared?.n, 1)
+  assert.deepEqual(getState().results, [])
+  cleared?.undo()
+  assert.deepEqual(getState().results.map((r) => r.id), ['r1'])
+  clearResults()
+  assert.equal(clearResults(), null)
+}
+
+// the same trust boundary the live setups get, plus the two things only a finished one has: a row
+// whose R is not a number would put NaN in the total and take the whole scoreboard with it
+const finished = (over: Record<string, unknown>) => load({
+  results: [{
+    id: 'x', asset: 'BTCUSDT', label: 'Bitcoin', dir: 'long', entry: 100, stop: 95, target: 110,
+    entryAt: 1, closedAt: 2, level: 'target', exit: 110, r: 2, ...over,
+  }],
+}).results
+assert.equal(finished({}).length, 1)
+assert.equal(finished({}) [0].level, 'target')
+assert.equal(finished({ level: 'nonsense' })[0].level, 'target')   // only the two it can be
+assert.equal(finished({ level: 'stop' })[0].level, 'stop')
+assert.deepEqual(finished({ r: 'lots' }), [])
+assert.deepEqual(finished({ closedAt: null }), [])
+assert.deepEqual(finished({ stop: 105 }), [])                      // a long stopped above its entry
+assert.deepEqual(load({ results: 'nope' }).results, [])
+
+// a stake is money at risk: positive, real, or the answer "say it in R and leave money out of it"
+for (const junk of ['20', -5, NaN, Infinity, null, undefined]) {
+  assert.equal(load({ stake: junk }).stake, 0)
+}
+assert.equal(load({ stake: 250 }).stake, 250)
 
 console.log('store: ok')
 

@@ -180,8 +180,8 @@ touched, so it sinks under the first and rises under the second. Dragging a proj
 the order yours, so it drops straight back to **Custom**, freezing whatever order you were looking
 at and landing the drop where you saw it land.
 
-**Settings** in the footer holds the theme, the Markets chart style, the stock-data key and a card
-of every key. The theme is also a single button in the header that cycles system → light → dark,
+**Settings** in the footer holds the theme, the Markets chart style, what a setup is worth, the
+stock-data key and a card of every key. The theme is also a single button in the header that cycles system → light → dark,
 and the switch opens as a circle from whatever you clicked, using the browser's own View
 Transitions — Firefox and *reduce motion* get the plain switch.
 
@@ -361,7 +361,29 @@ timeframe gets said out loud too.
 
 **Alert me** on that card saves those three levels, and the bell then watches the live
 price against them: it tells you when price reaches the entry, when it runs through the stop (the
-setup is dead), and when it hits the target. The levels are a snapshot — the entry rides a moving
+setup is dead), and when it hits the target.
+
+### How they went
+
+A saved setup is a claim, and the desk now keeps the score of them. The entry being *reached* is
+what starts one — a plan whose price never came round is not a trade that lost, it is a trade
+nobody was ever in, and it stays on the list waiting. Once the entry has really been seen, whichever
+of the target and the stop the price reaches first ends it, and the setup moves off the live list
+into **How they went** at the bottom of the desk. Which is also what stops a dead setup shouting
+forever, the way it used to.
+
+Each finished one is scored in R — multiples of what it had at risk — off the price actually seen
+when it ended, not off the level it was aiming at: a target overshot to +2.4R says +2.4R, and a stop
+gapped through says worse than −1R. Set **What a setup is worth** in Settings → Markets to the euros
+you would have had at risk on one, and the same rows read in money too: *+€480.00 had you taken it*,
+and a running total across the lot. Leave it empty and it stays in R.
+
+Nothing here was ever bought. There is no position, no broker, no fee and no slippage in any of it —
+it is the plan's own arithmetic run forward, and the wording never says otherwise. Two more honest
+limits: a level crossed while every device is shut is noticed at the next look, so the exit written
+down is the price then rather than the price at the crossing — the record shows both dates, so a
+suspiciously good number can be read for what it is. And the ledger only ever counts setups you
+saved, which is a scoreboard of a rule, not of your trading. The levels are a snapshot — the entry rides a moving
 average that walks every bar, and a watch that kept re-reading it would be a different trade every
 hour. One saved setup per asset, side **and horizon** — an hourly long and a daily long on the same
 coin are two different trades off two different charts, so saving one leaves the other alone, and the
@@ -398,6 +420,21 @@ not pretend to be a system.
 
 None of it is advice, and none of it is stored — every number on the page is fetched fresh.
 
+### Trending on Solana
+
+The other market, at the bottom of the desk: whatever opened this morning and is already moving,
+off GeckoTerminal's trending pools — a dozen of the twenty it returns, ranked by the last hour
+rather than the last day, because a memecoin's day is over. Price, the hour's move, the pool's
+liquidity and its age, and each row links straight out to the pool: none of this is in ASSETS and
+none of it gets a chart here, since a moving average over a six-hour pool is a line through noise.
+
+Each row now draws the hour it is ranked by — twelve five-minute closes, the same sparkline the
+Overview uses, at row height — because +59% and −45% are the same number to a list and completely
+different shapes. One request per row, cached for the length of a bar: the panel re-reads every
+minute and these are five-minute bars, so four of every five fetches would ask for a picture that
+cannot have changed. A pool minutes old has no bars yet and simply has no line, rather than a flat
+one that says nothing. Hidden on a phone, where the row has no width to spare.
+
 The Overview's Markets panel ranks the eleven keyless assets by the size of their 24-hour move and
 shows the four biggest, either direction — a 6% drop is as much news as a 6% rally. Tapping one opens
 the desk on that asset, and so does clicking a Markets notification: the bell's "Bitcoin · Trading at
@@ -409,7 +446,9 @@ lives in the store, so it also survives a reload.
 The bell in the header counts what wants attention, derived from state rather than stored, so it is
 never stale: tasks overdue or due today, subscriptions charging within three days, any of the four
 watched assets that moved more than 3% in twenty-four hours, and any saved Markets setup whose entry,
-stop or target the live price has reached. Clicking one goes where it lives.
+stop or target the live price has reached. A setup that finished stays in the bell for half a day
+with what it did — *+2.40R — +€480.00 had you taken it* — and after that it is only in the record.
+Clicking one goes where it lives.
 Dismissing is for the session — a reload brings back whatever is still true.
 
 That bell needs the app to be open. **Settings → Account → Notifications** is the other half: the
@@ -604,7 +643,8 @@ signed in on with one button to end all of them, and deleting the account — wh
 nobody could ever cut an invite again. **History** is the fifty versions the server keeps.
 **People** is there for an admin. **Data** is the backup out and back in, clearing what is finished,
 and what the browser will admit about keeping any of it. **About** says which build this is and
-looks for a newer one. **Markets** and **Hotkeys** are kept on this machine and never travel.
+looks for a newer one. **Markets** holds the chart style, what a setup is worth, and the stock-data
+key; that key and **Hotkeys** are kept on this machine and never travel.
 
 No Appearance: the theme cycles from the button in the header — system, light, dark — and ⌘K lists
 all three, so a third way to set it would be a setting for its own sake.

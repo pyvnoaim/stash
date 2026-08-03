@@ -1,7 +1,7 @@
 // npm test — the bell count comes from here, so a wrong alert is a wrong nudge
 import assert from 'node:assert/strict'
 // type-only, so it's erased and store still loads lazily below, after the globals are stubbed
-import type { Item, State, Watch } from './store.ts'
+import type { Item, Result, State, Watch } from './store.ts'
 import type { Trend } from './market.ts'
 
 // notify imports store, which touches localStorage and listeners at import time
@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alerts, watchAlerts, trendAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
+const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
 
 const t = today()
@@ -22,7 +22,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', watches: [], marketAsset: 'BTCUSDT' }
+  subView: 'expense', watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT' }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
 const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({
@@ -71,6 +71,82 @@ assert.equal(fire(89, short)[0].title, 'Bitcoin · Trading hit target')
 // no price (feed down, or a stock with no key) says nothing rather than guessing
 assert.deepEqual(watchAlerts([long], {}), [])
 assert.deepEqual(watchAlerts([long], { BTCUSDT: NaN }), [])
+
+/* ---------- what actually happened: the window opening, and the trade ending ---------- */
+
+const NOW = 1_700_000_000_000
+const step = (p: number, w = long) => watchProgress([w], { BTCUSDT: p }, NOW)
+
+// price above the entry: the window has not opened, and nothing is written down
+assert.deepEqual(step(104), { opened: [], closed: [] })
+// no price at all writes nothing either — the same rule the alerts hold to
+assert.deepEqual(watchProgress([long], {}, NOW), { opened: [], closed: [] })
+
+// price at the entry opens it, once. Nothing is closed: it has only just started
+assert.deepEqual(step(100).opened, ['w1'])
+assert.deepEqual(step(100).closed, [])
+// already open, so opening it again is not news — and this is what stops the entry timestamp
+// being rewritten to "now" on every poll for as long as price sits at the level
+const open: Watch = { ...long, entryAt: NOW - 3600_000 }
+assert.deepEqual(step(97, open).opened, [])
+
+// a setup whose entry never came round cannot lose: price straight to the target from above
+// records nothing at all, because nobody was ever in it
+assert.deepEqual(step(111), { opened: [], closed: [] })
+
+// once open, the target closes it — at the price actually seen, not at the level
+const hit = step(112, open).closed[0]
+assert.equal(hit.level, 'target')
+assert.equal(hit.exit, 112)
+assert.equal(hit.entryAt, NOW - 3600_000)
+assert.equal(hit.closedAt, NOW)
+assert.equal(hit.r, 2.4)          // (112 − 100) / (100 − 95): overshot its 2R plan, and says so
+assert.equal(hit.id, 'w1')        // the id it had, so the record cannot double up
+
+// the stop closes it at −1R, or worse when the price gapped through
+assert.equal(step(95, open).closed[0].level, 'stop')
+assert.equal(step(95, open).closed[0].r, -1)
+assert.equal(step(94, open).closed[0].r, -1.2)
+
+/* a price that gapped past both in one poll opens and closes on the same tick — for a long the
+   stop is below the entry, so reaching it means the entry was reached too. The worse of the two
+   is what happened, and it is written down as a real (bad) outcome rather than skipped. */
+const gap = step(90)
+assert.deepEqual(gap.opened, ['w1'])
+assert.equal(gap.closed[0].level, 'stop')
+assert.equal(gap.closed[0].entryAt, NOW)
+
+// a short mirrors, level for level
+const openShort: Watch = { ...short, entryAt: NOW - 3600_000 }
+assert.deepEqual(step(96, short), { opened: [], closed: [] })   // ran away from the entry, downward
+assert.deepEqual(step(101, short).opened, ['w1'])
+assert.equal(step(88, openShort).closed[0].level, 'target')
+assert.equal(step(88, openShort).closed[0].r, 2.4)             // (100 − 88) / (105 − 100)
+assert.equal(step(105, openShort).closed[0].level, 'stop')
+assert.equal(step(105, openShort).closed[0].r, -1)
+
+/* ---------- and what it would have paid ---------- */
+
+const result: Result = { ...long, entryAt: NOW - 7200_000, closedAt: NOW, level: 'target', exit: 110, r: 2, id: 'r1' }
+const one = (stake: number, over: Partial<Result> = {}) =>
+  resultAlerts([{ ...result, ...over }], stake, NOW)[0]
+
+// no stake: the score, and no money it cannot know
+assert.equal(one(0).title, 'Bitcoin · Trading hit target')
+assert.ok(one(0).detail.startsWith('+2.00R'))
+assert.ok(!one(0).detail.includes('€'))
+
+// with one, the money is that R times the stake — and the wording never says it was traded
+assert.ok(one(200).detail.includes('+€400.00'))
+assert.ok(one(200).detail.includes('had you taken it'))
+// a loss reads as one, sign and all
+assert.equal(one(200, { level: 'stop', r: -1, exit: 95 }).title, 'Bitcoin · Trading stopped out')
+assert.ok(one(200, { level: 'stop', r: -1, exit: 95 }).detail.includes('−€200.00'))
+assert.equal(one(200, { level: 'stop', r: -1 }).tone, 'warn')
+
+// it is news for half a day, and a record after that — the desk keeps it, the bell lets it go
+assert.equal(resultAlerts([result], 0, NOW + 11 * 3600_000).length, 1)
+assert.deepEqual(resultAlerts([result], 0, NOW + 13 * 3600_000), [])
 
 console.log('notify ok')
 

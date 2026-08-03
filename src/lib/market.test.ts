@@ -1,7 +1,7 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, tradePlan, divergence,
-  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS } = await import('./market.ts')
+  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS } = await import('./market.ts')
 
 // sma: nulls until the window fills, then the trailing average
 const s = sma([1, 2, 3, 4, 5], 3)
@@ -260,3 +260,18 @@ assert.equal(priceDigits(0.0000004), 9)  // three significant figures, not six z
 // the digit survives instead of rounding away; the trailing zeros are minimumFractionDigits padding
 assert.equal(fmtPrice(0.0000004), '0.000000400')
 assert.equal(fmtPrice(0.000001), '0.00000100')
+
+/* parsePoolLine against the shape the OHLCV endpoint really answers with: newest bar first, each
+   one [ts, o, h, l, c, v]. Drawn in that order the line runs backwards, which looks like a market
+   rather than like a bug — so the reversal is asserted rather than trusted. */
+const ohlcv = (list: unknown[][]) => ({ data: { attributes: { ohlcv_list: list } } })
+assert.deepEqual(parsePoolLine(ohlcv([
+  [1754200800, 0.9, 1.1, 0.8, 3, 500],
+  [1754200500, 0.9, 1.1, 0.8, 2, 500],
+  [1754200200, 0.9, 1.1, 0.8, 1, 500],
+])), [1, 2, 3], 'the closes came back newest-first and were drawn that way')
+// a bar with no usable close is dropped rather than plotted at zero, and junk is simply empty
+assert.deepEqual(parsePoolLine(ohlcv([[1, 0, 0, 0, null, 0], [2, 0, 0, 0, '5', 0]])), [5])
+for (const junk of [null, {}, { data: {} }, ohlcv('nope' as never)]) {
+  assert.deepEqual(parsePoolLine(junk), [])
+}

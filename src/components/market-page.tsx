@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Bell, BellRing, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -7,10 +8,12 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
+import { euro, moneyOf, rLabel, signedEuro } from '@/lib/notify'
+import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
-import { addWatch, removeWatch, setApiKey, setMarketAsset, uid, useStash } from '@/lib/store'
+import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, uid, useStash } from '@/lib/store'
 import {
-  ASSETS, fetchCandles, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
+  ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
   PLAN_WORDS, signals, tradePlan, trendFilter, TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
@@ -774,12 +777,95 @@ export default function MarketPage() {
       </>
       )}
 
-      {/* outside the fragment above, so it is there while the desk loads, errors, or waits for a
-          stock key — it needs none of those things */}
+      {/* outside the fragment above, so they are there while the desk loads, errors, or waits for
+          a stock key — none of them needs any of that */}
+      <Record />
+
       <Trending />
 
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
+  )
+}
+
+/**
+ * How the saved setups actually went. A setup only lands here if its entry was really reached —
+ * the window opening is the whole condition, since a plan whose price never came round is not a
+ * trade that lost — and then only once it ran to its target or its stop.
+ *
+ * The money is arithmetic on a number you gave: the R it did, times the stake you said one setup
+ * is worth. Nothing was ever bought, no fee is modelled, and the wording is careful about that —
+ * "had you taken it" is the whole claim. Set no stake and it says R and nothing else.
+ */
+function Record() {
+  const { results, stake } = useStash()
+  if (!results.length) return null
+
+  const total = results.reduce((n, r) => n + r.r, 0)
+  const won = results.filter((r) => r.level === 'target').length
+  const money = moneyOf(total, stake)
+  const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-heading text-sm tracking-wide uppercase">How they went</span>
+          <span className="text-muted-foreground text-xs">
+            {results.length} finished · {won} hit target
+          </span>
+          <span className={cn('ml-auto font-mono text-sm tabular-nums',
+            total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+            {money === null ? rLabel(total) : signedEuro(money)}
+          </span>
+          {money !== null && (
+            <span className="text-muted-foreground font-mono text-xs tabular-nums">{rLabel(total)}</span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground -my-1 h-7"
+            onClick={() => {
+              const gone = clearResults()
+              if (gone) toast(`Cleared ${gone.n}`, { action: { label: 'Undo', onClick: gone.undo } })
+            }}
+          >
+            Clear
+          </Button>
+        </div>
+        {results.map((r) => {
+          const hit = r.level === 'target'
+          const cash = moneyOf(r.r, stake)
+          return (
+            <div key={r.id} className="flex items-baseline gap-2 px-1.5 py-1 text-sm">
+              <span className="w-28 shrink-0 truncate font-medium">{r.label}</span>
+              <span className="text-muted-foreground w-24 shrink-0 truncate text-xs">
+                {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
+              </span>
+              {/* the two dates that matter: when the window opened and when it was over */}
+              <span className="text-muted-foreground hidden shrink-0 font-mono text-xs tabular-nums sm:block">
+                {when(r.entryAt)} → {when(r.closedAt)}
+              </span>
+              <span className={cn('ml-auto shrink-0 text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {hit ? 'target' : 'stopped'}
+              </span>
+              <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+              <span className={cn('w-20 shrink-0 text-right font-mono text-xs tabular-nums',
+                r.r >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {cash === null ? '' : signedEuro(cash)}
+              </span>
+            </div>
+          )
+        })}
+        <p className="text-muted-foreground mt-2 px-1.5 text-xs">
+          {stake > 0
+            ? `What each would have paid, risking ${euro(stake)} a setup. Nothing was bought and no
+               fee is counted — it is the plan's own arithmetic, not a broker's.`
+            : `Set what a setup is worth in Settings → Markets and these read in euros as well as
+               in R.`}
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -792,6 +878,10 @@ export default function MarketPage() {
 function Trending() {
   const [rows, setRows] = useState<Trend[] | null>(null)
   const [err, setErr] = useState(false)
+  /* The last hour as a line, one pool at a time — the feed has no batch for it. Only for the rows
+     actually shown, and only the pools still on the list: a shortlist that turns over all day
+     would otherwise keep every pool it ever held. */
+  const [lines, setLines] = useState<Record<string, number[]>>({})
 
   useEffect(() => {
     let on = true
@@ -802,6 +892,19 @@ function Trending() {
     const h = window.setInterval(tick, TREND_LIVE)
     return () => { on = false; window.clearInterval(h) }
   }, [])
+
+  const shown = rows?.slice(0, TREND_ROWS)
+  useEffect(() => {
+    if (!shown?.length) return
+    let on = true
+    // one map, set once: twelve resolutions each setting their own would be twelve renders, and
+    // building it from the current rows is what drops the ones that have fallen off the list
+    void Promise.all(shown.map(async (t) => [t.pool, await fetchPoolLine(t.pool)] as const))
+      .then((pairs) => { if (on) setLines(Object.fromEntries(pairs)) })
+    return () => { on = false }
+    // the pools on the list, not the array: the fetch is cached per pool, but a new array every
+    // minute would still rebuild the map — and with it every line — for no change at all
+  }, [shown?.map((t) => t.pool).join()])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
   const usd = (n: number) => n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1e3)}k`
@@ -817,7 +920,7 @@ function Trending() {
         {err && <p className="text-muted-foreground py-4 text-sm">Could not reach the pool feed.</p>}
         {!err && !rows && <p className="text-muted-foreground py-4 text-sm">Loading pools…</p>}
         {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">Nothing trending right now.</p>}
-        {rows?.slice(0, TREND_ROWS).map((t) => (
+        {shown?.map((t) => (
           /* straight out to the pool: this app has no chart for it and pretending otherwise would
              be the dishonest kind of feature. New tab, noreferrer — same terms as the item links. */
           <a
@@ -834,6 +937,12 @@ function Trending() {
             <span className={cn('w-16 shrink-0 text-right font-mono text-xs tabular-nums',
               t.h1 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
               {pct(t.h1)}
+            </span>
+            {/* the hour the row is ranked by, drawn: twelve five-minute closes. A pool minutes old
+                has no bars yet and simply has no line, rather than a flat one that says nothing.
+                Hidden on a phone, where the row has no width to spare. */}
+            <span className="ml-3 hidden w-24 shrink-0 self-center sm:block">
+              <Sparkline data={lines[t.pool] ?? []} up={t.h1 >= 0} id={t.pool} className="h-4 w-full" />
             </span>
             {/* liquidity is the honest column here — a 300% hour on $4k of pool is not a market */}
             <span className="text-muted-foreground ml-auto shrink-0 font-mono text-xs tabular-nums">

@@ -99,7 +99,31 @@ export interface Watch {
   stop: number
   target: number
   ts: number
+  /**
+   * When a live price was first actually seen at the entry — the window really opening. Absent
+   * until it is, which is what separates a setup that ran from one that never started: a plan
+   * whose entry never came round is not a trade that lost, it is a trade nobody was ever in.
+   */
+  entryAt?: number
 }
+
+/**
+ * A setup that ran its course: its entry was reached, and then one of its two exits was. Kept so
+ * the desk can say what the plan would have paid — nothing here was ever a position, and nothing
+ * here claims one was.
+ */
+export interface Result extends Watch {
+  entryAt: number
+  closedAt: number
+  /** Which level ended it, and the price actually on screen when it did. */
+  level: 'target' | 'stop'
+  exit: number
+  /** Multiples of the risk. The only unit two setups on two different assets compare in. */
+  r: number
+}
+
+/** How many finished setups are kept. Past a few dozen it is a spreadsheet, not a scoreboard. */
+const KEEP_RESULTS = 50
 
 /** What to set aside each month to cover it: a €120 yearly abo is €10 a month. The whole point. */
 export const monthlyCost = (sub: Sub) => (sub.cost * PER_YEAR[sub.cycle]) / 12
@@ -168,6 +192,16 @@ function cleanDate(v: unknown): string | null {
   return !isNaN(+d) && d.toLocaleDateString('sv') === v ? v : null
 }
 
+/**
+ * Whether a setup's three levels describe a trade at all: for a long the stop sits under the entry
+ * and the target over it, and for a short the other way round. Anything else is not a plan, it is
+ * an alarm that is already going off — which is why both the live list and the record are held to
+ * it on the way in.
+ */
+const liveGeometry = (w: Pick<Watch, 'asset' | 'dir' | 'entry' | 'stop' | 'target'>) =>
+  !!w.asset && [w.entry, w.stop, w.target].every(isFinite)
+  && (w.dir === 'long' ? w.stop < w.entry && w.target > w.entry : w.stop > w.entry && w.target < w.entry)
+
 /** Manual is the drag order the sidebar has always had; the other two are derived on the way past. */
 export const PROJECT_SORTS = ['manual', 'name', 'name-desc', 'edited', 'edited-asc'] as const
 export type ProjectSort = (typeof PROJECT_SORTS)[number]
@@ -201,6 +235,14 @@ export interface State {
   subView: 'expense' | 'income'
   /** Saved Markets setups the bell watches the live price against. */
   watches: Watch[]
+  /** The ones that finished, newest first. */
+  results: Result[]
+  /**
+   * What one setup is worth to you: the euros you would have had at risk on it. Money is only ever
+   * this times the R the setup actually did — the app has no positions, no broker and no idea what
+   * you really traded. Zero means say it in R and leave the money out of it.
+   */
+  stake: number
   /** Which asset the Markets desk is on. Lives here so a mover tile or an alert can open the desk
    *  already showing the right thing — and so it survives a reload. Validated by the page, which
    *  owns the asset table and falls back to Bitcoin for an id it doesn't recognise. */
@@ -242,7 +284,7 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense',
-  watches: [], marketAsset: 'BTCUSDT',
+  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT',
 })
 
 // Every way data enters — localStorage, an imported backup — comes through here.
@@ -339,13 +381,46 @@ export function load(data: unknown): State {
       stop: Number(w.stop),
       target: Number(w.target),
       ts: typeof w.ts === 'number' ? w.ts : Date.now(),
+      // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
+      ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
     }))
     // levels the wrong way round for their side are not a trade, they are an alarm that fires on
     // every tick forever: a long whose stop sits above its entry is already "stopped out" the
     // moment it loads. The app can't build one — tradePlan checks the geometry — but a hand-edited
     // backup can, and this is the boundary that decides what the bell is allowed to shout about.
-    .filter((w) => w.asset && [w.entry, w.stop, w.target].every(isFinite)
-      && (w.dir === 'long' ? w.stop < w.entry && w.target > w.entry : w.stop > w.entry && w.target < w.entry))
+    .filter(liveGeometry)
+
+  /* The record of the finished ones. Same geometry rule, since these are the same setups one step
+     later — plus the two things only a finished one has: when it ended and what it did. A row
+     whose R is not a number would put NaN in a total and take the whole scoreboard with it. */
+  const rseen = new Set<string>()
+  st.results = (Array.isArray(st.results) ? st.results : [])
+    .filter((r) => r && r.id && !rseen.has(String(r.id)) && rseen.add(String(r.id)))
+    .map((r) => ({
+      id: String(r.id),
+      asset: String(r.asset ?? ''),
+      label: String(r.label || r.asset || 'Setup'),
+      horizon: String(r.horizon ?? ''),
+      dir: r.dir === 'short' ? 'short' as const : 'long' as const,
+      entry: Number(r.entry),
+      stop: Number(r.stop),
+      target: Number(r.target),
+      ts: typeof r.ts === 'number' ? r.ts : Date.now(),
+      entryAt: Number(r.entryAt),
+      closedAt: Number(r.closedAt),
+      level: r.level === 'stop' ? 'stop' as const : 'target' as const,
+      exit: Number(r.exit),
+      r: Number(r.r),
+    }))
+    /* `> 0` rather than isFinite for the three that cannot be zero: Number(null) and Number('')
+       are both 0, which is finite — a row with no closing time would otherwise load as one that
+       finished in 1970 and sit at the bottom of the record forever. */
+    .filter((r) => liveGeometry(r) && [r.entryAt, r.closedAt, r.exit].every((n) => n > 0)
+      && isFinite(r.r))
+    .slice(0, KEEP_RESULTS)
+
+  // a stake is money at risk: a real number, never negative. Zero is the answer "say it in R"
+  st.stake = typeof st.stake === 'number' && isFinite(st.stake) && st.stake > 0 ? st.stake : 0
 
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
@@ -779,6 +854,34 @@ export const addWatch = (w: Watch) =>
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
+
+/** A live price was seen at the entry: the window really opened, once, at this moment. */
+export const openWatch = (id: string, at: number) => set((s) => ({
+  ...s,
+  watches: s.watches.map((w) => (w.id === id && !w.entryAt ? { ...w, entryAt: at } : w)),
+}))
+
+/**
+ * It ran to its target or its stop: off the live list, into the record. Idempotent on the id, so
+ * two ticks landing on the same crossing file it once.
+ */
+export const closeWatch = (r: Result) => set((s) => (s.results.some((x) => x.id === r.id) ? s : {
+  ...s,
+  watches: s.watches.filter((w) => w.id !== r.id),
+  results: [r, ...s.results].slice(0, KEEP_RESULTS),
+}))
+
+/** Returns what it cleared so the caller can offer an undo — the same as every other delete here. */
+export function clearResults() {
+  const gone = state.results
+  if (!gone.length) return null
+  set((s) => ({ ...s, results: [] }))
+  return { n: gone.length, undo: () => set((s) => ({ ...s, results: gone.concat(s.results).slice(0, KEEP_RESULTS) })) }
+}
+
+/** Euros at risk on one setup, or 0 for "say it in R and leave the money out of it". */
+export const setStake = (stake: number) =>
+  set((s) => ({ ...s, stake: isFinite(stake) && stake > 0 ? stake : 0 }))
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 

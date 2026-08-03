@@ -93,12 +93,20 @@ export function alertsOf(s: any, tz: number, prices: Record<string, number>, at 
     if (!hit) continue
     const who = w.horizon ? `${w.label} · ${w.horizon}` : w.label
     const side = long ? 'long' : 'short'
+    /* What it did, and — where a stake is set — what that is in money. The same arithmetic
+       notify.ts does in the app (rOf × stake): R off the plan's own geometry, nothing bought,
+       no fee counted. Only on an outcome; at the entry nothing has happened yet. */
+    const stake = Number(s?.stake) || 0
+    const r = long ? (p - w.entry) / (w.entry - w.stop) : (w.entry - p) / (w.stop - w.entry)
+    const paid = hit !== 'entry' && stake > 0 && isFinite(r)
+      ? ` · ${r >= 0 ? '+' : '−'}${euro(Math.abs(r * stake))} had you taken it`
+      : ''
     out.push({
       key: `watch-${w.id}-${hit}`,
       title: hit === 'entry' ? `${who} at entry` : hit === 'target' ? `${who} hit target` : `${who} setup broken`,
-      body: hit === 'entry' ? `${price(p)} — the ${side} entry ${price(w.entry)} is here`
+      body: (hit === 'entry' ? `${price(p)} — the ${side} entry ${price(w.entry)} is here`
         : hit === 'target' ? `${price(p)} — the ${side} target ${price(w.target)} is reached`
-          : `${price(p)} — through the ${side} stop ${price(w.stop)}`,
+          : `${price(p)} — through the ${side} stop ${price(w.stop)}`) + paid,
       target: 'market',
     })
   }

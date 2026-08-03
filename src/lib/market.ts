@@ -204,6 +204,46 @@ export function fetchTrending(): Promise<Trend[]> {
 }
 
 /**
+ * The closes out of GeckoTerminal's OHLCV list. It answers newest first, and a line drawn in that
+ * order runs backwards — the one mistake here that looks like data rather than like a bug, so it
+ * is pure and there is a test holding a real payload against it.
+ */
+export function parsePoolLine(json: unknown): number[] {
+  const rows = (json as { data?: { attributes?: { ohlcv_list?: unknown[][] } } } | null)
+    ?.data?.attributes?.ohlcv_list
+  if (!Array.isArray(rows)) return []
+  return rows
+    .map((r) => Number(r?.[4]))
+    .filter((n) => isFinite(n) && n > 0)
+    .reverse()
+}
+
+/* One line per pool, kept for as long as a bar lasts. The panel re-reads every minute and these are
+   five-minute bars, so four of every five fetches would ask for a picture that cannot have changed
+   — at twelve rows that is the whole of the feed's allowance spent on nothing. */
+const lines = new Map<string, { at: number; closes: number[] }>()
+const LINE_TTL = 5 * 60_000
+
+/** The last hour of one pool, in five-minute closes — the window the panel ranks by. */
+export async function fetchPoolLine(pool: string): Promise<number[]> {
+  const held = lines.get(pool)
+  if (held && Date.now() - held.at < LINE_TTL) return held.closes
+  // ponytail: swept on write, no timer — pools churn, and a session left open all day would
+  // otherwise hold every one that was ever trending for five minutes
+  if (lines.size > 100) for (const [k, v] of lines) if (Date.now() - v.at >= LINE_TTL) lines.delete(k)
+  const url = `https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}`
+    + `/pools/${encodeURIComponent(pool)}/ohlcv/minute?aggregate=5&limit=12&currency=usd`
+  try {
+    const closes = parsePoolLine(await fetch(url).then((r) => r.json()))
+    // an empty answer is not cached as an answer: a pool minutes old has no bars yet and will
+    if (closes.length) lines.set(pool, { at: Date.now(), closes })
+    return closes
+  } catch {
+    return []
+  }
+}
+
+/**
  * How many decimals a price needs to stay meaningful. Two is right for Bitcoin and wrong for a coin
  * that trades at 0.17, where entry, stop and target all round to the same number and the whole card
  * turns to mush. Scaled off a reference price rather than the value itself, so every figure on a
