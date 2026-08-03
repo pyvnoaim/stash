@@ -1,5 +1,6 @@
 import { ExternalLink, Flag, Maximize2, Trash2, X } from 'lucide-react'
 import { DueField } from '@/components/due-field'
+import { useMembers } from '@/components/faces'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +18,7 @@ import { patch, useStash, type Item, type ItemType } from '@/lib/store'
 const TYPES: ItemType[] = ['task', 'idea', 'note']
 const QUICK = '__inbox__'   // Select can't hold "" as a value
 const ONCE = '__once__'
+const NOBODY = '__nobody__'
 
 // a textarea holds text and nothing else, so whatever links are in there turn up under it instead
 const LINK = /https?:\/\/[^\s<>"')\]]+/g
@@ -52,6 +54,9 @@ function Links({ it }: { it: Item }) {
 
 export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () => void; onExpand: () => void }) {
   const s = useStash()
+  /* Who it is for. Only where there is somebody else to pick: in a stash of your own every row is
+     yours, and a field whose only answer is "you" is not a field. */
+  const members = useMembers(s.projects.find((p) => p.id === it.pid))
 
   /** Whatever is in the box joins the tags it already has, and the box empties for the next one. */
   const addTags = (el: HTMLInputElement) => {
@@ -166,6 +171,32 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
           </SelectContent>
         </Select>
       </div>
+
+      {/* a shared project has hands in it; whose row this is is the one thing the list cannot
+          derive, so it is the one thing worth storing. Nobody is a real answer and the default. */}
+      {members.length > 1 && (
+        <div className="grid gap-2">
+          <Label htmlFor="i-who">Assigned</Label>
+          <Select
+            value={it.who ?? NOBODY}
+            onValueChange={(v) => patch(it.id, { who: v === NOBODY ? undefined : v })}
+          >
+            <SelectTrigger id="i-who" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NOBODY}>Nobody</SelectItem>
+              {members.map((m) => (
+                <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
+              ))}
+              {/* someone who has since left the project still names the row they were given */}
+              {it.who && !members.some((m) => m.name === it.who) && (
+                <SelectItem value={it.who}>{it.who}</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <div className="grid gap-2">
         <Label htmlFor="i-tags">Tags</Label>

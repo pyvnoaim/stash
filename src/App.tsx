@@ -484,6 +484,7 @@ export default function App() {
                         sel={s.sel}
                         onSelect={(range) => pick(it.id, range)}
                         onTag={(t) => addTerm('#' + t)}
+                        onWho={(w) => addTerm('+' + w)}
                         // the same landing the palette does: drop the search, or the project you
                         // just opened would still be showing search results
                         onProject={(pid) => { setQuery(''); select(pid) }}

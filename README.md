@@ -67,6 +67,7 @@ included. Everything else is searched across text, notes and tags.
 | `@kova add fonts` | *add fonts* inside Kova only |
 | `#wartung #wsh` | tagged both, not either |
 | `fonts @kova` | the same as the first — order does not matter |
+| `+mia` | what is assigned to Mia, in every project you share with her |
 
 Click a `#tag` on a row to add it to the search, or pick one out of **Tags** in the sidebar, which
 lists every tag in use with how much is still open under it — a tag whose work is all finished
@@ -538,6 +539,14 @@ than each invitation's, so everyone on it sees the same thing, and turning it of
 children back off their sidebars along with everything filed under them. The chip on a member's
 row flips between view and edit at any time, and removing someone takes the project off their
 sidebar on their next sync.
+
+Once somebody else is on a project, its rows can say whose they are: **Assigned** in the details
+panel lists the people on it, and the mark on the row is their initials, ringed to tell it from the
+one that says who last touched it. Clicking it searches `+name`, which is how you get to *what is
+mine* without a view for it — and it stacks with every other term, so `+mia @kova #audio` is a
+sentence. Only where there is somebody to pick: in a stash of your own every row is yours, and a
+field whose only answer is *you* is not a field. It is a name, not an account — someone who leaves
+the project still names the row they were given, rather than the row quietly losing it.
 
 A shared project moves into a document of its own that everyone on it syncs against, versioned
 exactly like a personal one and kept fifty deep. That makes the blast radius one project rather

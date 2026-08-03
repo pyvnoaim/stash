@@ -261,9 +261,12 @@ assert.equal(getState().items[0].by, undefined)
 
 // a name is a name or it is nothing — someone else's document cannot smuggle an object, or a
 // novel, into the tooltip on your row
-const named = load({ items: [{ id: 'n', by: 'x'.repeat(500), editedBy: 7 }] }).items[0]
+const named = load({ items: [{ id: 'n', by: 'x'.repeat(500), editedBy: 7, who: 'y'.repeat(500) }] }).items[0]
 assert.equal(named.by, 'x'.repeat(32))
 assert.equal(named.editedBy, undefined)
+assert.equal(named.who, 'y'.repeat(32))
+// an empty string is nobody, not somebody with no name
+assert.equal(load({ items: [{ id: 'n', who: '' }] }).items[0].who, undefined)
 
 /* ---------- one parsed line, one item: capture, a paste and a shared link all build it ---------- */
 
@@ -311,6 +314,18 @@ addItem(item({ id: 'tagged', tags: ['audio'] }))
 assert.deepEqual(visible(getState(), 'audio').map((i) => i.id).sort(), ['tagged', 'text'])
 assert.deepEqual(visible(getState(), '#audio').map((i) => i.id), ['tagged'])
 assert.deepEqual(visible(getState(), '#aud').map((i) => i.id), [])
+
+/* ---------- +name is whose it is to do, matched whole ---------- */
+
+patch('text', { who: 'Bo' })
+assert.deepEqual(visible(getState(), '+bo').map((i) => i.id), ['text'])
+// the whole name, not the start of one: half a name matching puts someone else's work in your list
+assert.deepEqual(visible(getState(), '+b').map((i) => i.id), [])
+assert.deepEqual(visible(getState(), '+nobody').map((i) => i.id), [])
+// and it narrows like every other term, rather than replacing the search
+assert.deepEqual(visible(getState(), '+bo audio').map((i) => i.id), ['text'])
+assert.deepEqual(visible(getState(), '+bo #audio').map((i) => i.id), [])
+patch('text', { who: undefined })
 
 /* ---------- @project search matches the name's start, the way capture does ---------- */
 
