@@ -299,18 +299,36 @@ function Spend({ items, total, onOpen }: {
   total: number
   onOpen: () => void
 }) {
-  const W = 400, H = 100 // a 4:1 frame, so % positioning below matches the aspect-[4/1] box
+  // the tiers below are absolute px, so the frame's real width has to be known: a % threshold looks
+  // the same at every size but the type inside it doesn't, which is how a phone ended up with labels
+  // spilling out of tiles that were "big enough" on a desktop
+  const [px, setPx] = useState(0)
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!box) return
+    const ro = new ResizeObserver(([e]) => setPx(e.contentRect.width))
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [box])
+  const W = 400
+  // 4:1 is a sliver on a phone — ~80px tall, too short for a single tile to hold a name, an amount
+  // and a share. Below that, trade width for height so the tiles have somewhere to put their labels.
+  const H = px && px < 560 ? 300 : 100
   const tiles = treemap(items, (d) => d.v, W, H)
+  const scale = px ? px / W : 0 // css px per layout unit
   return (
-    <div className="relative aspect-[4/1] w-full">
+    <div ref={setBox} className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
       {tiles.map(({ item, x, y, w, h }) => {
         const wp = (w / W) * 100
         const hp = (h / H) * 100
-        // three tiers by tile size so content fills the space instead of stranding it: tiny tiles get
-        // just the amount, roomy ones the full name + amount + share, the big ones all of it, larger
-        const mid = wp > 6 && hp > 10
-        const big = wp > 11 && hp > 20
-        const huge = wp > 22 && hp > 40
+        // three tiers by real tile size so content fills the space instead of overflowing it: tiny
+        // tiles get just the amount, roomy ones the full name + amount + share, the big ones larger.
+        // Each bound is what the type inside actually measures — an amount is ~50px at text-xs, the
+        // three-line stack is ~68px tall at text-xs and ~88px at text-2xl.
+        const tw = w * scale, th = h * scale
+        const mid = tw > 56 && th > 26
+        const big = tw > 88 && th > 76
+        const huge = tw > 136 && th > 104
         // a bill you pay is never 0% — anything under a whole percent still reads as "<1%"
         const raw = (item.v / total) * 100
         const pct = raw > 0 && raw < 1 ? '<1%' : `${Math.round(raw)}%`
@@ -325,7 +343,7 @@ function Spend({ items, total, onOpen }: {
             >
               {/* brightness can't lift a black (or white) fill — it's a no-op on monochrome — so the
                   hover cue is a scale + an inset ring in the surface colour, which reads in both themes */}
-              <span className="bg-foreground text-background ring-background relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm p-2 text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1">
+              <span className={cn('bg-foreground text-background ring-background relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
                 {/* a faint diagonal sheen off the top-left corner, so a flat fill reads as a surface */}
                 <span aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-br from-background/15 via-transparent to-transparent transition-opacity duration-150 group-hover:from-background/22" />
                 {mid && (
