@@ -24,7 +24,7 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
   note: StickyNote,
 }
 
-function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onTag, onProject, onDelete }: {
+function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onTag, onWho, onProject, onDelete }: {
   it: Item
   selected: boolean
   /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
@@ -37,6 +37,8 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   sel: string
   onSelect: (range: boolean) => void
   onTag: (tag: string) => void
+  /** the assignee's mark searches for them, the same way a #tag on a row searches for the tag */
+  onWho: (name: string) => void
   onProject: (pid: string) => void
   onDelete: () => void
 }) {
@@ -173,7 +175,21 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
               </Hint>
             ))}
 
-            {hand && (
+            {/* who it is for beats who last touched it: one says what happens next, the other
+                what already happened. Shown even when it is you — "assigned to me" is the case
+                you most want to spot — and ringed, which is what tells the two marks apart. */}
+            {it.who ? (
+              <Hint label={`Find everything for ${it.who}`}>
+                <button
+                  type="button"
+                  aria-label={`For ${it.who}`}
+                  onClick={(e) => { e.stopPropagation(); onWho(it.who!) }}
+                  className="ring-foreground/25 focus-visible:ring-ring inline-flex cursor-pointer rounded-md ring-1 outline-none focus-visible:ring-2"
+                >
+                  <Avatar name={it.who} avatar={null} className="size-5 text-[10px]" />
+                </button>
+              </Hint>
+            ) : hand && (
               <Hint label={`${hand.did} by ${hand.name}`}>
                 {/* focusable, or the name is a thing only a mouse can read.
                     ponytail: initials, not their picture — the row has no roster to look one up in */}

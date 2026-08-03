@@ -28,6 +28,12 @@ export interface Item {
    */
   by?: string
   editedBy?: string
+  /**
+   * Whose it is to do, in a project shared with other people — a name, the same one they sign in
+   * with. Absent everywhere else: a stash of your own has one person in it, and a field that
+   * always says "you" is not a field. Search `+name` reads it.
+   */
+  who?: string
 }
 
 /* Who is signed in, as far as the store is concerned. sync.ts owns the session and pushes the
@@ -295,6 +301,8 @@ export function load(data: unknown): State {
         // a novel in one would go straight into a tooltip.
         by: typeof i.by === 'string' ? i.by.slice(0, 32) : undefined,
         editedBy: typeof i.editedBy === 'string' ? i.editedBy.slice(0, 32) : undefined,
+        // a name, cut to the length the server lets one be — the same reason as the two above
+        who: typeof i.who === 'string' && i.who ? i.who.slice(0, 32) : undefined,
         // orphans land in Quick notes rather than becoming invisible
         pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
       }
@@ -685,6 +693,12 @@ export function visible(s: State, query: string): Item[] {
       // a # is the tag itself, not a substring — what clicking one on a row searches for
       if (w.length > 1 && w.startsWith('#')) {
         list = list.filter((i) => i.tags.includes(w.slice(1)))
+        continue
+      }
+      // a + is the person it is assigned to — `+leon` is the whole name, the way #tag is the
+      // whole tag: half a name matching is how you get someone else's work in your own list
+      if (w.length > 1 && w.startsWith('+')) {
+        list = list.filter((i) => i.who?.toLowerCase() === w.slice(1))
         continue
       }
       // and an @ is the project, matched on the name's start the same way capture matches it
