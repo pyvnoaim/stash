@@ -3,7 +3,7 @@
    already does (notify.ts, store.ts), which is exactly why they are asserted here: the two sides
    drifting apart is the failure nobody would notice. */
 import assert from 'node:assert/strict'
-import { alertsOf, chargeAt, nextCharge } from './push.ts'
+import { alertsOf, chargeAt, nextCharge, type Alert } from './push.ts'
 
 /** Midday UTC on the day everything below is written against, so a timezone can't move the date. */
 const NOON = Date.parse('2026-08-03T12:00:00Z')
@@ -65,6 +65,23 @@ assert.deepEqual(at({ items: [{ id: 'x', text: 'later', due: '2026-09-01' }] }),
 const late = Date.parse('2026-08-03T22:00:00Z')
 assert.equal(alertsOf(items, 120, {}, late)[0].key, 'due-2026-08-04')
 assert.equal(alertsOf(items, -420, {}, late)[0].key, 'due-2026-08-03')
+
+/* ---------- what is moving ---------- */
+
+/* The movers are worked out once a tick and handed in, so here they only have to arrive, and
+   arrive in the right place: after a level someone asked for by number, before a digest that will
+   still be true in the morning. The rule that builds them is moverMove's, asserted in notify.test. */
+const pump: Alert = {
+  key: 'mkt-BTCUSDT-up-2026-08-03T13',
+  title: 'Bitcoin up 1.0% in an hour',
+  body: "63,351.09 — 37% of the day's range, in one hour",
+  target: 'market',
+}
+// it belongs to nobody's document: an empty stash is still told the market moved
+assert.deepEqual(alertsOf(null, 0, {}, NOON, [pump]), [pump])
+
+const all = alertsOf({ ...long, ...items }, 0, { BTCUSDT: 100 }, NOON, [pump])
+assert.deepEqual(all.map((a) => a.key), ['watch-w1-entry', pump.key, 'due-2026-08-03'])
 
 /* ---------- what is about to be charged ---------- */
 

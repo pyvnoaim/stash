@@ -247,7 +247,32 @@ export interface State {
    *  already showing the right thing — and so it survives a reload. Validated by the page, which
    *  owns the asset table and falls back to Bitcoin for an id it doesn't recognise. */
   marketAsset: string
+  /**
+   * Alerts you have swiped away, id → when. In the document rather than in the bell's own state,
+   * because dismissing is a decision and it was being made again on every device and after every
+   * reload. They expire (see DISMISS_TTL): a dismissal is "not now", not "never" — an alert whose
+   * reason is still true tomorrow is worth saying again.
+   */
+  dismissed: Record<string, number>
 }
+
+/** How long a dismissal holds, and how many are kept. Bounded on both ends: the ids are other
+ *  people's pool addresses and today's date, so without this the document grows forever. The count
+ *  is generous because tasks are the one alert there can be a hundred of — clearing a pile of
+ *  overdue work must not leave the tail of it to come straight back. */
+export const DISMISS_TTL = 24 * 3600_000
+const KEEP_DISMISSED = 200
+
+/** The one shape a dismissal list is allowed to have: newest first, expired dropped, capped. Used
+ *  on the way in and on every write, so neither a hand-edited backup nor a long session can grow
+ *  a document that gets pushed to the server whole. */
+const pruneDismissed = (d: unknown, now = Date.now()): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(d && typeof d === 'object' ? d as Record<string, unknown> : {})
+      .filter((e): e is [string, number] => typeof e[1] === 'number' && now - e[1] < DISMISS_TTL)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, KEEP_DISMISSED),
+  )
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
@@ -284,7 +309,7 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense',
-  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT',
+  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', dismissed: {},
 })
 
 // Every way data enters — localStorage, an imported backup — comes through here.
@@ -437,6 +462,9 @@ export function load(data: unknown): State {
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
+  /* Expiry runs here as well as on write: this is what every device does with a document it takes
+     from another, so a dismissal that has run out never travels any further. */
+  st.dismissed = pruneDismissed(st.dismissed)
   return st
 }
 
@@ -851,6 +879,18 @@ export const addWatch = (w: Watch) =>
     ...s,
     watches: [w, ...s.watches.filter((x) => !(x.asset === w.asset && x.dir === w.dir && x.horizon === w.horizon))],
   }))
+/** Swiped away, on every device: the bell reads this out of the document the sync carries. */
+export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
+  /* The new ones go in first, so that when the cap bites it drops the oldest and not these:
+     "Clear" writes every id on the same millisecond, and a tie has to fall the way the person
+     just chose — losing it is the alert they swiped reappearing on the next load.
+     Pruned on the way in as well as on the way out, so a tab left open all day cannot carry every
+     dismissal it ever made into a document that gets pushed to the server whole. */
+  const next: Record<string, number> = Object.fromEntries(ids.map((id) => [id, at]))
+  for (const [id, when] of Object.entries(s.dismissed)) if (!(id in next)) next[id] = when
+  return { ...s, dismissed: pruneDismissed(next, at) }
+})
+
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))

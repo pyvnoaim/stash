@@ -3,9 +3,12 @@ import { Bell, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { closeWatch, MARKET, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { fetchPrices, fetchTrending } from '@/lib/market'
-import { alerts, resultAlerts, trendAlerts, watchAlerts, watchProgress, type Alert } from '@/lib/notify'
+import { closeWatch, dismissAlerts, DISMISS_TTL, openWatch, setMarketAsset, useStash } from '@/lib/store'
+import { ASSETS, fetchPrices, fetchTrending } from '@/lib/market'
+import {
+  alerts, moverAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
+  type Alert, type Mover,
+} from '@/lib/notify'
 
 // a coloured dot stands in for a per-kind icon; keeps the row compact
 const DOT: Record<Alert['tone'], string> = {
@@ -14,48 +17,49 @@ const DOT: Record<Alert['tone'], string> = {
   info: 'bg-sky-500',
 }
 
-// keyless Binance 24h tickers — a move past this reads as "worth a glance"
-const WATCH = [
-  { id: 'BTCUSDT', label: 'Bitcoin' },
-  { id: 'ETHUSDT', label: 'Ethereum' },
-  { id: 'SOLUSDT', label: 'Solana' },
-  { id: 'PAXGUSDT', label: 'Gold' },
-]
-const MOVE = 3 // percent
+/* Everything on the desk that Binance quotes — crypto and gold. Keyless, and one call covers the
+   lot, so there is no reason for this to be a shorter hand-kept list than the one the picker shows:
+   the coin you are not watching is exactly the one whose move you would want telling about. Stocks
+   sit it out, the same as everywhere else — their feed needs the key, which stays in the browser. */
+const MOVERS = ASSETS.filter((a) => a.source === 'binance')
 const POLL = 60_000 // how often saved setups are re-priced while the app is open
 
 export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
   const [open, setOpen] = useState(false)
   const [movers, setMovers] = useState<Alert[]>([])
-  // dismissed for this session; a reload re-surfaces whatever is still relevant
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
   const stateAlerts = useMemo(() => alerts(s), [s.items, s.subs]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* On the same minute as everything else, because a move is only news while it is happening — the
+     one-shot on start this replaces could only ever report what had already finished overnight.
+     Two calls: the hour that just went, and the day it sits in for scale. Both keyless, both take
+     every symbol at once, so this is two requests a minute however long the desk's list grows. */
   useEffect(() => {
     let live = true
-    const syms = encodeURIComponent(JSON.stringify(WATCH.map((w) => w.id)))
-    fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${syms}`)
-      .then((r) => r.json())
-      .then((rows: { symbol: string; priceChangePercent: string }[]) => {
-        if (!live || !Array.isArray(rows)) return
-        setMovers(WATCH.flatMap((w) => {
-          const chg = parseFloat(rows.find((r) => r.symbol === w.id)?.priceChangePercent ?? '0')
-          if (Math.abs(chg) < MOVE) return []
-          const up = chg >= 0
+    const syms = encodeURIComponent(JSON.stringify(MOVERS.map((a) => a.id)))
+    const ticker = (q: string) =>
+      fetch(`https://api.binance.com/api/v3/ticker${q}&symbols=${syms}`).then((r) => r.json())
+    type Row = { symbol: string; openPrice: string; lastPrice: string; highPrice: string; lowPrice: string }
+    const tick = () => Promise.all([ticker('?windowSize=1h'), ticker('/24hr?')])
+      .then(([hour, day]: [Row[], Row[]]) => {
+        if (!live || !Array.isArray(hour) || !Array.isArray(day)) return
+        setMovers(moverAlerts(MOVERS.flatMap((a): Mover[] => {
+          const h = hour.find((r) => r.symbol === a.id)
+          const d = day.find((r) => r.symbol === a.id)
+          // a symbol either feed left out is skipped, not defaulted — moverAlerts would read a
+          // missing open as a 100% move, which is the one way this could shout about nothing
+          if (!h || !d) return []
           return [{
-            id: `mkt-${w.id}`,
-            title: `${w.label} ${up ? 'up' : 'down'} ${Math.abs(chg).toFixed(1)}%`,
-            detail: 'last 24 hours',
-            tone: up ? 'info' : 'warn',
-            target: MARKET,
-            asset: w.id,
-          } as Alert]
-        }))
+            asset: a.id, label: a.label,
+            open: +h.openPrice, last: +h.lastPrice, high: +d.highPrice, low: +d.lowPrice,
+          }]
+        })))
       })
-      .catch(() => {})
-    return () => { live = false }
+      .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
+    tick()
+    const h = setInterval(tick, POLL)
+    return () => { live = false; clearInterval(h) }
   }, [])
 
   // saved setups, re-priced on a timer. The joined ids are the dep so the poll only restarts when
@@ -101,8 +105,13 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     return () => { on = false; clearInterval(h) }
   }, [])
 
-  const shown = [...stateAlerts, ...setups, ...done, ...movers, ...trends].filter((a) => !dismissed.has(a.id))
-  const drop = (ids: string[]) => setDismissed((prev) => new Set([...prev, ...ids]))
+  /* Swiped away, and it stays swiped away on the phone too: the dismissals live in the document the
+     sync carries. They run out after a day, so a dismissal reads as "not now" rather than "never" —
+     an overdue task is still overdue tomorrow, and worth saying again then. Filtered here as well as
+     pruned on load, since a tab left open all day outlives the ones it started with. */
+  const gone = (id: string) => Date.now() - (s.dismissed[id] ?? 0) < DISMISS_TTL
+  const shown = [...stateAlerts, ...setups, ...done, ...movers, ...trends].filter((a) => !gone(a.id))
+  const drop = dismissAlerts
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

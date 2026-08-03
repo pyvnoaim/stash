@@ -12,7 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
-  openWatch, closeWatch, clearResults,
+  openWatch, closeWatch, clearResults, dismissAlerts,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -720,4 +720,40 @@ console.log('store: ok')
   const st = load({ hotkeys: { today: 'g', nonesuch: 'q', done: 42 } })
   assert.deepEqual(st.hotkeys, { today: 'g' })
   assert.deepEqual(load({}).hotkeys, {})
+}
+
+/* ---------- dismissed alerts: the trust boundary, and the two bounds on it ---------- */
+{
+  const now = Date.now()
+  const old = now - 25 * 3600_000
+
+  // a dismissal is "not now": one made yesterday has run out and the alert is worth saying again
+  assert.deepEqual(load({ dismissed: { fresh: now, stale: old } }).dismissed, { fresh: now })
+  // junk out of a hand-edited backup is not a dismissal, whatever it looks like
+  assert.deepEqual(load({ dismissed: { a: 'yesterday', b: null, c: {} } }).dismissed, {})
+  for (const junk of [null, 7, 'nope', []]) assert.deepEqual(load({ dismissed: junk }).dismissed, {})
+
+  // capped, newest kept — the document is pushed to the server whole, so it cannot grow forever
+  const many = Object.fromEntries(Array.from({ length: 260 }, (_, i) => [`a${i}`, now - i * 1000]))
+  const kept = load({ dismissed: many }).dismissed
+  assert.equal(Object.keys(kept).length, 200)
+  assert.ok('a0' in kept && !('a259' in kept), 'the oldest are the ones that fall off')
+
+  // and the same on the way in, so a long session cannot outgrow what a reload would have allowed
+  dismissAlerts(Object.keys(many), now)
+  assert.equal(Object.keys(getState().dismissed).length, 200)
+
+  /* At the cap, with every id written on the same millisecond, the one just swiped is the one that
+     has to survive — losing that tie is the alert coming straight back after you cleared it. */
+  dismissAlerts(['just-swiped'], now)
+  assert.equal(getState().dismissed['just-swiped'], now)
+  assert.equal(Object.keys(getState().dismissed).length, 200)
+  /* Dismissing is not an edit to walk back: ⌘Z belongs to the work, not to the bell. So the undo
+     after it returns the item, and leaves the dismissal exactly where it was. */
+  addItem(item({ id: 'walk-back' }))
+  const withIt = getState().items
+  dismissAlerts(['swiped'], now)
+  undo()
+  assert.notEqual(getState().items, withIt, 'the item came back, not the dismissal')
+  assert.equal(getState().dismissed.swiped, now)
 }

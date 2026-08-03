@@ -14,12 +14,19 @@
  * What it decides to knock about:
  *  - a saved Markets setup whose entry, stop or target the live price has reached. Crypto and gold
  *    only: the stock feed needs the Twelve Data key, which deliberately never leaves the browser.
+ *  - a listed asset that has just moved hard, whether or not anything was ever saved on it. The
+ *    same rule and the same two numbers the in-app bell uses, imported rather than copied.
  *  - once a day, in the morning, what is due and what is about to be charged.
  * Each of those is a key, and a key already sent is never sent again — the digest key carries the
- * date, so tomorrow's is a new one and today's is not.
+ * date, so tomorrow's is a new one and today's is not; a mover's carries the hour.
  */
 import { generateKeyPairSync, createPrivateKey, sign } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
+/* The one module the app and this process share. It is worth the Dockerfile line: everything in it
+   is arithmetic over numbers — no React, no localStorage, nothing to import that isn't here — and
+   the alternative is the threshold that decides "is this worth waking someone" living in two
+   files. The subscription maths below is the shape of that alternative, and its comment says so. */
+import { ASSETS, fmtPrice, moverMove } from '../src/lib/market.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -75,7 +82,9 @@ const days = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)
  * An asset with no price says nothing rather than guessing: an alert about a level the market
  * never reached is worse than no alert, which is the app's rule too.
  */
-export function alertsOf(s: any, tz: number, prices: Record<string, number>, at = Date.now()): Alert[] {
+export function alertsOf(
+  s: any, tz: number, prices: Record<string, number>, at = Date.now(), movers: Alert[] = [],
+): Alert[] {
   const out: Alert[] = []
   const day = localDay(tz, at)
 
@@ -110,6 +119,12 @@ export function alertsOf(s: any, tz: number, prices: Record<string, number>, at 
       target: 'market',
     })
   }
+
+  /* Then whatever is moving. They are the same for everyone — nothing about a market depends on
+     whose document this is — so they are worked out once a tick and handed in. They come after the
+     levels because a level is a number you asked to be told about, and before the digest because a
+     move is over by tomorrow morning and a task is not. */
+  out.push(...movers)
 
   // then the day's work, as one line rather than one notification per task
   const items: any[] = Array.isArray(s?.items) ? s.items : []
@@ -254,11 +269,50 @@ export function createPush(db: DatabaseSync) {
     }
   }
 
+  /* The listed assets that are moving, as of the last tick, already worded. Everything Binance
+     quotes on the desk — crypto and gold — and one pair of calls covers the lot however long that
+     list grows. Stocks sit it out: their feed needs the key, which stays in the browser it was
+     typed into, so this process has no way to ask and should not have one. */
+  const MOVERS = ASSETS.filter((a) => a.source === 'binance')
+  type Row = { symbol: string, openPrice: string, lastPrice: string, highPrice: string, lowPrice: string }
+  let movers: Alert[] = []
+
+  async function refreshMovers(at = Date.now()) {
+    const syms = encodeURIComponent(JSON.stringify(MOVERS.map((a) => a.id)))
+    const ticker = (query: string) =>
+      fetch(`https://api.binance.com/api/v3/ticker${query}&symbols=${syms}`).then((r) => r.json())
+    try {
+      // the hour just gone, and the day it sits in for scale — the two moverMove reads
+      const [hour, day] = await Promise.all([ticker('?windowSize=1h'), ticker('/24hr?')]) as Row[][]
+      if (!Array.isArray(hour) || !Array.isArray(day)) { movers = []; return }
+      /* The hour is in the key, so a move that keeps going is one knock an hour rather than one a
+         minute, and the same asset moving again tomorrow is news again — the trick the digest key
+         plays with the date. ponytail: a run that straddles two clock hours knocks twice. Being
+         told about a pump twice is the failure worth having here; the other one is this thread. */
+      const hr = new Date(at).toISOString().slice(0, 13)
+      movers = MOVERS.flatMap((a): Alert[] => {
+        const h = hour.find((r) => r.symbol === a.id)
+        const d = day.find((r) => r.symbol === a.id)
+        if (!h || !d) return []
+        const m = moverMove(+h.openPrice, +h.lastPrice, +d.highPrice, +d.lowPrice)
+        if (!m) return []
+        return [{
+          key: `mkt-${a.id}-${m.up ? 'up' : 'down'}-${hr}`,
+          title: `${a.label} ${m.up ? 'up' : 'down'} ${Math.abs(m.pct).toFixed(1)}% in an hour`,
+          body: `${fmtPrice(+h.lastPrice)} — ${Math.round(m.bite * 100)}% of the day's range, in one hour`,
+          target: 'market',
+        }]
+      })
+    } catch {
+      movers = []   // a feed that is down says nothing, rather than waking someone over a guess
+    }
+  }
+
   /** One person's list, out of their newest document and the prices last fetched. */
   function alertsFor(user: number, tz: number): Alert[] {
     const row = q.doc.get(user) as { json: string } | undefined
     if (!row) return []
-    try { return alertsOf(JSON.parse(row.json), tz, prices) } catch { return [] }
+    try { return alertsOf(JSON.parse(row.json), tz, prices, Date.now(), movers) } catch { return [] }
   }
 
   /** What `/api/alerts` answers: this user's list, against whichever timezone they last reported. */
@@ -268,8 +322,9 @@ export function createPush(db: DatabaseSync) {
   /** One pass: refresh the prices, then knock once per device that has something new to hear. */
   async function tick() {
     const rows = q.all.all() as { endpoint: string, user: number, tz: number, seen: string }[]
+    // nobody subscribed is nobody to tell, and no reason to be asking an exchange anything
     if (!rows.length) return
-    await refreshPrices([...new Set(rows.map((r) => r.user))])
+    await Promise.all([refreshPrices([...new Set(rows.map((r) => r.user))]), refreshMovers()])
 
     for (const r of rows) {
       let seen: string[]

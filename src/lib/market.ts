@@ -266,6 +266,40 @@ export const fmtPrice = (n: number, ref = n) => {
   return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
 }
 
+/* ---------- an hour worth interrupting someone for ---------- */
+
+/* Two dials, and they are dials. A single percent cannot serve gold and Dogecoin: 2% in an hour is
+   a remarkable day for one and a quiet morning for the other, and any number low enough to catch
+   the first drowns you in the second. So the yardstick is the asset's own day — how much of the
+   last 24 hours' entire range this one hour just ate. Sized against a move that got missed:
+   Bitcoin ran +1.04% in the 13:00 hour of 3 Aug 2026 and +0.97% in the next, 38% and 36% of the
+   day's range, making the high an hour after the first. A flat percent that caught that would have
+   to sit under 1%, which on the alts is most hours of most days.
+   MOVER_FLOOR is what stops a day where nothing happened, and whose range is therefore nearly
+   nothing, from making a rounding error look like half of it. Bell too loud? Raise MOVER_BITE.
+
+   This lives here, with the maths, rather than beside either bell: the one in the tab reads it
+   through notify.ts and the one that reaches a shut phone reads it from server/push.ts, and a
+   threshold kept in two places is two thresholds a month later. */
+export const MOVER_BITE = 0.35   // share of the day's range covered in the hour
+export const MOVER_FLOOR = 0.75  // percent, under which nothing counts however quiet the day was
+
+/**
+ * One asset's last hour measured against the day it happened in, or null when there is nothing
+ * there worth saying. Both bells build their own sentence out of this; neither decides it.
+ */
+export function moverMove(open: number, last: number, high: number, low: number):
+{ pct: number; bite: number; up: boolean } | null {
+  const range = high - low, moved = last - open
+  // a feed that answered with a missing open would otherwise read as a move of infinity, and a
+  // day with no range at all divides by zero — both are "say nothing", which is the honest answer
+  if (!(open > 0) || !(range > 0) || !isFinite(moved)) return null
+  const pct = (moved / open) * 100
+  const bite = Math.abs(moved) / range
+  if (Math.abs(pct) < MOVER_FLOOR || bite < MOVER_BITE) return null
+  return { pct, bite, up: moved >= 0 }
+}
+
 /** Simple moving average, aligned to the input: null until `p` points exist, so index i lines up.
  *  Rolling sum (O(n)) rather than a slice+mean per bar (O(n·p)) — matters over the 1000/5000 candles. */
 export function sma(v: number[], p: number): (number | null)[] {
