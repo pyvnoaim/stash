@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  CandlestickChart, ChartLine, Database, Download, Eraser, History, Info, Keyboard, LogOut,
-  RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
+  Bell, BellOff, CandlestickChart, ChartLine, Copy, Database, Download, Eraser, History, Info,
+  Keyboard, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
@@ -26,9 +26,10 @@ import {
   clearDone, hotkey, resetHotkeys, setApiKey, setChart, setHotkey, useStash, type ChartStyle,
 } from '@/lib/store'
 import {
-  changePassword, deleteAccount, devices, getSync, logout, restore, subscribeSync, updateAccount,
-  versions, type Device, type Version,
+  changePassword, deleteAccount, devices, dropFeed, feed, getSync, logout, newFeed, restore,
+  subscribeSync, updateAccount, versions, type Device, type Version,
 } from '@/lib/sync'
+import { disablePush, enablePush, pushState, type PushState } from '@/lib/push'
 
 const CHARTS: { id: ChartStyle; label: string; icon: React.ElementType }[] = [
   { id: 'line', label: 'Line', icon: ChartLine },
@@ -508,10 +509,139 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
 
       <PasswordForm />
 
+      <NotificationsPanel />
+
+      <CalendarFeed />
+
       <Devices />
 
       <DeleteAccount />
     </>
+  )
+}
+
+/**
+ * The bell with the app closed. Nothing runs on this device to make it happen — the server keeps
+ * the subscription and does the watching, so what is on offer here is the one thing a phone has
+ * to agree to. Off is the default and stays the default: this asks for nothing until pressed.
+ */
+function NotificationsPanel() {
+  const [state, setState] = useState<PushState | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void pushState().then(setState) }, [])
+
+  const hint = state === 'unsupported'
+    ? `This browser has no push. On an iPhone that changes the moment Stash is added to the home
+       screen — Safari only offers it to an installed app.`
+    : state === 'blocked'
+      ? 'Notifications are blocked for this site. The browser’s own site settings are the way back.'
+      : `A saved Markets setup reaching its entry, stop or target, and once each morning what is
+         due and what is about to be charged. Nothing else, and nothing while the app is open —
+         the bell in the header already has that.`
+
+  const go = async (on: boolean) => {
+    setBusy(true)
+    let err: string | null = null
+    if (on) err = await enablePush()
+    else await disablePush()
+    setState(await pushState())
+    setBusy(false)
+    toast(err ?? (on ? 'Notifications on' : 'Notifications off'))
+  }
+
+  return (
+    <Section
+      title="Notifications"
+      hint={hint}
+      action={state === 'unsupported' || state === 'blocked'
+        ? undefined
+        : (
+            <Button
+              variant={state === 'on' ? 'outline' : 'default'}
+              size="sm"
+              disabled={!state || busy}
+              onClick={() => go(state !== 'on')}
+            >
+              {state === 'on' ? <><BellOff /> Turn off</> : <><Bell /> Turn on</>}
+            </Button>
+          )}
+    >
+      <p className="text-sm">
+        {state === null ? <span className="text-muted-foreground">Asking the browser…</span>
+          : state === 'on' ? 'This device is on the list.'
+            : <span className="text-muted-foreground">This device is not on the list.</span>}
+      </p>
+    </Section>
+  )
+}
+
+/**
+ * What is due and what is about to be charged, as a calendar anything can subscribe to — the
+ * phone's own calendar, its lock screen and its alarms, without a line of this app running.
+ * The link is the whole of the authorisation, so it is treated as one: shown, copied, replaced.
+ */
+function CalendarFeed() {
+  // undefined while it is being asked for, null when there is none
+  const [token, setToken] = useState<string | null | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void feed().then(setToken) }, [])
+
+  const url = token ? `${location.origin}/ics/${token}` : ''
+  const act = async (fn: () => Promise<string | null | void>) => {
+    setBusy(true)
+    const next = await fn()
+    setToken(next ?? null)
+    setBusy(false)
+  }
+
+  return (
+    <Section
+      title="Calendar feed"
+      hint="A read-only link your calendar can subscribe to: every dated item and every
+        subscription charge for a year ahead, as all-day events with a nine o'clock alert. Anyone
+        holding the link can read it, so a new link is how you take an old one back."
+      action={(
+        <div className="flex flex-wrap gap-2">
+          {token && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => act(async () => { await dropFeed(); return null })}
+            >
+              <Trash2 /> Turn off
+            </Button>
+          )}
+          <Button
+            variant={token ? 'outline' : 'default'}
+            size="sm"
+            disabled={token === undefined || busy}
+            onClick={() => act(newFeed)}
+          >
+            <RefreshCw /> {token ? 'New link' : 'Create link'}
+          </Button>
+        </div>
+      )}
+    >
+      {token
+        ? (
+            <div className="flex items-center gap-2">
+              <Input readOnly value={url} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { void navigator.clipboard?.writeText(url); toast('Link copied') }}
+              >
+                <Copy /> Copy
+              </Button>
+            </div>
+          )
+        : (
+            <p className="text-muted-foreground text-sm">
+              {token === undefined ? 'Asking the server…' : 'No link yet.'}
+            </p>
+          )}
+    </Section>
   )
 }
 

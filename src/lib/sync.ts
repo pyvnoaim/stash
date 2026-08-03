@@ -252,6 +252,19 @@ export async function restore(v: number): Promise<string | null> {
   }
 }
 
+/* ---------- the calendar feed ---------- */
+
+/** The token this account's `/ics/…` feed hangs on, or null when there is none. */
+export const feed = (): Promise<string | null> =>
+  call('/api/feed').then((j) => (j.feed as string | null)).catch(() => null)
+
+/** Cuts one. Cutting a second is also what stops the first from working. */
+export const newFeed = (): Promise<string | null> =>
+  call('/api/feed', { method: 'POST' }).then((j) => j.feed as string).catch(() => null)
+
+export const dropFeed = (): Promise<void> =>
+  call('/api/feed', { method: 'DELETE' }).then(() => undefined).catch(() => undefined)
+
 /* ---------- admin ---------- */
 
 export interface AdminUser {

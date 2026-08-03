@@ -26,6 +26,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { chargeAt, createPush } from './push.ts'
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -68,6 +69,125 @@ function send(res: ServerResponse, code: number, body: unknown, headers?: Record
     ...headers,
   })
   res.end(s)
+}
+
+/* ---------- the calendar feed ---------- */
+
+/**
+ * RFC 5545's escaping: a backslash, a semicolon, a comma and a newline all mean something.
+ *
+ * A lone carriage return counts as a newline here too. It is not a line break by the letter of the
+ * format, but lenient parsers take it as one — and a line break that survives into the file is how
+ * a note ends up able to write `END:VEVENT` and invent the next event. The text is not always your
+ * own: a project shared with you is in your document, so it is in your feed.
+ */
+const esc = (s: unknown) => String(s).replace(/([\\;,])/g, '\\$1').replace(/\r\n|[\r\n]/g, '\\n')
+
+/** …and its folding: 75 octets to a line, the rest carried on indented by one space. */
+function fold(line: string): string {
+  const out: string[] = []
+  let cur = '', n = 0
+  // by character, not by index — splitting inside one is how an emoji becomes two broken bytes
+  for (const ch of line) {
+    const w = Buffer.byteLength(ch)
+    if (n + w > 72) { out.push(cur); cur = ' '; n = 1 }
+    cur += ch
+    n += w
+  }
+  out.push(cur)
+  return out.join('\r\n')
+}
+
+const utcDay = (at = Date.now()) => new Date(at).toISOString().slice(0, 10)
+const dense = (d: string) => d.replace(/-/g, '')
+const nextDay = (d: string) => {
+  const x = new Date(d + 'T00:00Z')
+  x.setUTCDate(x.getUTCDate() + 1)
+  return dense(x.toISOString().slice(0, 10))
+}
+
+/** How far ahead a subscription's charges are written out. A year of a monthly abo is a dozen rows. */
+const ICS_MONTHS = 12
+
+/**
+ * The stash as a calendar anyone's calendar app can subscribe to: what is due, and what is about
+ * to be charged. All-day events, so there is no timezone to get wrong — the alarm at PT9H is nine
+ * in the morning wherever the phone reading it happens to be.
+ *
+ * Read-only and derived: nothing here is stored, and the file is built fresh for every fetch.
+ */
+function icsOf(json: string, who: string): string {
+  let s: any
+  try { s = JSON.parse(json) } catch { s = {} }
+  const now = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z'
+  const from = utcDay()
+  const out: string[] = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Stash//Calendar feed//EN', 'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH', `X-WR-CALNAME:${esc(`Stash — ${who}`)}`, 'X-PUBLISHED-TTL:PT1H',
+  ]
+
+  const event = (uid: string, day: string, summary: string, description: string, alarm: boolean) => {
+    out.push('BEGIN:VEVENT', `UID:${esc(uid)}`, `DTSTAMP:${now}`,
+      `DTSTART;VALUE=DATE:${dense(day)}`, `DTEND;VALUE=DATE:${nextDay(day)}`,
+      `SUMMARY:${esc(summary)}`)
+    if (description) out.push(`DESCRIPTION:${esc(description)}`)
+    // a subscribed calendar only ever says anything if the event asks it to
+    if (alarm) out.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:PT9H', `DESCRIPTION:${esc(summary)}`, 'END:VALARM')
+    out.push('END:VEVENT')
+  }
+
+  const projects = new Map<string, string>(
+    (Array.isArray(s.projects) ? s.projects : []).map((p: any) => [String(p?.id), String(p?.name ?? '')]),
+  )
+
+  // what is due. Finished work is left out: a calendar is what is coming, and a struck-through
+  // event is not a thing the format can say
+  for (const i of Array.isArray(s.items) ? s.items : []) {
+    if (!i || i.done || typeof i.due !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(i.due)) continue
+    const where = projects.get(String(i.pid)) ?? ''
+    event(`${String(i.id)}@stash`, i.due, String(i.text || 'Untitled'),
+      [where && `@${where}`, String(i.note ?? '').slice(0, 500)].filter(Boolean).join('\n'),
+      i.type !== 'note')
+  }
+
+  // and what it costs. Income rides along with a +, since the two are the same row one sign apart
+  const horizon = new Date(from + 'T00:00Z')
+  horizon.setUTCMonth(horizon.getUTCMonth() + ICS_MONTHS)
+  const until = horizon.toISOString().slice(0, 10)
+  for (const x of Array.isArray(s.subs) ? s.subs : []) {
+    if (!x || typeof x.due !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(x.due)) continue
+    const income = x.kind === 'income'
+    const cost = Number(x.cost) || 0
+    for (let n = 0; n < 500; n++) {
+      const day = chargeAt(x.due, String(x.cycle), n)
+      if (day > until) break
+      if (day < from) continue
+      event(`${String(x.id)}-${day}@stash`, day,
+        `${income ? '+' : ''}€${cost.toFixed(2)} ${String(x.name ?? 'Subscription')}`, '', !income)
+    }
+  }
+
+  out.push('END:VCALENDAR')
+  return out.map(fold).join('\r\n') + '\r\n'
+}
+
+/* ---------- push endpoints ---------- */
+
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
+const LOCAL = /(^|\.)(localhost|local|internal|home|lan)$/i
+
+/**
+ * Whether an endpoint is one this process is willing to post to. It is a string an account hands
+ * in and the push loop then makes requests at, which is a request forgery waiting to happen: an
+ * https URL aimed at whatever else answers on this network would be sent an authenticated POST
+ * every minute. A real push service is always a public name — never an address, never a
+ * single-label or local one — so that is the whole test, and it costs nothing legitimate.
+ */
+const pushable = (raw: string) => {
+  const u = URL.parse(raw)
+  if (!u || u.protocol !== 'https:') return false
+  const h = u.hostname
+  return h.includes('.') && !h.startsWith('[') && !IPV4.test(h) && !LOCAL.test(h)
 }
 
 function readBody(req: IncomingMessage): Promise<any> {
@@ -174,6 +294,8 @@ export function start({
   } catch { /* already there */ }
   // sessions from before the list existed have no label, and read as the unknown device they are
   try { db.exec('alter table sessions add column device text') } catch { /* already there */ }
+  // the calendar feed's secret, null until someone asks for one
+  try { db.exec('alter table users add column feed text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -195,6 +317,12 @@ export function start({
     openInvites: db.prepare('select code, ts from invites where used is null and ts > ? order by ts desc'),
     dropInvite: db.prepare('delete from invites where code = ? and used is null'),
     rename: db.prepare('update users set name = ? where id = ?'),
+    /* The calendar feed: one secret per user, and the only thing that stands between a URL and
+       what is due. Nothing is written through it and it names no one — a leaked one is rotated
+       by asking for another, which is what makes the old string stop working. */
+    feedOf: db.prepare('select feed from users where id = ?'),
+    setFeed: db.prepare('update users set feed = ? where id = ?'),
+    byFeed: db.prepare('select id, name from users where feed = ?'),
     setAvatar: db.prepare('update users set avatar = ? where id = ?'),
     setPass: db.prepare('update users set salt = ?, hash = ?, n = ? where id = ?'),
     userById: db.prepare('select * from users where id = ?'),
@@ -246,6 +374,10 @@ export function start({
       (select v from pdocs where owner = ? and pid = ? order by v desc limit ?)`),
     dropPdoc: db.prepare('delete from pdocs where owner = ? and pid = ?'),
   }
+
+  /* The notifications that reach a closed app: its own module, its own table, and the minute
+     timer that decides when anything is worth a knock. See server/push.ts. */
+  const push = createPush(db)
 
   /* ponytail: in-memory, per-process — a restart forgives everyone, which at ten users is fine.
      Keyed by address *and* name so one flooded account never locks the rest out. */
@@ -560,6 +692,86 @@ export function start({
       })
     }
 
+    /* ---------- the calendar feed ---------- */
+
+    if (path === '/api/feed') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      if (req.method === 'GET') {
+        return send(res, 200, { feed: (q.feedOf.get(user.id) as { feed: string | null }).feed })
+      }
+      // cutting a second one is also how the first stops working — there is no other revocation
+      if (req.method === 'POST') {
+        const feed = randomBytes(16).toString('hex')
+        q.setFeed.run(feed, user.id)
+        log('feed', user.name, via(req))
+        return send(res, 200, { feed })
+      }
+      if (req.method === 'DELETE') {
+        q.setFeed.run(null, user.id)
+        log('feed-off', user.name, via(req))
+        return send(res, 200, { feed: null })
+      }
+      return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* The feed itself. No session, because no calendar app can hold one: the token in the URL is
+       the whole of the authorisation, which is why it is 128 bits out of randomBytes and why
+       asking for a new one is what revokes the old. Read-only, one document, always text. */
+    if (path.startsWith('/ics/') && (req.method === 'GET' || req.method === 'HEAD')) {
+      const token = path.slice(5)
+      const owner = /^[a-f0-9]{32}$/.test(token)
+        ? q.byFeed.get(token) as { id: number, name: string } | undefined
+        : undefined
+      if (!owner) return send(res, 404, { error: 'not found' })
+      const row = q.latest.get(owner.id) as { json: string } | undefined
+      const body = icsOf(row?.json ?? '{}', owner.name)
+      res.writeHead(200, {
+        'content-type': 'text/calendar; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+        'cache-control': 'no-store',
+        'content-disposition': 'inline; filename="stash.ics"',
+        'x-content-type-options': 'nosniff',
+      })
+      return res.end(req.method === 'HEAD' ? undefined : body)
+    }
+
+    /* ---------- push: the bell with the app closed ---------- */
+
+    if (path === '/api/push') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      // the key a browser has to subscribe with. Public by definition — it is what identifies
+      // this server to the push service, and it is useless without the private half
+      if (req.method === 'GET') return send(res, 200, { key: push.publicKey })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const endpoint = String(b?.endpoint ?? '')
+      if (endpoint.length > 1024 || !pushable(endpoint)) {
+        return send(res, 400, { error: 'bad endpoint' })
+      }
+      if (req.method === 'POST') {
+        push.subscribe(user.id, endpoint, Math.trunc(Number(b?.tz)) || 0)
+        return send(res, 200, {})
+      }
+      if (req.method === 'DELETE') {
+        push.unsubscribe(user.id, endpoint)
+        return send(res, 200, {})
+      }
+      return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* What the service worker asks the moment a knock arrives. The notification is written from
+       this rather than from the push itself, so what the phone shows is what is true when it is
+       shown — the push carries no payload at all. */
+    if (path === '/api/alerts' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const raw = new URL(req.url ?? '/', 'http://x').searchParams.get('tz')
+      const tz = raw !== null && isFinite(Number(raw)) ? Number(raw) : undefined
+      return send(res, 200, { alerts: push.alerts(user.id, tz) })
+    }
+
     /* Your own account, gone: the sessions, the documents and every share go with it on the
        cascade. The password again, for the reason changing one asks for it — and the last admin
        is refused, since a server with nobody who can cut an invite can never let anyone back in.
@@ -796,7 +1008,8 @@ export function start({
   })
 
   server.listen(port)
-  return Object.assign(server, { invite })
+  server.on('close', push.stop)
+  return Object.assign(server, { invite, push })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
