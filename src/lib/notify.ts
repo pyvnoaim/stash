@@ -1,6 +1,6 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
-import { nextCharge, SUBS, MARKET, type State, type Watch } from './store.ts'
+import { nextCharge, SUBS, MARKET, type Result, type State, type Watch } from './store.ts'
 import type { Trend } from './market.ts'
 import { today } from './parse.ts'
 
@@ -13,7 +13,7 @@ export type Alert = {
   asset?: string
 }
 
-const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+export const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const daysUntil = (date: string, from: string) => Math.round((Date.parse(date) - Date.parse(from)) / 864e5)
 
 const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -44,6 +44,89 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>): A
     }[hit]
     // the level is in the id, so dismissing "at entry" doesn't also silence the stop that follows
     return [{ id: `watch-${w.id}-${hit}`, ...a, target: MARKET, asset: w.asset }]
+  })
+}
+
+/* ---------- what a setup actually did ---------- */
+
+/**
+ * Multiples of the risk. A setup that reached its target pays what its geometry promised; one that
+ * ran through its stop costs the 1R it always had at risk. The only unit in which a trade on gold
+ * and a trade on a memecoin are the same size.
+ */
+export const rOf = (w: Watch, exit: number) => (w.dir === 'long'
+  ? (exit - w.entry) / (w.entry - w.stop)
+  : (w.entry - exit) / (w.stop - w.entry))
+
+export const rLabel = (r: number) => `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
+
+/** What that R would have paid at the stake you set, or null when you have not set one. */
+export const moneyOf = (r: number, stake: number) => (stake > 0 ? r * stake : null)
+
+/** Signed, so a loss reads as one rather than as a number that happens to be smaller. */
+export const signedEuro = (n: number) => (n >= 0 ? '+' : '−') + euro(Math.abs(n))
+
+/**
+ * What a live price does to the saved setups: opens the one whose entry it has really reached, and
+ * closes the one that has since run to its target or its stop. Pure — the bell hands it prices and
+ * writes back whatever it says, so the rule that decides "this actually happened" is testable
+ * without a network, and the same rule decides it whichever price arrives first.
+ *
+ * The entry has to have been reached before anything else counts. A setup whose window never
+ * opened is not a trade that lost; it is a trade nobody was ever in, and it stays on the list
+ * waiting for its price the way it always did.
+ */
+export function watchProgress(watches: Watch[], prices: Record<string, number>, at = Date.now()): {
+  opened: string[], closed: Result[]
+} {
+  const opened: string[] = []
+  const closed: Result[] = []
+
+  for (const w of watches) {
+    const p = prices[w.asset]
+    if (typeof p !== 'number' || !isFinite(p)) continue
+    const long = w.dir === 'long'
+    const reached = (lvl: number) => (long ? p <= lvl : p >= lvl)
+
+    const entryAt = w.entryAt ?? (reached(w.entry) ? at : undefined)
+    if (entryAt === undefined) continue
+    if (w.entryAt === undefined) opened.push(w.id)
+
+    /* The stop before the target, the same order the alerts read in: a price through the stop of a
+       long is also past its entry, and between two things that could have happened on one tick the
+       worse one is the one to write down. */
+    const level = reached(w.stop) ? 'stop' as const
+      : (long ? p >= w.target : p <= w.target) ? 'target' as const
+        : null
+    if (!level) continue
+    closed.push({ ...w, entryAt, closedAt: at, level, exit: p, r: rOf(w, p) })
+  }
+  return { opened, closed }
+}
+
+/** How long a finished setup stays in the bell. It is news, and then it is a record. */
+const RESULT_FRESH = 12 * 3600_000
+
+/**
+ * The finished ones, while they are still news. The only alert here about something that has
+ * already happened — which is the point of it: the window opened, it ran, and this is what it
+ * would have paid. Nothing was ever bought and the wording never pretends otherwise.
+ */
+export function resultAlerts(results: Result[], stake: number, at = Date.now()): Alert[] {
+  return results.filter((r) => at - r.closedAt < RESULT_FRESH).map((r) => {
+    const won = r.level === 'target'
+    const money = moneyOf(r.r, stake)
+    const who = r.horizon ? `${r.label} · ${r.horizon}` : r.label
+    return {
+      id: `result-${r.id}`,
+      title: `${who} ${won ? 'hit target' : 'stopped out'}`,
+      detail: money === null
+        ? `${rLabel(r.r)} — from the entry at ${price(r.entry)}`
+        : `${rLabel(r.r)} — ${signedEuro(money)} had you taken it`,
+      tone: won ? 'info' as const : 'warn' as const,
+      target: MARKET,
+      asset: r.asset,
+    }
   })
 }
 

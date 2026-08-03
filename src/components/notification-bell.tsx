@@ -3,9 +3,9 @@ import { Bell, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { MARKET, setMarketAsset, useStash } from '@/lib/store'
+import { closeWatch, MARKET, openWatch, setMarketAsset, useStash } from '@/lib/store'
 import { fetchPrices, fetchTrending } from '@/lib/market'
-import { alerts, trendAlerts, watchAlerts, type Alert } from '@/lib/notify'
+import { alerts, resultAlerts, trendAlerts, watchAlerts, watchProgress, type Alert } from '@/lib/notify'
 
 // a coloured dot stands in for a per-kind icon; keeps the row compact
 const DOT: Record<Alert['tone'], string> = {
@@ -72,6 +72,21 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   }, [assets, s.apiKey])
   const setups = useMemo(() => watchAlerts(s.watches, live), [s.watches, live])
 
+  /* The same prices, written down. A setup whose entry the price has really reached is marked as
+     having opened, and one that has since run to its target or its stop leaves the live list for
+     the record — which is what stops a dead setup shouting forever, and what lets the desk say
+     afterwards what it would have paid.
+     Only while something is looking: a level crossed with every device shut is noticed at the
+     next look, and the exit written down is the price actually seen then. The record says when. */
+  useEffect(() => {
+    const at = Date.now()
+    const { opened, closed } = watchProgress(s.watches, live, at)
+    opened.forEach((id) => openWatch(id, at))
+    closed.forEach(closeWatch)
+  }, [live, s.watches])
+
+  const done = useMemo(() => resultAlerts(s.results, s.stake), [s.results, s.stake])
+
   /* the memecoin end, on the same timer. This is the half that has to be a poll rather than the
      movers' one-shot: a pool that opened twenty minutes ago stops being news within the hour, and
      an answer fetched when the tab opened is no answer at all. Keyless, so it costs nothing to ask. */
@@ -86,7 +101,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     return () => { on = false; clearInterval(h) }
   }, [])
 
-  const shown = [...stateAlerts, ...setups, ...movers, ...trends].filter((a) => !dismissed.has(a.id))
+  const shown = [...stateAlerts, ...setups, ...done, ...movers, ...trends].filter((a) => !dismissed.has(a.id))
   const drop = (ids: string[]) => setDismissed((prev) => new Set([...prev, ...ids]))
 
   return (

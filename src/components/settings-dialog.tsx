@@ -23,7 +23,7 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  clearDone, hotkey, resetHotkeys, setApiKey, setChart, setHotkey, useStash, type ChartStyle,
+  clearDone, hotkey, resetHotkeys, setApiKey, setChart, setHotkey, setStake, useStash, type ChartStyle,
 } from '@/lib/store'
 import {
   changePassword, deleteAccount, devices, dropFeed, feed, getSync, logout, newFeed, restore,
@@ -305,6 +305,23 @@ function MarketsPanel() {
             </Button>
           ))}
         </div>
+      </Section>
+
+      <Section
+        title="What a setup is worth"
+        hint="The euros you would have had at risk on one saved setup. It is the only number
+          behind “had you taken it” on the record of how they went: that R times this. Nothing is
+          ever bought here, no fee is counted, and left empty the record simply reads in R."
+      >
+        {/* a comma is what a German keyboard types and what the Subscriptions header shows back */}
+        <Input
+          id="stake"
+          inputMode="decimal"
+          placeholder="€ at risk per setup"
+          className="max-w-48"
+          defaultValue={s.stake || ''}
+          onChange={(e) => setStake(parseFloat(e.target.value.replace(',', '.')))}
+        />
       </Section>
 
       <Section

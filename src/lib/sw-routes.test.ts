@@ -29,7 +29,7 @@ globalThis.fetch = ((url: string) => {
   seen.push(url)
   return Promise.resolve({ json: () => Promise.resolve([]) })
 }) as typeof fetch
-const { ASSETS, fetchCandles, fetchPrices, fetchTrending } = await import('./market.ts')
+const { ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchTrending } = await import('./market.ts')
 const asked = async (fn: () => Promise<unknown>) => {
   seen.length = 0
   await fn().catch(() => {})
@@ -58,5 +58,11 @@ for (const url of [
 const trendUrls = await asked(() => fetchTrending())
 assert.ok(trendUrls.length, 'fetchTrending asked for nothing')
 for (const url of trendUrls) assert.ok(!cached(url), `trending must never be served from cache: ${url}`)
+
+// the row sparkline rides the same feed and is on the same footing: these pools live hours, and a
+// cached line is a picture of a market that has since happened
+const lineUrls = await asked(() => fetchPoolLine('SomePoolAddress'))
+assert.ok(lineUrls.length, 'fetchPoolLine asked for nothing')
+for (const url of lineUrls) assert.ok(!cached(url), `pool lines must never be served from cache: ${url}`)
 
 console.log('sw routes ok')

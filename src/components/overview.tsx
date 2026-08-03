@@ -19,8 +19,11 @@ const CANDIDATES = ASSETS.filter((a) => a.source === 'binance')
 type Row = { id: string; label: string; closes: number[]; price: number; change: number }
 
 /** Price line with a gradient area fading beneath it, drawn in a stretched 0..100 box; the 1.5px
- *  stroke is held via vector-effect. `id` keeps each card's gradient def unique. */
-function Sparkline({ data, up, id }: { data: number[]; up: boolean; id: string }) {
+ *  stroke is held via vector-effect. `id` keeps each card's gradient def unique. The trending
+ *  panel draws the same line at row height, which is what `className` is for. */
+export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
+  data: number[]; up: boolean; id: string; className?: string
+}) {
   if (data.length < 2) return null
   const lo = Math.min(...data), hi = Math.max(...data), span = hi - lo || 1
   // inset 3 units top+bottom so peaks/troughs don't sit on the edge — the 1.5px non-scaling stroke's
@@ -28,7 +31,7 @@ function Sparkline({ data, up, id }: { data: number[]; up: boolean; id: string }
   const line = data.map((v, i) => `${i ? 'L' : 'M'}${((i / (data.length - 1)) * 100).toFixed(1)} ${(3 + (1 - (v - lo) / span) * 94).toFixed(1)}`).join(' ')
   const color = up ? '#10b981' : '#ef4444'
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-8 w-full">
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={className}>
       <defs>
         <linearGradient id={`spark-${id}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity={0.25} />
