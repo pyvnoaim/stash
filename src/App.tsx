@@ -22,7 +22,6 @@ import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
-import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { hit } from '@/lib/keys'
@@ -573,8 +572,6 @@ export default function App() {
           e.target.value = ''
         }}
       />
-
-      <Toaster position="bottom-right" />
     </SidebarProvider>
     </TooltipProvider>
   )

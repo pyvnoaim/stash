@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App.tsx'
+import { Toaster } from './components/ui/sonner.tsx'
 import { LoginGate } from './components/login-gate.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 import { addShared, select } from './lib/store.ts'
@@ -85,8 +86,14 @@ function Root() {
   return status === 'off' && hasLocal() ? <App /> : <LoginGate />
 }
 
+/* The toaster sits above the gate, not inside App: sonner drops anything published while no
+   Toaster is listening, and never replays it. Installed to a home screen or the Dock the whole
+   bundle is precached, so a worker left waiting from the last session announces itself the moment
+   registration resolves — well before the sync round-trip opens the gate, and it only announces
+   itself once. That prompt was landing on nobody, which is why only Check now ever found it. */
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <Toaster position="bottom-right" />
     <Root />
   </StrictMode>,
 )
