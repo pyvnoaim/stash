@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Hint } from '@/components/ui/tooltip'
 import {
-  dropLink, linkUrl, links, makeLink, people, share, shares, unshare, syncNow, type Member,
+  dropLink, linkUrl, links, makeLink, people, share, shares, unshare, syncFresh, type Member,
 } from '@/lib/sync'
 import { childProjects, useStash, type Project } from '@/lib/store'
 
@@ -53,7 +53,7 @@ export function ShareControls({ p }: { p: Project }) {
     if (err) return
     setName('')
     load()
-    void syncNow()      // publish the project straight away, so they see it rather than an empty one
+    void syncFresh()      // publish the project straight away, so they see it rather than an empty one
   }
 
   return (
@@ -90,7 +90,7 @@ export function ShareControls({ p }: { p: Project }) {
                 if (members.length) {
                   await Promise.all(members.map((m) => share(p.id, m.name, !!m.edit, e.target.checked)))
                   load()
-                  void syncNow()
+                  void syncFresh()
                 }
               }}
             />
@@ -189,7 +189,7 @@ function LinkShare({ pid }: { pid: string }) {
     if (!t) return void toast('Could not make the link')
     setToken(t)
     setJoin(joinable)
-    void syncNow()   // publish the project, or the link opens on nothing
+    void syncFresh()   // publish the project, or the link opens on nothing
   }
 
   const url = token ? linkUrl(token) : ''
