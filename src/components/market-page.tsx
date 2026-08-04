@@ -13,7 +13,7 @@ import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
-  ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
+  ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
   PLAN_WORDS, signals, tradePlan, trendFilter, TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
@@ -169,18 +169,28 @@ export default function MarketPage() {
       })
   }, [asset, interval, nonce, apiKey, needKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The timeframe one step up, purely for the "don't fight the bigger picture" card. Its own small
-  // fetch rather than grouping the bars we have: the slow MA wants 200 higher-timeframe bars of
-  // history, which this window doesn't hold. Fails quietly — it's a filter, not the feed.
+  // The bigger picture, twice over. `higher` is the timeframe one step up and votes in the tally —
+  // the "don't fight the bigger picture" card. `anchor` is the daily (the weekly, once you're on the
+  // daily) and never votes: it exists so a 15m read, whose step up is only the 4h, can still tell you
+  // it is pointing the opposite way to the chart you were looking at a minute ago.
+  // Their own small fetches rather than grouping the bars we have: the slow MA wants 200 higher-
+  // timeframe bars of history, which this window doesn't hold. Fail quietly — filters, not the feed.
   const [higher, setHigher] = useState<Signal | null>(null)
+  const [anchor, setAnchor] = useState<Signal | null>(null)
   useEffect(() => {
-    const up = HIGHER[interval]
-    setHigher(null)
-    if (needKey || !up) return
+    setHigher(null); setAnchor(null)
+    if (needKey) return
     let on = true
-    fetchCandles(current, up, apiKey)
-      .then((c) => { if (on) setHigher(trendFilter(c, cfg.slow, up)) })
-      .catch(() => {})
+    const lean = (iv?: Interval) => (iv
+      ? fetchCandles(current, iv, apiKey).then((c) => trendFilter(c, cfg.slow, iv)).catch(() => null)
+      : Promise.resolve(null))
+    const up = HIGHER[interval], anc = ANCHOR[interval]
+    const upLean = lean(up)
+    // on 1h the step up already *is* the daily — one request, read twice, not two identical calls.
+    // Twelve Data's free tier allows 8 a minute and an interval switch already spends one on candles.
+    const ancLean = anc === up ? upLean : lean(anc)
+    upLean.then((s) => { if (on) setHigher(s) })
+    ancLean.then((s) => { if (on) setAnchor(s) })
     return () => { on = false }
   }, [asset, interval, nonce, apiKey, needKey, cfg.slow]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -332,7 +342,11 @@ export default function MarketPage() {
   const plan = view && entryMA != null && last != null
     ? tradePlan(dir, last, entryMA, view.levels, view.atr) : null
   // taking a long while the timeframe above leans down is the trade guides tell you to skip
-  const against = plan && higher && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
+  const fights = (s: Signal | null) => !!s && ((dir === 'long' && s.tone === 'bear') || (dir === 'short' && s.tone === 'bull'))
+  const against = !!plan && fights(higher)
+  // the tide disagrees but the step up doesn't — not a reason to skip the trade, just the thing you
+  // want said out loud before you take a scalp against the chart the rest of the app defaults to
+  const counter = !!plan && !against && fights(anchor)
 
   /* The whole card in one line, because "when do I buy" shouldn't need three cards cross-referenced.
      Within a quarter-ATR of the entry counts as "here" — asking for the exact number is asking for a
@@ -747,6 +761,15 @@ export default function MarketPage() {
             {against && (
               <p className="text-amber-600 dark:text-amber-500 w-full text-xs">
                 Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
+              </p>
+            )}
+            {/* Not amber: this one isn't a warning off, it's the sentence that stops the {interval}
+                card and the {ANCHOR[interval]} card reading as the tool contradicting itself. */}
+            {counter && (
+              <p className="text-muted-foreground w-full text-xs">
+                Counter-trend — the {ANCHOR[interval]} chart leans {dir === 'long' ? 'down' : 'up'}, so this is a{' '}
+                {interval} {dir} against it. That is a real trade, not the same one the {ANCHOR[interval]} chart is
+                offering; it wants a tighter stop and no waiting around for the target.
               </p>
             )}
           </CardContent>
