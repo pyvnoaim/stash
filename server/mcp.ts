@@ -466,6 +466,7 @@ const isMain = (() => {
 })()
 
 if (isMain) {
+  const inflight = new Set<Promise<unknown>>()
   let buf = ''
   process.stdin.setEncoding('utf8').on('data', (chunk: string) => {
     buf += chunk
@@ -478,9 +479,17 @@ if (isMain) {
         say({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } })
         continue
       }
-      // deliberately not awaited: two calls in flight is the client's business, not ours
-      rpc(msg).then((out) => { if (out) say(out) })
+      // deliberately not awaited: two calls in flight is the client's business, not ours — the
+      // set is only so a shutdown can wait for the answers it already owes
+      const answered = rpc(msg).then((out) => { if (out) say(out) }).finally(() => inflight.delete(answered))
+      inflight.add(answered)
     }
   })
-  process.stdin.on('end', () => process.exit(0))
+  // stdin closing is how a client says it is done, but a call already in the air still has an
+  // answer owed to it — piping a line in to see what comes back is otherwise a race the pipe loses
+  /* stdin closing is how a client says it is done, and an answer already owed is still owed.
+     Waiting on the tool queue instead was the near miss: the queue settles a couple of microtasks
+     before the reply is written, so a piped line — the way you'd smoke-test this by hand — got the
+     exit and never the answer. */
+  process.stdin.on('end', () => { Promise.allSettled([...inflight]).then(() => process.exit(0)) })
 }
