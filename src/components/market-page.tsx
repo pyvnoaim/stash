@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  localClock, orb, PLAN_WORDS, SESSIONS, signals, tradePlan, trendFilter, TREND_NETWORK,
+  localClock, orb, PLAN_WORDS, SESSIONS, signals, tally, tradePlan, trendFilter, TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
 
@@ -293,9 +293,7 @@ export default function MarketPage() {
   ]
 
   // one clean call: tally the bull vs bear cards into a Long / Short / Flat verdict for the horizon
-  const bulls = shownSignals.filter((s) => s.tone === 'bull').length
-  const bears = shownSignals.filter((s) => s.tone === 'bear').length
-  const dir = bulls > bears ? 'long' : bears > bulls ? 'short' : 'flat'
+  const { bulls, bears, dir } = tally(shownSignals)
   // tinted rather than solid: a filled red pill reads as an emergency, and a 1/5 tally is a lean
   const bias = dir === 'long'
     ? { label: 'Long', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400', Icon: TrendingUp }

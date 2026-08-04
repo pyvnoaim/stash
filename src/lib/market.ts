@@ -796,6 +796,18 @@ export const FRESH_CROSS = 20
 export type Signal = { label: string; tone: 'bull' | 'bear' | 'flat'; detail: string; kind: GuideKey }
 
 /**
+ * The bull/bear count and the side it comes out on. Here rather than in the page because the desk
+ * is no longer the only thing that reads it — `server/mcp.ts` answers the same question over MCP,
+ * and a verdict that disagreed with the screen would be worse than no verdict. The flat-toned
+ * cards describe conditions rather than a side, so they deliberately don't vote.
+ */
+export function tally(list: Signal[]): { bulls: number; bears: number; dir: 'long' | 'short' | 'flat' } {
+  const bulls = list.filter((s) => s.tone === 'bull').length
+  const bears = list.filter((s) => s.tone === 'bear').length
+  return { bulls, bears, dir: bulls > bears ? 'long' : bears > bulls ? 'short' : 'flat' }
+}
+
+/**
  * What each reading is, what it's claiming, and when it turns up — for the guide that opens under a
  * signal. Written to be read by someone who hasn't done this before, and to say where the idea is
  * weak, because every one of these is a rule of thumb that a lot of people watch, not a law.

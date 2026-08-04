@@ -26,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the sync engine against the real server, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -683,6 +683,53 @@ Read-only means read-only in three places, not one: the capture field says whose
 instead of taking dictation, the store refuses every edit that reaches it, and the server refuses
 the write even if something got past both. A project shared with you carries an eye or a pair of
 people in the sidebar, and **Leave project** in its menu — leaving takes nothing with it.
+
+## From Claude
+
+`server/mcp.ts` is an MCP server over stdio: it signs into your account like any other device and
+hands Claude seven tools. Registering it once is the whole setup —
+
+```sh
+claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e STASH_PASS=… \
+  -- node --experimental-strip-types /path/to/stash/server/mcp.ts
+```
+
+| Tool | What it does |
+| --- | --- |
+| `stash_read` | every project, and one view's items — `query` takes the app's own `#tag`, `@project`, `+person` search |
+| `stash_capture` | adds lines through the same parser the capture bar uses, so `@kova #audio tomorrow !` all mean what they mean when typed |
+| `stash_edit` | one item by id: text, note, date, hour, flag, tags, type, project, done, or gone |
+| `stash_project` | adds one, or renames, recolours and renests an existing one |
+| `market_read` | the desk's read on an asset — price, every signal, the tally and the setup that falls out of it |
+| `market_trending` | Solana pools trending on the last hour, or the ones that just opened — `new` filtered by your own liquidity floor |
+| `market_setups` | the saved setups the bell is watching, and the record of the ones that finished |
+
+Nothing is reimplemented out there. The parser, the repeat that opens the next occurrence when a
+task is ticked, the guard that refuses a write to a project shared read-only and the bull/bear
+tally are `store.ts`'s and `market.ts`'s, reached rather than copied — which is why the tally moved
+out of the Markets page and into `market.ts` when this was written. A verdict from Claude that
+disagreed with the one on screen would be worse than none.
+
+Each call pulls `/state`, runs the store's actions over it and pushes the result back with
+`If-Match`, so a capture from Claude is the write the capture bar makes and reaches every device on
+the next sync. Two edits landing in the same instant resolve the way `sync.ts` decides it: the
+later one wins, and the earlier is a server snapshot rather than a loss. The session shows up in
+Settings → Devices as `stash-mcp` and can be revoked there like any other.
+
+One tool runs at a time, on purpose. The store is a single document that every call pulls the
+server's into, so two in flight would interleave their pulls and the second would adopt over the
+first's edit before it had been sent — and a client asking for two tools in one turn is entitled
+to. They queue instead. What goes out is also run through `load` first, the same door every
+device's document comes in by: a date that cannot exist is dropped there rather than reported back
+as set and then quietly thrown away by the next reader.
+
+Three limits worth knowing. The Twelve Data key never leaves the browser it was typed into — the
+sync blanks it on every push — so the nine stocks need `STASH_TD_KEY` in the MCP server's own
+environment; the eleven keyless assets need nothing. This only runs while Claude is calling it: no
+watching, no alerts, nothing in the background. And some of what comes back is other people's
+writing — rows out of a project shared with you, and token symbols off GeckoTerminal, which are
+whoever-minted-it's text arriving in a model's context. It is data, not instruction, and none of
+these tools do anything a sentence could talk them into: they read, and they write your own stash.
 
 ## Settings
 
