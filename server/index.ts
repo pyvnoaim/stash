@@ -21,7 +21,8 @@
  * bootstrapping. No email, no reset flow — at this scale a forgotten password is the admin
  * deleting the row and cutting a new invite.
  */
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
@@ -239,7 +240,17 @@ function readBody(req: IncomingMessage): Promise<any> {
 
 /** Hashing a miss against this keeps "no such user" as slow as "wrong password". */
 const DUMMY_SALT = randomBytes(16)
-const hashPass = (pass: string, salt: Buffer, n: number) => scryptSync(pass, salt, 64, scryptOpts(n))
+/**
+ * On the threadpool rather than scryptSync on the event loop. At N=2^15 one hash is a tenth of a
+ * second of solid CPU, and this process has one thread for everybody: a script posting junk logins
+ * ten times a second would otherwise hold the whole app still for as long as it kept going, with
+ * nothing signed in and nothing exploited. The limiter cannot answer that one — it keys on the
+ * name so that a flood at one account cannot lock out a proxy everyone shares an address behind,
+ * which means a flood spread over names never trips it. Here it costs a worker, not the loop.
+ */
+const scryptAsync = promisify(scrypt) as
+  (pass: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>
+const hashPass = (pass: string, salt: Buffer, n: number) => scryptAsync(pass, salt, 64, scryptOpts(n))
 const hashToken = (t: string) => createHash('sha256').update(t).digest('hex')
 
 const SCHEMA = `
@@ -574,7 +585,7 @@ export function start({
       const salt = randomBytes(16)
       // the first account through the door is the admin — it is yours, you deployed this
       const admin = q.anyUser.get() ? 0 : 1
-      const id = Number(q.addUser.run(name, salt, hashPass(pass, salt, SCRYPT_N), SCRYPT_N, admin, Date.now()).lastInsertRowid)
+      const id = Number(q.addUser.run(name, salt, await hashPass(pass, salt, SCRYPT_N), SCRYPT_N, admin, Date.now()).lastInsertRowid)
       q.useInvite.run(id, invite)
       log('signup', name, via(req))
       return send(res, 200, { user: name, admin, avatar: null }, { 'set-cookie': cookie(newSession(id, deviceOf(req))) })
@@ -588,7 +599,7 @@ export function start({
       if (limited(`${ip}:${name}`)) return send(res, 429, { error: 'too many tries — wait 15 minutes' })
       const u = q.userByName.get(name) as
         { id: number, salt: Buffer, hash: Buffer, n: number, admin: number } | undefined
-      const h = hashPass(String(b?.pass ?? ''), u ? Buffer.from(u.salt) : DUMMY_SALT, u?.n ?? SCRYPT_N)
+      const h = await hashPass(String(b?.pass ?? ''), u ? Buffer.from(u.salt) : DUMMY_SALT, u?.n ?? SCRYPT_N)
       if (!u || !timingSafeEqual(h, Buffer.from(u.hash))) {
         log('login-fail', name, via(req))
         return send(res, 401, { error: 'wrong name or password' })
@@ -740,12 +751,12 @@ export function start({
       if (next.length < 8) return send(res, 400, { error: 'password: 8 characters at least' })
       const u = q.userById.get(user.id) as { salt: Buffer, hash: Buffer, n: number }
       // the current password, again — a borrowed unlocked laptop should not be able to lock you out
-      if (!timingSafeEqual(hashPass(String(b?.current ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
+      if (!timingSafeEqual(await hashPass(String(b?.current ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
         log('password-fail', user.name, via(req))
         return send(res, 401, { error: 'wrong password' })
       }
       const salt = randomBytes(16)
-      q.setPass.run(salt, hashPass(next, salt, SCRYPT_N), SCRYPT_N, user.id)
+      q.setPass.run(salt, await hashPass(next, salt, SCRYPT_N), SCRYPT_N, user.id)
       // every other device keeps its session; this one is fine, and a changed password is not a theft
       log('password', user.name, via(req))
       return send(res, 200, {})
@@ -912,7 +923,7 @@ export function start({
       let b: any
       try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
       const u = q.userById.get(user.id) as { salt: Buffer, hash: Buffer, n: number }
-      if (!timingSafeEqual(hashPass(String(b?.pass ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
+      if (!timingSafeEqual(await hashPass(String(b?.pass ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
         log('delete-self-fail', user.name, via(req))
         return send(res, 401, { error: 'wrong password' })
       }
