@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "server": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/index.ts",
+    "mcp": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/mcp.ts",
     "preview": "vite preview",
     "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning 'src/**/*.test.ts' 'server/*.test.ts'"
   },

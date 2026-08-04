@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally } = await import('./market.ts')
+type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
 const s = sma([1, 2, 3, 4, 5], 3)
@@ -159,6 +160,14 @@ assert.equal(crossAt(2)?.tone, 'bull') // fresh: it votes
 assert.equal(crossAt(60)?.tone, 'flat') // stale: still shown, no longer voting
 assert.ok(crossAt(60)!.detail.includes('background, not news'))
 assert.equal(FRESH_CROSS, 20)
+
+/* The tally the desk and the MCP server both read: only the sides count, and an even split is no
+   trade rather than a coin flip. The flat cards describe conditions, so they must never tip it. */
+const card = (tone: Signal['tone']): Signal => ({ label: '', tone, detail: '', kind: 'trend' })
+assert.deepEqual(tally([card('bull'), card('bull'), card('bear')]), { bulls: 2, bears: 1, dir: 'long' })
+assert.deepEqual(tally([card('bear'), card('flat')]), { bulls: 0, bears: 1, dir: 'short' })
+assert.equal(tally([card('bull'), card('bear'), card('flat'), card('flat')]).dir, 'flat')
+assert.equal(tally([]).dir, 'flat')
 
 // bullish divergence: a steep drop to a low (RSI very low there), then a gentle grind to a *lower*
 // low (RSI higher). 20 lead-in bars so RSI is defined at both lows (RSI needs 14 bars of history).
