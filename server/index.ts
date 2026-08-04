@@ -258,6 +258,21 @@ const SCHEMA = `
     pid text not null, ts integer not null, device text, json text not null
   );
   create index if not exists pdocs_key on pdocs (owner, pid, v desc);
+  /* A public link to one project. The token is the whole credential — no account behind it — so it
+     is 128 bits of randomness and the row is the only thing that makes it work: deleting it is how
+     a link is revoked, and there is nothing else to rotate. What it grants is reading, always.
+     The joinable flag adds one thing on top: whoever opens it while signed in may put themselves on the
+     project, with edit — the only thing joining could usefully mean.
+     One per project: a second link to the same project is the same link, so there is one row to
+     revoke and one string to have leaked. */
+  create table if not exists links (
+    token text primary key,
+    owner integer not null references users(id) on delete cascade,
+    pid text not null,
+    joinable integer not null default 0,
+    ts integer not null,
+    unique (owner, pid)
+  );
 `
 
 export function start({
@@ -373,6 +388,31 @@ export function start({
     prunePdoc: db.prepare(`delete from pdocs where owner = ? and pid = ? and v not in
       (select v from pdocs where owner = ? and pid = ? order by v desc limit ?)`),
     dropPdoc: db.prepare('delete from pdocs where owner = ? and pid = ?'),
+
+    /* links */
+    addLink: db.prepare(`insert into links (token, owner, pid, joinable, ts) values (?, ?, ?, ?, ?)
+      on conflict (owner, pid) do update set joinable = excluded.joinable`),
+    /** The link for one project, if there is one — also what says "this project is still reachable". */
+    linkOf: db.prepare('select token, joinable from links where owner = ? and pid = ?'),
+    /** Every link you have handed out, for the list that revokes them. */
+    myLinks: db.prepare('select token, pid, joinable, ts from links where owner = ? order by ts desc'),
+    dropLink: db.prepare('delete from links where owner = ? and pid = ?'),
+    /** The token, which is the whole credential: one row, and the owner's name to show for it. */
+    byToken: db.prepare(`select l.owner, l.pid, l.joinable, u.name as owner_name
+      from links l join users u on u.id = l.owner where l.token = ?`),
+    /** The project's sub-project setting, taken off any row on it — it is the same on every one. */
+    shareSubs: db.prepare('select subs from shares where owner = ? and pid = ? limit 1'),
+  }
+
+  /* A shared project's document lives on the server for exactly as long as something can reach it:
+     a member, or a live link. When the last of them goes it is a private project again and the copy
+     here goes with it — which is why every path that removes one of the two ends up in here rather
+     than dropping the document itself. */
+  const retire = (pid: string, owner: number) => {
+    const members = (q.myShares.all(owner, owner) as { pid: string }[]).some((m) => m.pid === pid)
+    if (members || q.linkOf.get(owner, pid)) return
+    q.dropShares.run(pid, owner)
+    q.dropPdoc.run(owner, pid)
   }
 
   /* The notifications that reach a closed app: its own module, its own table, and the minute
@@ -809,6 +849,9 @@ export function start({
       return send(res, 200, {
         mine: q.myShares.all(user.id, user.id),
         with_me: q.sharedWithMe.all(user.id, user.id),
+        /* A project with a link on it and nobody else on it is still published: the link is a
+           reader, and it has nothing to read unless this device pushes the document. */
+        links: q.myLinks.all(user.id),
       })
     }
 
@@ -860,14 +903,16 @@ export function start({
         if (b?.user) {
           const target = q.userByName.get(String(b.user).trim().toLowerCase()) as { id: number } | undefined
           if (target) q.dropShare.run(pid, target.id, user.id)
-          // the last member gone means it is a private project again
-          if (!(q.myShares.all(user.id, user.id) as { pid: string }[]).some((m) => m.pid === pid)) {
-            q.dropShares.run(pid, user.id)
-            q.dropPdoc.run(user.id, pid)
-          }
+          // the last member gone means it is a private project again — unless a link still reaches it
+          retire(pid, user.id)
         } else {
-          q.dropShares.run(pid, user.id)
-          q.dropPdoc.run(user.id, pid)
+          // everyone off it at once, and the same question: is there still a way in?
+          for (const m of q.myShares.all(user.id, user.id) as { pid: string, name: string }[]) {
+            if (m.pid !== pid) continue
+            const t = q.userByName.get(m.name) as { id: number } | undefined
+            if (t) q.dropShare.run(pid, t.id, user.id)
+          }
+          retire(pid, user.id)
         }
         log('unshare', `${pid} by ${user.name}`, via(req))
         return send(res, 200, { members: q.myShares.all(user.id, user.id) })
@@ -878,6 +923,96 @@ export function start({
       q.leaveShare.run(pid, user.id, owner.id)
       log('leave-share', `${pid} of ${ownerName} by ${user.name}`, via(req))
       return send(res, 200, {})
+    }
+
+    /* ---------- public links ---------- */
+
+    /* The one route here that answers to nobody: the token is the credential, so there is no
+       session to read and nothing to check but whether the row is still there. It is a read, and
+       only a read — the writing half of a link is joining, below, which needs an account.
+       ponytail: no rate limit on the token. It is 128 bits out of randomBytes; a guessing loop at
+       a thousand tries a second is still working on it long after the sun has gone. */
+    if (path === '/api/link' && req.method === 'GET') {
+      const token = new URL(req.url ?? '/', 'http://x').searchParams.get('t') ?? ''
+      const l = q.byToken.get(token) as
+        { owner: number, pid: string, joinable: number, owner_name: string } | undefined
+      if (!l) return send(res, 404, { error: 'this link is not live' })
+      const row = q.pdoc.get(l.owner, l.pid) as { json: string } | undefined
+      /* Signed in and already on this project? Then the link is just a fast way in and their own
+         rights are what count — an editor opening a view-only link is still an editor, and being
+         shown a frozen copy of their own project would be the wrong answer twice over. */
+      const user = auth(req)
+      const may = user ? q.access.get(l.owner, l.pid, user.id) as { edit: number } | undefined : undefined
+      return send(res, 200, {
+        pid: l.pid,
+        owner: l.owner_name,
+        joinable: !!l.joinable,
+        member: !!may,
+        edit: !!may?.edit,
+        signedIn: !!user,
+        state: row ? JSON.parse(row.json) : null,
+      })
+    }
+
+    if (path === '/api/link' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const pid = String(b?.pid ?? '')
+      if (!pid) return send(res, 400, { error: 'which project' })
+      // the same rule the named share follows: a project you are only a member of is not yours to hand on
+      if (q.notMine.get(pid, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
+      const joinable = b?.joinable ? 1 : 0
+      const now = Date.now()
+      // the owner's own access row, so the document below has somewhere to be written from
+      q.addShare.run(pid, user.id, user.id, 1, (q.shareSubs.get(user.id, pid) as { subs: number } | undefined)?.subs ?? 0, now)
+      // 128 bits, and the row is only cut once: toggling joinable must not silently break the
+      // link someone already sent — revoking is the deliberate act that changes the string
+      const token = (q.linkOf.get(user.id, pid) as { token: string } | undefined)?.token
+        ?? randomBytes(16).toString('hex')
+      q.addLink.run(token, user.id, pid, joinable, now)
+      log('link', `${pid} by ${user.name}${joinable ? ' (joinable)' : ''}`, via(req))
+      return send(res, 200, { token, joinable: !!joinable })
+    }
+
+    if (path === '/api/link' && req.method === 'DELETE') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const pid = String(b?.pid ?? '')
+      q.dropLink.run(user.id, pid)
+      // revoked, and with nobody else on it the project stops being published at all
+      retire(pid, user.id)
+      log('unlink', `${pid} by ${user.name}`, via(req))
+      return send(res, 200, { links: q.myLinks.all(user.id) })
+    }
+
+    if (path === '/api/links' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      return send(res, 200, { links: q.myLinks.all(user.id) })
+    }
+
+    /* Joining: the half of a link that writes anything. It needs an account — a share row names a
+       user, and there is no such thing as an anonymous member — so a stranger with the link reads,
+       and someone with the link and an account here can put themselves on it. */
+    if (path === '/api/link/join' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'sign in first' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      const l = q.byToken.get(String(b?.t ?? '')) as
+        { owner: number, pid: string, joinable: number, owner_name: string } | undefined
+      if (!l) return send(res, 404, { error: 'this link is not live' })
+      if (l.owner === user.id) return send(res, 200, { pid: l.pid, owner: l.owner_name })
+      if (!l.joinable) return send(res, 403, { error: 'this link is view only' })
+      const subs = (q.shareSubs.get(l.owner, l.pid) as { subs: number } | undefined)?.subs ?? 0
+      // joining is joining: the point of the flag is that they can work on it
+      q.addShare.run(l.pid, l.owner, user.id, 1, subs, Date.now())
+      log('link-join', `${l.pid} of ${l.owner_name} by ${user.name}`, via(req))
+      return send(res, 200, { pid: l.pid, owner: l.owner_name })
     }
 
     // the shared project's document — the same versioned exchange /state runs, one project wide

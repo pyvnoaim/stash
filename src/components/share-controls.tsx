@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Eye, Pencil, Trash2 } from 'lucide-react'
+import { Copy, Eye, Link2, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccessToggle, PeopleSuggest } from '@/components/share-fields'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Hint } from '@/components/ui/tooltip'
-import { people, share, shares, unshare, syncNow, type Member } from '@/lib/sync'
+import {
+  dropLink, linkUrl, links, makeLink, people, share, shares, unshare, syncNow, type Member,
+} from '@/lib/sync'
 import { childProjects, useStash, type Project } from '@/lib/store'
 
 /**
@@ -150,6 +152,118 @@ export function ShareControls({ p }: { p: Project }) {
           </p>
         </div>
       )}
+
+      <LinkShare pid={p.id} />
+    </div>
+  )
+}
+
+/**
+ * The other kind of sharing: a URL, no account behind it, read-only. It is the one that leaves the
+ * building — a member is someone you named, a link is whoever it was forwarded to — so the wording
+ * says so plainly and revoking is one click away rather than in a menu.
+ *
+ * `join` is the only thing that can be turned up: anyone signed in on this server who opens it may
+ * put themselves on the project, with edit. Toggling it does not cut a new URL — the one already
+ * sent goes on working, which is what makes revoke the deliberate act and not a side effect.
+ */
+function LinkShare({ pid }: { pid: string }) {
+  // undefined while asking, null when there is none
+  const [token, setToken] = useState<string | null | undefined>(undefined)
+  const [join, setJoin] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setToken(undefined)
+    void links().then((all) => {
+      const here = all.find((l) => l.pid === pid)
+      setToken(here?.token ?? null)
+      setJoin(!!here?.joinable)
+    })
+  }, [pid])
+
+  const cut = async (joinable: boolean) => {
+    setBusy(true)
+    const t = await makeLink(pid, joinable)
+    setBusy(false)
+    if (!t) return void toast('Could not make the link')
+    setToken(t)
+    setJoin(joinable)
+    void syncNow()   // publish the project, or the link opens on nothing
+  }
+
+  const url = token ? linkUrl(token) : ''
+
+  return (
+    <div className="grid gap-2 border-t pt-4">
+      <div className="flex items-center gap-2">
+        <Label className="flex items-center gap-1.5"><Link2 className="size-3.5" /> Link</Label>
+        {token
+          ? (
+              <Button
+                variant="ghost" size="sm" className="ml-auto"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true)
+                  const err = await dropLink(pid)
+                  setBusy(false)
+                  if (err) return void toast(err)
+                  setToken(null)
+                  setJoin(false)
+                  toast('Link revoked')
+                }}
+              >
+                <Trash2 /> Revoke
+              </Button>
+            )
+          : (
+              <Button
+                size="sm" className="ml-auto"
+                disabled={token === undefined || busy}
+                onClick={() => cut(false)}
+              >
+                Create link
+              </Button>
+            )}
+      </div>
+
+      {token
+        ? (
+            <>
+              <div className="flex gap-2">
+                <Input readOnly value={url} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+                <Button
+                  variant="outline"
+                  onClick={() => { void navigator.clipboard?.writeText(url); toast('Link copied') }}
+                >
+                  <Copy /> Copy
+                </Button>
+              </div>
+              <label className="flex items-start gap-2 pt-1 text-sm">
+                <input
+                  type="checkbox"
+                  checked={join}
+                  disabled={busy}
+                  className="accent-foreground mt-[3px] size-3.5 shrink-0"
+                  onChange={(e) => cut(e.target.checked)}
+                />
+                <span>
+                  Let them join and edit
+                  <span className="text-muted-foreground block text-xs">
+                    Off, the link only reads. On, anyone with an account here who opens it can add
+                    themselves to the project — the same as if you had named them.
+                  </span>
+                </span>
+              </label>
+            </>
+          )
+        : (
+            <p className="text-muted-foreground text-xs">
+              {token === undefined
+                ? 'Asking the server…'
+                : 'A read-only link anyone can open without an account. Revoke it and it stops working for everyone.'}
+            </p>
+          )}
     </div>
   )
 }

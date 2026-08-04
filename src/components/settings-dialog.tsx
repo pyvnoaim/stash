@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Bell, BellOff, CandlestickChart, ChartLine, Copy, Database, Download, Eraser, History, Info,
-  Keyboard, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
+  Keyboard, Link2, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
@@ -26,8 +26,9 @@ import {
   clearDone, hotkey, resetHotkeys, setApiKey, setChart, setHotkey, setStake, useStash, type ChartStyle,
 } from '@/lib/store'
 import {
-  changePassword, deleteAccount, devices, dropFeed, feed, getSync, logout, newFeed, restore,
-  subscribeSync, updateAccount, versions, type Device, type Version,
+  changePassword, deleteAccount, devices, dropFeed, dropLink, feed, getSync, links, linkUrl, logout,
+  newFeed, restore, subscribeSync, updateAccount, versions,
+  type Device, type Link, type Version,
 } from '@/lib/sync'
 import { disablePush, enablePush, pushState, type PushState } from '@/lib/push'
 
@@ -75,6 +76,7 @@ export function SettingsDialog({ open, onOpenChange }: {
       ? [
           { id: 'account', label: 'Account', icon: UserPen },
           { id: 'history', label: 'History', icon: History },
+          { id: 'links', label: 'Links', icon: Link2 },
           ...(user.admin ? [{ id: 'people', label: 'People', icon: Users }] : []),
         ]
       : []),
@@ -131,6 +133,7 @@ export function SettingsDialog({ open, onOpenChange }: {
               <h2 className="font-heading text-lg tracking-wide">{title}</h2>
               {here === 'account' && user && <AccountPanel name={user.name} avatar={user.avatar} />}
               {here === 'history' && <HistoryPanel onDone={() => onOpenChange(false)} />}
+              {here === 'links' && <LinksPanel />}
               {here === 'people' && user && <PeoplePanel me={user.name} />}
               {here === 'data' && <DataPanel />}
               {here === 'markets' && <MarketsPanel />}
@@ -658,6 +661,70 @@ function CalendarFeed() {
               {token === undefined ? 'Asking the server…' : 'No link yet.'}
             </p>
           )}
+    </Section>
+  )
+}
+
+/**
+ * Every public link you have handed out, in one place — because a link is the one kind of sharing
+ * you cannot see from inside the project you shared: it names nobody, it makes no row in a member
+ * list, and the person holding it never appears anywhere. This is where they are counted and where
+ * they are taken back. Revoking is immediate and total: the URL stops resolving for everyone.
+ *
+ * The links themselves are cut in Edit project, beside the people. This list only ever removes.
+ */
+function LinksPanel() {
+  const s = useStash()
+  const [list, setList] = useState<Link[] | null>(null)
+  useEffect(() => { void links().then(setList) }, [])
+
+  return (
+    <Section
+      title="Shared links"
+      hint="Anyone holding one of these can read that project without an account. A link marked
+        join lets anyone signed in here put themselves on the project and edit it."
+    >
+      {!list && <p className="text-muted-foreground text-sm">Asking the server…</p>}
+      {list?.length === 0 && (
+        <p className="text-muted-foreground text-sm">
+          No links out. You make one in a project's Edit dialog, under Share.
+        </p>
+      )}
+      {list?.map((l) => {
+        // the project's name is in the local document; a link to one since deleted still lists
+        const name = s.projects.find((p) => p.id === l.pid)?.name ?? 'Deleted project'
+        const url = linkUrl(l.token)
+        return (
+          <div key={l.token} className="grid gap-1.5 rounded-md border px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm">{name}</span>
+              {!!l.joinable && (
+                <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px] uppercase">
+                  can join
+                </span>
+              )}
+              <Button
+                variant="ghost" size="sm" className="ml-auto"
+                onClick={() => { void navigator.clipboard?.writeText(url); toast('Link copied') }}
+              >
+                <Copy /> Copy
+              </Button>
+              <Button
+                variant="ghost" size="icon" className="size-7"
+                aria-label={`Revoke the link to ${name}`}
+                onClick={async () => {
+                  const err = await dropLink(l.pid)
+                  toast(err ?? 'Link revoked')
+                  void links().then(setList)
+                }}
+              >
+                <Trash2 />
+              </Button>
+            </div>
+            <span className="text-muted-foreground truncate font-mono text-xs">{url}</span>
+          </div>
+        )
+      })}
     </Section>
   )
 }

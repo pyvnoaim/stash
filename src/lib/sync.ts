@@ -93,17 +93,26 @@ function schedule() {
 }
 
 let inflight: Promise<void> | undefined
+let queued: Promise<void> | undefined
 
 /**
  * Push if dirty, pull if not. Safe to call any time; does nothing without a session.
  *
- * Calls that arrive while one is in flight join it rather than starting a second. A phone coming
- * back to the app fires visibilitychange and focus, and both wake the sync — two pushes of one
- * edit, the second landing on a 409 it has to redo, and two of the fifty snapshots spent on a
- * single change. Nothing is lost by joining: an edit made mid-flight re-arms its own timer.
+ * A second call while one is in flight does not start a second exchange — a phone coming back to
+ * the app fires visibilitychange and focus, and both wake the sync, which would be two pushes of
+ * one edit and two of the fifty snapshots spent on a single change.
+ *
+ * It waits for one instead of joining it. Awaiting the one already going is the wrong answer for
+ * anyone who calls this because they just changed something on the server — accepting a link's
+ * invitation, sharing a project — since that exchange read the server before their change existed
+ * and comes back without it. One extra round trip, and "sync now" means what it says. Everyone
+ * arriving mid-flight shares that single follow-up, so the coalescing this replaced still holds.
  */
 export function syncNow(): Promise<void> {
-  return inflight ??= run().finally(() => { inflight = undefined })
+  if (!inflight) return inflight = run().finally(() => { inflight = undefined })
+  // `inflight` is the finally-wrapped promise, so by the time this runs it has already cleared
+  // itself and the call below starts a fresh exchange rather than handing back the finished one
+  return queued ??= inflight.then(() => { queued = undefined; return syncNow() })
 }
 
 async function run(): Promise<void> {
@@ -292,8 +301,49 @@ export interface SharedWithMe { pid: string, edit: number, subs: number, owner: 
 /** One person on one project — the owner included, since they are working on it too. */
 export interface Face { pid: string, owner: string, name: string, avatar: string | null, subs: number }
 
-export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[] }> =>
-  call('/api/shares').catch(() => ({ mine: [], with_me: [] }))
+export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[], links: Link[] }> =>
+  call('/api/shares').catch(() => ({ mine: [], with_me: [], links: [] }))
+
+/* ---------- public links ---------- */
+
+export interface Link { pid: string, token: string, joinable: number, ts: number }
+
+/** What a link looks like from the outside — the project, and what this visitor may do with it. */
+export interface LinkView {
+  pid: string
+  owner: string
+  joinable: boolean
+  /** Already on the project: the link is a fast way in, and their own rights apply. */
+  member: boolean
+  edit: boolean
+  signedIn: boolean
+  state: { projects: Project[], items: unknown[] } | null
+}
+
+/** The URL to hand out. A query rather than a path: the server has no SPA fallback, so `/l/xyz`
+ *  would be a 404 from the static handler, and this needs no route at all. */
+export const linkUrl = (token: string) => `${location.origin}/?link=${token}`
+
+export const links = (): Promise<Link[]> =>
+  call('/api/links').then((j) => j.links as Link[]).catch(() => [])
+
+/** Cuts the link, or returns the one already cut with `joinable` set to what was asked for. */
+export const makeLink = (pid: string, joinable: boolean): Promise<string | null> =>
+  call('/api/link', { method: 'POST', body: JSON.stringify({ pid, joinable }) })
+    .then((j) => j.token as string).catch(() => null)
+
+export const dropLink = (pid: string) =>
+  call('/api/link', { method: 'DELETE', body: JSON.stringify({ pid }) })
+    .then(() => null).catch(errorOf)
+
+/** Open one, signed in or not. Throws with the server's word for it when the link is dead. */
+export const openLink = (t: string): Promise<LinkView> =>
+  call(`/api/link?t=${encodeURIComponent(t)}`)
+
+/** Put yourself on the project — needs an account, and a link that allows it. */
+export const joinLink = (t: string): Promise<string | null> =>
+  call('/api/link/join', { method: 'POST', body: JSON.stringify({ t }) })
+    .then(() => null).catch(errorOf)
 
 /** Everyone on every project you are on. Its own request: the sync loop never wants the pictures. */
 export const roster = (): Promise<Face[]> =>
@@ -370,9 +420,13 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
 
 /** Every project either shared by you or with you, exchanged after the personal document. */
 async function syncShares() {
-  const { mine, with_me } = await shares()
+  const { mine, with_me, links } = await shares()
   // one row per member: the project's own settings are the same on each, so the first will do
   const owned = new Map(mine.map((m) => [m.pid, !!m.subs]))
+  /* A project whose only reader is a public link is still a published one — without this it would
+     have a link pointing at a document nobody ever pushed. Set only where a member has not already
+     answered: they carry the project's sub-project setting and a link does not. */
+  for (const l of links) if (!owned.has(l.pid)) owned.set(l.pid, false)
   // a project someone shared with you must exist locally before its slice can land in it
   for (const s of with_me) {
     if (!getState().projects.some((p) => p.id === s.pid)) {
