@@ -28,9 +28,10 @@ export const ON_ROWS = ['today', 'tomorrow', 'done']
 export const FIXED: [string, string][] = [
   ['⌘Z / ⇧⌘Z', 'Undo, redo'],
   ['↑ ↓ or J K', 'Move through the list'],
+  ['⏎ or double-click', 'Open the row full-page'],
   ['⇧↑ ⇧↓', 'Extend the selection'],
   ['⌥↑ ⌥↓', 'Reorder the selected row'],
-  ['Esc', 'Leave the field, drop the selection, close the inspector'],
+  ['Esc', 'Leave the field, close the page, drop the selection, close the inspector'],
 ]
 
 /* What the fixed half already answers to. Bare keys only: the handler drops every ⌘ press before

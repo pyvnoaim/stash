@@ -230,9 +230,12 @@ export default function App() {
         if (e.shiftKey ? redo() : undo()) { setMarked([]); toast(e.shiftKey ? 'Redone' : 'Undone') }
         return
       }
-      // esc walks back out: leave the field, then drop the marks, then close the inspector
+      // esc walks back out: leave the field, then the page, then drop the marks, then close the
+      // inspector. The page step is new alongside ⏎/double-click — a way in with no way back out
+      // but the mouse is half a shortcut, and this branch already promised to walk all the way out.
       if (e.key === 'Escape') {
         if (typingIn(e.target)) (e.target as HTMLElement).blur()
+        else if (pageItem) setPageItem(null)
         else if (marked.length) setMarked([])
         else if (s.focus) focus(null)
         return
@@ -247,10 +250,27 @@ export default function App() {
       }
       // no other list shortcut wants a modifier, and ⌘S belongs to the browser
       if (cmd) return
-      // the list shortcuts would act on a row you cannot see from here, delete included
-      if (!query && isPage(s.sel)) return
+      // the list shortcuts would act on a row you cannot see from here, delete included — and the
+      // full-page editor hides the list just as completely as Overview or Markets does, so J and K
+      // were walking a focus you couldn't see and T was dating a row behind the page
+      if (pageItem || (!query && isPage(s.sel))) return
 
       const at = items.findIndex((i) => i.id === s.focus)
+
+      /* Enter opens the row in hand full-page — the keyboard half of the double-click. Fixed rather
+         than rebindable: it is navigation, like the arrows below it, and `refuse` would turn down a
+         bare key that isn't ON_ROWS anyway. Reads `chosen`, the same one-or-many the other row keys
+         act on, so a lone mark and a lone focus both mean the same thing here — and looks it up in
+         `items` rather than trusting s.focus, which survives a search that filtered its row away and
+         would otherwise open a page for something this view no longer shows. */
+      if (e.key === 'Enter') {
+        const one = chosen.length === 1 ? items.find((i) => i.id === chosen[0]) : undefined
+        if (!one) return
+        e.preventDefault()
+        setMarked([])
+        setPageItem(one.id)
+        return
+      }
 
       // dragging is the only way to reorder otherwise, which leaves a keyboard with none
       if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -487,6 +507,9 @@ export default function App() {
                         projects={projectList}
                         sel={s.sel}
                         onSelect={(range) => pick(it.id, range)}
+                        // focus it too: coming back out of the page should leave the row you were on
+                        // under the cursor, not wherever the selection happened to be before
+                        onOpen={() => { focus(it.id); setMarked([]); setPageItem(it.id) }}
                         onTag={(t) => addTerm('#' + t)}
                         onWho={(w) => addTerm('+' + w)}
                         // the same landing the palette does: drop the search, or the project you
