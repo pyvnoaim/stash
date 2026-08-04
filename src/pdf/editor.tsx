@@ -5,7 +5,7 @@ import type { PageViewport, PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dis
 import type { PDFFont } from '@cantoo/pdf-lib'
 import {
   ChevronDown, ChevronLeft, ChevronRight, Download, FilePlus2, FileWarning, Files, FolderOpen,
-  Highlighter, Loader2, MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn,
+  Highlighter, Loader2, MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, X, ZoomIn,
   ZoomOut,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -72,9 +72,10 @@ export default function Editor({ visible }: { visible: boolean }) {
   /* The name being typed into the save dialog — null when it is shut, so an emptied field is still
      an open dialog. `pending` is the file waiting on the "this discards your stamps" answer. */
   const [saveAs, setSaveAs] = useState<string | null>(null)
-  const [pending, setPending] = useState<File | null>(null)
+  const [pending, setPending] = useState<File | 'close' | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const textRef = useRef<HTMLDivElement>(null)
   const openRef = useRef<HTMLInputElement>(null)
   const mergeRef = useRef<HTMLInputElement>(null)
 
@@ -117,9 +118,13 @@ export default function Editor({ visible }: { visible: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!visible || !(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
-      // inside a stamp, the browser's own text undo is the one you meant
-      const el = e.target as HTMLElement | null
-      if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return
+      // a dialog is in front of the page: undoing something you cannot see is not what you asked
+      if (saveAs !== null || pending) return
+      /* Inside a stamp the browser's own text undo is the one you meant — unless the box is
+         empty, which is where placing one leaves you and where the browser has nothing to walk
+         back, so ⌘Z did nothing at all at the exact moment you wanted the stamp gone. */
+      const el = e.target
+      if ((el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) && el.value) return
       e.preventDefault()
       if (e.shiftKey) redo()
       else undo()
@@ -134,9 +139,14 @@ export default function Editor({ visible }: { visible: boolean }) {
     if (!bytes) return
     let task: RenderTask | null = null
     let loading: PDFDocumentLoadingTask | null = null
+    let text: pdfjs.TextLayer | null = null
+    let watch: ResizeObserver | null = null
     let live = true
     setDrawing(true)
     setError(null)
+    // the words of whatever was here before — cleared now rather than after the render, or a file
+    // that fails to open leaves the last one's text selectable behind the error panel
+    textRef.current?.replaceChildren()
 
     ;(async () => {
       try {
@@ -158,6 +168,31 @@ export default function Editor({ visible }: { visible: boolean }) {
         task = proxy.render({ canvas, viewport })
         await task.promise.catch(() => {})   // cancelled by the next page turn, which is fine
         if (live) setView(viewport)
+
+        /* The canvas is a picture, so the words on it could not be selected or copied — a receipt
+           you wanted one line out of meant retyping it. pdf.js can lay the same text back over the
+           page as transparent spans, which is what every PDF viewer you have ever selected text in
+           is doing. Positions come out as percentages, so only the font size needs a scale, and
+           that follows the canvas's real width rather than `zoom` — `max-w-full` shrinks the sheet
+           below the zoom we asked for on a narrow window, and the text has to shrink with it. */
+        const layer = textRef.current
+        if (live && layer) {
+          const unit = proxy.getViewport({ scale: 1 })
+          text = new pdfjs.TextLayer({
+            textContentSource: proxy.streamTextContent(),
+            container: layer,
+            viewport: unit,
+          })
+          /* Deliberately not awaited. The page is drawn and usable by now, so pulling its text out
+             must not hold the spinner up on a dense page — and a failure here must not fall into
+             the catch below, which would replace a page you can see with "could not be opened". */
+          void text.render().then(() => {
+            if (!live) return   // or this observer outlives the cleanup that already ran
+            watch = new ResizeObserver(([e]) => layer.style.setProperty(
+              '--total-scale-factor', String(e.contentRect.width / unit.width)))
+            watch.observe(canvas)
+          }).catch(() => {})
+        }
       } catch (e) {
         /* Anything that is not really a PDF fails here, and used to fail as an unhandled rejection
            behind a blank sheet that never filled in. It then said only that it had failed, which
@@ -184,23 +219,31 @@ export default function Editor({ visible }: { visible: boolean }) {
     })()
 
     // destroy the document (and its worker) on every change, or each page turn/zoom leaks one
-    return () => { live = false; task?.cancel(); loading?.destroy() }
+    return () => { live = false; task?.cancel(); text?.cancel(); watch?.disconnect(); loading?.destroy() }
   }, [bytes, page, zoom, password])
+
+  /** Back to an empty editor. Everything a file leaves behind, dropped in one place. */
+  const reset = () => {
+    setBytes(null)
+    setNotes([])
+    setPage(0)
+    setView(null)     // or the last file stays on screen until the next one has drawn
+    setPast([])       // a new file is not something you undo your way out of
+    setFuture([])
+    setPassword('')   // and it is not the next file's password either
+    setAskPass(false)
+    setActive(null)
+    setError(null)
+  }
 
   const load = async (file: File, into: 'open' | 'merge') => {
     setBusy(true)
     try {
       const next = new Uint8Array(await file.arrayBuffer())
       if (into === 'open') {
+        reset()
         setBytes(next)
         setName(file.name)
-        setNotes([])
-        setPage(0)
-        setView(null)     // or the last file stays on screen until this one has drawn
-        setPast([])       // a new file is not something you undo your way out of
-        setFuture([])
-        setPassword('')   // and it is not this file's password either
-        setAskPass(false)
       } else if (bytes) {
         // merge first, then record the step — a failed merge must not leave a phantom undo behind
         const merged = await appendPdf(bytes, next)
@@ -387,7 +430,8 @@ export default function Editor({ visible }: { visible: boolean }) {
     <div className="flex min-h-0 flex-1 flex-col">
       {/* the app header above already names the tab, so this bar is only the file and its tools */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b px-4 py-2">
-        <span className="text-muted-foreground max-w-40 truncate font-mono text-xs">
+        {/* truncated at 40 — hovering is the only way to read the rest of a long name */}
+        <span title={name} className="text-muted-foreground max-w-40 truncate font-mono text-xs">
           {name}
         </span>
 
@@ -402,14 +446,14 @@ export default function Editor({ visible }: { visible: boolean }) {
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon-sm" aria-label="Previous page"
+          <Button variant="ghost" size="icon-sm" title="Previous page" aria-label="Previous page"
             disabled={page === 0} onClick={() => setPage(page - 1)}>
             <ChevronLeft />
           </Button>
           <span className="text-muted-foreground font-mono text-xs tabular-nums">
             {page + 1} / {count}
           </span>
-          <Button variant="ghost" size="icon-sm" aria-label="Next page"
+          <Button variant="ghost" size="icon-sm" title="Next page" aria-label="Next page"
             disabled={page >= count - 1} onClick={() => setPage(page + 1)}>
             <ChevronRight />
           </Button>
@@ -421,7 +465,7 @@ export default function Editor({ visible }: { visible: boolean }) {
             real resolution rather than magnifying the pixels you already had */}
         <div className="flex items-center gap-1">
           <Button
-            variant="ghost" size="icon-sm" aria-label="Zoom out"
+            variant="ghost" size="icon-sm" title="Zoom out" aria-label="Zoom out"
             disabled={zoom <= ZOOMS[0]}
             onClick={() => setZoom(ZOOMS[ZOOMS.indexOf(zoom) - 1] ?? ZOOMS[0])}
           >
@@ -436,7 +480,7 @@ export default function Editor({ visible }: { visible: boolean }) {
             {Math.round(zoom * 100)}%
           </button>
           <Button
-            variant="ghost" size="icon-sm" aria-label="Zoom in"
+            variant="ghost" size="icon-sm" title="Zoom in" aria-label="Zoom in"
             disabled={zoom >= ZOOMS[ZOOMS.length - 1]}
             onClick={() => setZoom(ZOOMS[ZOOMS.indexOf(zoom) + 1] ?? zoom)}
           >
@@ -471,13 +515,13 @@ export default function Editor({ visible }: { visible: boolean }) {
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
         <Button
-          variant="ghost" size="icon-sm" title="Undo" aria-label="Undo"
+          variant="ghost" size="icon-sm" title="Undo (⌘Z)" aria-label="Undo"
           disabled={!past.length} onClick={undo}
         >
           <Undo2 />
         </Button>
         <Button
-          variant="ghost" size="icon-sm" title="Redo" aria-label="Redo"
+          variant="ghost" size="icon-sm" title="Redo (⇧⌘Z)" aria-label="Redo"
           disabled={!future.length} onClick={redo}
         >
           <Redo2 />
@@ -507,7 +551,7 @@ export default function Editor({ visible }: { visible: boolean }) {
           <div className="flex items-center gap-1.5">
             <select
               value={shown.size}
-              aria-label="Text size"
+              title="Text size" aria-label="Text size"
               onChange={(e) => restyle({ size: Number(e.target.value) })}
               className="border-input bg-background h-8 rounded-md border px-2 text-sm"
             >
@@ -531,7 +575,7 @@ export default function Editor({ visible }: { visible: boolean }) {
             {shown.border && (
               <select
                 value={shown.weight}
-                aria-label="Outline thickness"
+                title="Outline thickness" aria-label="Outline thickness"
                 onChange={(e) => restyle({ weight: Number(e.target.value) })}
                 className="border-input bg-background h-8 rounded-md border px-2 text-sm"
               >
@@ -541,7 +585,15 @@ export default function Editor({ visible }: { visible: boolean }) {
           </div>
         )}
 
-        <Button className="ml-auto" size="sm" disabled={busy || drawing}
+        {/* the way out of a file without opening another one — same warning about loose stamps */}
+        <Button
+          className="ml-auto" variant="outline" size="sm"
+          onClick={() => (notes.length ? setPending('close') : reset())}
+        >
+          <X className="size-3.5" /> Close
+        </Button>
+
+        <Button size="sm" disabled={busy || drawing}
           onClick={() => setSaveAs(suggested())}
         >
           {/* baking redraws every stamp into the file, which on a long document is a wait */}
@@ -596,6 +648,14 @@ export default function Editor({ visible }: { visible: boolean }) {
             )}
           />
 
+          {/* the selectable copy of the page's text. With the Text tool armed a click is meant for
+              the canvas underneath, so it steps out of the way rather than swallowing it */}
+          <div
+            ref={textRef}
+            onPointerDown={() => setActive(null)}
+            className={cn('textLayer', tool === 'text' && 'pointer-events-none')}
+          />
+
           {/* a page turn keeps the old page up rather than blanking, so this only says wait */}
           {view && drawing && (
             <div className="bg-background/50 absolute inset-0 flex items-center justify-center">
@@ -632,8 +692,12 @@ export default function Editor({ visible }: { visible: boolean }) {
                     'font-[Helvetica,Arial,sans-serif]',
                     // matches what bake draws, so the page shows what the file will hold
                     note.fill ? 'bg-[#fce633]' : 'bg-transparent',
-                    // without either, only the caret says where the text is, so mark it faintly
-                    !note.fill && !note.border && note.id === active && 'ring-foreground/30 ring-1',
+                    /* Which stamp the style controls are about to act on. Drawn on every picked
+                       stamp, highlighted or outlined ones included — it used to show only on plain
+                       ones, so on the rest nothing but the caret said which one you had. Blue and
+                       fixed rather than a theme token: the sheet under it is white either way, and
+                       this ring is the app talking, never something the file ends up holding. */
+                    note.id === active && 'ring-2 ring-blue-500',
                   )}
                 />
                 <span
@@ -695,15 +759,23 @@ export default function Editor({ visible }: { visible: boolean }) {
       <AlertDialog open={!!pending} onOpenChange={(v) => !v && setPending(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Open a different PDF?</AlertDialogTitle>
+            {/* one dialog: both ways out of the open file lose the same unbaked stamps */}
+            <AlertDialogTitle>
+              {pending === 'close' ? 'Close this PDF?' : 'Open a different PDF?'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               The text you added here will be discarded.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { if (pending) void load(pending, 'open') }}>
-              Open it
+            <AlertDialogAction
+              onClick={() => {
+                if (pending === 'close') reset()
+                else if (pending) void load(pending, 'open')
+              }}
+            >
+              {pending === 'close' ? 'Close it' : 'Open it'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
