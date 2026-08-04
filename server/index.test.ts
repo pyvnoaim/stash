@@ -413,7 +413,7 @@ const cy = jar(await post('/api/signup', { user: 'cy', pass: 'longenough', invit
 
 // nothing is shared until it is
 assert.equal((await pdoc('p1', ada)).status, 404)
-assert.deepEqual(await (await get('/api/shares', ada)).json(), { mine: [], with_me: [] })
+assert.deepEqual(await (await get('/api/shares', ada)).json(), { mine: [], with_me: [], links: [] })
 assert.deepEqual((await (await get('/api/roster', ada)).json()).roster, [])
 
 // ada shares p1 with bo read-only, and with cy to edit
@@ -484,6 +484,62 @@ assert.equal((await pdoc('same', bo, 'dee')).status, 404)
 assert.equal((await pdoc('same', cy, 'ada')).status, 404)
 // a member may not pass on what is not theirs
 assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, bo)).status, 403)
+
+/* ---------- public links ---------- */
+
+const linkOf = (t: string, cookie = '') =>
+  fetch(`${url}/api/link?t=${t}`, cookie ? { headers: { cookie } } : undefined)
+
+// a token nobody cut reaches nothing
+assert.equal((await linkOf('deadbeef')).status, 404)
+
+// ada links p2, and publishes it — the link is a reader, so there has to be something to read
+r = await post('/api/link', { pid: 'p2' }, ada)
+assert.equal(r.status, 200)
+const tok = (await r.json()).token
+assert.equal(tok.length, 32, '128 bits of hex')
+assert.equal((await putPdoc('p2', 0, { projects: [{ id: 'p2', name: 'Public' }], items: [] }, ada)).status, 200)
+
+// anyone at all, with no cookie: the project, and nothing else of ada's
+let lv = await (await linkOf(tok)).json()
+assert.deepEqual(lv.state.projects, [{ id: 'p2', name: 'Public' }])
+assert.equal(lv.owner, 'ada')
+assert.equal(lv.member, false)
+assert.equal(lv.signedIn, false)
+assert.equal(lv.joinable, false)
+
+// view only until it is not, and joining is the half that needs an account
+assert.equal((await post('/api/link/join', { t: tok })).status, 401)
+assert.equal((await post('/api/link/join', { t: tok }, bo)).status, 403)
+// the owner's own link opens as what it is: their project, theirs to edit
+assert.equal((await (await linkOf(tok, ada)).json()).member, true)
+
+// the same URL, now allowing it — the token does not change, so what was sent still works
+assert.equal((await (await post('/api/link', { pid: 'p2', joinable: true }, ada)).json()).token, tok)
+assert.equal((await post('/api/link/join', { t: tok }, bo)).status, 200)
+// bo is on it now, with edit, and the link opens as a fast way in rather than as a copy
+lv = await (await linkOf(tok, bo)).json()
+assert.equal(lv.member, true)
+assert.equal(lv.edit, true)
+const p2v = (await (await pdoc('p2', bo, 'ada')).json()).version
+assert.equal((await putPdoc('p2', p2v, { projects: [], items: ['bo'] }, bo, 'ada')).status, 200)
+
+// listed, and revoked — after which the link is dead for everyone
+assert.deepEqual((await (await get('/api/links', ada)).json()).links.map((l: any) => [l.pid, l.joinable]),
+  [['p2', 1]])
+assert.equal((await del2('/api/link', { pid: 'p2' }, ada)).status, 200)
+assert.equal((await linkOf(tok)).status, 404)
+// bo was a member in their own right, so revoking the link leaves them exactly where they were
+assert.equal((await pdoc('p2', bo, 'ada')).status, 200)
+
+// a project reachable only by link keeps its document; the link going is what retires it
+assert.equal((await post('/api/link', { pid: 'p3' }, ada)).status, 200)
+assert.equal((await putPdoc('p3', 0, { projects: [], items: ['solo'] }, ada)).status, 200)
+assert.equal((await del2('/api/link', { pid: 'p3' }, ada)).status, 200)
+assert.equal((await pdoc('p3', ada)).status, 404, 'the last way in went and the copy stayed')
+
+// and a project you are only a member of is not yours to link
+assert.equal((await post('/api/link', { pid: 'p2' }, bo)).status, 403)
 
 /* deleting your own account: the password again, and never the last admin — a server nobody can
    cut an invite on can never let anyone in again. Everything of theirs goes on the cascade. */
