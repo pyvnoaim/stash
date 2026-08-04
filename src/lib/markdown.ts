@@ -9,6 +9,13 @@ const SAFE = /^(https?:|mailto:|#|\/(?!\/))/i
 export const safeHref = (href: string) => (SAFE.test(href.trim()) ? href.trim() : '#')
 
 /**
+ * True when a run of text leaves a ` code span open, so the line that closes it is still to come.
+ * An email body pasted between backticks is the ordinary case: it spans lines, holds blank ones,
+ * and starts lines with dashes and > that are its own text rather than markdown.
+ */
+export const spanOpen = (text: string) => (text.split('`').length - 1) % 2 === 1
+
+/**
  * Tick or untick the `- [ ]` on one line of a note, leaving every other character where it was —
  * the checkbox in the rendered note edits the note itself, so there is no checklist to keep in
  * step with the text. A line that is not a box comes back unchanged.

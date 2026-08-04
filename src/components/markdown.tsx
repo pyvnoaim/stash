@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { safeHref } from '@/lib/markdown'
+import { safeHref, spanOpen } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 
 /**
@@ -9,8 +9,11 @@ import { cn } from '@/lib/utils'
  * Underline has no markdown standard, so `++x++` stands in for it.
  */
 
+/* A whole paragraph at a time, not a line: only a code span may run past the end of its line, so
+   a pasted email body between backticks is one span. The rest bar newlines from their insides, or
+   a stray * halfway down a note would italicise everything back up to the last one. */
 const INLINE =
-  /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|~~[^~]+~~|\+\+[^+]+\+\+|`[^`]+`|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s)]+)/g
+  /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|~~[^~\n]+~~|\+\+[^+\n]+\+\+|`[^`]+`|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s)]+)/g
 const link = (href: string, text: string, key: number) => (
   <a
     key={key}
@@ -31,17 +34,26 @@ function inline(text: string) {
     if (part.startsWith('++')) return <u key={i}>{part.slice(2, -2)}</u>
     if (part.startsWith('*')) return <em key={i}>{part.slice(1, -1)}</em>
     if (part.startsWith('`')) {
-      return <code key={i} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em]">{part.slice(1, -1)}</code>
+      return (
+        // pre-wrap so a span that crosses lines keeps its own breaks and blank lines
+        <code key={i} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em] whitespace-pre-wrap">
+          {part.slice(1, -1)}
+        </code>
+      )
     }
     const md = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
     if (md) return link(md[2], md[1], i)
     if (part.startsWith('http')) return link(part, part, i)
-    return <Fragment key={i}>{part}</Fragment>
+    // every newline left outside a span is the soft break it always was
+    return (
+      <Fragment key={i}>
+        {part.split('\n').map((l, j) => <Fragment key={j}>{j > 0 && <br />}{l}</Fragment>)}
+      </Fragment>
+    )
   })
 }
 
-const softLines = (lines: string[]) =>
-  lines.map((l, i) => <Fragment key={i}>{i > 0 && <br />}{inline(l)}</Fragment>)
+const softLines = (lines: string[]) => inline(lines.join('\n'))
 
 /**
  * `- [ ]` and `- [x]` render as real checkboxes when the note is editable: ticking one rewrites
@@ -114,6 +126,16 @@ export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: n
       continue
     }
     if (code) { code.push(raw); continue }
+
+    /* Inside a ` span still waiting for its partner, every line is the span's own text — a pasted
+       email body may hold blank lines and lines starting with - or >, and none of those are
+       markdown here. Only once a later line actually closes it: a lone stray backtick must not
+       swallow the rest of the note. ponytail: rescans the tail per line, which on a note is
+       nothing; hoist the closing index if one ever runs long enough to feel it. */
+    if (para.length && spanOpen(para.join('\n')) && lines.slice(n).some((l) => l.includes('`'))) {
+      para.push(line.trim())
+      continue
+    }
 
     const h = line.match(/^(#{1,3})\s+(.*)$/)
     const ul = line.match(/^[-*]\s+(.*)$/)
