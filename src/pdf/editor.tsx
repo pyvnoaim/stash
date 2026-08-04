@@ -230,13 +230,19 @@ export default function Editor({ visible }: { visible: boolean }) {
 
   const download = async () => {
     if (!bytes) return
+    // ponytail: native prompt, like the confirm() next to it. A dialog when someone wants the
+    // name remembered between saves.
+    const asked = prompt('Save as', name.replace(/(\.pdf)?$/i, '') + '-edited.pdf')
+    if (asked === null) return   // cancelled, so nothing is baked and nothing is written
+    // an empty box means they cleared it rather than chose nothing, so fall back to the file's
+    // own name — and to something at all if that leaves nothing, or `.pdf` saves a dotfile
+    const stem = (asked.trim() || name).replace(/(\.pdf)?$/i, '').trim()
+    const out = (stem || 'document') + '.pdf'
     setBusy(true)
     try {
-      const out = await bake(bytes, notes)
-      const url = URL.createObjectURL(new Blob([out as BlobPart], { type: 'application/pdf' }))
-      Object.assign(document.createElement('a'), {
-        href: url, download: name.replace(/(\.pdf)?$/i, '') + '-edited.pdf',
-      }).click()
+      const baked = await bake(bytes, notes)
+      const url = URL.createObjectURL(new Blob([baked as BlobPart], { type: 'application/pdf' }))
+      Object.assign(document.createElement('a'), { href: url, download: out }).click()
       setTimeout(() => URL.revokeObjectURL(url), 5000)
     } catch {
       // not the sheet's error state: the document on screen is fine, only the writing failed
