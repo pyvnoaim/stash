@@ -12,6 +12,15 @@ assert.equal(toggleBox(note, 0), note)
 assert.equal(toggleBox(note, 99), note)
 // indented and numbered boxes count too, and the indent survives
 assert.equal(toggleBox('  1. [ ] a', 0), '  1. [x] a')
+import { spanOpen } from './markdown.ts'
+
+// an odd backtick leaves the span open, so the lines after it belong to it
+assert.equal(spanOpen('Body: `Sehr geehrte Damen und Herren,'), true)
+assert.equal(spanOpen('Body: `Sehr geehrte Damen und Herren,\n\nVielen Dank.`'), false)
+// a closed span on one line, and a line with none at all, are not open
+assert.equal(spanOpen('run `npm test` first'), false)
+assert.equal(spanOpen('no ticks here'), false)
+
 import { safeHref } from './markdown.ts'
 
 // safe schemes pass through, trimmed
