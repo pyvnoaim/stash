@@ -218,6 +218,11 @@
 .textLayer {
   position: absolute;
   inset: 0;
+  /* pdf.js stacks its spans at z-index 1. Without a stacking context here those escape the layer
+     and paint over the stamps, so a stamp sitting on top of the page's own text could not be
+     clicked at all — in Select the click landed on a word and dropped the selection, and with the
+     Text tool it fell through to the canvas and stacked a second stamp on the first. */
+  z-index: 0;
   overflow: clip;
   text-align: initial;
   line-height: 1;

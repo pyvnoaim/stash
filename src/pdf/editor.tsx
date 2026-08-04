@@ -158,8 +158,20 @@ export default function Editor({ visible }: { visible: boolean }) {
         setCount(doc.numPages)
 
         const at = Math.min(page, doc.numPages - 1)
+        /* Undoing an added page leaves `page` past the end of the file. The sheet below is then the
+           last page while a stamp dropped on it is keyed to a page the document no longer has — and
+           bake skips a stamp whose page is missing, so the text sat on screen and came out of the
+           download gone. Clamping the state rather than only the render is what keeps the two the
+           same page. */
+        if (at !== page) setPage(at)
         const proxy = await doc.getPage(at + 1)
-        const viewport = proxy.getViewport({ scale: RENDER_SCALE * zoom })
+        const unit = proxy.getViewport({ scale: 1 })
+        /* Safari refuses a canvas over about 16.7M pixels and hands back a blank one rather than a
+           smaller one — and A4 at the top zoom asks for 18M. Cap the pixels, not the zoom: the
+           sheet is still displayed at the size that was asked for, a little softer at the very top
+           end, which beats a page that is not there. */
+        const scale = Math.min(RENDER_SCALE * zoom, Math.sqrt(16e6 / (unit.width * unit.height)))
+        const viewport = proxy.getViewport({ scale })
         const canvas = canvasRef.current
         if (!live || !canvas) return
 
@@ -177,7 +189,6 @@ export default function Editor({ visible }: { visible: boolean }) {
            below the zoom we asked for on a narrow window, and the text has to shrink with it. */
         const layer = textRef.current
         if (live && layer) {
-          const unit = proxy.getViewport({ scale: 1 })
           text = new pdfjs.TextLayer({
             textContentSource: proxy.streamTextContent(),
             container: layer,
@@ -636,9 +647,11 @@ export default function Editor({ visible }: { visible: boolean }) {
           <canvas
             ref={canvasRef}
             onPointerDown={place}
-            // the canvas holds RENDER_SCALE times as many pixels as it shows. Every coordinate
-            // in here is a ratio of the displayed box, so the two never have to agree.
-            style={{ width: view ? view.width / RENDER_SCALE : undefined }}
+            /* the canvas holds several times as many pixels as it shows — RENDER_SCALE of them,
+               unless the pixel cap above took some back. Displayed at the page's own width times
+               the zoom either way; every coordinate in here is a ratio of the displayed box, so
+               the two never have to agree. */
+            style={{ width: view ? (view.width * zoom) / view.scale : undefined }}
             className={cn(
               'block h-auto max-w-full bg-white shadow-lg',
               // nothing drawn on it yet — stays mounted so the render effect keeps its ref,
