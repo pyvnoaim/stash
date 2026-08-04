@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toggle } from '@/components/ui/toggle'
@@ -54,6 +55,11 @@ export default function Editor({ visible }: { visible: boolean }) {
   const [zoom, setZoom] = useState(1)
   const [drawing, setDrawing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /* The password the file was encrypted with, held for as long as the tab is open and never
+     written anywhere — the same terms as the file itself. `askPass` is what turns the failure
+     panel into a way in rather than a dead end. */
+  const [password, setPassword] = useState('')
+  const [askPass, setAskPass] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -123,7 +129,7 @@ export default function Editor({ visible }: { visible: boolean }) {
     ;(async () => {
       try {
         // pdf.js takes ownership of the buffer it is handed, so it never gets ours
-        loading = pdfjs.getDocument({ data: bytes.slice() })
+        loading = pdfjs.getDocument({ data: bytes.slice(), password })
         const doc = await loading.promise
         // cleanup already ran while we were loading — tear this orphan down rather than leak it
         if (!live) { loading.destroy(); return }
@@ -140,10 +146,26 @@ export default function Editor({ visible }: { visible: boolean }) {
         task = proxy.render({ canvas, viewport })
         await task.promise.catch(() => {})   // cancelled by the next page turn, which is fine
         if (live) setView(viewport)
-      } catch {
-        // anything that is not really a PDF fails here, and used to fail as an unhandled
-        // rejection behind a blank sheet that never filled in
-        if (live) { setError('This file could not be opened as a PDF.'); setView(null) }
+      } catch (e) {
+        /* Anything that is not really a PDF fails here, and used to fail as an unhandled rejection
+           behind a blank sheet that never filled in. It then said only that it had failed, which
+           for the commonest case — a statement or an invoice out of a downloads folder, encrypted
+           by whoever issued it — was both true and no help at all. pdf.js knows which of these it
+           is, so say it, and for the one that has an answer, ask for it. */
+        if (!live) return
+        const why = e as { name?: string, code?: number, message?: string }
+        setView(null)
+        if (why?.name === 'PasswordException') {
+          setAskPass(true)
+          setError(why.code === 2 || password
+            ? 'That password was not right.'
+            : 'This PDF is password-protected.')
+        } else {
+          setAskPass(false)
+          setError(why?.name === 'InvalidPDFException'
+            ? 'This file is damaged, or it is not a PDF at all.'
+            : `This file could not be opened as a PDF.${why?.message ? ` (${why.message})` : ''}`)
+        }
       } finally {
         if (live) setDrawing(false)
       }
@@ -151,7 +173,7 @@ export default function Editor({ visible }: { visible: boolean }) {
 
     // destroy the document (and its worker) on every change, or each page turn/zoom leaks one
     return () => { live = false; task?.cancel(); loading?.destroy() }
-  }, [bytes, page, zoom])
+  }, [bytes, page, zoom, password])
 
   const load = async (file: File, into: 'open' | 'merge') => {
     setBusy(true)
@@ -165,6 +187,8 @@ export default function Editor({ visible }: { visible: boolean }) {
         setView(null)     // or the last file stays on screen until this one has drawn
         setPast([])       // a new file is not something you undo your way out of
         setFuture([])
+        setPassword('')   // and it is not this file's password either
+        setAskPass(false)
       } else if (bytes) {
         // merge first, then record the step — a failed merge must not leave a phantom undo behind
         const merged = await appendPdf(bytes, next)
@@ -519,6 +543,19 @@ export default function Editor({ visible }: { visible: boolean }) {
             <div className="flex h-[60vh] max-w-md flex-col items-center justify-center gap-3 px-8 text-center">
               <FileWarning className="text-muted-foreground size-6" />
               <p className="text-sm">{error}</p>
+              {askPass && (
+                <form
+                  className="flex w-full max-w-xs gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    // the effect watches `password`, so setting it here is the retry
+                    setPassword(String(new FormData(e.currentTarget).get('pw') ?? ''))
+                  }}
+                >
+                  <Input name="pw" type="password" autoFocus placeholder="Password" />
+                  <Button type="submit" size="sm">Open</Button>
+                </form>
+              )}
               <Button variant="outline" size="sm" onClick={() => openRef.current?.click()}>
                 Open a different one
               </Button>
