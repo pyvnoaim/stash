@@ -13,8 +13,8 @@ import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
-  ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
-  PLAN_WORDS, signals, tradePlan, trendFilter, TREND_NETWORK,
+  ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  localClock, orb, PLAN_WORDS, SESSIONS, signals, tradePlan, trendFilter, TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
 
@@ -36,38 +36,6 @@ const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops be
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 const BAR_MS: Record<Interval, number> = { '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
-
-// The big three equity opens, each in its own tz so daylight saving is handled for free. These
-// markets don't trade the assets here (all 24/7 crypto/gold) — they mark when global volume and
-// volatility ramp, which does move gold and crypto. `min` is local minutes-of-day.
-const SESSIONS = [
-  { label: 'Asia', tz: 'Asia/Tokyo', min: 9 * 60, color: '#f43f5e' },       // Tokyo 09:00 (no DST)
-  { label: 'Europe', tz: 'Europe/Berlin', min: 9 * 60, color: '#6366f1' },  // Frankfurt/XETRA 09:00
-  { label: 'US', tz: 'America/New_York', min: 9 * 60 + 30, color: '#14b8a6' }, // NYSE 09:30
-]
-
-// One formatter per timezone, built once. The session scan calls this ~210 times and reruns on every
-// live tick; constructing a fresh Intl.DateTimeFormat each call measured 8.8ms a tick against 1.1ms
-// reused — eight times the main-thread work, five seconds apart, for the same three formatters.
-const FORMATTERS = new Map<string, Intl.DateTimeFormat>()
-const formatterFor = (tz: string) => {
-  let f = FORMATTERS.get(tz)
-  if (!f) {
-    f = new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-    })
-    FORMATTERS.set(tz, f)
-  }
-  return f
-}
-
-// DST-correct local clock for a timestamp in a tz: the calendar day (to spot a new session) and
-// minutes-of-day (to spot the open within it)
-const localClock = (ms: number, tz: string) => {
-  const p = formatterFor(tz).formatToParts(new Date(ms))
-  const g = (t: string) => p.find((x) => x.type === t)?.value ?? '0'
-  return { day: g('year') + g('month') + g('day'), min: (+g('hour') % 24) * 60 + +g('minute') }
-}
 
 
 /* The service worker keeps the last candles it fetched, so the chart still draws with no network.

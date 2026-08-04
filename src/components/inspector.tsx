@@ -126,7 +126,13 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
 
       <div className="grid gap-2">
         <Label htmlFor="i-due">Due</Label>
-        <DueField id="i-due" due={it.due} onPick={(due) => patch(it.id, { due })} />
+        <DueField
+          id="i-due"
+          due={it.due}
+          at={it.at}
+          onPick={(due) => patch(it.id, { due })}
+          onTime={(at) => patch(it.id, { at })}
+        />
       </div>
 
       {/* only tasks are ever finished, and finishing is what opens the next one */}

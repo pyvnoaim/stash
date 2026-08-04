@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, X } from 'lucide-react'
+import { Bell, Clock, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { closeWatch, dismissAlerts, DISMISS_TTL, openWatch, setMarketAsset, useStash } from '@/lib/store'
+import { closeWatch, dismissAlerts, openWatch, setMarketAsset, snoozeAlerts, snoozeUntil, useStash } from '@/lib/store'
 import { ASSETS, fetchNew, fetchPrices, fetchStockHours, fetchTrending, type Trend } from '@/lib/market'
 import {
   alerts, moverAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
@@ -142,11 +142,12 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     return () => { on = false; clearInterval(h) }
   }, [])
 
-  /* Swiped away, and it stays swiped away on the phone too: the dismissals live in the document the
-     sync carries. They run out after a day, so a dismissal reads as "not now" rather than "never" —
-     an overdue task is still overdue tomorrow, and worth saying again then. Filtered here as well as
-     pruned on load, since a tab left open all day outlives the ones it started with. */
-  const gone = (id: string) => Date.now() - (s.dismissed[id] ?? 0) < DISMISS_TTL
+  /* Silenced, and it stays silenced on the phone too: the decision lives in the document the sync
+     carries, as the moment the alert may speak again — a day off for a swipe, a few hours for a
+     snooze. Nothing is silenced for good: an overdue task is still overdue tomorrow, and worth
+     saying again then. Filtered here as well as pruned on load, since a tab left open all day
+     outlives the hours it started with. */
+  const gone = (id: string) => (s.dismissed[id] ?? 0) > Date.now()
 
   /* Every market reading worded at once, against the thresholds this document carries. A pool on
      both the trending and the new list produces the same id twice, so the map is what stops it
@@ -158,6 +159,10 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
 
   const shown = [...stateAlerts, ...setups, ...done, ...market].filter((a) => !gone(a.id))
   const drop = dismissAlerts
+  /* When "later" is, in words — read when the popover renders, which is the only time it is
+     looked at. A tab left open past five gets the answer from before then, and the button still
+     does what it says at the moment it is pressed: snoozeAlerts asks the clock again. */
+  const later = new Date(snoozeUntil()).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -188,6 +193,13 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
                   onClick={() => { if (a.asset) setMarketAsset(a.asset); onNavigate(a.target); setOpen(false) }}>
                   <span className="block truncate text-sm">{a.title}</span>
                   <span className="text-muted-foreground block text-xs">{a.detail}</span>
+                </button>
+                {/* two ways to make one stop: until it is worth saying again this evening, or
+                    until tomorrow. Both appear on hover, so a row at rest is still just a row. */}
+                <button type="button" aria-label={`Snooze until ${later}`} title={`Snooze until ${later}`}
+                  onClick={() => snoozeAlerts([a.id])}
+                  className="text-muted-foreground hover:text-foreground shrink-0 rounded-sm p-0.5 opacity-0 transition-opacity group-hover/noti:opacity-100">
+                  <Clock className="size-3.5" />
                 </button>
                 <button type="button" aria-label="Dismiss" onClick={() => drop([a.id])}
                   className="text-muted-foreground hover:text-foreground -mr-1 shrink-0 rounded-sm p-0.5 opacity-0 transition-opacity group-hover/noti:opacity-100">

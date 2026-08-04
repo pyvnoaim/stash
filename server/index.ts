@@ -26,6 +26,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { allowed, icsText, parseIcs } from './cal.ts'
 import { chargeAt, createPush } from './push.ts'
 
 /** The whole document, not an upload endpoint. */
@@ -108,6 +109,14 @@ const nextDay = (d: string) => {
   return dense(x.toISOString().slice(0, 10))
 }
 
+/** An hour after 'HH:MM', as the dense 'HHMM' a DTEND wants. 23:30 stops at midnight rather than
+ *  spilling into a day the DTSTART doesn't name — an event that ends before it starts is one no
+ *  calendar draws. ponytail: a late-night item is half an hour long, which nobody will notice. */
+const plusHour = (at: string) => {
+  const [h, m] = at.split(':').map(Number)
+  return h >= 23 ? '2359' : String(h + 1).padStart(2, '0') + String(m).padStart(2, '0')
+}
+
 /** How far ahead a subscription's charges are written out. A year of a monthly abo is a dozen rows. */
 const ICS_MONTHS = 12
 
@@ -128,13 +137,29 @@ function icsOf(json: string, who: string): string {
     'METHOD:PUBLISH', `X-WR-CALNAME:${esc(`Stash — ${who}`)}`, 'X-PUBLISHED-TTL:PT1H',
   ]
 
-  const event = (uid: string, day: string, summary: string, description: string, alarm: boolean) => {
-    out.push('BEGIN:VEVENT', `UID:${esc(uid)}`, `DTSTAMP:${now}`,
-      `DTSTART;VALUE=DATE:${dense(day)}`, `DTEND;VALUE=DATE:${nextDay(day)}`,
-      `SUMMARY:${esc(summary)}`)
+  /**
+   * `at` is 'HH:MM' local for an item that named an hour, and null for one that only named a day.
+   * A timed event is written in floating local time — no TZID, no VTIMEZONE block — because the
+   * hour was typed on a phone in the pocket of the person the calendar belongs to: 18:00 means
+   * six wherever they are, which is exactly what a floating time says and what a fixed zone would
+   * quietly get wrong the week they land somewhere else.
+   */
+  const event = (uid: string, day: string, at: string | null, summary: string, description: string, alarm: boolean) => {
+    out.push('BEGIN:VEVENT', `UID:${esc(uid)}`, `DTSTAMP:${now}`)
+    if (at) {
+      out.push(`DTSTART:${dense(day)}T${at.replace(':', '')}00`, `DTEND:${dense(day)}T${plusHour(at)}00`)
+    } else {
+      out.push(`DTSTART;VALUE=DATE:${dense(day)}`, `DTEND;VALUE=DATE:${nextDay(day)}`)
+    }
+    out.push(`SUMMARY:${esc(summary)}`)
     if (description) out.push(`DESCRIPTION:${esc(description)}`)
-    // a subscribed calendar only ever says anything if the event asks it to
-    if (alarm) out.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:PT9H', `DESCRIPTION:${esc(summary)}`, 'END:VALARM')
+    // a subscribed calendar only ever says anything if the event asks it to. An all-day event
+    // starts at midnight, so nine hours in is nine in the morning; a timed one wants ten minutes'
+    // warning, which is the difference between an alarm and a note that it already started.
+    if (alarm) {
+      out.push('BEGIN:VALARM', 'ACTION:DISPLAY', `TRIGGER:${at ? '-PT10M' : 'PT9H'}`,
+        `DESCRIPTION:${esc(summary)}`, 'END:VALARM')
+    }
     out.push('END:VEVENT')
   }
 
@@ -147,7 +172,10 @@ function icsOf(json: string, who: string): string {
   for (const i of Array.isArray(s.items) ? s.items : []) {
     if (!i || i.done || typeof i.due !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(i.due)) continue
     const where = projects.get(String(i.pid)) ?? ''
-    event(`${String(i.id)}@stash`, i.due, String(i.text || 'Untitled'),
+    // the hour, where the item named one — and only ever alongside its day, which the line above
+    // has already established
+    const at = typeof i.at === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(i.at) ? i.at : null
+    event(`${String(i.id)}@stash`, i.due, at, String(i.text || 'Untitled'),
       [where && `@${where}`, String(i.note ?? '').slice(0, 500)].filter(Boolean).join('\n'),
       i.type !== 'note')
   }
@@ -164,7 +192,7 @@ function icsOf(json: string, who: string): string {
       const day = chargeAt(x.due, String(x.cycle), n)
       if (day > until) break
       if (day < from) continue
-      event(`${String(x.id)}-${day}@stash`, day,
+      event(`${String(x.id)}-${day}@stash`, day, null,
         `${income ? '+' : ''}€${cost.toFixed(2)} ${String(x.name ?? 'Subscription')}`, '', !income)
     }
   }
@@ -313,6 +341,8 @@ export function start({
   try { db.exec('alter table sessions add column device text') } catch { /* already there */ }
   // the calendar feed's secret, null until someone asks for one
   try { db.exec('alter table users add column feed text') } catch { /* already there */ }
+  // and the calendar coming the other way: the one .ics URL this account subscribes to
+  try { db.exec('alter table users add column cal text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -337,6 +367,8 @@ export function start({
     /* The calendar feed: one secret per user, and the only thing that stands between a URL and
        what is due. Nothing is written through it and it names no one — a leaked one is rotated
        by asking for another, which is what makes the old string stop working. */
+    calOf: db.prepare('select cal from users where id = ?'),
+    setCal: db.prepare('update users set cal = ? where id = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -753,6 +785,62 @@ export function start({
         q.setFeed.run(null, user.id)
         log('feed-off', user.name, via(req))
         return send(res, 200, { feed: null })
+      }
+      return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* ---------- the calendar coming the other way ---------- */
+
+    /* One subscribed .ics URL, and what it holds for a window of days. Fetched here rather than in
+       the browser because no calendar provider answers a cross-origin request for a feed — and
+       because a server that fetches a URL somebody typed is a thing to be careful with, which is
+       what cal.ts's guard is for. Read-only in every direction: nothing here writes to anyone's
+       calendar, and none of it lands in the stash. */
+    if (path === '/api/cal') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const url = (q.calOf.get(user.id) as { cal: string | null }).cal
+
+      if (req.method === 'GET') {
+        const p = new URL(req.url ?? '/', 'http://x').searchParams
+        const day = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
+        const from = day(p.get('from'))
+        const to = day(p.get('to'))
+        // the reader's own zone, for the events written as real instants. A name this runtime does
+        // not know is not a zone, and UTC is the honest fallback rather than a guess at theirs.
+        let tz = p.get('tz') ?? 'UTC'
+        try { new Intl.DateTimeFormat('en-GB', { timeZone: tz }) } catch { tz = 'UTC' }
+        /* A window is a month or so of a calendar; a decade of one is a way to ask this server to
+           expand a daily rule four thousand times. Refused before anything else looks at it, so
+           the answer to a given window does not depend on whether anyone happens to be subscribed. */
+        if (from && to && Date.parse(to) - Date.parse(from) > 120 * 864e5) {
+          return send(res, 400, { error: 'window too wide' })
+        }
+        // and a window that is not a window yet — the page asks once before it knows — is an empty
+        // answer rather than an error
+        if (!url || !from || !to || to < from) return send(res, 200, { url, events: [] })
+        const text = await icsText(url)
+        return send(res, 200, { url, events: text ? parseIcs(text, from, to, tz) : [] })
+      }
+
+      if (req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const raw = String(b?.url ?? '').trim()
+        if (raw.length > 2048) return send(res, 400, { error: 'that is not a calendar link' })
+        // checked before it is stored, so a link this server would refuse to fetch is refused where
+        // the person can still see why — and checked again on every fetch, since a name's answer
+        // can change under it
+        const ok = await allowed(raw)
+        if (!ok) return send(res, 400, { error: 'that is not a calendar link' })
+        q.setCal.run(ok.href, user.id)
+        log('cal', user.name, via(req))
+        return send(res, 200, { url: ok.href })
+      }
+
+      if (req.method === 'DELETE') {
+        q.setCal.run(null, user.id)
+        return send(res, 200, { url: null })
       }
       return send(res, 405, { error: 'method not allowed' })
     }

@@ -34,7 +34,7 @@ startSync()  // wires onPersist, asks /api/me (nobody yet — 'out')
 await new Promise((r) => setTimeout(r, 50))   // let that first answer land before asserting on it
 const flush = () => new Promise((r) => setTimeout(r, 250))  // store's 200ms save debounce
 const add = (text: string) => addItem({
-  id: uid(), type: 'task', text, note: '', pid: null, due: null, repeat: null,
+  id: uid(), type: 'task', text, note: '', pid: null, due: null, at: null, repeat: null,
   flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
 })
 
@@ -149,7 +149,7 @@ assert.equal(await count(), before + 1)
   const { addProject } = await import('./store.ts')
   const { id: pid } = addProject('Shared')
   addItem({
-    id: uid(), type: 'task', text: 'something to share', note: '', pid, due: null, repeat: null,
+    id: uid(), type: 'task', text: 'something to share', note: '', pid, due: null, at: null, repeat: null,
     flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
   })
   await flush()

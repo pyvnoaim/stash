@@ -1,8 +1,8 @@
-import { Fragment, useRef, useState } from 'react'
+import { Fragment, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
-  ChevronRight, Eye, Layers, PencilLine, Plus, Trash2, UserMinus, Users,
+  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Trash2, UserMinus, Users,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -24,7 +24,8 @@ import { Hint } from '@/components/ui/tooltip'
 import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
-import { syncNow, unshare } from '@/lib/sync'
+import { dropLink, getSync, links, linkUrl, makeLink, subscribeSync, syncFresh, syncNow, unshare } from '@/lib/sync'
+import { toast } from 'sonner'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
@@ -61,6 +62,9 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
 }) {
   const s = useStash()
   const { setOpenMobile } = useSidebar()
+  // sharing is the server's half of the app: signed out there is nothing to share with, and the
+  // menu says so by not offering it
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
   const [dialog, setDialog] =
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -153,6 +157,34 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
     ),
   })
 
+  /**
+   * The link for a project, on the clipboard, from one press. An existing link is read rather than
+   * re-cut: `makeLink` sets `joinable` to whatever it is asked for, so cutting again to "just copy
+   * it" would quietly turn a join link into a read-only one.
+   *
+   * A link that did not exist a second ago is a new thing anyone holding it can read, so the toast
+   * says so and offers to take it back rather than leaving that to be discovered in Settings.
+   */
+  const shareLink = async (pid: string) => {
+    const here = (await links()).find((l) => l.pid === pid)
+    const token = here?.token ?? await makeLink(pid, false)
+    if (!token) return void toast('Could not make the link')
+    if (!here) void syncFresh()   // publish the project, or the link opens on nothing
+    try {
+      await navigator.clipboard.writeText(linkUrl(token))
+    } catch {
+      /* Safari hands the clipboard to a gesture, and the two calls above have spent it. Rather
+         than a dead end, open the dialog where the link sits in a field to be copied by hand. */
+      const p = project(s, pid)
+      if (p) setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })
+      return void toast('Copy it from the link field')
+    }
+    if (here) return void toast('Link copied')
+    toast('Link copied — anyone holding it can read this project', {
+      action: { label: 'Undo', onClick: () => { void dropLink(pid).then(() => toast('Link revoked')) } },
+    })
+  }
+
   const doomed = project(s, confirmDelete)
 
   const tags = tagCounts(s)
@@ -232,8 +264,17 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           <PencilLine />
           Edit
         </ContextMenuItem>
-        {/* no Open: the row itself is the way in. No Share… either — it is inside Edit now, which
-            is where the project's own settings are. Leaving someone else's stays: that is not a
+        {/* One press, one link on the clipboard — the whole of fast sharing. Who is on the project,
+            read or edit, whether the link lets anyone join, and taking it back all stay in Edit:
+            those are decisions, and a decision does not belong on a menu item that fires instantly.
+            Only your own projects: someone else's is theirs to hand out. */}
+        {user && !p.share && (
+          <ContextMenuItem onSelect={() => void shareLink(p.id)}>
+            <Link2 />
+            Copy share link
+          </ContextMenuItem>
+        )}
+        {/* no Open: the row itself is the way in. Leaving someone else's stays: that is not a
             setting of theirs to find, and nothing else on the row does it. */}
         {p.share && (
           <ContextMenuItem onSelect={async () => { await unshare(p.id, undefined, p.share?.by); void syncNow() }}>

@@ -28,7 +28,7 @@ const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', foc
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
 const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({
-  type: 'task', note: '', pid: null, repeat: null, flag: false, tags: [], doneAt: null, ts: 0, editedAt: null, ...o,
+  type: 'task', note: '', pid: null, at: null, repeat: null, flag: false, tags: [], doneAt: null, ts: 0, editedAt: null, ...o,
 })
 
 // an overdue task, a done-but-overdue task (ignored), and a far-future task (ignored)

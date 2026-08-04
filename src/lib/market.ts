@@ -356,6 +356,55 @@ export const MOVER_FLOOR = 0.75  // percent, under which nothing counts however 
  * of the same document when it decides whether to wake a shut phone. A threshold kept in two
  * places is two thresholds a month later.
  */
+/**
+ * The big three equity opens, each in its own tz so daylight saving is handled for free. These
+ * markets don't trade the assets here (all 24/7 crypto/gold) — they mark when global volume and
+ * volatility ramp, which does move gold and crypto. `min` is local minutes-of-day.
+ *
+ * Here rather than in the chart that draws them, because server/push.ts knocks on the same three
+ * and an open in two places is two opens the week a country moves its clocks.
+ */
+export const SESSIONS = [
+  { label: 'Asia', where: 'Tokyo', tz: 'Asia/Tokyo', min: 9 * 60, color: '#f43f5e' },       // 09:00, no DST
+  { label: 'Europe', where: 'Frankfurt', tz: 'Europe/Berlin', min: 9 * 60, color: '#6366f1' },
+  { label: 'US', where: 'New York', tz: 'America/New_York', min: 9 * 60 + 30, color: '#14b8a6' },
+]
+
+// One formatter per timezone, built once. The chart's session scan calls this ~210 times and reruns
+// on every live tick; constructing a fresh Intl.DateTimeFormat each call measured 8.8ms a tick
+// against 1.1ms reused — eight times the main-thread work, five seconds apart, for three formatters.
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>()
+const formatterFor = (tz: string) => {
+  let f = FORMATTERS.get(tz)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+    FORMATTERS.set(tz, f)
+  }
+  return f
+}
+
+/** DST-correct local clock for a timestamp in a tz: the calendar day (to spot a new session) and
+ *  minutes-of-day (to spot the open within it). */
+export const localClock = (ms: number, tz: string) => {
+  const p = formatterFor(tz).formatToParts(new Date(ms))
+  const g = (t: string) => p.find((x) => x.type === t)?.value ?? '0'
+  return { day: g('year') + g('month') + g('day'), min: (+g('hour') % 24) * 60 + +g('minute') }
+}
+
+/**
+ * How long until a market opens, in minutes, or null on a day it does not open at all. Weekends
+ * only — the world's holiday calendars are a table that goes stale, and a knock on Christmas
+ * morning is a smaller wrong than a table nobody maintains.
+ */
+export function opensIn(s: { tz: string, min: number }, at: number): number | null {
+  const { day, min } = localClock(at, s.tz)
+  const weekday = new Date(Date.UTC(+day.slice(0, 4), +day.slice(4, 6) - 1, +day.slice(6))).getUTCDay()
+  if (weekday === 0 || weekday === 6) return null
+  return s.min - min
+}
+
 export type Dials = {
   /** Share of the day's range an hour has to cover. */
   bite: number
@@ -369,11 +418,15 @@ export type Dials = {
   trendLiq: number
   /** …and the floor the New list on the Markets page is filtered by. */
   newLiq: number
+  /** Minutes' warning before an exchange opens. 0 is off, which is what it ships as. */
+  openIn: number
 }
 
 export const DIALS: Dials = {
   bite: MOVER_BITE, floor: MOVER_FLOOR,
   trendMove: 25, trendFresh: 6, trendLiq: 50_000, newLiq: 15_000,
+  // three knocks a day is a lot to hand someone who never asked for them
+  openIn: 0,
 }
 
 /** What each dial may be set to. A bite of zero is every tick of every day, and there is no
@@ -381,6 +434,8 @@ export const DIALS: Dials = {
 const RANGE: Record<keyof Dials, [number, number]> = {
   bite: [0.05, 1], floor: [0.1, 25], trendMove: [1, 500],
   trendFresh: [0.5, 72], trendLiq: [0, 5_000_000], newLiq: [0, 5_000_000],
+  // an hour's warning is the most that is still news; the push tick is a minute, so under one is 0
+  openIn: [0, 60],
 }
 
 /** The dials off a document — a user's, or a hand-edited backup's. Anything missing, unreadable or

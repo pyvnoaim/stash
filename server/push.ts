@@ -16,6 +16,8 @@
  *    only: the stock feed needs the Twelve Data key, which deliberately never leaves the browser.
  *  - a listed asset that has just moved hard, whether or not anything was ever saved on it. The
  *    same rule and the same two numbers the in-app bell uses, imported rather than copied.
+ *  - an item that named an hour, once that hour has come round where the phone is.
+ *  - a market about to open, for anyone who has turned that dial off zero.
  *  - once a day, in the morning, what is due and what is about to be charged.
  * Each of those is a key, and a key already sent is never sent again — the digest key carries the
  * date, so tomorrow's is a new one and today's is not; a mover's carries the hour.
@@ -26,7 +28,7 @@ import type { DatabaseSync } from 'node:sqlite'
    is arithmetic over numbers — no React, no localStorage, nothing to import that isn't here — and
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
-import { ASSETS, dialsOf, fmtPrice, moverMove, type Dials } from '../src/lib/market.ts'
+import { ASSETS, dialsOf, fmtPrice, localClock, moverMove, opensIn, SESSIONS, type Dials } from '../src/lib/market.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -43,6 +45,11 @@ const price = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 
 /** The day and the hour where the phone is, from the offset it told us when it subscribed. */
 const localDay = (tz: number, at = Date.now()) => new Date(at + tz * 60_000).toISOString().slice(0, 10)
 const localHour = (tz: number, at = Date.now()) => new Date(at + tz * 60_000).getUTCHours()
+/** …and the same clock to the minute, which is what an item's own hour is compared against. */
+const localMin = (tz: number, at = Date.now()) => {
+  const d = new Date(at + tz * 60_000)
+  return d.getUTCHours() * 60 + d.getUTCMinutes()
+}
 
 /* The subscription cycle maths, again — store.ts owns the original and the tests over it, and this
    process cannot import it: that module is the app's store, React and localStorage included, and
@@ -126,8 +133,48 @@ export function alertsOf(
      move is over by tomorrow morning and a task is not. */
   out.push(...movers)
 
-  // then the day's work, as one line rather than one notification per task
+  /* Then a market about to open, for anyone who has asked to be told: the minutes are a dial and
+     it ships at zero, because three knocks a day is a lot to hand someone who never set them.
+     The exchanges here trade none of the assets on the desk — they mark where the volume arrives,
+     and gold and crypto move when it does.
+     The key carries that market's own local day, so tomorrow's open is a new one. Not exempt from
+     the quiet hours below, which is what keeps Tokyo — two in the morning in Berlin — from being
+     a phone going off in the dark; a European or American open never lands in them. */
+  const openIn = dialsOf(s).openIn
+  if (openIn > 0) {
+    for (const m of SESSIONS) {
+      const mins = opensIn(m, at)
+      if (mins === null || mins <= 0 || mins > openIn) continue
+      out.push({
+        key: `open-${m.label}-${localClock(at, m.tz).day}`,
+        title: `${m.where} opens in ${mins} minute${mins === 1 ? '' : 's'}`,
+        body: `${m.label} hours — the volume that moves gold and crypto arrives with them`,
+        target: 'market',
+      })
+    }
+  }
+
   const items: any[] = Array.isArray(s?.items) ? s.items : []
+
+  /* Then anything that named an hour, once that hour has come round where the phone is. One knock
+     per item rather than a line in the digest: an hour is the whole point of setting one, and
+     "gym, 18:00" at half past six is a reminder that missed. The key carries the day, so tomorrow's
+     occurrence of a repeating task is a new one — and past its hour it stays sent, not re-sent.
+     These are exempt from the quiet hours in tick(): an alarm set for six is meant to go off. */
+  const mins = localMin(tz, at)
+  for (const i of items) {
+    if (!i || i.done || i.due !== day || typeof i.at !== 'string') continue
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(i.at)
+    if (!m || mins < +m[1] * 60 + +m[2]) continue
+    out.push({
+      key: `at-${String(i.id)}-${day}`,
+      title: String(i.text || 'Untitled'),
+      body: `due at ${i.at}`,
+      target: 'today',
+    })
+  }
+
+  // then the day's work, as one line rather than one notification per task
   const open = items.filter((i) => i && !i.done && typeof i.due === 'string' && i.due <= day)
   if (open.length) {
     const late = open.filter((i) => i.due < day).length
@@ -345,8 +392,9 @@ export function createPush(db: DatabaseSync) {
       const had = new Set(seen)
       const fresh = alertsFor(r.user, r.tz).filter((a) => !had.has(a.key)
         // a digest at three in the morning is not news, it is a phone waking someone up. A level
-        // the price has reached is exactly the thing that cannot wait for office hours.
-        && (a.key.startsWith('watch-') || localHour(r.tz) >= QUIET_UNTIL))
+        // the price has reached is exactly the thing that cannot wait for office hours — and
+        // neither is an hour someone set themselves, whatever hour they set it to.
+        && (a.key.startsWith('watch-') || a.key.startsWith('at-') || localHour(r.tz) >= QUIET_UNTIL))
       if (!fresh.length) continue
       // nothing is marked until the service took it, so a failed knock is tried again next minute
       if (!(await knock(r.endpoint))) continue

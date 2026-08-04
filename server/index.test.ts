@@ -155,6 +155,8 @@ await put(leon, (await (await get('/state', leon)).json()).version, {
     { id: 'i1', type: 'task', text: 'ship it, now', note: 'first line\nsecond', due: '2020-01-01', pid: 'p1' },
     { id: 'i2', type: 'task', text: 'already done', due: '2020-01-02', done: true },
     { id: 'i3', type: 'task', text: 'no date at all', due: null },
+    { id: 'i4', type: 'task', text: 'gym', due: '2020-01-03', at: '18:00' },
+    { id: 'i5', type: 'task', text: 'last thing', due: '2020-01-03', at: '23:30' },
   ],
   subs: [{ id: 's1', kind: 'expense', name: 'Netflix', cost: 12.99, cycle: 'monthly', due: '2026-08-03' }],
 })
@@ -177,6 +179,14 @@ assert.match(ics, /SUMMARY:ship it\\, now/)
 assert.match(ics, /DESCRIPTION:@Kova\\nfirst line\\nsecond/)
 assert.match(ics, /DTSTART;VALUE=DATE:20200101\r\nDTEND;VALUE=DATE:20200102/)
 assert.match(ics, /BEGIN:VALARM/, 'a subscribed calendar says nothing without an alarm on the event')
+/* An item that named an hour is an hour in the calendar, not a banner across the day — floating
+   local time, so six is six wherever the phone is, and ten minutes' warning rather than the
+   all-day event's nine hours. The last half hour of the day stops at midnight instead of ending
+   on a date its DTSTART never named. */
+assert.match(ics, /DTSTART:20200103T180000\r\nDTEND:20200103T190000/)
+assert.match(ics, /DTSTART:20200103T233000\r\nDTEND:20200103T235900/)
+assert.match(ics, /TRIGGER:-PT10M/)
+assert.match(ics, /TRIGGER:PT9H/, 'an all-day event still fires in the morning')
 // finished work and undated work are not things a calendar can show
 assert.ok(!ics.includes('already done') && !ics.includes('no date at all'))
 // and a year of the monthly charge, rolled forward from an anchor that is already in the past
@@ -193,6 +203,28 @@ await put(leon, (await (await get('/state', leon)).json()).version, {
 const escaped = await (await fetch(`${url}/ics/${feed}`)).text()
 assert.ok(escaped.includes('DESCRIPTION:a\\nb\\nEND:VEVENT\\nc'), escaped)
 assert.equal(escaped.match(/BEGIN:VEVENT/g)!.length, 1, 'a note wrote itself a second event')
+
+/* ---------- the calendar coming the other way ---------- */
+
+// nobody's calendar without a session, and nothing subscribed until somebody says so
+assert.equal((await get('/api/cal')).status, 401)
+assert.deepEqual(await (await get('/api/cal?from=2026-08-01&to=2026-08-31', leon)).json(),
+  { url: null, events: [] })
+
+/* A link this server would refuse to fetch is refused here, where the person can still see why —
+   the guard is cal.ts's, and this is the boundary that uses it. */
+for (const bad of ['http://127.0.0.1/cal.ics', 'file:///etc/passwd', 'nonsense', '']) {
+  const r = await post('/api/cal', { url: bad }, leon)
+  assert.equal(r.status, 400, bad)
+  assert.deepEqual(await (await get('/api/cal?from=2026-08-01&to=2026-08-31', leon)).json(),
+    { url: null, events: [] }, 'and nothing was stored on the way past')
+}
+
+// a window wide enough to expand a daily rule thousands of times is not a window
+assert.equal((await get('/api/cal?from=2020-01-01&to=2030-01-01', leon)).status, 400)
+// a window that is not two days is no answer rather than an error — the page asks before it knows
+assert.deepEqual(await (await get('/api/cal?from=nope&to=2026-08-31', leon)).json(),
+  { url: null, events: [] })
 
 // a token that is not one, and one that no longer is
 assert.equal((await fetch(`${url}/ics/nope`)).status, 404)

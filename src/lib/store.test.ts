@@ -12,7 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
-  openWatch, closeWatch, clearResults, dismissAlerts,
+  openWatch, closeWatch, clearResults, dismissAlerts, snoozeAlerts, snoozeUntil,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -113,7 +113,7 @@ assert.equal(load({ theme: 'neon' }).theme, 'auto')
 /* ---------- the two actions that could lose items ---------- */
 
 const item = (over: Partial<Item>): Item => ({
-  id: 'x', type: 'task', text: 'x', note: '', pid: null, due: null, repeat: null,
+  id: 'x', type: 'task', text: 'x', note: '', pid: null, due: null, at: null, repeat: null,
   flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null, ...over,
 })
 
@@ -224,6 +224,20 @@ addItem(item({ id: 'r2', repeat: 'week' }))
 patch('r2', { type: 'note' })
 assert.equal(getState().items[0].repeat, null)
 
+/* And an hour needs a day to sit in: clearing the date clears the time with it, wherever the
+   clearing came from — the field's X, the context menu, a bulk edit across twenty rows. */
+wipe()
+addItem(item({ id: 'h2', due: '2026-08-04', at: '18:00' }))
+patch('h2', { text: 'still at six' })
+assert.equal(getState().items[0].at, '18:00', 'an unrelated edit leaves the hour alone')
+patch('h2', { due: null })
+assert.equal(getState().items[0].at, null)
+// a repeating task keeps its hour through every occurrence: the same appointment, on more days
+wipe()
+addItem(item({ id: 'h3', repeat: 'day', due: '2026-08-04', at: '07:30' }))
+toggleDone('h3')
+assert.deepEqual(getState().items.map((i) => i.at), ['07:30', '07:30'])
+
 // an edit stamps the item; capturing one and finishing it are not edits
 wipe()
 addItem(item({ id: 'e1', repeat: 'day', due: '2026-01-01' }))
@@ -269,9 +283,18 @@ assert.equal(named.who, 'y'.repeat(32))
 // an empty string is nobody, not somebody with no name
 assert.equal(load({ items: [{ id: 'n', who: '' }] }).items[0].who, undefined)
 
+/* An hour is only ever an hour of a day: one on an item with no date, or one no clock could show,
+   is not kept — it would sort a row into a day it does not belong to and knock a phone at it. */
+const hour = (i: object) => load({ items: [{ id: 'h', ...i }] }).items[0].at
+assert.equal(hour({ due: '2026-08-04', at: '18:00' }), '18:00')
+assert.equal(hour({ due: null, at: '18:00' }), null)
+for (const junk of ['25:00', '7:30', '18:0', 1800, null, {}]) {
+  assert.equal(hour({ due: '2026-08-04', at: junk }), null, String(junk))
+}
+
 /* ---------- one parsed line, one item: capture, a paste and a shared link all build it ---------- */
 
-const line = { text: 'ship it', tags: ['audio'], pid: null, flag: true, due: '2026-09-01', repeat: 'week' as const }
+const line = { text: 'ship it', tags: ['audio'], pid: null, flag: true, due: '2026-09-01', at: null, repeat: 'week' as const }
 const built = itemOf(line)
 assert.equal(built.type, 'task')                  // a line says nothing about its kind
 assert.deepEqual([built.text, built.flag, built.due, built.tags, built.repeat],
@@ -722,19 +745,22 @@ console.log('store: ok')
   assert.deepEqual(load({}).hotkeys, {})
 }
 
-/* ---------- dismissed alerts: the trust boundary, and the two bounds on it ---------- */
+/* ---------- silenced alerts: the trust boundary, and the two bounds on it ---------- */
 {
   const now = Date.now()
-  const old = now - 25 * 3600_000
+  const day = 24 * 3600_000
+  const ahead = now + day
 
-  // a dismissal is "not now": one made yesterday has run out and the alert is worth saying again
-  assert.deepEqual(load({ dismissed: { fresh: now, stale: old } }).dismissed, { fresh: now })
-  // junk out of a hand-edited backup is not a dismissal, whatever it looks like
+  // an entry is the moment an alert may speak again: one already past has run out, and the alert
+  // is worth saying now
+  assert.deepEqual(load({ dismissed: { fresh: ahead, stale: now - 1000 } }).dismissed, { fresh: ahead })
+  // junk out of a hand-edited backup is not a silence, whatever it looks like
   assert.deepEqual(load({ dismissed: { a: 'yesterday', b: null, c: {} } }).dismissed, {})
   for (const junk of [null, 7, 'nope', []]) assert.deepEqual(load({ dismissed: junk }).dismissed, {})
 
-  // capped, newest kept — the document is pushed to the server whole, so it cannot grow forever
-  const many = Object.fromEntries(Array.from({ length: 260 }, (_, i) => [`a${i}`, now - i * 1000]))
+  // capped, the furthest-off kept — the document is pushed to the server whole, so it cannot grow
+  // forever
+  const many = Object.fromEntries(Array.from({ length: 260 }, (_, i) => [`a${i}`, ahead - i * 1000]))
   const kept = load({ dismissed: many }).dismissed
   assert.equal(Object.keys(kept).length, 200)
   assert.ok('a0' in kept && !('a259' in kept), 'the oldest are the ones that fall off')
@@ -746,7 +772,21 @@ console.log('store: ok')
   /* At the cap, with every id written on the same millisecond, the one just swiped is the one that
      has to survive — losing that tie is the alert coming straight back after you cleared it. */
   dismissAlerts(['just-swiped'], now)
-  assert.equal(getState().dismissed['just-swiped'], now)
+  assert.equal(getState().dismissed['just-swiped'], now + day)   // a swipe is a day of quiet
+  assert.equal(Object.keys(getState().dismissed).length, 200)
+
+  /* Snoozing is the same decision with a nearer hour on it: three hours during the day, and after
+     five the next morning at eight — an alert put off at six in the evening is a tomorrow alert. */
+  const three = (h: number) => { const d = new Date(); d.setHours(h, 0, 0, 0); return +d }
+  assert.equal(snoozeUntil(three(9)), three(9) + 3 * 3600_000)
+  const evening = new Date(snoozeUntil(three(18)))
+  assert.deepEqual([evening.getHours(), evening.getMinutes()], [8, 0])
+  assert.ok(snoozeUntil(three(18)) > three(18), 'and it is the morning after, not the one before')
+  /* And into the same map, off the same clock — at the cap too: a snooze runs out sooner than
+     every dismissal around it, so a list that kept the furthest-off hours would throw away the
+     one thing just chosen. What falls off is the oldest decision, not the nearest hour. */
+  snoozeAlerts(['put-off'], now)
+  assert.equal(getState().dismissed['put-off'], snoozeUntil(now))
   assert.equal(Object.keys(getState().dismissed).length, 200)
   /* Dismissing is not an edit to walk back: ⌘Z belongs to the work, not to the bell. So the undo
      after it returns the item, and leaves the dismissal exactly where it was. */
@@ -755,5 +795,5 @@ console.log('store: ok')
   dismissAlerts(['swiped'], now)
   undo()
   assert.notEqual(getState().items, withIt, 'the item came back, not the dismissal')
-  assert.equal(getState().dismissed.swiped, now)
+  assert.equal(getState().dismissed.swiped, now + day)
 }

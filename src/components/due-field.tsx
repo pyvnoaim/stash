@@ -13,18 +13,22 @@ const toStamp = (d: Date) => d.toLocaleDateString('sv')
 
 const shift = (n: number) => addDays(today(), n)
 
-export function DueField({ id, due, placeholder, onPick }: {
+export function DueField({ id, due, at, placeholder, onPick, onTime }: {
   id?: string
   due: string | null
   /** what no date reads as, for a selection whose rows disagree rather than share one */
   placeholder?: string
   onPick: (due: string | null) => void
+  /** The hour on that day. Only where one means something — a subscription bills on a date, not
+   *  at a quarter past — so the field appears with the handler and not otherwise. */
+  at?: string | null
+  onTime?: (at: string | null) => void
 }) {
   const [open, setOpen] = useState(false)
 
   const set = (v: string | null) => { onPick(v); setOpen(false) }
 
-  return (
+  const picker = (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
@@ -76,5 +80,29 @@ export function DueField({ id, due, placeholder, onPick }: {
         />
       </PopoverContent>
     </Popover>
+  )
+
+  if (!onTime) return picker
+
+  return (
+    <div className="flex gap-2">
+      {picker}
+      {/* the browser's own clock: it knows the 24h/AM-PM the machine is set to, and on a phone it
+          is the wheel everyone already uses. Disabled without a date, since an hour on no day is
+          not a time — the same rule the parser and the store hold to. */}
+      <input
+        type="time"
+        aria-label="Time"
+        disabled={!due}
+        value={at ?? ''}
+        onChange={(e) => onTime(e.target.value || null)}
+        className={cn(
+          'border-input bg-transparent dark:bg-input/30 h-9 shrink-0 rounded-md border px-2 py-1 font-mono text-sm tabular-nums shadow-xs',
+          'focus-visible:border-ring focus-visible:ring-ring/50 outline-none focus-visible:ring-[3px]',
+          'disabled:cursor-not-allowed disabled:opacity-50',
+          !at && 'text-muted-foreground',
+        )}
+      />
+    </div>
   )
 }

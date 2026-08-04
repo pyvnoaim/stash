@@ -9,7 +9,7 @@ RUN npm run build
 FROM node:24-alpine
 WORKDIR /app
 COPY --from=build /app/dist ./dist
-COPY server/index.ts server/push.ts ./server/
+COPY server/index.ts server/push.ts server/cal.ts ./server/
 # The one thing the app and the server share: the market maths, push.ts imports the rule that
 # decides a move is worth waking someone for. Pure arithmetic, no imports of its own.
 COPY src/lib/market.ts ./src/lib/
