@@ -29,7 +29,7 @@ globalThis.fetch = ((url: string) => {
   seen.push(url)
   return Promise.resolve({ json: () => Promise.resolve([]) })
 }) as typeof fetch
-const { ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchTrending } = await import('./market.ts')
+const { ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchStockHours, fetchTrending } = await import('./market.ts')
 const asked = async (fn: () => Promise<unknown>) => {
   seen.length = 0
   await fn().catch(() => {})
@@ -50,6 +50,14 @@ for (const url of [
   ...(await asked(() => fetchPrices([crypto.id], ''))),
   ...(await asked(() => fetchPrices([stock.id], 'KEY'))),
 ]) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
+
+/* The stocks' mover sweep hits the same endpoint the candles do, and must land the other side of
+   that line: it is a live reading, and served from cache it announces an hour that is over to
+   someone offline who has no way to check. The two are told apart by outputsize, which is exactly
+   the sort of arrangement that rots silently — hence this. */
+const hourUrls = await asked(() => fetchStockHours([stock.id], 'KEY'))
+assert.ok(hourUrls.length, 'fetchStockHours asked for nothing')
+for (const url of hourUrls) assert.ok(!cached(url), `the hour sweep must never be cached: ${url}`)
 
 /* Trending pools are on the same footing as the ticker, and for the same reason: the bell alerts
    off this list. A cached one would announce a launch that already happened and a mover that has
