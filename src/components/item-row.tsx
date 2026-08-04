@@ -1,7 +1,7 @@
 import { memo, useState } from 'react'
 import {
-  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo, PencilLine,
-  Repeat, RotateCcw, StickyNote, Trash2,
+  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo, Maximize2,
+  PencilLine, Repeat, RotateCcw, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
@@ -24,7 +24,7 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
   note: StickyNote,
 }
 
-function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onTag, onWho, onProject, onDelete }: {
+function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete }: {
   it: Item
   selected: boolean
   /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
@@ -36,6 +36,9 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   /** the current view id — a row already inside its own project hides its @project label */
   sel: string
   onSelect: (range: boolean) => void
+  /** Straight to the full-page editor. Getting there was click the row, then find Expand in the side
+   *  panel — two steps and a hunt, for the thing a note row exists to hold. */
+  onOpen: () => void
   onTag: (tag: string) => void
   /** the assignee's mark searches for them, the same way a #tag on a row searches for the tag */
   onWho: (name: string) => void
@@ -72,6 +75,18 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           data-row
           draggable
           onClick={(e) => onSelect(e.shiftKey)}
+          /* the desktop idiom, and the only gesture free here: single click selects, shift-click
+             ranges, drag reorders, right-click menus. The two clicks that precede it just select
+             the row, which is what opening it wants anyway.
+
+             The checkbox, the #tag, the @project and the +who all stopPropagation on click but have
+             no say over dblclick, so a quick double-tap on any of them did its own thing twice *and*
+             opened the page over the top. Guarded once here rather than five times down there. */
+          onDoubleClick={(e) => {
+            if ((e.target as HTMLElement).closest('button, a, input')) return
+            window.getSelection()?.removeAllRanges() // else the second click leaves a word highlighted under the page
+            onOpen()
+          }}
           onDragStart={(e) => {
             e.dataTransfer.setData('text/plain', it.id)
             e.dataTransfer.effectAllowed = 'move'   // otherwise the cursor offers to copy
@@ -233,6 +248,14 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
             <ContextMenuShortcut>space</ContextMenuShortcut>
           </ContextMenuItem>
         )}
+
+        {/* first, and carrying the gesture: a double-click nobody is told about is a feature nobody
+            has. Above "Edit details" because the two read as the same wish and this is the bigger one. */}
+        <ContextMenuItem onSelect={onOpen}>
+          <Maximize2 />
+          Open
+          <ContextMenuShortcut>⏎ or double-click</ContextMenuShortcut>
+        </ContextMenuItem>
 
         <ContextMenuItem onSelect={() => focus(it.id)}>
           <PencilLine />
