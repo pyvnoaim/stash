@@ -66,6 +66,60 @@ const late = Date.parse('2026-08-03T22:00:00Z')
 assert.equal(alertsOf(items, 120, {}, late)[0].key, 'due-2026-08-04')
 assert.equal(alertsOf(items, -420, {}, late)[0].key, 'due-2026-08-03')
 
+/* ---------- an item that named an hour ---------- */
+
+/* NOON is midday where the phone is, so the nine o'clock is behind us and the six is not. One
+   knock per item and not a line in the digest: the hour is the whole point of setting one. */
+const hours = {
+  items: [
+    { id: 'g', text: 'gym', due: '2026-08-03', at: '09:00' },
+    { id: 'h', text: 'dinner', due: '2026-08-03', at: '18:00' },
+    { id: 'i', text: 'brush teeth', due: '2026-08-03', at: '07:30', done: true },
+    { id: 'j', text: 'tomorrow early', due: '2026-08-04', at: '06:00' },
+    { id: 'k', text: 'junk hour', due: '2026-08-03', at: '25:00' },
+  ],
+}
+const timed = at(hours).filter((a) => a.key.startsWith('at-'))
+assert.deepEqual(timed.map((a) => a.key), ['at-g-2026-08-03'])
+assert.deepEqual([timed[0].title, timed[0].body, timed[0].target], ['gym', 'due at 09:00', 'today'])
+// it comes before the digest, which is the same work said less urgently
+assert.deepEqual(at(hours).map((a) => a.key), ['at-g-2026-08-03', 'due-2026-08-03'])
+
+/* The hour is the phone's too. Half past nine UTC is half past ten in Berlin — so the ten o'clock
+   has come round there and not in London, and the key carries the local day either way. */
+const halfTen = Date.parse('2026-08-03T09:30:00Z')
+const ten = { items: [{ id: 'g', text: 'gym', due: '2026-08-03', at: '10:00' }] }
+assert.equal(alertsOf(ten, 60, {}, halfTen)[0]?.key, 'at-g-2026-08-03')
+assert.ok(!alertsOf(ten, 0, {}, halfTen).some((a) => a.key.startsWith('at-')))
+
+/* ---------- a market about to open ---------- */
+
+/* 08:45 in Frankfurt on a Monday, which is 06:45 UTC: a quarter of an hour before XETRA. The
+   dial is the whole switch — at zero, which is what it ships as, none of this is said at all. */
+const mon = Date.parse('2026-08-03T06:45:00Z')
+const warn = (openIn: number, when = mon) =>
+  alertsOf({ dials: { openIn } }, 0, {}, when).filter((a) => a.key.startsWith('open-'))
+
+assert.deepEqual(warn(0), [], 'off is off, and off is the default')
+assert.deepEqual(warn(15).map((a) => a.key), ['open-Europe-20260803'])
+assert.equal(warn(15)[0].title, 'Frankfurt opens in 15 minutes')
+assert.equal(warn(15)[0].target, 'market')
+// ten minutes' warning does not reach back fifteen
+assert.deepEqual(warn(10), [])
+// nor does it fire once the bell has gone: the open is behind us at 09:01
+assert.deepEqual(warn(15, Date.parse('2026-08-03T07:01:00Z')), [])
+
+// New York is five and a half hours behind Frankfurt in August, and gets its own key that day
+assert.deepEqual(warn(15, Date.parse('2026-08-03T13:20:00Z')).map((a) => a.key), ['open-US-20260803'])
+
+// the exchanges are shut at the weekend, whatever the clock says
+assert.deepEqual(warn(15, Date.parse('2026-08-01T06:45:00Z')), [])
+assert.deepEqual(warn(15, Date.parse('2026-08-02T06:45:00Z')), [])
+
+/* The day in the key is the market's own, not the server's: a New York open is still yesterday's
+   date in New York while it is already tomorrow in Berlin. */
+assert.equal(warn(60, Date.parse('2026-08-03T13:20:00Z'))[0].key, 'open-US-20260803')
+
 /* ---------- what is moving ---------- */
 
 /* The movers are worked out once a tick and handed in, so here they only have to arrive, and

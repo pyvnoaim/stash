@@ -282,6 +282,32 @@ export const newFeed = (): Promise<string | null> =>
 export const dropFeed = (): Promise<void> =>
   call('/api/feed', { method: 'DELETE' }).then(() => undefined).catch(() => undefined)
 
+/* ---------- the calendar coming the other way ---------- */
+
+/** One event out of a subscribed calendar. Read-only, and never an item: it is somebody else's
+ *  record of the day, shown beside the work rather than mixed into it. */
+export interface CalEvent { day: string, at: string | null, summary: string }
+
+/** What the subscribed calendar holds between two days, plus the URL it came from. The server
+ *  fetches it — no provider's feed answers a request from a page — and caches it for ten minutes,
+ *  so a month view may ask on every paint without anyone noticing. */
+export const calendar = (from: string, to: string): Promise<{ url: string | null, events: CalEvent[] }> => {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  const p = new URLSearchParams({ from, to, tz })
+  return call(`/api/cal?${p}`)
+    .then((j) => ({ url: (j.url as string | null) ?? null, events: (j.events as CalEvent[]) ?? [] }))
+    .catch(() => ({ url: null, events: [] }))
+}
+
+/** Subscribe, or replace what is subscribed. Returns the error to show, or null when it took. */
+export const setCalendar = (url: string): Promise<string | null> =>
+  call('/api/cal', { method: 'POST', body: JSON.stringify({ url }) })
+    .then(() => null)
+    .catch((e: Error) => e.message || 'that is not a calendar link')
+
+export const dropCalendar = (): Promise<void> =>
+  call('/api/cal', { method: 'DELETE' }).then(() => undefined).catch(() => undefined)
+
 /* ---------- admin ---------- */
 
 export interface AdminUser {

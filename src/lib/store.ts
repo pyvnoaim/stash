@@ -13,6 +13,12 @@ export interface Item {
   note: string
   pid: string | null
   due: string | null
+  /**
+   * The hour on that day, 'HH:MM' local, or null for a day with no hour in it. Only ever set
+   * alongside a date — a time on nothing is not a time. It is what orders a day, what the push
+   * knocks on, and what turns an all-day event in the feed into one at a quarter past.
+   */
+  at: string | null
   /** Finishing it opens the next one instead of ending the task. */
   repeat: Repeat | null
   flag: boolean
@@ -193,6 +199,10 @@ function cleanDate(v: unknown): string | null {
   return !isNaN(+d) && d.toLocaleDateString('sv') === v ? v : null
 }
 
+/** 'HH:MM' and a real hour of a real day — 25:00 sorts fine and then means nothing to anyone. */
+const cleanTime = (v: unknown): string | null =>
+  typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : null
+
 /**
  * Whether a setup's three levels describe a trade at all: for a long the stop sits under the entry
  * and the target over it, and for a short the other way round. Anything else is not a plan, it is
@@ -257,31 +267,54 @@ export interface State {
    *  whether a shut phone rings. See Dials in market.ts, which owns the defaults and the ranges. */
   dials: Dials
   /**
-   * Alerts you have swiped away, id → when. In the document rather than in the bell's own state,
-   * because dismissing is a decision and it was being made again on every device and after every
-   * reload. They expire (see DISMISS_TTL): a dismissal is "not now", not "never" — an alert whose
-   * reason is still true tomorrow is worth saying again.
+   * Alerts you have silenced, id → the moment they may speak again. In the document rather than in
+   * the bell's own state, because silencing is a decision and it was being made again on every
+   * device and after every reload. Every entry runs out: an alert is silenced "until", never
+   * "never" — an alert whose reason is still true tomorrow is worth saying again then.
+   *
+   * Swiping one away is a day of quiet (DISMISS_TTL); snoozing picks a nearer hour. One map, since
+   * from the bell's side they are the same question — is this one allowed to speak yet.
    */
   dismissed: Record<string, number>
 }
 
-/** How long a dismissal holds, and how many are kept. Bounded on both ends: the ids are other
+/** How long swiping one away holds, and how many are kept. Bounded on both ends: the ids are other
  *  people's pool addresses and today's date, so without this the document grows forever. The count
  *  is generous because tasks are the one alert there can be a hundred of — clearing a pile of
  *  overdue work must not leave the tail of it to come straight back. */
 export const DISMISS_TTL = 24 * 3600_000
 const KEEP_DISMISSED = 200
 
-/** The one shape a dismissal list is allowed to have: newest first, expired dropped, capped. Used
- *  on the way in and on every write, so neither a hand-edited backup nor a long session can grow
- *  a document that gets pushed to the server whole. */
+/** The one shape the list is allowed to have: run-out entries dropped, capped. Used on the way in
+ *  and on every write, so neither a hand-edited backup nor a long session can grow a document that
+ *  gets pushed to the server whole.
+ *
+ *  The order is the map's own — silenceAlerts puts what was just chosen at the front, so the cap
+ *  drops the oldest decision rather than the nearest hour. Sorting on the hour instead would make
+ *  a snooze, which is by definition the soonest to run out, the first thing thrown away.
+ *
+ *  ponytail: a document written before these were "until" times holds moments already past, so it
+ *  comes back empty and the day's swipes are said once more. One reload, once, ever. */
 const pruneDismissed = (d: unknown, now = Date.now()): Record<string, number> =>
   Object.fromEntries(
     Object.entries(d && typeof d === 'object' ? d as Record<string, unknown> : {})
-      .filter((e): e is [string, number] => typeof e[1] === 'number' && now - e[1] < DISMISS_TTL)
-      .sort((a, b) => b[1] - a[1])
+      .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] > now)
       .slice(0, KEEP_DISMISSED),
   )
+
+/**
+ * Where "later" lands, from the clock and nothing else: three hours on during the day, and after
+ * five in the afternoon the next morning at eight — a thing put off at six in the evening is a
+ * tomorrow thing, and three hours would only mean nine at night.
+ * ponytail: one button, no menu of five. If picking the hour ever matters, this is where it goes.
+ */
+export function snoozeUntil(now = Date.now()): number {
+  const d = new Date(now)
+  if (d.getHours() < 17) return now + 3 * 3600_000
+  d.setDate(d.getDate() + 1)
+  d.setHours(8, 0, 0, 0)
+  return +d
+}
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
@@ -366,6 +399,9 @@ export function load(data: unknown): State {
         // a due date that isn't 'YYYY-MM-DD' has no localeCompare, and the grouped views sort on it —
         // a hand-edited backup would take the list down and then be written back to disk that way
         due: cleanDate(i.due),
+        // an hour with no day is not a time, it is a number nothing can place — the same rule the
+        // parser holds to, on the path a hand-edited backup comes in through
+        at: cleanDate(i.due) ? cleanTime(i.at) : null,
         flag: !!i.flag,
         done: !!i.done,
         doneAt: typeof i.doneAt === 'number' ? i.doneAt : null,
@@ -836,7 +872,12 @@ export function visible(s: State, query: string): Item[] {
   const filter = isView(s.sel) ? VIEWS[s.sel].filter : inProject(s, s.sel)
   const list = s.items.filter(filter)
   if (s.sel === 'done') return list.sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0))
-  if (isGrouped(s)) return list.sort((a, b) => (a.due || '').localeCompare(b.due || ''))
+  // the day first, then the hour inside it — an item with no hour sits after the ones that named
+  // theirs, since "sometime today" is what is left once the day's appointments are in
+  if (isGrouped(s)) {
+    return list.sort((a, b) =>
+      (a.due || '').localeCompare(b.due || '') || (a.at || '~').localeCompare(b.at || '~'))
+  }
   // Everything reads as sections by kind; sort is stable, so each kind keeps its own order
   if (s.sel === 'all') return list.sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type])
   return list.sort((a, b) => Number(a.done) - Number(b.done)) // manual order, finished items sink
@@ -866,7 +907,10 @@ const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => (
 // marker for a thing that will never come round — and being here at all is what "edited" means,
 // so a bulk command across twenty rows stamps all twenty
 export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
-  const next = { ...i, ...p, editedAt: Date.now(), ...(me && { editedBy: me }) }
+  const at = { ...i, ...p, editedAt: Date.now(), ...(me && { editedBy: me }) }
+  // and an hour needs a day to sit in: clearing the date clears the time with it, wherever the
+  // clearing came from — the field's X, the context menu, a bulk edit across twenty rows
+  const next = at.due ? at : { ...at, at: null }
   return next.type === 'task' ? next : { ...next, repeat: null }
 }))
 
@@ -892,17 +936,23 @@ export const addWatch = (w: Watch) =>
     ...s,
     watches: [w, ...s.watches.filter((x) => !(x.asset === w.asset && x.dir === w.dir && x.horizon === w.horizon))],
   }))
-/** Swiped away, on every device: the bell reads this out of the document the sync carries. */
-export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
+/** Quiet until a given moment, on every device: the bell reads this out of the document the sync
+ *  carries. Both buttons on an alert come through here — they differ only in the moment. */
+export const silenceAlerts = (ids: string[], until: number, at = Date.now()) => set((s) => {
   /* The new ones go in first, so that when the cap bites it drops the oldest and not these:
      "Clear" writes every id on the same millisecond, and a tie has to fall the way the person
      just chose — losing it is the alert they swiped reappearing on the next load.
      Pruned on the way in as well as on the way out, so a tab left open all day cannot carry every
      dismissal it ever made into a document that gets pushed to the server whole. */
-  const next: Record<string, number> = Object.fromEntries(ids.map((id) => [id, at]))
+  const next: Record<string, number> = Object.fromEntries(ids.map((id) => [id, until]))
   for (const [id, when] of Object.entries(s.dismissed)) if (!(id in next)) next[id] = when
   return { ...s, dismissed: pruneDismissed(next, at) }
 })
+
+/** Swiped away: quiet for a day, which is what a dismissal has always meant. */
+export const dismissAlerts = (ids: string[], at = Date.now()) => silenceAlerts(ids, at + DISMISS_TTL, at)
+/** Put off: quiet until the hour snoozeUntil picks, and then said again. */
+export const snoozeAlerts = (ids: string[], at = Date.now()) => silenceAlerts(ids, snoozeUntil(at), at)
 
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
@@ -951,7 +1001,7 @@ export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, 
  */
 export function itemOf(line: Parsed, extra: Partial<Item> = {}): Item {
   const it: Item = {
-    id: uid(), type: 'task', text: line.text, note: '', pid: line.pid, due: line.due,
+    id: uid(), type: 'task', text: line.text, note: '', pid: line.pid, due: line.due, at: line.at,
     repeat: line.repeat, flag: line.flag, tags: line.tags, done: false, doneAt: null,
     ts: Date.now(), editedAt: null, ...extra,
   }

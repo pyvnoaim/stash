@@ -1,7 +1,7 @@
 import { memo, useState } from 'react'
 import {
   CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo, Maximize2,
-  PencilLine, Repeat, RotateCcw, StickyNote, Trash2,
+  PencilLine, Repeat, RotateCcw, Share2, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
@@ -23,6 +23,22 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
   idea: Lightbulb,
   note: StickyNote,
 }
+
+/**
+ * One row through the machine's own share sheet: the line, the note under it, and the day it is
+ * due if it has one. Words, not a link — there is nothing to publish and nothing to take back,
+ * which is the whole reason this is a menu item and not a decision.
+ * Cancelling the sheet rejects with an AbortError, and a cancelled share is not an error to report.
+ */
+const shareItem = (it: Item) =>
+  navigator.share({
+    title: it.text || 'Untitled',
+    text: [
+      it.text,
+      it.due && `${dayLabel(it.due)}${it.at ? ` at ${it.at}` : ''}`,
+      it.note,
+    ].filter(Boolean).join('\n\n'),
+  }).catch(() => {})
 
 function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete }: {
   it: Item
@@ -234,6 +250,8 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 )}
               >
                 {dayLabel(it.due)}
+                {/* the hour rides on the day rather than beside it: "Today 18:00" is one fact */}
+                {it.at && <span className="ml-1">{it.at}</span>}
               </span>
             )}
           </div>
@@ -339,6 +357,17 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           <Copy />
           Copy text
         </ContextMenuItem>
+
+        {/* The machine's own share sheet — Mail, Messages, WhatsApp, AirDrop, whatever is installed.
+            A snapshot of the words rather than a link to the row: nothing here is published, no
+            token is cut, and the other side needs no account. Only where the browser has one; the
+            Copy text above is what the others already had. */}
+        {'share' in navigator && (
+          <ContextMenuItem onSelect={() => void shareItem(it)}>
+            <Share2 />
+            Share…
+          </ContextMenuItem>
+        )}
 
         <ContextMenuItem variant="destructive" onSelect={onDelete}>
           <Trash2 />

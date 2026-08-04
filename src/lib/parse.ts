@@ -58,12 +58,31 @@ export const addDays = (from: string, n: number) => shiftDays(new Date(from + 'T
 
 export const tomorrow = () => addDays(today(), 1)
 
+/**
+ * A time of day out of one word: `14:00`, `9:30pm`, `9am`. A colon or an am/pm is required, so a
+ * bare `5` in "5 push-ups" stays a five — the one ambiguity that would quietly eat text.
+ * Always comes back as 'HH:MM', which is what sorts and what an <input type="time"> speaks.
+ */
+export function timeWord(w = ''): string | null {
+  const m = /^(\d{1,2})(?::(\d{2}))?(am|pm)?$/i.exec(w)
+  if (!m || (!m[2] && !m[3])) return null
+  let h = +m[1]
+  const min = +(m[2] ?? 0)
+  if (m[3]) {
+    if (h < 1 || h > 12) return null
+    h = (h % 12) + (m[3].toLowerCase() === 'pm' ? 12 : 0)
+  }
+  return h < 24 && min < 60 ? `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}` : null
+}
+
 export interface Parsed {
   text: string
   tags: string[]
   pid: string | null
   flag: boolean
   due: string | null
+  /** 'HH:MM' local, or null for a day with no hour in it. Only ever set alongside a date. */
+  at: string | null
   repeat: Repeat | null
 }
 
@@ -79,6 +98,7 @@ export function parseCapture(
   let pid: string | null = null
   let flag = false
   let due: string | null = null
+  let at: string | null = null
   let repeat: Repeat | null = null
 
   const words = input.split(/\s+/)
@@ -106,6 +126,15 @@ export function parseCapture(
       }
     }
 
+    // "gym at 18:00" — the marker is eaten with the time it marks, or it would be left in the text.
+    // A bare `at` with nothing readable after it is just a word, and stays one.
+    if (low === 'at') {
+      const t = timeWord(words[n + 1]?.toLowerCase())
+      if (t) { at = t; n++; continue }
+    }
+    const time = timeWord(low)
+    if (time) { at = time; continue }
+
     if (word === '!') { flag = true; continue }
     if (low === 'today') { due = now; continue }
     if (low === 'tomorrow') { due = shift(1); continue }
@@ -125,8 +154,11 @@ export function parseCapture(
 
   // a repeat with no date of its own starts now — except a weekday, which starts on that weekday
   if (repeat && !due) due = weekday(repeat) >= 0 ? nextDue(now, repeat) : now
+  // an hour with no day means today: "gym at 18:00" is about tonight, and an hour hanging off no
+  // date at all sorts nowhere and is never due
+  if (at && !due) due = now
 
-  return { text: kept.join(' ').trim(), tags, pid, flag, due, repeat }
+  return { text: kept.join(' ').trim(), tags, pid, flag, due, at, repeat }
 }
 
 /** A line of a pasted list, plus what its checkbox said — no checkbox at all is `null`. */

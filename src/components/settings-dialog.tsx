@@ -28,8 +28,8 @@ import {
 } from '@/lib/store'
 import type { Dials as DialSet } from '@/lib/market'
 import {
-  changePassword, deleteAccount, devices, dropFeed, dropLink, feed, getSync, links, linkUrl, logout,
-  newFeed, restore, subscribeSync, updateAccount, versions,
+  calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
+  links, linkUrl, logout, newFeed, restore, setCalendar, subscribeSync, updateAccount, versions,
   type Device, type Link, type Version,
 } from '@/lib/sync'
 import { disablePush, enablePush, pushState, type PushState } from '@/lib/push'
@@ -362,6 +362,8 @@ const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string
     hint: 'Dollars in the pool before either reading counts. This is the one that separates a market from a rug with a chart on it — raise it first.' },
   { k: 'newLiq', label: 'New list floor', unit: '$',
     hint: 'And the floor the New list on the Markets page is filtered by, which is a shortlist rather than an interruption, so it can afford to be lower.' },
+  { k: 'openIn', label: 'Before a market opens', unit: 'min',
+    hint: 'A push that much before Frankfurt or New York opens — where the volume that moves gold and crypto arrives. Zero is off, and it ships off. Tokyo opens in the middle of the European night and is held back by the quiet hours like anything else.' },
 ]
 
 /**
@@ -594,6 +596,8 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
 
       <CalendarFeed />
 
+      <CalendarSub />
+
       <Devices />
 
       <DeleteAccount />
@@ -722,6 +726,68 @@ function CalendarFeed() {
               {token === undefined ? 'Asking the server…' : 'No link yet.'}
             </p>
           )}
+    </Section>
+  )
+}
+
+/**
+ * The other direction: your real calendar, shown on the Calendar page beside the work. Read-only
+ * and one-way — nothing here writes to it, and nothing it holds becomes an item. The link is the
+ * "secret address" every provider offers (Google calls it the private ICS address); it is fetched
+ * by this server, since none of them answer a browser asking from another origin.
+ */
+function CalendarSub() {
+  const [url, setUrl] = useState<string | null | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const field = useRef<HTMLInputElement>(null)
+  // the window does not matter here, only the URL that comes back with it
+  useEffect(() => { void calendar('2000-01-01', '2000-01-02').then((r) => setUrl(r.url)) }, [])
+
+  const save = async () => {
+    const next = field.current?.value.trim() ?? ''
+    if (!next) return
+    setBusy(true)
+    const err = await setCalendar(next)
+    setBusy(false)
+    if (err) return toast(err)
+    setUrl(next)
+    toast('Calendar subscribed')
+  }
+
+  return (
+    <Section
+      title="Subscribed calendar"
+      hint="One read-only .ics link — the private address out of Google, Apple or anything else that
+        offers one. Its events sit on the Calendar page beside what is due. Nothing is written back
+        to it, and none of it is kept in your stash."
+      action={url
+        ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={async () => { setBusy(true); await dropCalendar(); setUrl(null); setBusy(false) }}
+            >
+              <Trash2 /> Unsubscribe
+            </Button>
+          )
+        : undefined}
+    >
+      <div className="flex items-center gap-2">
+        <Input
+          ref={field}
+          // keyed on what came back, so the field repaints when the answer lands and after a drop
+          key={url ?? 'none'}
+          defaultValue={url ?? ''}
+          placeholder={url === undefined ? 'Asking the server…' : 'https://…/basic.ics'}
+          disabled={url === undefined || busy}
+          onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
+          className="font-mono text-xs"
+        />
+        <Button variant="outline" size="sm" disabled={url === undefined || busy} onClick={() => void save()}>
+          {url ? 'Replace' : 'Subscribe'}
+        </Button>
+      </div>
     </Section>
   )
 }

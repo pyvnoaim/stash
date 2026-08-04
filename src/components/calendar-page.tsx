@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import { PROJECT_DRAG } from '@/lib/utils'
 import { chargesBetween, patch, project, select, SUBS, useStash, type Item, type Sub } from '@/lib/store'
+import { calendar, type CalEvent } from '@/lib/sync'
 
 const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -49,10 +50,13 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     return m
   }, [s.items])
 
+  // the drawn window, which is what the charges are generated across and what the subscribed
+  // calendar is asked for
+  const from = stamp(weeks[0][0])
+  const to = stamp(weeks[weeks.length - 1][6])
+
   // subscription charges land on the days they bill, generated across the visible window only
   const subsByDay = useMemo(() => {
-    const from = stamp(weeks[0][0])
-    const to = stamp(weeks[weeks.length - 1][6])
     const m = new Map<string, Sub[]>()
     for (const sub of s.subs) {
       for (const day of chargesBetween(sub, from, to)) {
@@ -62,7 +66,28 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
       }
     }
     return m
-  }, [s.subs, weeks])
+  }, [s.subs, from, to])
+
+  /* What the subscribed calendar has on these days, if there is one. The server fetches and caches
+     it, so paging back and forth over a month costs one request each way and nothing after that.
+     Signed out, or with nothing subscribed, it answers with an empty list and the page is what it
+     always was. */
+  const [events, setEvents] = useState<Map<string, CalEvent[]>>(new Map())
+  useEffect(() => {
+    let on = true
+    void calendar(from, to).then(({ events }) => {
+      if (!on) return
+      const m = new Map<string, CalEvent[]>()
+      for (const e of events) {
+        const at = m.get(e.day)
+        if (at) at.push(e)
+        else m.set(e.day, [e])
+      }
+      setEvents(m)
+    })
+    // a month that is on its way out must not write its events over the one now on screen
+    return () => { on = false }
+  }, [from, to])
 
   const shift = (n: number) => setCursor((c) => new Date(c.getFullYear(), c.getMonth() + n, 1))
   const label = cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
@@ -148,6 +173,23 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                   >
                     {d.getDate()}
                   </span>
+
+                  {/* what is already on the day, out of the subscribed calendar. Not a button:
+                      there is nothing to open and nothing to edit — it is somebody else's record,
+                      shown so the work can be planned around it. */}
+                  {(events.get(key) ?? []).map((e, n) => (
+                    <div
+                      key={`${e.at ?? ''}-${e.summary}-${n}`}
+                      title={`${e.at ? `${e.at} · ` : ''}${e.summary}`}
+                      className="text-muted-foreground flex shrink-0 items-center gap-1 px-0.5 py-0.5 text-left text-[10px] sm:gap-1.5 sm:px-1 sm:text-xs"
+                    >
+                      {/* an outlined bar rather than a filled one: the same shape as an item's,
+                          hollow, which is how a thing you cannot tick reads at a glance */}
+                      <span className="border-muted-foreground/60 h-3 w-[2px] shrink-0 rounded-full border" />
+                      {e.at && <span className="shrink-0 font-mono tabular-nums">{e.at}</span>}
+                      <span className="truncate">{e.summary}</span>
+                    </div>
+                  ))}
 
                   {list.map((it) => {
                     const filed = project(s, it.pid)

@@ -26,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the sync engine against the real server, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the sync engine against the real server, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -38,6 +38,7 @@ Type into the bar and the parser pulls the structure out of the line:
 | `@kova` | files it under the Kova project |
 | `#audio` | adds a tag |
 | `today`, `tomorrow`, `fri`, `2026-09-01` | sets the due date |
+| `18:00`, `at 18:00`, `6pm`, `9am` | sets the hour on that day, and today's if no day was named |
 | `every day`, `every week`, `every month`, `every year`, `every mon` | repeats it |
 | `!` | flags it, and it turns up under **Flagged** |
 
@@ -267,7 +268,29 @@ of the same document sync holds, so nothing about it can go stale, and it only e
 A calendar app cannot sign in, so the link is the whole of the authorisation — which is why it is
 128 bits, why it is the only route on the server with no session behind it, and why cutting a new
 one is what revokes the old. **Turn off** leaves no link at all. Finished work is not in it: a
-calendar is what is coming, and a struck-through event is not a thing the format can say.
+calendar is what is coming, and a struck-through event is not a thing the format can say. An item
+that named an hour goes out as an event at that hour, in floating local time and with ten minutes'
+warning; one that only named a day is still the all-day event it was.
+
+### And theirs, here
+
+**Settings → Account → Subscribed calendar** takes the read-only `.ics` address your provider
+offers — Google calls it the private address, Apple calls it a public link — and the Calendar page
+draws what it holds beside what is due, in hollow rows that cannot be clicked, dragged or ticked.
+Nothing is written back, and none of it lands in the stash.
+
+The server fetches it, because no provider's feed answers a browser asking from another origin.
+Which makes this the one place Stash fetches a URL somebody typed, so `server/cal.ts` treats it as
+one: `http(s)` only, every redirect followed by hand and re-checked, hostnames that resolve into
+this machine's own ranges refused — the metadata address included — a two-megabyte ceiling read off
+the stream rather than after it, and a ten-second timeout. The answer is cached for ten minutes, so
+paging through a month costs one fetch.
+
+What it understands is a working subset, and the ceiling is written down rather than implied:
+`VEVENT` with `DTSTART`, `SUMMARY`, `RRULE` (`FREQ`, `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`) and
+`EXDATE`. Not `VTIMEZONE` — a `TZID` is read as your own zone, which is right for a calendar kept
+in the zone you live in and an hour out for one that is not — and not `RECURRENCE-ID` overrides.
+A UTC stamp is a real instant and is converted properly.
 
 ## Subscriptions
 
@@ -449,15 +472,27 @@ watched assets that moved more than 3% in twenty-four hours, and any saved Marke
 stop or target the live price has reached. A setup that finished stays in the bell for half a day
 with what it did — *+2.40R — +€480.00 had you taken it* — and after that it is only in the record.
 Clicking one goes where it lives.
-Dismissing is for the session — a reload brings back whatever is still true.
+
+A row has two ways to stop: the clock puts it off for three hours, or until eight tomorrow morning
+if the day is already gone, and the cross silences it for a day. Neither is *never* — an alert
+whose reason is still true when the time runs out is worth saying again. The decision rides in the
+document, so it holds on the phone too.
 
 That bell needs the app to be open. **Settings → Account → Notifications** is the other half: the
 server keeps the subscription, does the watching, and knocks. A saved Markets setup reaching its
 entry, its stop or its target goes out whenever it happens, since a level is exactly the thing that
-cannot wait for office hours; everything else — what is due, what is overdue, what is about to be
-charged — is one line once a day, in the morning where the phone is rather than where the server
-is. Nothing is knocked about twice: each alert is a key, and the daily one carries its date, so
-tomorrow's is a new one. Crypto and gold only, because a stock price needs the Twelve Data key and
+cannot wait for office hours; an item that named an hour goes out at that hour, quiet hours and all,
+because an alarm set for six is meant to go off at six; and everything else — what is due, what is
+overdue, what is about to be charged — is one line once a day, in the morning where the phone is
+rather than where the server is. Nothing is knocked about twice: each alert is a key, and the daily
+one carries its date, so tomorrow's is a new one.
+
+**Before a market opens** is off until you set it. *When the bell rings* has the minutes: that much
+before Frankfurt or New York opens, one knock, keyed to that exchange's own day. They trade none of
+the assets on the desk — they mark where the volume that moves gold and crypto arrives. Tokyo opens
+in the middle of the European night and is held back by the quiet hours like anything else, which
+is the honest way of saying it will rarely reach you. Weekends are skipped; public holidays are
+not, because the world's holiday calendars are a table that goes stale in a way nobody notices. Crypto and gold only, because a stock price needs the Twelve Data key and
 that key deliberately never leaves the browser it was typed into.
 
 The push carries nothing at all. Encrypting a payload for each subscription is the bulk of the Web
@@ -527,6 +562,7 @@ is still in the file and still copies out.
 - `public/push-sw.js` — the two service-worker handlers a notification needs, imported into the generated worker
 - `server/index.ts` — accounts, sessions and one versioned document per user, plus the calendar feed; Node + SQLite, no dependencies
 - `server/push.ts` — VAPID, the minute loop, and the rule that decides whether a phone is worth waking
+- `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
@@ -629,6 +665,19 @@ than one person: two people working in different projects never meet, and two pe
 project overwrite each other only if they write inside the same few seconds — where the last write
 wins and the one it replaced is still in that project's history. Proper character-by-character
 merging is a different data layer, and this is the seam it would replace.
+
+For the times a link is the whole answer, **Copy share link** sits on a project's right-click menu:
+one press, a `/?link=…` on the clipboard, readable by anyone holding it without an account. It
+reads back the link the project already has rather than cutting a second one — re-cutting would
+quietly turn a link that lets people join into one that does not — and a link that was just made
+says so in the message, with **Undo** to take it back. Everything that is a decision stays in
+**Edit**: who is on it, view or edit, whether the link lets a signed-in person join, and revoking.
+
+A single row shares as words rather than as a link. Right-click a note, task or idea → **Share…**
+hands its line, its day and its note to the machine's own share sheet — Mail, Messages, WhatsApp,
+AirDrop, whatever is installed — where the browser has one, next to the **Copy text** that has
+always been there. Nothing is published, no token is cut, and the person receiving it needs no
+account: a note sent this way is a snapshot, not a window.
 
 Read-only means read-only in three places, not one: the capture field says whose project it is
 instead of taking dictation, the store refuses every edit that reaches it, and the server refuses
