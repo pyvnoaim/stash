@@ -494,6 +494,27 @@ export function volumeSurge(c: Candle[], p = 20): number | null {
 /** The interval one step up, for the trend filter. 1w has nothing above it and sits the check out. */
 export const HIGHER: Partial<Record<Interval, Interval>> = { '15m': '4h', '1h': '1d', '4h': '1w', '1d': '1w' }
 
+/**
+ * The tide, whatever chart you happen to be on: the daily, or the weekly once the daily is the chart.
+ *
+ * HIGHER is one step up and votes in the tally, which is right for a filter — but on 15m one step up
+ * is the 4h, so the daily never entered the read at all. That is how this tool could hand you "Sell
+ * now" on the daily and "buy at" on the 15m without a word about the two being opposites: they were
+ * answering different questions and neither knew the other existed.
+ *
+ * Deliberately *not* a veto and deliberately *not* a vote. A 15m long inside a daily downtrend is a
+ * counter-trend scalp — a real trade with a worse hit rate, not a forbidden one. Refusing every
+ * intraday setup that disagrees with the daily would silence the tool for months at a time, which is
+ * the over-filtering the ORB backtest already showed turns a bad rule into a flat one. So it is
+ * information: you get told what you are taking, and you decide.
+ *
+ * Never below HIGHER — a "bigger picture" smaller than the filter already applied is nonsense, and a
+ * test asserts it. That leaves 15m as the only interval where the two differ, which is the whole
+ * point: 1h, 4h and 1d already have the daily or better above them, so there the anchor is the same
+ * fetch under a second name and the note below can't fire on top of a warning that already did.
+ */
+export const ANCHOR: Partial<Record<Interval, Interval>> = { '15m': '1d', '1h': '1d', '4h': '1w', '1d': '1w' }
+
 /** Which way a timeframe leans: price against its slow MA. Deliberately blunt — this is a filter,
  *  not a signal, and the rule it serves ("don't fight the bigger picture") needs nothing finer. */
 export function trend(c: Candle[], slowP: number): 'up' | 'down' | null {

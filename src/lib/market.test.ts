@@ -1,7 +1,8 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, tradePlan, divergence, parseStockHours, moverMove,
-  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS } = await import('./market.ts')
+  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
+  ANCHOR, HIGHER, INTERVALS } = await import('./market.ts')
 
 // sma: nulls until the window fills, then the trailing average
 const s = sma([1, 2, 3, 4, 5], 3)
@@ -132,6 +133,19 @@ assert.equal(trend(rising, 50), 'up')
 assert.equal(trend(rising.slice().reverse(), 50), 'down')
 assert.equal(trend(rising.slice(0, 3), 50), null) // MA not warm yet → no opinion
 assert.equal(trendFilter(rising, 50, '1d')?.tone, 'bull')
+
+/* The anchor is the tide the counter-trend note reads. Two things have to hold or the note is a lie:
+   it must never point *down* the ladder (a "bigger picture" below the chart you're on), and it must
+   actually reach past the one-step-up filter on the fast intervals — reaching only as far as HIGHER
+   is exactly the blind spot it was added to close. */
+const RANK = Object.fromEntries(INTERVALS.map((iv, i) => [iv, i]))
+for (const iv of INTERVALS) {
+  const anc = ANCHOR[iv]
+  if (!anc) { assert.equal(iv, '1w'); continue } // only the top has nothing above it
+  assert.ok(RANK[anc] > RANK[iv], `${iv} anchor ${anc} must sit above it`)
+  assert.ok(RANK[anc] >= RANK[HIGHER[iv]!], `${iv} anchor ${anc} must not sit below its HIGHER`)
+}
+assert.equal(ANCHOR['15m'], '1d') // the case that started this: 15m's step up is 4h, the tide is 1d
 
 /* A cross stops voting once it is old — it was still counting one from 257 bars ago against signals
    about the last few days. It stays on the page as context, at a flat tone the tally ignores. */
