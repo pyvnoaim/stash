@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
@@ -16,6 +16,11 @@ const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
 // until you've pasted one is worse than a tile that isn't there.
 const MOVERS = 4
 const CANDIDATES = ASSETS.filter((a) => a.source === 'binance')
+/* How often the tiles re-read. They were fetched once on mount and left there, so a tab open since
+   the morning showed the morning's market under a percentage still labelled 24h — the one thing
+   this app is careful about everywhere else. Five requests a minute at most, and only while
+   somebody is looking. */
+const TILE_LIVE = 60_000
 type Row = { id: string; label: string; closes: number[]; price: number; change: number }
 
 /** Price line with a gradient area fading beneath it, drawn in a stretched 0..100 box; the 1.5px
@@ -66,9 +71,12 @@ function Markets({ onOpen }: { onOpen: (asset: string) => void }) {
   // identical from here — four tiles of em-dashes that never filled in.
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [nonce, setNonce] = useState(0)
+  /* Skeletons on the first fetch only. A refresh that emptied the tiles every minute would be a
+     page that flickers at you rather than one that stays current. */
+  const drawn = useRef(false)
   useEffect(() => {
     let live = true
-    setState('loading')
+    if (!drawn.current) setState('loading')
     const syms = encodeURIComponent(JSON.stringify(CANDIDATES.map((a) => a.id)))
     fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${syms}`)
       .then((r) => r.json())
@@ -91,11 +99,26 @@ function Markets({ onOpen }: { onOpen: (asset: string) => void }) {
             return { ...t, label, closes: [] }
           }
         }))
-        if (live) { setRows(withLines); setState(withLines.length ? 'ready' : 'error') }
+        if (live) {
+          setRows(withLines)
+          drawn.current = withLines.length > 0
+          setState(withLines.length ? 'ready' : 'error')
+        }
       })
-      .catch(() => { if (live) setState('error') })
+      // a refresh that fails leaves the tiles that are already up rather than replacing a live
+      // market with an error panel — it is the first fetch that has nothing to fall back on
+      .catch(() => { if (live && !drawn.current) setState('error') })
     return () => { live = false }
   }, [nonce])
+
+  /* …and again on a timer, only while the tab is being looked at, and the moment it is looked at
+     again — which on a phone is the event that fires, where focus does not. */
+  useEffect(() => {
+    const beat = () => { if (document.visibilityState === 'visible') setNonce((n) => n + 1) }
+    const h = setInterval(beat, TILE_LIVE)
+    addEventListener('visibilitychange', beat)
+    return () => { clearInterval(h); removeEventListener('visibilitychange', beat) }
+  }, [])
   if (state === 'error') {
     return (
       <div className="text-muted-foreground flex flex-col items-center gap-2 py-8 text-sm">

@@ -98,20 +98,28 @@ let queued: Promise<void> | undefined
 /**
  * Push if dirty, pull if not. Safe to call any time; does nothing without a session.
  *
- * A second call while one is in flight does not start a second exchange — a phone coming back to
- * the app fires visibilitychange and focus, and both wake the sync, which would be two pushes of
- * one edit and two of the fifty snapshots spent on a single change.
- *
- * It waits for one instead of joining it. Awaiting the one already going is the wrong answer for
- * anyone who calls this because they just changed something on the server — accepting a link's
- * invitation, sharing a project — since that exchange read the server before their change existed
- * and comes back without it. One extra round trip, and "sync now" means what it says. Everyone
- * arriving mid-flight shares that single follow-up, so the coalescing this replaced still holds.
+ * Calls that arrive while one is in flight join it rather than starting a second. A phone coming
+ * back to the app fires visibilitychange and focus, and both wake the sync — two pushes of one
+ * edit, the second landing on a 409 it has to redo, and two of the fifty snapshots spent on a
+ * single change. Nothing is lost by joining: an edit made mid-flight re-arms its own timer.
  */
 export function syncNow(): Promise<void> {
-  if (!inflight) return inflight = run().finally(() => { inflight = undefined })
+  return inflight ??= run().finally(() => { inflight = undefined })
+}
+
+/**
+ * An exchange guaranteed to have begun after this call. For the few places that have just changed
+ * something on the *server* — taking a link's invitation, sharing a project, cutting a link — where
+ * joining the one already going is the wrong answer: it read /api/shares before the change existed,
+ * so it comes back without it, and with no sync on a timer in this app the next look could be hours
+ * away. Waking on focus deliberately does not use this; catching up is what the joining above is
+ * for, and a wake that fired two exchanges is the thing that rule exists to prevent.
+ */
+export function syncFresh(): Promise<void> {
+  if (!inflight) return syncNow()
   // `inflight` is the finally-wrapped promise, so by the time this runs it has already cleared
-  // itself and the call below starts a fresh exchange rather than handing back the finished one
+  // itself and the call below starts a fresh exchange rather than handing back the finished one.
+  // Everyone arriving mid-flight shares that single follow-up.
   return queued ??= inflight.then(() => { queued = undefined; return syncNow() })
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Eye, Link2Off, Loader2, UserPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/markdown'
-import { joinLink, openLink, syncNow, type LinkView } from '@/lib/sync'
+import { joinLink, openLink, syncFresh, type LinkView } from '@/lib/sync'
 import { dayLabel } from '@/lib/parse'
 import { cn } from '@/lib/utils'
 import { load, type Item } from '@/lib/store'
@@ -64,7 +64,7 @@ export function LinkPage({ token, onEnter }: { token: string, onEnter: (pid: str
     const err = await joinLink(token)
     if (err) { setBusy(false); setError(err); return }
     // pull the project in before landing on it, so it is there rather than arriving a beat later
-    await syncNow()
+    await syncFresh()
     onEnter(view.pid)
   }
 
