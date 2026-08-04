@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
+const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
 
@@ -184,20 +184,20 @@ const mc = (over: Partial<Trend> = {}): Trend => ({
 })
 
 // a thin pool says nothing however violently it moves — that is a chart, not a market
-assert.deepEqual(trendAlerts([mc({ h1: 900, liq: TREND_LIQ - 1 })]), [])
+assert.deepEqual(trendAlerts([mc({ h1: 900, liq: DIALS.trendLiq - 1 })]), [])
 // nor does a liquid pool that is neither moving nor new
 assert.deepEqual(trendAlerts([mc()]), [])
 
 // a hard hour, both ways round
-const [up] = trendAlerts([mc({ h1: TREND_MOVE + 5 })])
+const [up] = trendAlerts([mc({ h1: DIALS.trendMove + 5 })])
 assert.equal(up.tone, 'info')
 assert.match(up.title, /CATE up 30%/)
-const [down] = trendAlerts([mc({ h1: -(TREND_MOVE + 5) })])
+const [down] = trendAlerts([mc({ h1: -(DIALS.trendMove + 5) })])
 assert.equal(down.tone, 'warn')
 assert.match(down.title, /CATE down 30%/)
 
 // a fresh pool with money in it is worth a word even while it sits still
-const [fresh] = trendAlerts([mc({ age: TREND_FRESH - 1 })])
+const [fresh] = trendAlerts([mc({ age: DIALS.trendFresh - 1 })])
 assert.match(fresh.title, /is new/)
 assert.match(fresh.detail, /5h old/)
 assert.match(trendAlerts([mc({ age: 0.5 })])[0].detail, /under an hour/)
