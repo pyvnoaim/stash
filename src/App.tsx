@@ -122,8 +122,19 @@ export default function App() {
     document.title = n ? `(${n}) Stash` : 'Stash'
   }, [s.items])
 
-  /* the marks name rows in the list you were looking at, and this is no longer that list */
-  useEffect(() => { setMarked([]); setPageItem(null) }, [s.sel, query])
+  /* Which list the open page was opened from — see the effect below. */
+  const pageFrom = useRef<string | null>(null)
+  const openPage = (id: string) => { pageFrom.current = s.sel; setPageItem(id) }
+
+  /* The marks name rows in the list you were looking at, and this is no longer that list.
+     The open page is different: Overview and the PDF tab are a detour rather than a destination,
+     so leaving for one and coming back to the list you left finds the note still open — the point
+     of glancing at a PDF mid-note is that you get to come back to the note. Landing anywhere else,
+     another list or a search, is leaving it for good. */
+  useEffect(() => {
+    setMarked([])
+    if (query || (!isPage(s.sel) && s.sel !== pageFrom.current)) setPageItem(null)
+  }, [s.sel, query])
   // the open page is an item; if it's gone (deleted, filtered out) fall back to the list
   const paged = pageItem ? s.items.find((i) => i.id === pageItem) : undefined
 
@@ -268,7 +279,7 @@ export default function App() {
         if (!one) return
         e.preventDefault()
         setMarked([])
-        setPageItem(one.id)
+        openPage(one.id)
         return
       }
 
@@ -509,7 +520,7 @@ export default function App() {
                         onSelect={(range) => pick(it.id, range)}
                         // focus it too: coming back out of the page should leave the row you were on
                         // under the cursor, not wherever the selection happened to be before
-                        onOpen={() => { focus(it.id); setMarked([]); setPageItem(it.id) }}
+                        onOpen={() => { focus(it.id); setMarked([]); openPage(it.id) }}
                         onTag={(t) => addTerm('#' + t)}
                         onWho={(w) => addTerm('+' + w)}
                         // the same landing the palette does: drop the search, or the project you
@@ -534,7 +545,7 @@ export default function App() {
           const open = !page && !paged && (marked.length > 1 || !!selected)
           const panel = page || paged ? null : marked.length > 1
             ? <Selection ids={marked} onDelete={() => drop(marked)} />
-            : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => setPageItem(selected.id)} /> : null
+            : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} /> : null
           if (panel) panelRef.current = panel
           return (
             <>
