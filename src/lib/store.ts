@@ -247,6 +247,10 @@ export interface State {
    *  already showing the right thing — and so it survives a reload. Validated by the page, which
    *  owns the asset table and falls back to Bitcoin for an id it doesn't recognise. */
   marketAsset: string
+  /** Which horizon the desk reads on — a HORIZONS key. Here rather than in the page's own state for
+   *  the same reason as the asset: it is a standing preference, not a thing to pick again on every
+   *  reload, and the two horizons give genuinely different verdicts. Trading is the default. */
+  marketHorizon: 'long' | 'short'
   /**
    * Alerts you have swiped away, id → when. In the document rather than in the bell's own state,
    * because dismissing is a decision and it was being made again on every device and after every
@@ -309,7 +313,7 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense',
-  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', dismissed: {},
+  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', marketHorizon: 'short', dismissed: {},
 })
 
 // Every way data enters — localStorage, an imported backup — comes through here.
@@ -462,6 +466,7 @@ export function load(data: unknown): State {
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
+  st.marketHorizon = st.marketHorizon === 'long' ? 'long' : 'short'
   /* Expiry runs here as well as on write: this is what every device does with a document it takes
      from another, so a dismissal that has run out never travels any further. */
   st.dismissed = pruneDismissed(st.dismissed)
@@ -893,6 +898,7 @@ export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
 
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
+export const setMarketHorizon = (marketHorizon: State['marketHorizon']) => set((s) => ({ ...s, marketHorizon }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
 
 /** A live price was seen at the entry: the window really opened, once, at this moment. */

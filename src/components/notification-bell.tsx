@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, DISMISS_TTL, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { ASSETS, fetchPrices, fetchTrending } from '@/lib/market'
+import { ASSETS, fetchNew, fetchPrices, fetchTrending } from '@/lib/market'
 import {
   alerts, moverAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
@@ -97,8 +97,16 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   const [trends, setTrends] = useState<Alert[]>([])
   useEffect(() => {
     let on = true
-    const tick = () => fetchTrending()
-      .then((t) => { if (on) setTrends(trendAlerts(t)) })
+    /* Both lists, because the interesting launch is the one that has not trended yet — by the time a
+       pool is on the trending list, the hour that made it worth telling you about has gone. Same
+       rule over both (trendAlerts, with its liquidity floor), and a pool on both lists produces the
+       same id twice, so the map is what stops it being two rows saying one thing. */
+    // one list failing must not silence the other: Promise.all rejects on the first, and the two
+    // are separate calls to a feed that rate-limits
+    const tick = () => Promise.all([fetchTrending().catch(() => []), fetchNew().catch(() => [])])
+      .then(([a, b]) => {
+        if (on) setTrends([...new Map(trendAlerts([...a, ...b]).map((x) => [x.id, x])).values()])
+      })
       .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
     tick()
     const h = setInterval(tick, POLL)
