@@ -26,7 +26,7 @@ import type { DatabaseSync } from 'node:sqlite'
    is arithmetic over numbers — no React, no localStorage, nothing to import that isn't here — and
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
-import { ASSETS, fmtPrice, moverMove } from '../src/lib/market.ts'
+import { ASSETS, dialsOf, fmtPrice, moverMove, type Dials } from '../src/lib/market.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -275,7 +275,29 @@ export function createPush(db: DatabaseSync) {
      typed into, so this process has no way to ask and should not have one. */
   const MOVERS = ASSETS.filter((a) => a.source === 'binance')
   type Row = { symbol: string, openPrice: string, lastPrice: string, highPrice: string, lowPrice: string }
-  let movers: Alert[] = []
+  /* The tick's raw readings, not its sentences. Whether a move is worth waking someone for is that
+     person's dial now, so the two calls are made once and the wording happens per document — which
+     is arithmetic over a dozen rows, not a request. */
+  let ticks: { hour: Row[], day: Row[], hr: string } | null = null
+
+  /** The movers as one person's thresholds see them. */
+  function moversFor(dials: Dials): Alert[] {
+    if (!ticks) return []
+    const { hour, day, hr } = ticks
+    return MOVERS.flatMap((a): Alert[] => {
+      const h = hour.find((r) => r.symbol === a.id)
+      const d = day.find((r) => r.symbol === a.id)
+      if (!h || !d) return []
+      const m = moverMove(+h.openPrice, +h.lastPrice, +d.highPrice, +d.lowPrice, dials)
+      if (!m) return []
+      return [{
+        key: `mkt-${a.id}-${m.up ? 'up' : 'down'}-${hr}`,
+        title: `${a.label} ${m.up ? 'up' : 'down'} ${Math.abs(m.pct).toFixed(1)}% in an hour`,
+        body: `${fmtPrice(+h.lastPrice)} — ${Math.round(m.bite * 100)}% of the day's range, in one hour`,
+        target: 'market',
+      }]
+    })
+  }
 
   async function refreshMovers(at = Date.now()) {
     const syms = encodeURIComponent(JSON.stringify(MOVERS.map((a) => a.id)))
@@ -284,27 +306,14 @@ export function createPush(db: DatabaseSync) {
     try {
       // the hour just gone, and the day it sits in for scale — the two moverMove reads
       const [hour, day] = await Promise.all([ticker('?windowSize=1h'), ticker('/24hr?')]) as Row[][]
-      if (!Array.isArray(hour) || !Array.isArray(day)) { movers = []; return }
+      if (!Array.isArray(hour) || !Array.isArray(day)) { ticks = null; return }
       /* The hour is in the key, so a move that keeps going is one knock an hour rather than one a
          minute, and the same asset moving again tomorrow is news again — the trick the digest key
          plays with the date. ponytail: a run that straddles two clock hours knocks twice. Being
          told about a pump twice is the failure worth having here; the other one is this thread. */
-      const hr = new Date(at).toISOString().slice(0, 13)
-      movers = MOVERS.flatMap((a): Alert[] => {
-        const h = hour.find((r) => r.symbol === a.id)
-        const d = day.find((r) => r.symbol === a.id)
-        if (!h || !d) return []
-        const m = moverMove(+h.openPrice, +h.lastPrice, +d.highPrice, +d.lowPrice)
-        if (!m) return []
-        return [{
-          key: `mkt-${a.id}-${m.up ? 'up' : 'down'}-${hr}`,
-          title: `${a.label} ${m.up ? 'up' : 'down'} ${Math.abs(m.pct).toFixed(1)}% in an hour`,
-          body: `${fmtPrice(+h.lastPrice)} — ${Math.round(m.bite * 100)}% of the day's range, in one hour`,
-          target: 'market',
-        }]
-      })
+      ticks = { hour, day, hr: new Date(at).toISOString().slice(0, 13) }
     } catch {
-      movers = []   // a feed that is down says nothing, rather than waking someone over a guess
+      ticks = null   // a feed that is down says nothing, rather than waking someone over a guess
     }
   }
 
@@ -312,7 +321,11 @@ export function createPush(db: DatabaseSync) {
   function alertsFor(user: number, tz: number): Alert[] {
     const row = q.doc.get(user) as { json: string } | undefined
     if (!row) return []
-    try { return alertsOf(JSON.parse(row.json), tz, prices, Date.now(), movers) } catch { return [] }
+    try {
+      const doc = JSON.parse(row.json)
+      // their thresholds, off their own document — the same ones the bell in the tab reads
+      return alertsOf(doc, tz, prices, Date.now(), moversFor(dialsOf(doc)))
+    } catch { return [] }
   }
 
   /** What `/api/alerts` answers: this user's list, against whichever timezone they last reported. */

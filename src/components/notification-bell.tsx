@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, DISMISS_TTL, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { ASSETS, fetchNew, fetchPrices, fetchStockHours, fetchTrending } from '@/lib/market'
+import { ASSETS, fetchNew, fetchPrices, fetchStockHours, fetchTrending, type Trend } from '@/lib/market'
 import {
   alerts, moverAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
@@ -35,7 +35,10 @@ const STOCK_POLL = 5 * 60_000
 export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
   const [open, setOpen] = useState(false)
-  const [movers, setMovers] = useState<Alert[]>([])
+  /* The readings, not the sentences. Both sweeps below write rows and the wording happens in one
+     memo underneath, so turning a threshold in Settings changes the bell on the spot rather than
+     on whichever poll happens next — which for the stocks is five minutes of wondering if it took. */
+  const [movers, setMovers] = useState<Mover[]>([])
 
   const stateAlerts = useMemo(() => alerts(s), [s.items, s.subs]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -52,7 +55,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     const tick = () => Promise.all([ticker('?windowSize=1h'), ticker('/24hr?')])
       .then(([hour, day]: [Row[], Row[]]) => {
         if (!live || !Array.isArray(hour) || !Array.isArray(day)) return
-        setMovers(moverAlerts(MOVERS.flatMap((a): Mover[] => {
+        setMovers(MOVERS.flatMap((a): Mover[] => {
           const h = hour.find((r) => r.symbol === a.id)
           const d = day.find((r) => r.symbol === a.id)
           // a symbol either feed left out is skipped, not defaulted — moverAlerts would read a
@@ -62,7 +65,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
             asset: a.id, label: a.label,
             open: +h.openPrice, last: +h.lastPrice, high: +d.highPrice, low: +d.lowPrice,
           }]
-        })))
+        }))
       })
       .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
     tick()
@@ -73,17 +76,17 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   /* The same reading for the stocks, on the slower timer their feed can afford. Their own state,
      not appended to the one above: the two arrive on different clocks, and one list written by two
      timers would have each of them wiping the other's rows every time it landed. */
-  const [stockMovers, setStockMovers] = useState<Alert[]>([])
+  const [stockMovers, setStockMovers] = useState<Mover[]>([])
   useEffect(() => {
     if (!s.apiKey) { setStockMovers([]); return }
     let on = true
     const tick = () => fetchStockHours(STOCKS.map((a) => a.id), s.apiKey)
       .then((rows) => {
         if (!on) return
-        setStockMovers(moverAlerts(rows.flatMap((h): Mover[] => {
+        setStockMovers(rows.flatMap((h): Mover[] => {
           const a = STOCKS.find((x) => x.id === h.id)
           return a ? [{ asset: a.id, label: a.label, open: h.open, last: h.last, high: h.high, low: h.low }] : []
-        })))
+        }))
       })
     tick()
     const h = setInterval(tick, STOCK_POLL)
@@ -122,7 +125,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   /* the memecoin end, on the same timer. This is the half that has to be a poll rather than the
      movers' one-shot: a pool that opened twenty minutes ago stops being news within the hour, and
      an answer fetched when the tab opened is no answer at all. Keyless, so it costs nothing to ask. */
-  const [trends, setTrends] = useState<Alert[]>([])
+  const [trends, setTrends] = useState<Trend[]>([])
   useEffect(() => {
     let on = true
     /* Both lists, because the interesting launch is the one that has not trended yet — by the time a
@@ -132,9 +135,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     // one list failing must not silence the other: Promise.all rejects on the first, and the two
     // are separate calls to a feed that rate-limits
     const tick = () => Promise.all([fetchTrending().catch(() => []), fetchNew().catch(() => [])])
-      .then(([a, b]) => {
-        if (on) setTrends([...new Map(trendAlerts([...a, ...b]).map((x) => [x.id, x])).values()])
-      })
+      .then(([a, b]) => { if (on) setTrends([...a, ...b]) })
       .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
     tick()
     const h = setInterval(tick, POLL)
@@ -146,8 +147,16 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
      an overdue task is still overdue tomorrow, and worth saying again then. Filtered here as well as
      pruned on load, since a tab left open all day outlives the ones it started with. */
   const gone = (id: string) => Date.now() - (s.dismissed[id] ?? 0) < DISMISS_TTL
-  const shown = [...stateAlerts, ...setups, ...done, ...movers, ...stockMovers, ...trends]
-    .filter((a) => !gone(a.id))
+
+  /* Every market reading worded at once, against the thresholds this document carries. A pool on
+     both the trending and the new list produces the same id twice, so the map is what stops it
+     being two rows saying one thing. */
+  const market = useMemo(() => [
+    ...moverAlerts([...movers, ...stockMovers], s.dials),
+    ...new Map(trendAlerts(trends, s.dials).map((x) => [x.id, x])).values(),
+  ], [movers, stockMovers, trends, s.dials])
+
+  const shown = [...stateAlerts, ...setups, ...done, ...market].filter((a) => !gone(a.id))
   const drop = dismissAlerts
 
   return (
