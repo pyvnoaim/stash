@@ -345,11 +345,63 @@ export const fmtPrice = (n: number, ref = n) => {
 export const MOVER_BITE = 0.35   // share of the day's range covered in the hour
 export const MOVER_FLOOR = 0.75  // percent, under which nothing counts however quiet the day was
 
+/* ---------- and the same numbers, turned by hand ---------- */
+
+/**
+ * Every threshold the bell reads, as one object. They were constants with "Bell too loud? Raise
+ * this" written beside them, which is a redeploy for a number that depends on what the chain did
+ * that week. The defaults are the constants above and the ones in notify.ts, unchanged.
+ *
+ * One shape for both bells: the tab reads it out of the document, and server/push.ts reads it out
+ * of the same document when it decides whether to wake a shut phone. A threshold kept in two
+ * places is two thresholds a month later.
+ */
+export type Dials = {
+  /** Share of the day's range an hour has to cover. */
+  bite: number
+  /** …and the percent it has to be worth at all, however quiet the day. */
+  floor: number
+  /** A pool's move in the last hour, in percent. */
+  trendMove: number
+  /** Hours old and still counting as a new pool. */
+  trendFresh: number
+  /** Dollars in the pool before either reading is worth a word. */
+  trendLiq: number
+  /** …and the floor the New list on the Markets page is filtered by. */
+  newLiq: number
+}
+
+export const DIALS: Dials = {
+  bite: MOVER_BITE, floor: MOVER_FLOOR,
+  trendMove: 25, trendFresh: 6, trendLiq: 50_000, newLiq: 15_000,
+}
+
+/** What each dial may be set to. A bite of zero is every tick of every day, and there is no
+ *  wording for a bell that never stops — so the range is part of the dial, not advice beside it. */
+const RANGE: Record<keyof Dials, [number, number]> = {
+  bite: [0.05, 1], floor: [0.1, 25], trendMove: [1, 500],
+  trendFresh: [0.5, 72], trendLiq: [0, 5_000_000], newLiq: [0, 5_000_000],
+}
+
+/** The dials off a document — a user's, or a hand-edited backup's. Anything missing, unreadable or
+ *  out of range falls back to the default rather than to whatever the file said. */
+export function dialsOf(s: unknown): Dials {
+  const raw = (s as { dials?: Partial<Record<keyof Dials, unknown>> } | null)?.dials
+  const out = { ...DIALS }
+  if (!raw || typeof raw !== 'object') return out
+  for (const k of Object.keys(DIALS) as (keyof Dials)[]) {
+    const n = Number(raw[k])
+    const [lo, hi] = RANGE[k]
+    if (isFinite(n) && n >= lo && n <= hi) out[k] = n
+  }
+  return out
+}
+
 /**
  * One asset's last hour measured against the day it happened in, or null when there is nothing
  * there worth saying. Both bells build their own sentence out of this; neither decides it.
  */
-export function moverMove(open: number, last: number, high: number, low: number):
+export function moverMove(open: number, last: number, high: number, low: number, d: Dials = DIALS):
 { pct: number; bite: number; up: boolean } | null {
   const range = high - low, moved = last - open
   // a feed that answered with a missing open would otherwise read as a move of infinity, and a
@@ -357,7 +409,7 @@ export function moverMove(open: number, last: number, high: number, low: number)
   if (!(open > 0) || !(range > 0) || !isFinite(moved)) return null
   const pct = (moved / open) * 100
   const bite = Math.abs(moved) / range
-  if (Math.abs(pct) < MOVER_FLOOR || bite < MOVER_BITE) return null
+  if (Math.abs(pct) < d.floor || bite < d.bite) return null
   return { pct, bite, up: moved >= 0 }
 }
 

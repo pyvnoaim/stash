@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { HOTKEYS } from './keys.ts'
+import { DIALS, dialsOf, type Dials } from './market.ts'
 import { isRepeat, nextAfter, parseList, today, type Parsed, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
@@ -251,6 +252,10 @@ export interface State {
    *  the same reason as the asset: it is a standing preference, not a thing to pick again on every
    *  reload, and the two horizons give genuinely different verdicts. Trading is the default. */
   marketHorizon: 'long' | 'short'
+  /** What the bell counts as worth interrupting you for. In the document rather than on the device
+   *  because the push server reads it too — a threshold set here has to be the one that decides
+   *  whether a shut phone rings. See Dials in market.ts, which owns the defaults and the ranges. */
+  dials: Dials
   /**
    * Alerts you have swiped away, id → when. In the document rather than in the bell's own state,
    * because dismissing is a decision and it was being made again on every device and after every
@@ -313,7 +318,8 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense',
-  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', marketHorizon: 'short', dismissed: {},
+  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', marketHorizon: 'short',
+  dials: { ...DIALS }, dismissed: {},
 })
 
 // Every way data enters — localStorage, an imported backup — comes through here.
@@ -467,6 +473,8 @@ export function load(data: unknown): State {
   st.subView = st.subView === 'income' ? 'income' : 'expense'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
   st.marketHorizon = st.marketHorizon === 'long' ? 'long' : 'short'
+  // dialsOf owns the ranges: a hand-edited backup cannot set a threshold the bell has no wording for
+  st.dials = dialsOf(st)
   /* Expiry runs here as well as on write: this is what every device does with a document it takes
      from another, so a dismissal that has run out never travels any further. */
   st.dismissed = pruneDismissed(st.dismissed)
@@ -899,6 +907,10 @@ export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
 export const setMarketHorizon = (marketHorizon: State['marketHorizon']) => set((s) => ({ ...s, marketHorizon }))
+/** One dial, clamped to what it may be — the same guard a loaded document goes through. */
+export const setDial = (k: keyof Dials, v: number) =>
+  set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))
+export const resetDials = () => set((s) => ({ ...s, dials: { ...DIALS } }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
 
 /** A live price was seen at the entry: the window really opened, once, at this moment. */

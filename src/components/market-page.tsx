@@ -33,9 +33,6 @@ const LIVE = 5000 // how often the forming candle is repriced
 const LIVE_SLOW = 15_000 // …and how often for stocks, whose free tier allows 8 calls a minute
 const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a minute, this asks 1
 const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
-// A pool an hour old with $3k in it is a chart with nobody behind it, and the new list is mostly
-// those. ponytail: one floor, tuned by eye — a dial in Settings if it ever needs to differ per user.
-const NEW_LIQ = 15_000
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 const BAR_MS: Record<Interval, number> = { '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -882,6 +879,9 @@ function Trending() {
   /* Two lists, one panel: what is running now, and what has only just opened. The second is the one
      you cannot get from the first — by the time a pool trends, the hour you wanted is behind you. */
   const [mode, setMode] = useState<'trending' | 'new'>('trending')
+  // a pool an hour old with $3k in it is a chart with nobody behind it, and the new list is mostly
+  // those. The floor is a dial, in Settings → Markets, beside the ones the bell reads
+  const { newLiq } = useStash().dials
   const [rows, setRows] = useState<Trend[] | null>(null)
   const [err, setErr] = useState(false)
   /* The last hour as a line, one pool at a time — the feed has no batch for it. Only for the rows
@@ -902,7 +902,7 @@ function Trending() {
 
   // the new list comes back newest first and mostly empty of money — the floor is what makes it a
   // list of things you could act on rather than a feed of launches
-  const shown = (mode === 'new' ? rows?.filter((t) => t.liq >= NEW_LIQ) : rows)?.slice(0, TREND_ROWS)
+  const shown = (mode === 'new' ? rows?.filter((t) => t.liq >= newLiq) : rows)?.slice(0, TREND_ROWS)
   useEffect(() => {
     if (!shown?.length) return
     let on = true
@@ -927,7 +927,7 @@ function Trending() {
             {mode === 'new' ? 'New' : 'Trending'} on {TREND_NETWORK}
           </span>
           <span className="text-muted-foreground text-xs">
-            {mode === 'new' ? `just opened, over ${usd(NEW_LIQ)} in the pool` : 'by the last hour'}
+            {mode === 'new' ? `just opened, over ${usd(newLiq)} in the pool` : 'by the last hour'}
           </span>
           <span className="ml-auto flex gap-1">
             {(['trending', 'new'] as const).map((m) => (

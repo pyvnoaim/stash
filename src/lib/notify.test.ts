@@ -13,6 +13,7 @@ Object.assign(globalThis, {
 
 const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts, TREND_MOVE, TREND_FRESH, TREND_LIQ } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
+const { DIALS, dialsOf } = await import('./market.ts')
 
 const t = today()
 const yesterday = new Date(Date.parse(t) - 864e5).toLocaleDateString('sv')
@@ -23,7 +24,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
   subView: 'expense', watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT',
-  marketHorizon: 'short', dismissed: {} }
+  marketHorizon: 'short', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
 const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({
@@ -209,6 +210,17 @@ assert.equal(trendAlerts([mc({ h1: 40 })])[0].id, 'trend-pool1-move')
 assert.equal(trendAlerts([mc({ age: 1 })])[0].id, 'trend-pool1-new')
 // and none of them claims an asset — no ASSETS id exists, so the desk must not be pointed anywhere
 assert.equal(trendAlerts([mc({ h1: 40 })])[0].asset, undefined)
+
+/* The dials are the whole point of being able to turn them: the same pool, past a raised bar, says
+   nothing. Read through dialsOf the way both bells read them, so the clamping is on this path too. */
+const loud = mc({ h1: 40, liq: 60_000 })
+assert.equal(trendAlerts([loud], dialsOf({ dials: { trendLiq: 100_000 } })).length, 0)
+assert.equal(trendAlerts([loud], dialsOf({ dials: { trendMove: 50 } })).length, 0)
+assert.equal(trendAlerts([loud], dialsOf({ dials: { trendLiq: 10_000 } })).length, 1)
+// a dial set to something the bell has no wording for is the default, not the file's word
+assert.equal(dialsOf({ dials: { bite: 0 } }).bite, DIALS.bite)
+assert.equal(dialsOf({ dials: { trendLiq: 'lots' } }).trendLiq, DIALS.trendLiq)
+assert.deepEqual(dialsOf(null), DIALS)
 
 /* moverAlerts: the listed assets, measured against their own day. The first case is the one this
    rule exists for — Bitcoin's 13:00 hour on 3 Aug 2026, the pump the old 24-hour reading missed

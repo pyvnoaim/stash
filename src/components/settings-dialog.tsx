@@ -23,8 +23,10 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  clearDone, hotkey, resetHotkeys, setApiKey, setChart, setHotkey, setStake, useStash, type ChartStyle,
+  clearDone, hotkey, resetDials, resetHotkeys, setApiKey, setChart, setDial, setHotkey, setStake,
+  useStash, type ChartStyle,
 } from '@/lib/store'
+import type { Dials as DialSet } from '@/lib/market'
 import {
   changePassword, deleteAccount, devices, dropFeed, dropLink, feed, getSync, links, linkUrl, logout,
   newFeed, restore, subscribeSync, updateAccount, versions,
@@ -340,7 +342,66 @@ function MarketsPanel() {
           onChange={(e) => setApiKey(e.target.value)}
         />
       </Section>
+
+      <Dials />
     </>
+  )
+}
+
+/** One dial: a number, what it is, and the unit it is in. */
+const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string, scale?: number }[] = [
+  { k: 'floor', label: 'Worth saying at all', unit: '%',
+    hint: 'Under this in an hour, nothing is said however quiet the day was.' },
+  { k: 'bite', label: 'Share of the day', unit: '%', scale: 100,
+    hint: 'How much of the day\'s whole range the hour has to cover. The dial to raise first if the bell is loud — 2% is a remarkable hour for gold and a quiet one for Dogecoin, and this is what lets one number serve both.' },
+  { k: 'trendMove', label: 'Pool move', unit: '%',
+    hint: 'A memecoin pool\'s move in the last hour before it is worth a word.' },
+  { k: 'trendFresh', label: 'Still counts as new', unit: 'h',
+    hint: 'How long after a pool opens it is still news that it exists.' },
+  { k: 'trendLiq', label: 'Pool liquidity', unit: '$',
+    hint: 'Dollars in the pool before either reading counts. This is the one that separates a market from a rug with a chart on it — raise it first.' },
+  { k: 'newLiq', label: 'New list floor', unit: '$',
+    hint: 'And the floor the New list on the Markets page is filtered by, which is a shortlist rather than an interruption, so it can afford to be lower.' },
+]
+
+/**
+ * The numbers behind every market alert. They were constants in the source with "bell too loud?
+ * raise this" written beside them, which is a redeploy for a threshold that depends on what the
+ * chain did that week. They ride the document, so the bell in the tab and the one that reaches a
+ * shut phone read the same answer — a threshold kept in two places is two thresholds a month later.
+ */
+function Dials() {
+  const { dials } = useStash()
+  return (
+    <Section
+      title="When the bell rings"
+      hint="What counts as worth interrupting you for. Changes take on the spot, here and on your
+        phone — the alerts are re-read against these, not re-fetched."
+      action={<Button variant="outline" size="sm" onClick={resetDials}><RotateCcw /> Defaults</Button>}
+    >
+      {DIAL_FIELDS.map(({ k, label, unit, hint, scale = 1 }) => (
+        <div key={k} className="grid gap-1">
+          <div className="flex items-center gap-2">
+            <Label htmlFor={`dial-${k}`} className="flex-1">{label}</Label>
+            <span className="text-muted-foreground text-xs">{unit}</span>
+            <Input
+              id={`dial-${k}`}
+              inputMode="decimal"
+              className="w-28"
+              // uncontrolled and keyed on the value, so Defaults repaints the fields but typing
+              // into one does not fight the store's own round trip
+              key={`${k}-${dials[k]}`}
+              defaultValue={+(dials[k] * scale).toFixed(4)}
+              onChange={(e) => {
+                const n = parseFloat(e.target.value.replace(',', '.'))
+                if (isFinite(n)) setDial(k, n / scale)
+              }}
+            />
+          </div>
+          <p className="text-muted-foreground text-xs">{hint}</p>
+        </div>
+      ))}
+    </Section>
   )
 }
 

@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { nextCharge, SUBS, MARKET, type Result, type State, type Watch } from './store.ts'
-import { fmtPrice, moverMove, type Trend } from './market.ts'
+import { DIALS, fmtPrice, moverMove, type Dials, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -185,9 +185,9 @@ export type Mover = {
  * a two-hour run shows up in a 24-hour percentage it is over. It is asked every minute now, about
  * the hour just gone.
  */
-export function moverAlerts(rows: Mover[]): Alert[] {
+export function moverAlerts(rows: Mover[], d: Dials = DIALS): Alert[] {
   return rows.flatMap((m): Alert[] => {
-    const mv = moverMove(m.open, m.last, m.high, m.low)
+    const mv = moverMove(m.open, m.last, m.high, m.low, d)
     if (!mv) return []
     // the direction is in the id, so dismissing a run up doesn't silence the give-back after it
     return [{
@@ -201,13 +201,13 @@ export function moverAlerts(rows: Mover[]): Alert[] {
   })
 }
 
-/* Thresholds for the memecoin bell. All three are dials and all three are here: the numbers that
-   read as "worth interrupting you" depend entirely on what the chain is doing that week, and no
-   amount of cleverness in the rule below substitutes for turning them. Bell too loud? Raise
-   TREND_LIQ first — it is the one that separates a market from a rug with a chart on it. */
-export const TREND_MOVE = 25      // percent in an hour
-export const TREND_FRESH = 6      // hours old and still counting as new
-export const TREND_LIQ = 50_000   // dollars in the pool before it is worth a word
+/* The thresholds for the memecoin bell live in market.ts now, beside the movers' — see Dials.
+   They are turned in Settings → Markets, because the numbers that read as "worth interrupting you"
+   depend entirely on what the chain is doing that week. Of the three, liquidity is the one to raise
+   first: it is what separates a market from a rug with a chart on it. */
+export const TREND_MOVE = DIALS.trendMove
+export const TREND_FRESH = DIALS.trendFresh
+export const TREND_LIQ = DIALS.trendLiq
 
 /**
  * The trending pools, turned into things worth looking up from whatever you were doing. Two of
@@ -218,11 +218,11 @@ export const TREND_LIQ = 50_000   // dollars in the pool before it is worth a wo
  * desk on Bitcoin (see the note on State.marketAsset). The alert opens Markets, where the panel
  * lists it with a link out to the pool — which is as far as this app can honestly take you.
  */
-export function trendAlerts(trends: Trend[]): Alert[] {
+export function trendAlerts(trends: Trend[], d: Dials = DIALS): Alert[] {
   return trends.flatMap((t): Alert[] => {
-    if (t.liq < TREND_LIQ) return []
-    const moved = Math.abs(t.h1) >= TREND_MOVE
-    const fresh = t.age <= TREND_FRESH
+    if (t.liq < d.trendLiq) return []
+    const moved = Math.abs(t.h1) >= d.trendMove
+    const fresh = t.age <= d.trendFresh
     if (!moved && !fresh) return []
     const up = t.h1 >= 0
     const liq = '$' + Math.round(t.liq).toLocaleString()
