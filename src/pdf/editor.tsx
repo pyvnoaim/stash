@@ -8,7 +8,15 @@ import {
   Highlighter, Loader2, MousePointer2, Move, Redo2, Square, Trash2, Type, Undo2, Upload, ZoomIn,
   ZoomOut,
 } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -61,6 +69,10 @@ export default function Editor({ visible }: { visible: boolean }) {
   const [password, setPassword] = useState('')
   const [askPass, setAskPass] = useState(false)
   const [busy, setBusy] = useState(false)
+  /* The name being typed into the save dialog — null when it is shut, so an emptied field is still
+     an open dialog. `pending` is the file waiting on the "this discards your stamps" answer. */
+  const [saveAs, setSaveAs] = useState<string | null>(null)
+  const [pending, setPending] = useState<File | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const openRef = useRef<HTMLInputElement>(null)
@@ -196,7 +208,7 @@ export default function Editor({ visible }: { visible: boolean }) {
         setBytes(merged)
       }
     } catch {
-      alert('That file could not be read as a PDF.')
+      toast.error('That file could not be read as a PDF.')
     } finally {
       setBusy(false)
     }
@@ -214,7 +226,7 @@ export default function Editor({ visible }: { visible: boolean }) {
       setBytes(next)
       setNotes((ns) => notesAfterInsert(ns, page + 1))
       setPage(page + 1)
-    } catch { alert('That page could not be added.') }
+    } catch { toast.error('That page could not be added.') }
   }
 
   const drop = async () => {
@@ -225,19 +237,18 @@ export default function Editor({ visible }: { visible: boolean }) {
       setBytes(next)
       setNotes((ns) => notesAfterRemove(ns, page))
       setPage(Math.max(0, Math.min(page, count - 2)))
-    } catch { alert('That page could not be removed.') }
+    } catch { toast.error('That page could not be removed.') }
   }
 
-  const download = async () => {
-    if (!bytes) return
-    // ponytail: native prompt, like the confirm() next to it. A dialog when someone wants the
-    // name remembered between saves.
-    const asked = prompt('Save as', name.replace(/(\.pdf)?$/i, '') + '-edited.pdf')
-    if (asked === null) return   // cancelled, so nothing is baked and nothing is written
+  const suggested = () => name.replace(/(\.pdf)?$/i, '') + '-edited.pdf'
+
+  const write = async () => {
+    if (!bytes || saveAs === null) return
     // an empty box means they cleared it rather than chose nothing, so fall back to the file's
     // own name — and to something at all if that leaves nothing, or `.pdf` saves a dotfile
-    const stem = (asked.trim() || name).replace(/(\.pdf)?$/i, '').trim()
+    const stem = (saveAs.trim() || name).replace(/(\.pdf)?$/i, '').trim()
     const out = (stem || 'document') + '.pdf'
+    setSaveAs(null)
     setBusy(true)
     try {
       const baked = await bake(bytes, notes)
@@ -246,7 +257,7 @@ export default function Editor({ visible }: { visible: boolean }) {
       setTimeout(() => URL.revokeObjectURL(url), 5000)
     } catch {
       // not the sheet's error state: the document on screen is fine, only the writing failed
-      alert('The file could not be written. Your work is still here.')
+      toast.error('The file could not be written. Your work is still here.')
     } finally {
       setBusy(false)   // never leave the button stuck on “Preparing…”
     }
@@ -530,7 +541,9 @@ export default function Editor({ visible }: { visible: boolean }) {
           </div>
         )}
 
-        <Button className="ml-auto" size="sm" disabled={busy || drawing} onClick={download}>
+        <Button className="ml-auto" size="sm" disabled={busy || drawing}
+          onClick={() => setSaveAs(suggested())}
+        >
           {/* baking redraws every stamp into the file, which on a long document is a wait */}
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
           {busy ? 'Preparing…' : 'Download'}
@@ -646,12 +659,55 @@ export default function Editor({ visible }: { visible: boolean }) {
         ref={openRef} type="file" accept="application/pdf" hidden
         onChange={(e) => {
           const f = e.target.files?.[0]
-          if (f && (!notes.length || confirm('Open a different PDF? The text you added here will be discarded.'))) {
-            load(f, 'open')
+          if (f) {
+            if (notes.length) setPending(f)
+            else load(f, 'open')
           }
           e.target.value = ''
         }}
       />
+
+      <Dialog open={saveAs !== null} onOpenChange={(v) => !v && setSaveAs(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save as</DialogTitle>
+            <DialogDescription>
+              The text you added is drawn into the file as it is written.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            aria-label="File name"
+            value={saveAs ?? ''}
+            // the whole name selected, the way the browser's own box opened — retyping it is the
+            // common case, and the stem is what you were going to replace
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setSaveAs(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void write() } }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveAs(null)}>Cancel</Button>
+            <Button onClick={write}>Download</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!pending} onOpenChange={(v) => !v && setPending(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Open a different PDF?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The text you added here will be discarded.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (pending) void load(pending, 'open') }}>
+              Open it
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <input
         ref={mergeRef} type="file" accept="application/pdf" hidden
         onChange={(e) => {
