@@ -50,6 +50,8 @@ const scryptOpts = (N: number) => ({ N, r: 8, p: 1, maxmem: 128 * N * 8 * 2 })
 const MIME: Record<string, string> = {
   html: 'text/html; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
+  // pdf.js ships its worker as .mjs, and a browser will not run a module served as octet-stream
+  mjs: 'text/javascript; charset=utf-8',
   css: 'text/css; charset=utf-8',
   json: 'application/json; charset=utf-8',
   svg: 'image/svg+xml',
