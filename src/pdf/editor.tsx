@@ -570,6 +570,9 @@ export default function Editor({ visible }: { visible: boolean }) {
             style={{ width: view ? view.width / RENDER_SCALE : undefined }}
             className={cn(
               'block h-auto max-w-full bg-white shadow-lg',
+              // nothing drawn on it yet — stays mounted so the render effect keeps its ref,
+              // but an undrawn canvas is a bare 300×150 white rectangle nobody asked for
+              !view && 'hidden',
               tool === 'text' && 'cursor-text',
             )}
           />
