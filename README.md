@@ -687,10 +687,12 @@ people in the sidebar, and **Leave project** in its menu — leaving takes nothi
 ## From Claude
 
 `server/mcp.ts` is an MCP server over stdio: it signs into your account like any other device and
-hands Claude seven tools. Registering it once is the whole setup —
+hands Claude seven tools. Registering it once is the whole setup — the key is optional, and only
+the nine stocks want it:
 
 ```sh
 claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e STASH_PASS=… \
+  -e STASH_TD_KEY=… \
   -- node --experimental-strip-types /path/to/stash/server/mcp.ts
 ```
 
