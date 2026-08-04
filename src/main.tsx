@@ -28,6 +28,11 @@ const updateSW = registerSW({
     holdRegistration(r)      // so Check now, in Settings, has something to ask
     if (!r) return
     const check = () => { if (document.visibilityState === 'visible') void r.update() }
+    /* Once, now. Installed to the Dock this is the only check that ever runs on a normal day: the
+       app is opened, used and closed inside the hour, and visibilitychange does not fire on a
+       launch — nothing is becoming visible, it already is. That left Settings → Check now, which
+       asks this same question, as the only way an update was ever found. */
+    check()
     setInterval(check, 60 * 60 * 1000)
     addEventListener('visibilitychange', check)
   },
