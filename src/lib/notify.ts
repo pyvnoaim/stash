@@ -201,13 +201,10 @@ export function moverAlerts(rows: Mover[], d: Dials = DIALS): Alert[] {
   })
 }
 
-/* The thresholds for the memecoin bell live in market.ts now, beside the movers' — see Dials.
-   They are turned in Settings → Markets, because the numbers that read as "worth interrupting you"
+/* The thresholds for the memecoin bell live in market.ts now, beside the movers' — see Dials. They
+   are turned in Settings → Markets, because the numbers that read as "worth interrupting you"
    depend entirely on what the chain is doing that week. Of the three, liquidity is the one to raise
    first: it is what separates a market from a rug with a chart on it. */
-export const TREND_MOVE = DIALS.trendMove
-export const TREND_FRESH = DIALS.trendFresh
-export const TREND_LIQ = DIALS.trendLiq
 
 /**
  * The trending pools, turned into things worth looking up from whatever you were doing. Two of
