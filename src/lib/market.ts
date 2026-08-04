@@ -85,6 +85,58 @@ export async function fetchPrices(ids: string[], apiKey: string): Promise<Record
   return out
 }
 
+/* ---------- the stocks' last hour ---------- */
+
+/** One listed asset's hour and the session it sits in — what moverMove reads, before it is words. */
+export type Hour = { id: string; open: number; last: number; high: number; low: number }
+
+/** A bar older than this is a market that shut, not a move. Without it the closing hour of a US
+ *  session would be announced all evening and again all night, every poll, to nobody's benefit. */
+const STOCK_STALE = 2 * 3600_000
+
+/**
+ * Twelve Data's hourly bars, turned into the same reading the crypto sweep produces. Pure, so a
+ * real payload can be held against it without a network.
+ *
+ * The range here is the session's rather than a rolling 24 hours: a stock does not trade overnight,
+ * and the eight bars asked for cover a US day with an hour to spare. That is the honest denominator
+ * for "how much of today did this hour eat" on something that only has six and a half of them.
+ */
+export function parseStockHours(json: unknown, ids: string[], now = Date.now()): Hour[] {
+  if (!json || typeof json !== 'object') return []
+  type Row = { datetime: string; open: string; high: string; low: string; close: string }
+  const j = json as Record<string, { values?: Row[] }> & { values?: Row[] }
+  return ids.flatMap((id): Hour[] => {
+    /* One symbol comes back bare, several come back keyed by symbol — the asymmetry fetchPrices
+       meets. Read either shape rather than deciding from the count: the count is what was asked
+       for, and the shape is what arrived. */
+    const rows = j[id]?.values ?? j.values
+    if (!Array.isArray(rows) || !rows.length) return []
+    // newest first, the way this feed answers. timezone=UTC on the request makes these absolute
+    const t = rows[0].datetime
+    const at = Date.parse(t.includes(' ') ? t.replace(' ', 'T') + 'Z' : t + 'T00:00:00Z')
+    if (!isFinite(at) || now - at > STOCK_STALE) return []
+    const open = +rows[0].open, last = +rows[0].close
+    const highs = rows.map((r) => +r.high).filter((n) => isFinite(n) && n > 0)
+    const lows = rows.map((r) => +r.low).filter((n) => isFinite(n) && n > 0)
+    if (!(open > 0) || !(last > 0) || !highs.length || !lows.length) return []
+    return [{ id, open, last, high: Math.max(...highs), low: Math.min(...lows) }]
+  })
+}
+
+/**
+ * The stocks' last hour, in one call for all of them. Separate from fetchCandles because it must
+ * never be the cached one — see the note on the worker's routes in vite.config.ts — and separate
+ * from the crypto sweep because the free tier allows 800 calls a day, which a poll on the minute
+ * spends by lunchtime. A key it does not have, or a feed that fails, says nothing at all.
+ */
+export function fetchStockHours(ids: string[], apiKey: string, now = Date.now()): Promise<Hour[]> {
+  if (!apiKey || !ids.length) return Promise.resolve([])
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(ids.join(','))}`
+    + `&interval=1h&outputsize=8&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`
+  return fetch(url).then((r) => r.json()).then((j) => parseStockHours(j, ids, now)).catch(() => [])
+}
+
 async function fetchBinance(symbol: string, interval: Interval): Promise<Candle[]> {
   const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1000`
   const rows = await fetch(url).then((r) => r.json())

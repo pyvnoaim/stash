@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, DISMISS_TTL, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { ASSETS, fetchNew, fetchPrices, fetchTrending } from '@/lib/market'
+import { ASSETS, fetchNew, fetchPrices, fetchStockHours, fetchTrending } from '@/lib/market'
 import {
   alerts, moverAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
@@ -19,10 +19,18 @@ const DOT: Record<Alert['tone'], string> = {
 
 /* Everything on the desk that Binance quotes — crypto and gold. Keyless, and one call covers the
    lot, so there is no reason for this to be a shorter hand-kept list than the one the picker shows:
-   the coin you are not watching is exactly the one whose move you would want telling about. Stocks
-   sit it out, the same as everywhere else — their feed needs the key, which stays in the browser. */
+   the coin you are not watching is exactly the one whose move you would want telling about. */
 const MOVERS = ASSETS.filter((a) => a.source === 'binance')
+/* And the stocks, on their own timer. They were left out of this entirely, which meant the desk
+   could tell you gold had moved and never that Nvidia had. Two things keep them apart from the
+   sweep above rather than in it: the key, which lives in this browser and never reaches the push
+   server — so this half is in-tab only, and a closed phone still hears about crypto alone — and
+   Twelve Data's free tier of 800 calls a day, which a poll on the minute would spend by lunch. */
+const STOCKS = ASSETS.filter((a) => a.source === 'twelvedata')
 const POLL = 60_000 // how often saved setups are re-priced while the app is open
+/* Five minutes: 288 calls a day against the 800 allowed, leaving room for the setup poll beside
+   it. An hourly bar barely moves inside five minutes, so nothing is missed for the arithmetic. */
+const STOCK_POLL = 5 * 60_000
 
 export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
@@ -61,6 +69,26 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     const h = setInterval(tick, POLL)
     return () => { live = false; clearInterval(h) }
   }, [])
+
+  /* The same reading for the stocks, on the slower timer their feed can afford. Their own state,
+     not appended to the one above: the two arrive on different clocks, and one list written by two
+     timers would have each of them wiping the other's rows every time it landed. */
+  const [stockMovers, setStockMovers] = useState<Alert[]>([])
+  useEffect(() => {
+    if (!s.apiKey) { setStockMovers([]); return }
+    let on = true
+    const tick = () => fetchStockHours(STOCKS.map((a) => a.id), s.apiKey)
+      .then((rows) => {
+        if (!on) return
+        setStockMovers(moverAlerts(rows.flatMap((h): Mover[] => {
+          const a = STOCKS.find((x) => x.id === h.id)
+          return a ? [{ asset: a.id, label: a.label, open: h.open, last: h.last, high: h.high, low: h.low }] : []
+        })))
+      })
+    tick()
+    const h = setInterval(tick, STOCK_POLL)
+    return () => { on = false; clearInterval(h) }
+  }, [s.apiKey])
 
   // saved setups, re-priced on a timer. The joined ids are the dep so the poll only restarts when
   // the set of watched assets actually changes, not on every unrelated write to the store.
@@ -118,7 +146,8 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
      an overdue task is still overdue tomorrow, and worth saying again then. Filtered here as well as
      pruned on load, since a tab left open all day outlives the ones it started with. */
   const gone = (id: string) => Date.now() - (s.dismissed[id] ?? 0) < DISMISS_TTL
-  const shown = [...stateAlerts, ...setups, ...done, ...movers, ...trends].filter((a) => !gone(a.id))
+  const shown = [...stateAlerts, ...setups, ...done, ...movers, ...stockMovers, ...trends]
+    .filter((a) => !gone(a.id))
   const drop = dismissAlerts
 
   return (

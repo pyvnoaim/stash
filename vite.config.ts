@@ -76,7 +76,13 @@ export default defineConfig({
              good one and is what you get offline until the next success replaces it. Living with
              it: generateSW takes serialisable config only, so filtering the body would mean owning
              the whole service worker. The app already renders that body as the error it is. */
-          urlPattern: /^https:\/\/api\.twelvedata\.com\/time_series/,
+          /* The history call and nothing else: outputsize=5000 is what fetchCandles asks for, and
+             the mover sweep asks the same endpoint for the last eight hourly bars. That one is a
+             live reading in the same way the ticker is — served from cache it announces an hour
+             that is over, to someone offline who cannot check. Matched on the size so the two
+             cannot be confused, and sw-routes.test.ts holds both halves of that against the
+             worker that actually shipped. */
+          urlPattern: /^https:\/\/api\.twelvedata\.com\/time_series\?.*outputsize=5000/,
           handler: 'NetworkFirst',
           options: {
             cacheName: 'candles-twelvedata',
