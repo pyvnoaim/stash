@@ -178,30 +178,39 @@ export function parseTrending(json: unknown, now = Date.now()): Trend[] {
   })
 }
 
-/* Two callers want this list on the same minute and it is the same list: the panel on the Markets
-   page, and the bell that polls whether or not you ever open that page. Without this they were two
-   requests a minute for one answer. A caller arriving mid-flight joins the request already going;
-   one arriving just after gets what it returned. Failures are deliberately not cached — a feed that
-   was down a second ago is allowed to be up now. */
-let cache: { at: number; rows: Trend[] } | null = null
-let flight: Promise<Trend[]> | null = null
+/* Two callers want each of these lists on the same minute and it is the same list: the panel on the
+   Markets page, and the bell that polls whether or not you ever open that page. Without this they
+   were two requests a minute for one answer. A caller arriving mid-flight joins the request already
+   going; one arriving just after gets what it returned. Failures are deliberately not cached — a
+   feed that was down a second ago is allowed to be up now. */
+const cache = new Map<string, { at: number; rows: Trend[] }>()
+const flights = new Map<string, Promise<Trend[]>>()
 const TREND_TTL = 50_000   // under the 60s both callers poll at, so a real tick always refetches
 
-/** Trending pools, ranked by the last hour rather than the last day — a memecoin's day is over. */
-export function fetchTrending(): Promise<Trend[]> {
-  if (cache && Date.now() - cache.at < TREND_TTL) return Promise.resolve(cache.rows)
-  if (flight) return flight
-  const url = `https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}/trending_pools?duration=1h`
-  flight = fetch(url)
+function fetchPools(path: string): Promise<Trend[]> {
+  const held = cache.get(path)
+  if (held && Date.now() - held.at < TREND_TTL) return Promise.resolve(held.rows)
+  const going = flights.get(path)
+  if (going) return going
+  const p = fetch(`https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}/${path}`)
     .then((r) => r.json())
     .then((j) => {
       const rows = parseTrending(j)
-      cache = { at: Date.now(), rows }
+      cache.set(path, { at: Date.now(), rows })
       return rows
     })
-    .finally(() => { flight = null })
-  return flight
+    .finally(() => { flights.delete(path) })
+  flights.set(path, p)
+  return p
 }
+
+/** Trending pools, ranked by the last hour rather than the last day — a memecoin's day is over. */
+export const fetchTrending = () => fetchPools('trending_pools?duration=1h')
+
+/** The pools that just opened, newest first — the half of this market that has not trended yet, and
+ *  by the time it does the hour you wanted is gone. Same shape, same parser: a pool is a pool.
+ *  Mostly rubbish by count, which is what the liquidity floors on both readers are for. */
+export const fetchNew = () => fetchPools('new_pools')
 
 /**
  * The closes out of GeckoTerminal's OHLCV list. It answers newest first, and a line drawn in that

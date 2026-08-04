@@ -11,9 +11,9 @@ import { GuideDialog } from '@/components/guide-dialog'
 import { euro, moneyOf, rLabel, signedEuro } from '@/lib/notify'
 import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
-import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, uid, useStash } from '@/lib/store'
+import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
-  ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
+  ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS, orb,
   PLAN_WORDS, signals, tradePlan, trendFilter, TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
@@ -33,6 +33,9 @@ const LIVE = 5000 // how often the forming candle is repriced
 const LIVE_SLOW = 15_000 // …and how often for stocks, whose free tier allows 8 calls a minute
 const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a minute, this asks 1
 const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
+// A pool an hour old with $3k in it is a chart with nobody behind it, and the new list is mostly
+// those. ponytail: one floor, tuned by eye — a dial in Settings if it ever needs to differ per user.
+const NEW_LIQ = 15_000
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 const BAR_MS: Record<Interval, number> = { '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -116,7 +119,7 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
 }
 
 export default function MarketPage() {
-  const { chart, apiKey, watches, marketAsset: asset } = useStash()
+  const { chart, apiKey, watches, marketAsset: asset, marketHorizon: horizon } = useStash()
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload
   const setAsset = setMarketAsset
@@ -127,7 +130,7 @@ export default function MarketPage() {
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
   const [preset, setPreset] = useState<Preset>('standard')
-  const [horizon, setHorizon] = useState<Horizon>('long')
+  const setHorizon = setMarketHorizon // standing preference, same as the asset — see the store
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
@@ -876,6 +879,9 @@ function Record() {
  * The bell (trendAlerts) is what makes it fast; this is what makes it readable.
  */
 function Trending() {
+  /* Two lists, one panel: what is running now, and what has only just opened. The second is the one
+     you cannot get from the first — by the time a pool trends, the hour you wanted is behind you. */
+  const [mode, setMode] = useState<'trending' | 'new'>('trending')
   const [rows, setRows] = useState<Trend[] | null>(null)
   const [err, setErr] = useState(false)
   /* The last hour as a line, one pool at a time — the feed has no batch for it. Only for the rows
@@ -885,15 +891,18 @@ function Trending() {
 
   useEffect(() => {
     let on = true
-    const tick = () => fetchTrending()
+    setRows(null)
+    const tick = () => (mode === 'new' ? fetchNew() : fetchTrending())
       .then((t) => { if (on) { setRows(t); setErr(false) } })
       .catch(() => { if (on) setErr(true) })
     tick()
     const h = window.setInterval(tick, TREND_LIVE)
     return () => { on = false; window.clearInterval(h) }
-  }, [])
+  }, [mode])
 
-  const shown = rows?.slice(0, TREND_ROWS)
+  // the new list comes back newest first and mostly empty of money — the floor is what makes it a
+  // list of things you could act on rather than a feed of launches
+  const shown = (mode === 'new' ? rows?.filter((t) => t.liq >= NEW_LIQ) : rows)?.slice(0, TREND_ROWS)
   useEffect(() => {
     if (!shown?.length) return
     let on = true
@@ -914,12 +923,28 @@ function Trending() {
     <Card className="py-3">
       <CardContent className="px-3">
         <div className="mb-2 flex items-baseline gap-2">
-          <span className="font-heading text-sm tracking-wide uppercase">Trending on {TREND_NETWORK}</span>
-          <span className="text-muted-foreground text-xs">by the last hour</span>
+          <span className="font-heading text-sm tracking-wide uppercase">
+            {mode === 'new' ? 'New' : 'Trending'} on {TREND_NETWORK}
+          </span>
+          <span className="text-muted-foreground text-xs">
+            {mode === 'new' ? `just opened, over ${usd(NEW_LIQ)} in the pool` : 'by the last hour'}
+          </span>
+          <span className="ml-auto flex gap-1">
+            {(['trending', 'new'] as const).map((m) => (
+              <Button key={m} variant={mode === m ? 'secondary' : 'ghost'} size="sm"
+                className="h-6 px-2 text-xs capitalize" onClick={() => setMode(m)}>
+                {m}
+              </Button>
+            ))}
+          </span>
         </div>
         {err && <p className="text-muted-foreground py-4 text-sm">Could not reach the pool feed.</p>}
         {!err && !rows && <p className="text-muted-foreground py-4 text-sm">Loading pools…</p>}
-        {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">Nothing trending right now.</p>}
+        {shown?.length === 0 && (
+          <p className="text-muted-foreground py-4 text-sm">
+            {mode === 'new' ? 'Nothing new with real money in it.' : 'Nothing trending right now.'}
+          </p>
+        )}
         {shown?.map((t) => (
           /* straight out to the pool: this app has no chart for it and pretending otherwise would
              be the dishonest kind of feature. New tab, noreferrer — same terms as the item links. */
