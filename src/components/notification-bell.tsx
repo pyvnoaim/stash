@@ -44,28 +44,30 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
 
   /* On the same minute as everything else, because a move is only news while it is happening — the
      one-shot on start this replaces could only ever report what had already finished overnight.
-     Two calls: the hour that just went, and the day it sits in for scale. Both keyless, both take
-     every symbol at once, so this is two requests a minute however long the desk's list grows. */
+     Three calls: the hour that just went, the four hours behind it for the grind an hour cannot
+     see, and the day both sit in for scale. All keyless, all take every symbol at once, so this is
+     three requests a minute however long the desk's list grows. */
   useEffect(() => {
     let live = true
     const syms = encodeURIComponent(JSON.stringify(MOVERS.map((a) => a.id)))
     const ticker = (q: string) =>
       fetch(`https://api.binance.com/api/v3/ticker${q}&symbols=${syms}`).then((r) => r.json())
     type Row = { symbol: string; openPrice: string; lastPrice: string; highPrice: string; lowPrice: string }
-    const tick = () => Promise.all([ticker('?windowSize=1h'), ticker('/24hr?')])
-      .then(([hour, day]: [Row[], Row[]]) => {
-        if (!live || !Array.isArray(hour) || !Array.isArray(day)) return
-        setMovers(MOVERS.flatMap((a): Mover[] => {
-          const h = hour.find((r) => r.symbol === a.id)
+    const tick = () => Promise.all([ticker('?windowSize=1h'), ticker('?windowSize=4h'), ticker('/24hr?')])
+      .then(([hour, four, day]: [Row[], Row[], Row[]]) => {
+        if (!live || !Array.isArray(day)) return
+        const rows = (win: Row[], hours: number) => !Array.isArray(win) ? [] : MOVERS.flatMap((a): Mover[] => {
+          const h = win.find((r) => r.symbol === a.id)
           const d = day.find((r) => r.symbol === a.id)
           // a symbol either feed left out is skipped, not defaulted — moverAlerts would read a
           // missing open as a 100% move, which is the one way this could shout about nothing
           if (!h || !d) return []
           return [{
-            asset: a.id, label: a.label,
+            asset: a.id, label: a.label, hours,
             open: +h.openPrice, last: +h.lastPrice, high: +d.highPrice, low: +d.lowPrice,
           }]
-        }))
+        })
+        setMovers([...rows(hour, 1), ...rows(four, 4)])
       })
       .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
     tick()

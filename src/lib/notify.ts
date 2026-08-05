@@ -185,12 +185,16 @@ export function resultAlerts(results: Result[], stake: number, at = Date.now()):
 export type Mover = {
   asset: string
   label: string
-  /** Where the hour opened and where price is now. */
+  /** Where the window opened and where price is now. */
   open: number
   last: number
   /** The 24-hour high and low — the yardstick, not a signal of their own. */
   high: number
   low: number
+  /** The window the reading covers — 1 unless said otherwise. The four-hour sweep exists for the
+   *  grind the hour cannot see: gold's morning of 5 Aug 2026 ran 1.4% over four hours, half the
+   *  day's range, and never printed a single hour over the floor. */
+  hours?: number
 }
 
 /**
@@ -204,19 +208,26 @@ export type Mover = {
  * the hour just gone.
  */
 export function moverAlerts(rows: Mover[], d: Dials = DIALS): Alert[] {
-  return rows.flatMap((m): Alert[] => {
+  const out = new Map<string, Alert>()
+  // shortest window first: a spike hot enough for the hour is also hot over four, and the sharper
+  // sentence is the one to keep. Same id either way — the run is one story, told once.
+  for (const m of [...rows].sort((a, b) => (a.hours ?? 1) - (b.hours ?? 1))) {
     const mv = moverMove(m.open, m.last, m.high, m.low, d)
-    if (!mv) return []
+    if (!mv) continue
     // the direction is in the id, so dismissing a run up doesn't silence the give-back after it
-    return [{
-      id: `mkt-${m.asset}-${mv.up ? 'up' : 'down'}`,
-      title: `${m.label} ${mv.up ? 'up' : 'down'} ${Math.abs(mv.pct).toFixed(1)}% in an hour`,
-      detail: `${fmtPrice(m.last)} — ${Math.round(mv.bite * 100)}% of the day's range, in one hour`,
+    const id = `mkt-${m.asset}-${mv.up ? 'up' : 'down'}`
+    if (out.has(id)) continue
+    const span = (m.hours ?? 1) > 1 ? `${m.hours} hours` : 'an hour'
+    out.set(id, {
+      id,
+      title: `${m.label} ${mv.up ? 'up' : 'down'} ${Math.abs(mv.pct).toFixed(1)}% in ${span}`,
+      detail: `${fmtPrice(m.last)} — ${Math.round(mv.bite * 100)}% of the day's range, in ${(m.hours ?? 1) > 1 ? span : 'one hour'}`,
       tone: mv.up ? 'info' : 'warn',
       target: MARKET,
       asset: m.asset,
-    }]
-  })
+    })
+  }
+  return [...out.values()]
 }
 
 /* The thresholds for the memecoin bell live in market.ts now, beside the movers' — see Dials. They
