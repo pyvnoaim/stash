@@ -259,6 +259,18 @@ export default function App() {
         drop(chosen)
         return
       }
+      /* ⌘A with nothing focused is the document's, and the document is the sidebar and the header
+         too — so a note in preview selected the whole app. Scope it to the content pane. Sits below
+         the `typingIn` return above on purpose: in the markdown editor, the search field or the
+         title, the browser's own select-all is already the one you meant, which is why this only
+         ever looked wrong in preview. */
+      if (cmd && key === 'a') {
+        const main = document.querySelector('main')
+        if (!main) return
+        e.preventDefault()
+        window.getSelection()?.selectAllChildren(main)
+        return
+      }
       // no other list shortcut wants a modifier, and ⌘S belongs to the browser
       if (cmd) return
       // the list shortcuts would act on a row you cannot see from here, delete included — and the

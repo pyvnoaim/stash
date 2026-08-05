@@ -27,6 +27,7 @@ export const ON_ROWS = ['today', 'tomorrow', 'done']
 /** Written into the handler and not rebindable, listed so the panel can still show them. */
 export const FIXED: [string, string][] = [
   ['⌘Z / ⇧⌘Z', 'Undo, redo'],
+  ['⌘A', 'Select the page, not the sidebar with it'],
   ['↑ ↓ or J K', 'Move through the list'],
   ['⏎ or double-click', 'Open the row full-page'],
   ['⇧↑ ⇧↓', 'Extend the selection'],
