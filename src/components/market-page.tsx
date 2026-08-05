@@ -866,7 +866,7 @@ export default function MarketPage() {
 
       {/* outside the fragment above, so they are there while the desk loads, errors, or waits for
           a stock key — none of them needs any of that */}
-      <Scan />
+      <Scan orbMode={preset === 'orb'} />
 
       <Record />
 
@@ -1189,17 +1189,23 @@ type ScanRow = {
 /** The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — run
  *  over one asset without rendering it. Same calls, same order, so a row here never disagrees with
  *  what opening the asset shows. */
-async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon]): Promise<ScanRow | null> {
-  const up = HIGHER[cfg.interval]
+async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], orbMode: boolean): Promise<ScanRow | null> {
+  // the orb preset pins the desk to 15m bars and adds the opening-range vote — mirror both, or a
+  // row here contradicts the card the click lands on
+  const interval: Interval = orbMode ? '15m' : cfg.interval
+  const up = HIGHER[interval]
   const [candles, higher] = await Promise.all([
-    fetchCandles(a, cfg.interval, ''),
+    fetchCandles(a, interval, ''),
     up ? fetchCandles(a, up, '').then((c) => trendFilter(c, cfg.slow, up)).catch(() => null)
        : Promise.resolve<Signal | null>(null),
   ])
   if (!candles.length) return null
   const view = signals(candles, cfg)
   const vwap = sessionVwap(candles)
-  const { bulls, bears, dir } = tally([...(higher ? [higher] : []), ...(vwap ? [vwap.signal] : []), ...view.signals])
+  const range = orbMode ? orb(candles) : null
+  const { bulls, bears, dir } = tally([
+    ...(higher ? [higher] : []), ...(range ? [range.signal] : []), ...(vwap ? [vwap.signal] : []), ...view.signals,
+  ])
   const price = candles.at(-1)!.c
   const entryMA = view.smaFast.at(-1)
   const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr) : null
@@ -1232,7 +1238,7 @@ const TIER_CLS = [
  * ponytail: fetched once per visit and on the refresh button, no live poll — these reads move by
  * the bar (an hour, a day), not by the tick.
  */
-function Scan() {
+function Scan({ orbMode }: { orbMode: boolean }) {
   const { marketHorizon: horizon } = useStash()
   const cfg = HORIZONS[horizon]
   const [rows, setRows] = useState<ScanRow[] | null>(null)
@@ -1244,14 +1250,14 @@ function Scan() {
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg).catch(() => null)),
+      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg, orbMode).catch(() => null)),
     ).then((r) => {
       if (!on) return
       setRows(r.filter((x): x is ScanRow => !!x)
         .sort((x, y) => y.tier - x.tier || (y.plan?.rr ?? 0) - (x.plan?.rr ?? 0)))
     })
     return () => { on = false }
-  }, [cfg, nonce])
+  }, [cfg, nonce, orbMode])
 
   return (
     <Card className="py-3">
@@ -1259,7 +1265,7 @@ function Scan() {
         <div className="mb-2 flex items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">Scan</span>
           <span className="text-muted-foreground text-xs">
-            every keyless chart, the {cfg.label.toLowerCase()} read, best first
+            every keyless chart, the {orbMode ? 'opening-range' : cfg.label.toLowerCase()} read, best first
           </span>
           <Button size="icon" variant="ghost" className="ml-auto size-6" title="Refresh"
             onClick={() => setNonce((n) => n + 1)}>
