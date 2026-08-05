@@ -594,7 +594,7 @@ export function trend(c: Candle[], slowP: number): 'up' | 'down' | null {
   return c.at(-1)!.c >= slow ? 'up' : 'down'
 }
 
-/** Wilder's RSI, same alignment. Flat runs give 100/0 at the extremes, which is the intended read. */
+/** Wilder's RSI, same alignment. Gains-only runs read 100, losses-only 0, a dead-flat run 50. */
 export function rsi(v: number[], p = 14): (number | null)[] {
   const out: (number | null)[] = v.map(() => null)
   if (v.length <= p) return out
@@ -633,9 +633,14 @@ export function divergence(c: Candle[], rsiSeries: (number | null)[], w = 30): '
   const argHigh = (a: number, b: number) => { let k = a; for (let i = a; i < b; i++) if (c[i].h > c[k].h) k = i; return k }
   const l1 = argLow(s, s + half), l2 = argLow(s + half, n)
   const h1 = argHigh(s, s + half), h2 = argHigh(s + half, n)
+  /* Two extremes a bar or two apart are one move seen twice, not two visits to a level: the lows
+     compare wicks while RSI reads closes, so a hammer beside a marginally lower wick with a higher
+     close read as "lower low, higher RSI" — a reversal cue off a single slide straddling the
+     halfway line. Real divergence is two swings, so the pivots have to stand apart. */
+  const gap = Math.floor(w / 6)
   const r1l = rsiSeries[l1], r2l = rsiSeries[l2], r1h = rsiSeries[h1], r2h = rsiSeries[h2]
-  if (r1l != null && r2l != null && c[l2].l < c[l1].l && r2l > r1l) return 'bull'
-  if (r1h != null && r2h != null && c[h2].h > c[h1].h && r2h < r1h) return 'bear'
+  if (r1l != null && r2l != null && l2 - l1 >= gap && c[l2].l < c[l1].l && r2l > r1l) return 'bull'
+  if (r1h != null && r2h != null && h2 - h1 >= gap && c[h2].h > c[h1].h && r2h < r1h) return 'bear'
   return null
 }
 
@@ -988,7 +993,11 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     ? { label: 'MACD turned up', tone: 'bull', kind: 'macd' as const, detail: `momentum crossed up ${mCross.ago} bars ago` }
     : { label: 'MACD turned down', tone: 'bear', kind: 'macd' as const, detail: `momentum crossed down ${mCross.ago} bars ago` })
 
-  out.push(...candlePatterns(c))
+  /* The feeds send the current bar still forming, and the lines above read it live the way every
+     chart does. The *event* reads below wait for a close: a bar seconds old is a doji every time,
+     and its two minutes of volume against twenty full bars reads as a surge that never comes. */
+  const closed = c.slice(0, -1)
+  out.push(...candlePatterns(closed))
 
   // The three below describe conditions rather than direction, so they carry a flat tone and stay
   // out of the bull/bear tally — a volatility reading isn't a vote for either side.
@@ -1002,10 +1011,10 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     out.push({ label: 'Volatility squeeze', tone: 'flat', kind: 'squeeze' as const,
       detail: 'the bands are as tight as they have been in a hundred bars — moves tend to follow, direction unsaid' })
 
-  const vol = volumeSurge(c)
+  const vol = volumeSurge(closed)
   if (vol != null && vol >= 1.8)
     out.push({ label: `Volume ${vol.toFixed(1)}× average`, tone: 'flat', kind: 'volume' as const,
-      detail: 'the latest bar brought real participation — breaks on thin volume are the ones that fail' })
+      detail: 'the last closed bar brought real participation — breaks on thin volume are the ones that fail' })
 
   return {
     smaFast, smaSlow, rsiSeries, support, resistance,
@@ -1132,10 +1141,12 @@ export function orb(c: Candle[]): Range | null {
   // noise dressed as structure, and a break nobody traded is the one that gets given back.
   const a = atr(c)
   const wide = a != null && high - low >= a * 1.5
-  // ponytail: this reads the latest bar, not whichever bar broke the range — right when the break
-  // is fresh, and the wording says "trading thin" rather than "the break came on thin volume" so it
-  // doesn't claim more than it measured. Track the breaking bar if that ever needs to be exact.
-  const surge = volumeSurge(c)
+  // ponytail: this reads the latest *closed* bar, not whichever bar broke the range — right when
+  // the break is fresh, and the wording says "trading thin" rather than "the break came on thin
+  // volume" so it doesn't claim more than it measured. The forming bar is excluded: minutes of
+  // volume against full bars called every fresh break thin until the bar aged. Track the breaking
+  // bar if that ever needs to be exact.
+  const surge = volumeSurge(c.slice(0, -1))
   const volume = surge == null || surge >= 1.2
   const hrs = Math.round((c.at(-1)!.t - open.t) / 36e5)
   const age = hrs < 1 ? 'set this hour' : `set ${hrs}h ago`
