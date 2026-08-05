@@ -170,6 +170,18 @@
   background-color: color-mix(in oklch, var(--foreground) 20%, transparent);
 }
 
+/* Radix and cmdk ship cursor-default on every menu item, the same way preflight does on buttons —
+   and like those buttons, every menu here is meant to be clicked. Matched by role so one rule covers
+   the dropdown, the context menu, the command palette and the selects, rather than eight class
+   strings in files shadcn regenerates. Unlayered on purpose: inside @layer base it would lose to the
+   cursor-default utility the components carry. Disabled items keep the arrow. */
+[role="menuitem"]:not([data-disabled]),
+[role="menuitemcheckbox"]:not([data-disabled]),
+[role="menuitemradio"]:not([data-disabled]),
+[role="option"]:not([data-disabled]) {
+  cursor: pointer;
+}
+
 /* the theme swap animates as a clip-path circle (see revealTheme); the default cross-fade would
    only muddy it, and the two roots must stack rather than blend */
 ::view-transition-old(root),
