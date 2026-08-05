@@ -569,6 +569,16 @@ assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
 assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
 assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
 
+// size and leverage ride the same row and load as a pair: half of one prices the trade wrong, and
+// a wrong number in euros is worse here than no number at all
+const pos = (extra: object) =>
+  load({ watches: [{ id: 'w', asset: 'BTCUSDT', dir: 'long', entry: 100, stop: 95, target: 110, ...extra }] }).watches[0]
+assert.deepEqual([pos({ size: 100, lev: 10 }).size, pos({ size: 100, lev: 10 }).lev], [100, 10])
+assert.equal(pos({ size: 100 }).size, undefined)          // leverage missing → neither survives
+assert.equal(pos({ size: 100, lev: 0 }).size, undefined)  // …nor does a zero, which is no position
+assert.equal(pos({ size: 'lots', lev: 10 }).lev, undefined)
+assert.equal(pos({}).size, undefined)                     // a plain watched plan, as before
+
 /* ---------- the record of how they went ---------- */
 {
   const w = { ...mkWatch('Trading', 100), id: 'r1', stop: 95, target: 110 }

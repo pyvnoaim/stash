@@ -50,7 +50,7 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>, st
        profit, and there is no losing case to write. A trade going the other way is either back at
        its entry or through its stop, and both of those already have the word for it. */
     if (w.entryAt && !hit) {
-      const money = moneyOf(rOf(w, p), stake)
+      const money = moneyOf(rOf(w, p), stakeOf(w, stake))
       return [{
         // no level in the id: this one alert is the whole running read-out, and dismissing it is
         // saying "stop telling me about this trade until it ends", which it then does
@@ -58,7 +58,8 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>, st
         title: `${who} is up ${rOf(w, p).toFixed(2)}R`,
         detail: money === null
           ? `${price(p)} — from the ${side.toLowerCase()} entry at ${price(w.entry)}`
-          : `${price(p)} — ${signedEuro(money)} had you taken it`,
+          // "had you taken it" is the wrong sentence for money that is actually on the table
+          : `${price(p)} — ${signedEuro(money)}${isPosition(w) ? ' on your position' : ' had you taken it'}`,
         tone: 'info' as const,
         target: MARKET,
         asset: w.asset,
@@ -90,6 +91,23 @@ export const rLabel = (r: number) => `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
 
 /** What that R would have paid at the stake you set, or null when you have not set one. */
 export const moneyOf = (r: number, stake: number) => (stake > 0 ? r * stake : null)
+
+/**
+ * What one R is worth in euros on this row. A setup you actually took prices itself: `size × lev`
+ * is the notional you're holding, and the distance from the entry to the stop is the share of it
+ * that is at risk — so a €100 long at 10× with its stop 5% away has €50 on the line, whatever the
+ * hypothetical stake in Settings says. Everything else falls back to that stake, which is what
+ * every row here was before positions existed.
+ *
+ * ponytail: no fees and no funding. On a perp held for days the funding is real money and this will
+ * read a little rich; the moment that matters, it takes a rate per asset and a clock, not a
+ * constant. What it does get right is the leverage, which is the part that was off by 10×.
+ */
+export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake = 0) =>
+  (w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : stake)
+
+/** Whether this row is money you actually have on the table, which is a different sentence. */
+export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
 
 /** Signed, so a loss reads as one rather than as a number that happens to be smaller. */
 export const signedEuro = (n: number) => (n >= 0 ? '+' : '−') + euro(Math.abs(n))
@@ -138,19 +156,19 @@ const RESULT_FRESH = 12 * 3600_000
 /**
  * The finished ones, while they are still news. The only alert here about something that has
  * already happened — which is the point of it: the window opened, it ran, and this is what it
- * would have paid. Nothing was ever bought and the wording never pretends otherwise.
+ * paid. On a plan that was only ever watched, what it would have paid, and the wording says so.
  */
 export function resultAlerts(results: Result[], stake: number, at = Date.now()): Alert[] {
   return results.filter((r) => at - r.closedAt < RESULT_FRESH).map((r) => {
     const won = r.level === 'target'
-    const money = moneyOf(r.r, stake)
+    const money = moneyOf(r.r, stakeOf(r, stake))
     const who = r.horizon ? `${r.label} · ${r.horizon}` : r.label
     return {
       id: `result-${r.id}`,
       title: `${who} ${won ? 'hit target' : 'stopped out'}`,
       detail: money === null
         ? `${rLabel(r.r)} — from the entry at ${price(r.entry)}`
-        : `${rLabel(r.r)} — ${signedEuro(money)} had you taken it`,
+        : `${rLabel(r.r)} — ${signedEuro(money)}${isPosition(r) ? '' : ' had you taken it'}`,
       tone: won ? 'info' as const : 'warn' as const,
       target: MARKET,
       asset: r.asset,

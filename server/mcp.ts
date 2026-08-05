@@ -375,11 +375,22 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
 
   market_setups: {
     description: 'The saved setups the bell is watching, and the record of the ones that finished — '
-      + 'scored in R off the price actually seen when they ended. Nothing here was ever bought.',
+      + 'scored in R off the price actually seen when they ended. A row carrying size and leverage '
+      + 'is a position that was really taken and its money is real; every other row is a plan, and '
+      + 'its money is what the stake says it would have paid.',
     schema: { type: 'object', properties: {} },
     run: async () => {
       const s = await pull()
-      const money = (r: number) => (s.stake ? Number((r * s.stake).toFixed(2)) : undefined)
+      /* One R in euros, per row: a taken position off its own notional, everything else off the
+         stake. The same arithmetic as stakeOf in src/lib/notify.ts — see the note there. */
+      const per = (w: { entry: number, stop: number, size?: number, lev?: number }) => {
+        const own = w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : 0
+        // a stored entry of zero divides to Infinity, and an answer of Infinity euros is worse
+        // than the honest absence of one
+        return isFinite(own) && own > 0 ? own : s.stake
+      }
+      const money = (r: number, at: number) =>
+        (at > 0 && isFinite(at * r) ? Number((r * at).toFixed(2)) : undefined)
       const total = s.results.reduce((n, r) => n + r.r, 0)
       return {
         stake: s.stake || null,
@@ -389,13 +400,15 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
           saved: new Date(w.ts).toISOString(),
           // an entry never reached is not a trade that lost, it is one nobody was ever in
           started: w.entryAt ? new Date(w.entryAt).toISOString() : null,
+          // present only on the ones with money actually on them
+          ...(w.size && w.lev ? { position: { size: w.size, leverage: w.lev, atRisk: Number(per(w).toFixed(2)) } } : {}),
         })),
         finished: s.results.map((r) => ({
           asset: r.label, dir: r.dir, horizon: r.horizon, ended: r.level, exit: r.exit,
-          r: Number(r.r.toFixed(2)), money: money(r.r),
+          r: Number(r.r.toFixed(2)), money: money(r.r, per(r)), taken: !!(r.size && r.lev),
           started: new Date(r.entryAt).toISOString(), closedAt: new Date(r.closedAt).toISOString(),
         })),
-        total: { r: Number(total.toFixed(2)), money: money(total) },
+        total: { r: Number(total.toFixed(2)), money: money(total, s.stake) },
       }
     },
   },

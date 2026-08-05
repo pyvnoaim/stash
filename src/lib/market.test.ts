@@ -1,6 +1,6 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
-const { sma, rsi, lastCross, signals, candlePatterns, orb, tradePlan, divergence, parseStockHours, moverMove,
+const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
   ANCHOR, HIGHER, INTERVALS, tally } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
@@ -63,6 +63,47 @@ assert.equal(o?.signal.label, 'Opening-range breakout')
 // the quality tests are what the backtest showed separate a losing rule from a break-even one
 assert.equal(typeof o?.quality.wide, 'boolean')
 assert.equal(orb([{ t: Date.UTC(2024, 0, 2, 3, 30), o: 1, h: 1, l: 1, c: 1 }]), null) // no session open → null
+assert.equal(o?.where, 'New York')
+/* …and a range from a session that has closed is context, not a vote: same break, no side. The
+   filler stops at 23:45 UTC — one more bar and it would land on Tokyo's 09:00, which is a fresh
+   session open and a different (correct) answer. */
+const stale = [...orbBars, ...Array.from({ length: 33 }, (_, i) => bar(5 + i, 109, 103, 108))]
+assert.equal(orb(stale)?.signal.label, 'Opening-range breakout')
+assert.equal(orb(stale)?.signal.tone, 'flat')
+
+/* The anchor follows whichever desk opened last. Frankfurt, 09:00 local on a winter Tuesday, is
+   08:00 UTC: the range is its first hour, the break is described the same way — and it does not
+   vote, because the 219 days behind this play were run on New York's open and not on this one. */
+const fra = Date.UTC(2024, 0, 2, 8)
+const fraBar = (n: number, h: number, l: number, c: number) => ({ t: fra + n * 900000, o: c, h, l, c, v: 10 })
+const fraBars = [fraBar(0, 105, 95, 102), fraBar(1, 104, 99, 100), fraBar(2, 106, 98, 103), fraBar(3, 104, 97, 101), fraBar(4, 109, 103, 108)]
+assert.equal(orb(fraBars)?.where, 'Frankfurt')
+assert.equal(orb(fraBars)?.signal.label, 'Opening-range breakout')
+assert.equal(orb(fraBars)?.signal.tone, 'flat')
+assert.ok(orb(fraBars)?.signal.detail.includes('Frankfurt'))
+// a Saturday 09:30 in New York is a bar nobody opened for: crypto prints one, no desk sat down
+assert.equal(orb(orbBars.map((b) => ({ ...b, t: b.t + 4 * 864e5 }))), null)
+/* The open is looked for inside a bar, not on its first tick: New York's 09:30 falls in the 09:00
+   hourly bar, and matching the minute exactly hid the only anchor that votes from every chart but
+   the 15m one. A day-long bar swallows every session there is, and anchors to none of them. */
+const hourly = [13, 14, 15, 16].map((h, i) => ({ t: Date.UTC(2024, 0, 2, h), o: 100, h: 105, l: 95, c: 100 + i, v: 10 }))
+assert.equal(orb(hourly)?.t, Date.UTC(2024, 0, 2, 14))
+assert.equal(orb(hourly)?.where, 'New York')
+assert.equal(orb([0, 1, 2, 3].map((d) => ({ t: Date.UTC(2024, 0, 2 + d), o: 100, h: 105, l: 95, c: 100, v: 10 }))), null)
+
+/* Session VWAP: the average price paid since that open, weighted by what traded at each. Most of
+   the size went through at 100 and price has walked to 108, so the average sits well below it. */
+const vw = sessionVwap([
+  { ...bar(0, 101, 99, 100), v: 100 }, { ...bar(1, 101, 99, 100), v: 100 },
+  { ...bar(2, 109, 107, 108), v: 10 }, { ...bar(3, 109, 107, 108), v: 10 },
+])
+assert.ok(vw != null && vw.vwap > 100 && vw.vwap < 102) // dragged only a little by the thin bars
+assert.equal(vw?.where, 'New York')
+assert.equal(vw?.signal.tone, 'bull')
+// no volume is no VWAP — an average weighted by nothing is a number with no claim behind it
+assert.equal(sessionVwap(orbBars.map(({ v: _v, ...b }) => b)), null)
+// nor is there a session inside a daily bar
+assert.equal(sessionVwap(orbBars.map((b, i) => ({ ...b, t: Date.UTC(2024, 0, 2 + i, 14, 30) }))), null)
 
 // trade plan — (dir, price, entry, levels, atr). The stop comes off the near band, the target off
 // the wide one: aiming at the swing you're stopping against is what made setups pay under 1R.
