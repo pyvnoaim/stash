@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  localClock, openDesks, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
+  localClock, openDesks, openPlay, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
   TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
@@ -496,6 +496,9 @@ export default function MarketPage() {
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
       <OpenNow at={candles.at(-1)?.t} />
+      {/* and what to do about the open that is either coming or running — above the chart, because
+          it is the only thing here with a clock on it */}
+      <OpenPlay candles={candles} />
       {/* price + window change, with the overall signal verdict on the right */}
       <div className="flex items-center gap-3">
         <AssetLogo src={current.logo} className="size-7" />
@@ -863,6 +866,34 @@ function OpenNow({ at }: { at?: number }) {
       {both && <span className="text-amber-600 dark:text-amber-500">the overlap — where most of the day's range gets made</span>}
       {!desks.length && <span>No exchange open — thin hours, and a break made in them is the kind that gets given back</span>}
     </div>
+  )
+}
+
+/**
+ * The open, as an instruction. Four moments — one coming up, the hour that sets the range, the range
+ * waiting, the break — and nothing here that the chart below doesn't already contain; the point is
+ * that it is one sentence with a clock on it instead of three things to assemble.
+ *
+ * Off the drawn candles, so it reprices on the same live tick they do.
+ */
+function OpenPlay({ candles }: { candles: Candle[] }) {
+  const play = useMemo(() => (candles.length ? openPlay(candles) : null), [candles])
+  if (!play) return null
+  const TONE = {
+    wait: 'text-amber-600 dark:text-amber-500',
+    ready: 'text-foreground',
+    go: 'text-emerald-600 dark:text-emerald-400',
+  } as const
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <p className={cn('text-sm', TONE[play.tone])}>{play.say}</p>
+        <p className="text-muted-foreground mt-1 text-xs">
+          At the open · the opening-range play was break-even over 219 days once filtered — these are
+          levels worth knowing, not a system worth trusting.
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 
