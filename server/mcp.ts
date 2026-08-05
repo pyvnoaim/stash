@@ -322,7 +322,7 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
         signals: list.map((x) => ({ label: x.label, tone: x.tone, detail: x.detail })),
         plan: plan && {
           ...plan,
-          how: market.PLAN_WORDS[plan.kind],
+          how: `${dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA`,
           // a list, because a setup can be both thin and against the tide, and dropping either one
           // of those on the floor is dropping the half of the answer that says don't
           warnings: [
@@ -331,7 +331,7 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
           ],
         },
         // the honest answer is usually that there is nothing to do, so it is said rather than left blank
-        ...(plan ? {} : { verdict: dir === 'flat' ? 'No side to take — the readings are split' : 'No clean setup — price has already run past the level this setup would aim at' }),
+        ...(plan ? {} : { verdict: dir === 'flat' ? 'No side to take — the readings are split' : `No clean setup — price is already past the ${cfg.fast}-MA, and entering there is chasing` }),
       }
     },
   },

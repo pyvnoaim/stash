@@ -862,14 +862,6 @@ export const GUIDES: Record<GuideKey, string> = {
 }
 
 /**
- * Which trade the geometry actually describes. The entry sits on the fast MA either way; whether
- * that is above or below the price right now is the difference between waiting for a pull-back and
- * chasing a level price has already left, and the card has to say which — "buy the pull-back" while
- * the MA sits above the price is simply a lie, and it was one on ~46% of bars.
- */
-export type PlanKind = 'pull-back' | 'reclaim' | 'bounce' | 'breakdown'
-
-/**
  * Two bands, not one. The stop belongs to the near swing — the level that, broken, means you were
  * wrong. The target belongs to the structure past it, measured over three times the window: aiming
  * at the same near swing you're stopping against made 90% of short-term setups pay under 1R, which
@@ -878,7 +870,6 @@ export type PlanKind = 'pull-back' | 'reclaim' | 'bounce' | 'breakdown'
 export type Levels = { support: number; resistance: number; farLow: number; farHigh: number }
 
 export type Plan = {
-  kind: PlanKind
   entry: number
   stop: number
   target: number
@@ -888,41 +879,28 @@ export type Plan = {
 }
 
 /**
- * A concrete setup for the current bias. Entry is the fast MA, stop goes beyond the swing against
- * you with an ATR buffer so ordinary noise doesn't clip it, and the target is the opposite swing —
- * a real level someone is trading, never a projection.
+ * One setup, both sides: wait for price to come back to the fast MA, stop beyond the near swing
+ * with a quarter-ATR buffer so ordinary noise doesn't clip it, target the far swing — a real level
+ * someone is trading, never a projection.
  *
- * The old version targeted `max(resistance, entry + 2·risk)`, which meant the R:R it printed was
- * 2.00 by construction and could never warn you off anything. A setup that doesn't pay now says so
- * (`thin`) instead of being dressed up.
- *
- * Null when there's no trade to describe: flat, or the stop and target land the wrong side of entry.
+ * Null when there is nothing honest to describe: the tally is flat, price is already on the wrong
+ * side of the MA (entering there is chasing, and the old version renamed the chase four ways
+ * instead of declining it), or the stop and target land the wrong side of the entry.
  */
 export function tradePlan(
   dir: 'long' | 'short' | 'flat', price: number, entry: number,
   levels: Levels, atrValue: number | null = null,
 ): Plan | null {
   if (dir === 'flat') return null
-  // a quarter-ATR beyond the swing: enough that a normal wick doesn't take you out at the exact low
+  const long = dir === 'long'
+  if (long ? entry > price : entry < price) return null // the pull-back already happened — chasing
   const buffer = (atrValue ?? 0) * 0.25
-  if (dir === 'long') {
-    const stop = levels.support - buffer, target = levels.farHigh
-    const risk = entry - stop, reward = target - entry
-    if (risk <= 0 || reward <= 0) return null
-    return { kind: entry <= price ? 'pull-back' : 'reclaim', entry, stop, target, rr: reward / risk, thin: reward < risk }
-  }
-  const stop = levels.resistance + buffer, target = levels.farLow
-  const risk = stop - entry, reward = entry - target
+  const stop = long ? levels.support - buffer : levels.resistance + buffer
+  const target = long ? levels.farHigh : levels.farLow
+  const risk = long ? entry - stop : stop - entry
+  const reward = long ? target - entry : entry - target
   if (risk <= 0 || reward <= 0) return null
-  return { kind: entry >= price ? 'bounce' : 'breakdown', entry, stop, target, rr: reward / risk, thin: reward < risk }
-}
-
-/** How each setup is actually taken, in words that match where the entry sits relative to price. */
-export const PLAN_WORDS: Record<PlanKind, string> = {
-  'pull-back': 'buy the pull-back down to',
-  reclaim: 'buy the reclaim back above',
-  bounce: 'sell the bounce up into',
-  breakdown: 'sell the break down through',
+  return { entry, stop, target, rr: reward / risk, thin: reward < risk }
 }
 
 /** Trade horizon tunes how twitchy the read is: investing rides the slow classic 50/200 pair, a wide

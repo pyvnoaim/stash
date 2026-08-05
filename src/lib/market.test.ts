@@ -144,10 +144,9 @@ const long = tradePlan('long', 102, 100, band)
 assert.equal(long?.stop, 95) // the near swing, not the far one
 assert.equal(long?.target, 110) // a real level, never a projection
 assert.equal(long?.rr, 2)
-assert.equal(long?.kind, 'pull-back') // entry below price → you wait for it to come to you
 assert.equal(long?.thin, false)
-// the same levels with price *below* the entry is not a pull-back — it's chasing, and says so
-assert.equal(tradePlan('long', 98, 100, band)?.kind, 'reclaim')
+// price below the entry means the pull-back already happened — that's a chase, not a plan
+assert.equal(tradePlan('long', 98, 100, band), null)
 // the ATR buffer widens the stop past the swing so an ordinary wick doesn't take it out
 assert.equal(tradePlan('long', 102, 100, band, 4)?.stop, 94)
 // reward under 1R is flagged rather than dressed up as 2R — the old maths printed 2.00 here
@@ -155,12 +154,11 @@ const poor = tradePlan('long', 102, 100, { ...band, farHigh: 102 })
 assert.equal(poor?.target, 102)
 assert.equal(poor?.thin, true)
 assert.ok(poor!.rr < 1)
-// short mirrors: entry above price is the bounce you sell into, below it is the break you chase
+// short mirrors: entry above price is the bounce you sell into, below it is the chase you decline
 const s2 = tradePlan('short', 98, 100, band)
 assert.equal(s2?.stop, 105) // near swing high
 assert.equal(s2?.target, 90) // far low
-assert.equal(s2?.kind, 'bounce')
-assert.equal(tradePlan('short', 102, 100, band)?.kind, 'breakdown')
+assert.equal(tradePlan('short', 102, 100, band), null)
 assert.equal(tradePlan('flat', 102, 100, band), null)
 assert.equal(tradePlan('long', 102, 100, { ...band, support: 105 }), null) // stop above entry → no risk
 assert.equal(tradePlan('long', 102, 100, { ...band, farHigh: 99 }), null) // target below entry → nothing to aim at
