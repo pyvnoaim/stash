@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Bell, BellRing, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -108,6 +108,7 @@ export default function MarketPage() {
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
   const [guide, setGuide] = useState<Signal | null>(null) // the reading whose explainer is open
+  const [showWhy, setShowWhy] = useState(false) // the readings behind the verdict, folded by default
   const online = useOnline()
   /* navigator.onLine only knows whether there is *a* network — a captive wifi or a dead uplink
      still reads as online, and the service worker would answer those from cache without a word.
@@ -495,10 +496,6 @@ export default function MarketPage() {
 
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
-      <OpenNow at={candles.at(-1)?.t} />
-      {/* and what to do about the open that is either coming or running — above the chart, because
-          it is the only thing here with a clock on it */}
-      <OpenPlay candles={candles} />
       {/* price + window change, with the overall signal verdict on the right */}
       <div className="flex items-center gap-3">
         <AssetLogo src={current.logo} className="size-7" />
@@ -524,6 +521,96 @@ export default function MarketPage() {
           </span>
         )}
       </div>
+
+      {/* The answer first, before the chart: "what do I do" is the question the page exists for,
+          and it used to sit below 300px of candles. Everything under it is the working. */}
+      {verdict && (
+        <Card className={cn('py-3', against ? 'border-amber-600/40' : 'border-foreground/30')}>
+          <CardContent className="px-3 pb-2">
+              <p className="flex items-center gap-2">
+                <span className={cn('text-base font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
+                {/* which chart this verdict is off — the two horizons disagree often, and a hint with
+                    no timeframe on it is the kind you act on for the wrong reason */}
+                <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
+                  {cfg.label} · {interval}
+                </span>
+              </p>
+            <p className="text-muted-foreground text-xs">{verdict.why}</p>
+          </CardContent>
+          {/* faded when the verdict above already said not to take it — the levels are still there to
+              read, they just stop competing with the answer for attention */}
+          {plan && (
+          <CardContent className={cn('flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm',
+            verdict?.tone === 'wait' && 'opacity-60')}>
+            {/* the wording follows the geometry: the entry only reads as a pull-back when the MA is
+                actually below the price. It wasn't, on roughly half the bars. */}
+            <span className="font-medium">
+              {dir === 'long' ? 'Long' : 'Short'} setup
+              <span className="text-muted-foreground font-normal">
+                {' · '}{PLAN_WORDS[plan.kind]} the {cfg.fast}-MA
+              </span>
+            </span>
+            <span className="text-sky-600 dark:text-sky-400">Entry <span className="font-medium tabular-nums">{fmt(plan.entry)}</span></span>
+            <span className="text-destructive">Stop <span className="font-medium tabular-nums">{fmt(plan.stop)}</span></span>
+            <span className="text-emerald-600 dark:text-emerald-400">Target <span className="font-medium tabular-nums">{fmt(plan.target)}</span></span>
+            {/* R:R used to be 2.00 by construction and could never warn you off anything */}
+            {/* spelled out as well as ratio'd: "0.70" means nothing until you see it's 1.310 for 900 */}
+            <span className={cn('ml-auto', plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}
+              title={`Risk ${fmt(risk)} per unit for a shot at ${fmt(reward)}`}>
+              Risk <span className="tabular-nums">{fmt(risk)}</span> to make <span className="tabular-nums">{fmt(reward)}</span>
+              <span className={cn('ml-1 font-medium tabular-nums', !plan.thin && 'text-foreground')}>({plan.rr.toFixed(2)}×)</span>
+            </span>
+            {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
+                watch that kept re-reading it would quietly become a different trade every bar */}
+            {!inIt && (
+            <Button size="sm" variant={watched ? 'secondary' : 'outline'}
+              onClick={() => (watched
+                ? removeWatch(watched.id)
+                : dir !== 'flat' && addWatch({
+                    id: uid(), asset: current.id, label: current.label, horizon: cfg.label, dir,
+                    entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
+                  }))}>
+              {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
+              {watched ? 'Alerting' : 'Alert me'}
+            </Button>
+            )}
+            {/* the button explained where it sits — it was the one thing on this card you had to
+                already know. One line, gone once it is on. */}
+            {!inIt && !watched && (
+              <p className="text-muted-foreground w-full text-xs">
+                Alert me saves these levels as they stand and the bell tells you when price reaches
+                the entry, the target, or the stop. Nothing is traded.
+              </p>
+            )}
+            {against && (
+              <p className="text-amber-600 dark:text-amber-500 w-full text-xs">
+                Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
+              </p>
+            )}
+            {/* Not amber: this one isn't a warning off, it's the sentence that stops the {interval}
+                card and the {ANCHOR[interval]} card reading as the tool contradicting itself. */}
+            {counter && (
+              <p className="text-muted-foreground w-full text-xs">
+                Counter-trend — the {ANCHOR[interval]} chart leans {dir === 'long' ? 'down' : 'up'}, so this is a{' '}
+                {interval} {dir} against it. That is a real trade, not the same one the {ANCHOR[interval]} chart is
+                offering; it wants a tighter stop and no waiting around for the target.
+              </p>
+            )}
+          </CardContent>
+          )}
+        </Card>
+      )}
+
+      {/* what you are actually in on this asset, if anything — under the plan, because the plan is
+          what the tool thinks and this is what you did, and they are not always the same thing */}
+      <Position asset={current.id} label={current.label} horizon={cfg.label}
+        price={last ?? null} plan={plan} dir={dir} />
+
+      {/* the open, when there is something to act on — in the opening-range preset, always: there
+          the open is the whole subject */}
+      <OpenPlay candles={candles} full={preset === 'orb'} />
+      {/* who is at their desks — context for the candles it sits on top of */}
+      <OpenNow at={candles.at(-1)?.t} />
 
       {/* the chart: price line, the two MAs whose cross the guides watch, and the S/R band */}
       <Card className="py-3">
@@ -742,98 +829,35 @@ export default function MarketPage() {
         </CardContent>
       </Card>
 
-      {/* the answer, and the levels behind it when there are any */}
-      {verdict && (
-        <Card className={cn('py-3', against ? 'border-amber-600/40' : 'border-foreground/30')}>
-          <CardContent className="px-3 pb-2">
-              <p className="flex items-center gap-2">
-                <span className={cn('text-base font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
-                {/* which chart this verdict is off — the two horizons disagree often, and a hint with
-                    no timeframe on it is the kind you act on for the wrong reason */}
-                <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
-                  {cfg.label} · {interval}
-                </span>
-              </p>
-            <p className="text-muted-foreground text-xs">{verdict.why}</p>
-          </CardContent>
-          {/* faded when the verdict above already said not to take it — the levels are still there to
-              read, they just stop competing with the answer for attention */}
-          {plan && (
-          <CardContent className={cn('flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm',
-            verdict?.tone === 'wait' && 'opacity-60')}>
-            {/* the wording follows the geometry: the entry only reads as a pull-back when the MA is
-                actually below the price. It wasn't, on roughly half the bars. */}
-            <span className="font-medium">
-              {dir === 'long' ? 'Long' : 'Short'} setup
-              <span className="text-muted-foreground font-normal">
-                {' · '}{PLAN_WORDS[plan.kind]} the {cfg.fast}-MA
-              </span>
-            </span>
-            <span className="text-sky-600 dark:text-sky-400">Entry <span className="font-medium tabular-nums">{fmt(plan.entry)}</span></span>
-            <span className="text-destructive">Stop <span className="font-medium tabular-nums">{fmt(plan.stop)}</span></span>
-            <span className="text-emerald-600 dark:text-emerald-400">Target <span className="font-medium tabular-nums">{fmt(plan.target)}</span></span>
-            {/* R:R used to be 2.00 by construction and could never warn you off anything */}
-            {/* spelled out as well as ratio'd: "0.70" means nothing until you see it's 1.310 for 900 */}
-            <span className={cn('ml-auto', plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}
-              title={`Risk ${fmt(risk)} per unit for a shot at ${fmt(reward)}`}>
-              Risk <span className="tabular-nums">{fmt(risk)}</span> to make <span className="tabular-nums">{fmt(reward)}</span>
-              <span className={cn('ml-1 font-medium tabular-nums', !plan.thin && 'text-foreground')}>({plan.rr.toFixed(2)}×)</span>
-            </span>
-            {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
-                watch that kept re-reading it would quietly become a different trade every bar */}
-            {!inIt && (
-            <Button size="sm" variant={watched ? 'secondary' : 'outline'}
-              onClick={() => (watched
-                ? removeWatch(watched.id)
-                : dir !== 'flat' && addWatch({
-                    id: uid(), asset: current.id, label: current.label, horizon: cfg.label, dir,
-                    entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
-                  }))}>
-              {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
-              {watched ? 'Alerting' : 'Alert me'}
-            </Button>
-            )}
-            {against && (
-              <p className="text-amber-600 dark:text-amber-500 w-full text-xs">
-                Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
-              </p>
-            )}
-            {/* Not amber: this one isn't a warning off, it's the sentence that stops the {interval}
-                card and the {ANCHOR[interval]} card reading as the tool contradicting itself. */}
-            {counter && (
-              <p className="text-muted-foreground w-full text-xs">
-                Counter-trend — the {ANCHOR[interval]} chart leans {dir === 'long' ? 'down' : 'up'}, so this is a{' '}
-                {interval} {dir} against it. That is a real trade, not the same one the {ANCHOR[interval]} chart is
-                offering; it wants a tighter stop and no waiting around for the target.
-              </p>
-            )}
-          </CardContent>
-          )}
-        </Card>
-      )}
-
-      {/* what you are actually in on this asset, if anything — under the plan, because the plan is
-          what the tool thinks and this is what you did, and they are not always the same thing */}
-      <Position asset={current.id} label={current.label} horizon={cfg.label}
-        price={last ?? null} plan={plan} dir={dir} />
-
-      {/* The read-out. One quiet card of rows rather than eight bordered ones in two colours: the
-          side a signal is on is a dot, and the reading itself is read as text. Eight cards all
-          shouting made the wall harder to read than the chart it was explaining. */}
+      {/* The readings behind the call, folded: the verdict at the top already carries the answer,
+          and eight spelled-out readings under the chart were the page's densest stretch. The tally
+          stays on the fold line; the working opens on demand, guides and all. */}
       {view && (
         <Card className="py-3">
-          <CardContent className="grid gap-x-8 gap-y-2 px-3 sm:grid-cols-2">
-            {/* click a reading for its guide: what it's called, what it claims, when it turns up —
-                over a worked example drawn from the same code that drew the chart above */}
-            {shownSignals.map((sig, i) => (
-              <button key={i} type="button" onClick={() => setGuide(sig)}
-                className="flex min-w-0 items-baseline gap-2 text-left text-sm">
-                <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
-                <span className="decoration-muted-foreground/40 shrink-0 underline decoration-dotted underline-offset-4">{sig.label}</span>
-                <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
-              </button>
-            ))}
-            {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
+          <CardContent className="px-3">
+            <button type="button" onClick={() => setShowWhy((v) => !v)}
+              className="flex w-full items-baseline gap-2 text-left">
+              <span className="font-heading text-sm tracking-wide uppercase">Why this call</span>
+              <span className="text-muted-foreground text-xs">
+                {bulls} bull · {bears} bear{showWhy ? ' · tap a reading for its guide' : ''}
+              </span>
+              <ChevronDown className={cn('text-muted-foreground ml-auto size-4 self-center transition-transform', showWhy && 'rotate-180')} />
+            </button>
+            {showWhy && (
+              <div className="mt-3 grid gap-x-8 gap-y-2 sm:grid-cols-2">
+                {/* click a reading for its guide: what it's called, what it claims, when it turns up —
+                    over a worked example drawn from the same code that drew the chart above */}
+                {shownSignals.map((sig, i) => (
+                  <button key={i} type="button" onClick={() => setGuide(sig)}
+                    className="flex min-w-0 items-baseline gap-2 text-left text-sm">
+                    <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
+                    <span className="decoration-muted-foreground/40 shrink-0 underline decoration-dotted underline-offset-4">{sig.label}</span>
+                    <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
+                  </button>
+                ))}
+                {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -895,9 +919,13 @@ function OpenNow({ at }: { at?: number }) {
  *
  * Off the drawn candles, so it reprices on the same live tick they do.
  */
-function OpenPlay({ candles }: { candles: Candle[] }) {
+function OpenPlay({ candles, full }: { candles: Candle[]; full?: boolean }) {
   const play = useMemo(() => (candles.length ? openPlay(candles) : null), [candles])
   if (!play) return null
+  /* Waiting is the page's default state and the verdict above already owns it — the open earns a
+     card of its own only once there is something to act on. The opening-range preset is the
+     exception: there the open is the whole subject, so every state shows. */
+  if (play.tone === 'wait' && !full) return null
   const TONE = {
     wait: 'text-amber-600 dark:text-amber-500',
     ready: 'text-foreground',
