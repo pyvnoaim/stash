@@ -112,6 +112,15 @@ export interface Watch {
    * whose entry never came round is not a trade that lost, it is a trade nobody was ever in.
    */
   entryAt?: number
+  /**
+   * What you actually put in, in euros, and at what leverage — set only on a setup you took for
+   * real. Absent is the old meaning of every row here: a plan being watched, nothing bought.
+   * Together they are the position's size: `size × lev` is the notional, and the money at risk
+   * between the entry and the stop is what `stakeOf` turns them into, so a real position reads in
+   * its own money rather than in the hypothetical stake set in Settings.
+   */
+  size?: number
+  lev?: number
 }
 
 /**
@@ -209,6 +218,16 @@ const cleanTime = (v: unknown): string | null =>
  * an alarm that is already going off — which is why both the live list and the record are held to
  * it on the way in.
  */
+/**
+ * The two numbers that turn a watched plan into a position you're actually in: both there and both
+ * above zero, or neither. Half of one — money at no leverage stated, or leverage on no money —
+ * would price the trade wrong in euros, and a wrong number is worse here than no number.
+ */
+const positionOf = (w: { size?: unknown, lev?: unknown }) => {
+  const size = Number(w.size), lev = Number(w.lev)
+  return isFinite(size) && size > 0 && isFinite(lev) && lev > 0 ? { size, lev } : {}
+}
+
 const liveGeometry = (w: Pick<Watch, 'asset' | 'dir' | 'entry' | 'stop' | 'target'>) =>
   !!w.asset && [w.entry, w.stop, w.target].every(isFinite)
   && (w.dir === 'long' ? w.stop < w.entry && w.target > w.entry : w.stop > w.entry && w.target < w.entry)
@@ -454,6 +473,7 @@ export function load(data: unknown): State {
       ts: typeof w.ts === 'number' ? w.ts : Date.now(),
       // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
       ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
+      ...positionOf(w),
     }))
     // levels the wrong way round for their side are not a trade, they are an alarm that fires on
     // every tick forever: a long whose stop sits above its entry is already "stopped out" the
@@ -482,6 +502,7 @@ export function load(data: unknown): State {
       level: r.level === 'stop' ? 'stop' as const : 'target' as const,
       exit: Number(r.exit),
       r: Number(r.r),
+      ...positionOf(r),
     }))
     /* `> 0` rather than isFinite for the three that cannot be zero: Number(null) and Number('')
        are both 0, which is finite — a row with no closing time would otherwise load as one that

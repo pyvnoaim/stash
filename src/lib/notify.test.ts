@@ -99,6 +99,20 @@ assert.equal(run(95)[0].title, 'Bitcoin · Trading setup broken')
 // never opened, and away from every level — still nothing to say, as before
 assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }, 200), [])
 
+/* A setup you were actually in prices itself off its own size and leverage, and ignores the stake.
+   Long from 100 with the stop at 95: €100 at 10× is €1,000 on the market, 5% of which is the €50
+   between here and the stop — so 1R is €50 and the sentence stops saying "had you taken it". */
+const position: Watch = { ...running, size: 100, lev: 10 }
+const pos = (p: number) => watchAlerts([position], { BTCUSDT: p }, 999)
+assert.ok(pos(105)[0].detail.includes('+€50'))
+assert.ok(pos(105)[0].detail.includes('on your position'))
+assert.ok(!pos(105)[0].detail.includes('had you taken it'))
+assert.ok(pos(102.5)[0].detail.includes('+€25'))
+// leverage is the part that has to reach the money: the same €100 at 1× is a tenth of it
+assert.ok(pos(105)[0].detail.includes('+€50') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, 999)[0].detail.includes('+€5'))
+// half a position is no position: without both numbers it falls back to the stake, as it always did
+assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€200'))
+
 /* ---------- what actually happened: the window opening, and the trade ending ---------- */
 
 const NOW = 1_700_000_000_000

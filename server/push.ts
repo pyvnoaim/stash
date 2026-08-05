@@ -112,10 +112,19 @@ export function alertsOf(
     /* What it did, and — where a stake is set — what that is in money. The same arithmetic
        notify.ts does in the app (rOf × stake): R off the plan's own geometry, nothing bought,
        no fee counted. Only on an outcome; at the entry nothing has happened yet. */
-    const stake = Number(s?.stake) || 0
+    /* A setup you took prices itself instead: size × leverage is the notional, and the entry-to-stop
+       distance is the share of it at risk. Same arithmetic as stakeOf in notify.ts — kept here in
+       longhand rather than imported, because market.ts is the one module this process shares with
+       the app and notify.ts would drag the store's world across with it. */
+    const took = Number(w.size) > 0 && Number(w.lev) > 0
+    const own = (Number(w.size) * Number(w.lev) * Math.abs(w.entry - w.stop)) / w.entry
+    /* isFinite as well as > 0: these numbers come out of a stored document rather than off the
+       form that made them, and an entry of zero divides its way to an Infinity that formats as a
+       euro sign and a lemniscate. A knock with no money in it beats a knock with nonsense in it. */
+    const stake = took && isFinite(own) ? own : Number(s?.stake) || 0
     const r = long ? (p - w.entry) / (w.entry - w.stop) : (w.entry - p) / (w.stop - w.entry)
-    const paid = hit !== 'entry' && stake > 0 && isFinite(r)
-      ? ` · ${r >= 0 ? '+' : '−'}${euro(Math.abs(r * stake))} had you taken it`
+    const paid = hit !== 'entry' && stake > 0 && isFinite(stake) && isFinite(r)
+      ? ` · ${r >= 0 ? '+' : '−'}${euro(Math.abs(r * stake))}${took ? '' : ' had you taken it'}`
       : ''
     out.push({
       key: `watch-${w.id}-${hit}`,

@@ -8,13 +8,15 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
-import { euro, moneyOf, rLabel, signedEuro } from '@/lib/notify'
+import { euro, isPosition, moneyOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  localClock, orb, PLAN_WORDS, SESSIONS, signals, tally, tradePlan, trendFilter, TREND_NETWORK,
+  localClock, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter, TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
 
@@ -287,9 +289,14 @@ export default function MarketPage() {
   // where the range hour sits in the drawn window — both -1 once it's scrolled out of view
   const orbBar = range ? vis.findIndex((c) => c.t === range.t) : -1
   const orbEnd = range ? vis.findIndex((c) => c.t === range.until) : -1
+  /* Where price sits against the average paid since the session opened. Not tied to the opening-range
+     preset — it is the intraday reference whatever you are looking at — and it returns null on its
+     own for a daily bar or a feed with no volume, which is every case it would be a lie in. */
+  const vwap = useMemo(() => (candles.length ? sessionVwap(candles) : null), [candles])
   // the higher-timeframe lean leads: it's the filter the others get read through
   const shownSignals = [
-    ...(higher ? [higher] : []), ...(range ? [range.signal] : []), ...(view?.signals ?? []),
+    ...(higher ? [higher] : []), ...(range ? [range.signal] : []),
+    ...(vwap ? [vwap.signal] : []), ...(view?.signals ?? []),
   ]
 
   // one clean call: tally the bull vs bear cards into a Long / Short / Flat verdict for the horizon
@@ -359,6 +366,11 @@ export default function MarketPage() {
   // an existing alert for this asset, side and horizon — the button toggles that one, and an alert
   // saved on the other horizon is left alone rather than being silently replaced
   const watched = watches.find((w) => w.asset === current.id && w.dir === dir && w.horizon === cfg.label)
+  /* Money already on this asset. The alert button is hidden while there is: saving a plan on the
+     same asset, side and horizon replaces the row it finds, and the row it would find is the
+     position — a real trade quietly overwritten by a hypothetical one. The position is watched at
+     all three of its own levels anyway, so there is nothing the button would add. */
+  const inIt = watches.some((w) => w.asset === current.id && isPosition(w))
 
   // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
   // computed off every fetched bar, so the 200-MA is real from the first visible bar
@@ -714,6 +726,7 @@ export default function MarketPage() {
             </span>
             {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
                 watch that kept re-reading it would quietly become a different trade every bar */}
+            {!inIt && (
             <Button size="sm" variant={watched ? 'secondary' : 'outline'}
               onClick={() => (watched
                 ? removeWatch(watched.id)
@@ -724,6 +737,7 @@ export default function MarketPage() {
               {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
               {watched ? 'Alerting' : 'Alert me'}
             </Button>
+            )}
             {against && (
               <p className="text-amber-600 dark:text-amber-500 w-full text-xs">
                 Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
@@ -742,6 +756,11 @@ export default function MarketPage() {
           )}
         </Card>
       )}
+
+      {/* what you are actually in on this asset, if anything — under the plan, because the plan is
+          what the tool thinks and this is what you did, and they are not always the same thing */}
+      <Position asset={current.id} label={current.label} horizon={cfg.label}
+        price={last ?? null} plan={plan} dir={dir} />
 
       {/* The read-out. One quiet card of rows rather than eight bordered ones in two colours: the
           side a signal is on is a dot, and the reading itself is read as text. Eight cards all
@@ -786,13 +805,157 @@ export default function MarketPage() {
  * is worth. Nothing was ever bought, no fee is modelled, and the wording is careful about that —
  * "had you taken it" is the whole claim. Set no stake and it says R and nothing else.
  */
+/**
+ * A trade you are actually in, as opposed to one the tool is watching for you. It is the same
+ * `Watch` row the bell already reads — money and leverage written on it — so nothing downstream
+ * needed a second code path: the entry, stop and target alerts fire, the running read-out counts,
+ * and when it ends at one of its levels it files itself into the record below. The only difference
+ * is that the euros are the ones you put in rather than the hypothetical stake from Settings.
+ *
+ * ponytail: one position per asset, closed only by its own stop or target. Closing half, adding to
+ * it, or getting out by hand at some third price are all real things a person does and none of them
+ * are here — they want an exit price on the row and a partial-fill model, which is a bigger thing
+ * than a number and a multiplier. "Not in it any more" drops the row without filing a result.
+ */
+function Position({ asset, label, horizon, price, plan, dir }: {
+  asset: string
+  label: string
+  horizon: string
+  price: number | null
+  plan: { entry: number; stop: number; target: number } | null
+  dir: 'long' | 'short' | 'flat'
+}) {
+  const { watches } = useStash()
+  const held = watches.find((w) => w.asset === asset && isPosition(w))
+  const [open, setOpen] = useState(false)
+  const [f, setF] = useState({ side: 'long', entry: '', stop: '', target: '', size: '', lev: '' })
+
+  // a comma is what a German keyboard puts there, and Number('4,1') is NaN
+  const num = (v: string) => Number(v.replace(',', '.'))
+  const [entry, stop, target, size, lev] = [f.entry, f.stop, f.target, f.size, f.lev].map(num)
+  const sane = [entry, stop, target, size].every((x) => isFinite(x) && x > 0) && lev >= 1
+  // the same geometry the store holds every saved row to: a long stops below and aims above
+  const geometry = f.side === 'long' ? stop < entry && target > entry : stop > entry && target < entry
+  const risk = sane && geometry ? (size * lev * Math.abs(entry - stop)) / entry : 0
+
+  const start = () => {
+    setF({
+      side: dir === 'short' ? 'short' : 'long',
+      entry: price != null ? String(price) : '',
+      // the plan's own stop and target, which is where they'd be if you took what it offered
+      stop: plan ? String(plan.stop) : '',
+      target: plan ? String(plan.target) : '',
+      size: '', lev: '',
+    })
+    setOpen(true)
+  }
+
+  const save = () => {
+    addWatch({
+      id: uid(), asset, label, horizon, dir: f.side === 'short' ? 'short' : 'long',
+      entry, stop, target, ts: Date.now(),
+      // you are in it already: the window opened now, not whenever price next comes back to the entry
+      entryAt: Date.now(),
+      size, lev,
+    })
+    setOpen(false)
+  }
+
+  const field = (k: keyof typeof f, text: string, hint?: string) => (
+    <div className="grid gap-1">
+      <Label htmlFor={`pos-${k}`} className="text-xs">{text}</Label>
+      <Input id={`pos-${k}`} inputMode="decimal" value={f[k]} placeholder={hint}
+        onChange={(e) => setF((s) => ({ ...s, [k]: e.target.value }))} />
+    </div>
+  )
+
+  if (held) {
+    const r = price != null ? rOf(held, price) : null
+    const money = r != null ? moneyOf(r, stakeOf(held)) : null
+    const long = held.dir === 'long'
+    return (
+      <Card className="py-3">
+        <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 px-3 text-sm">
+          <span className="font-medium">
+            You are {long ? 'long' : 'short'} {held.label}
+            <span className="text-muted-foreground font-normal">
+              {' · '}{euro(held.size!)} at {held.lev}× {' · '}{euro(held.size! * held.lev!)} on the market
+            </span>
+          </span>
+          <span className="text-sky-600 dark:text-sky-400">From <span className="font-medium tabular-nums">{fmtPrice(held.entry)}</span></span>
+          <span className="text-destructive">Stop <span className="font-medium tabular-nums">{fmtPrice(held.stop)}</span></span>
+          <span className="text-emerald-600 dark:text-emerald-400">Target <span className="font-medium tabular-nums">{fmtPrice(held.target)}</span></span>
+          {money !== null && r !== null && (
+            <span className={cn('ml-auto font-mono tabular-nums',
+              money >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {signedEuro(money)}
+              <span className="text-muted-foreground ml-2 text-xs">{rLabel(r)}</span>
+            </span>
+          )}
+          <Button size="sm" variant="ghost" className="text-muted-foreground"
+            onClick={() => {
+              removeWatch(held.id)
+              toast('Position closed', { description: 'Nothing filed — the record only keeps the ones that ran to their stop or target.' })
+            }}>
+            Not in it any more
+          </Button>
+          <p className="text-muted-foreground w-full text-xs">
+            {euro(stakeOf(held))} at risk between here and the stop. No fees and no funding are
+            counted — on a perp held for days the funding is real money this does not know about.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Popover open={open} onOpenChange={(v) => (v ? start() : setOpen(false))}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline" className="self-start">I'm in this trade</Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 grid gap-3">
+        <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+          {(['long', 'short'] as const).map((d) => (
+            <Button key={d} size="sm" variant={f.side === d ? 'secondary' : 'ghost'}
+              className={cn('h-7 flex-1', f.side !== d && 'text-muted-foreground')}
+              onClick={() => setF((s) => ({ ...s, side: d }))}>
+              {d === 'long' ? 'Long' : 'Short'}
+            </Button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {field('size', 'Money in', '100')}
+          {field('lev', 'Leverage', '10')}
+          {field('entry', 'Your entry')}
+          {field('stop', 'Stop')}
+        </div>
+        {field('target', 'Target')}
+        <p className="text-muted-foreground text-xs">
+          {!sane
+            ? 'Every field is a number above zero, and leverage is at least 1.'
+            : !geometry
+              ? `A ${f.side} stops ${f.side === 'long' ? 'below' : 'above'} the entry and aims ${f.side === 'long' ? 'above' : 'below'} it — as written, this one is already over.`
+              : `${euro(risk)} at risk to the stop. The bell watches all three levels from here.`}
+        </p>
+        <Button size="sm" disabled={!sane || !geometry} onClick={save}>Track it</Button>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function Record() {
   const { results, stake } = useStash()
   if (!results.length) return null
 
   const total = results.reduce((n, r) => n + r.r, 0)
   const won = results.filter((r) => r.level === 'target').length
-  const money = moneyOf(total, stake)
+  /* Row by row rather than off the total, because the rows are no longer all the same kind of
+     money: one you were in prices itself off its own size and leverage, one that was only ever
+     watched off the stake in Settings. Null only when not a single row has a figure at all. */
+  const cashOf = (r: typeof results[number]) => moneyOf(r.r, stakeOf(r, stake))
+  const money = results.some((r) => cashOf(r) !== null)
+    ? results.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
+  const real = results.some(isPosition)
   const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
   return (
@@ -824,7 +987,7 @@ function Record() {
         </div>
         {results.map((r) => {
           const hit = r.level === 'target'
-          const cash = moneyOf(r.r, stake)
+          const cash = cashOf(r)
           return (
             <div key={r.id} className="flex items-baseline gap-2 px-1.5 py-1 text-sm">
               <span className="w-28 shrink-0 truncate font-medium">{r.label}</span>
@@ -847,11 +1010,15 @@ function Record() {
           )
         })}
         <p className="text-muted-foreground mt-2 px-1.5 text-xs">
-          {stake > 0
-            ? `What each would have paid, risking ${euro(stake)} a setup. Nothing was bought and no
-               fee is counted — it is the plan's own arithmetic, not a broker's.`
-            : `Set what a setup is worth in Settings → Markets and these read in euros as well as
-               in R.`}
+          {real
+            ? `The ones you were in are your own money, off the size and leverage you gave them —
+               no fee and no funding counted, so a perp held for days read a little rich. The rest
+               are what the plan would have paid${stake > 0 ? `, risking ${euro(stake)} a setup` : ' in R'}.`
+            : stake > 0
+              ? `What each would have paid, risking ${euro(stake)} a setup. Nothing was bought and no
+                 fee is counted — it is the plan's own arithmetic, not a broker's.`
+              : `Set what a setup is worth in Settings → Markets and these read in euros as well as
+                 in R.`}
         </p>
       </CardContent>
     </Card>

@@ -772,6 +772,15 @@ export const DEMOS: Record<GuideKey, Demo> = {
     candles: walk([100, 103, 101, 102.5, 102, 101.4, 102.2, 101.6, 102.8, 103.4, 104.6, 105.2, 106.1, 105.6, 106.8]),
     band: 15, mark: [0, 3],
   },
+  // most of the session's size changed hands down at the open, so the average paid stays well under
+  // a price that has since walked away from it
+  vwap: {
+    candles: withVolume(
+      walk([100, 99.4, 100.2, 99.6, 100.5, 101.3, 102.1, 102.6, 103.3, 104.1]),
+      [31, 35, 27, 25, 12, 9, 7, 6, 5, 5],
+    ),
+    panel: 'volume',
+  },
   // a climb, a dip that holds above the slow average, then the climb resumes — price on the up side
   htf: { candles: walk([...wave(10, 100, 1.2, 2), ...wave(6, 112, -0.9, 1.6), ...wave(14, 107, 1.1, 2.2)]), ma: [4, 12] },
 }
@@ -788,7 +797,7 @@ export const mirrorDemo = (d: Demo): Demo => {
 /** Which concept a signal belongs to — the key its guide is written against. */
 export type GuideKey =
   | 'ma-cross' | 'trend' | 'rsi' | 'sr' | 'divergence' | 'macd'
-  | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf'
+  | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap'
 
 /** How many bars a moving-average cross keeps its vote. See the note where it is used. */
 export const FRESH_CROSS = 20
@@ -830,7 +839,9 @@ export const GUIDES: Record<GuideKey, string> = {
     'How much was traded on the latest bar against the recent average. A breakout on heavy volume means many people acted on it; the same break on thin volume often means very few did and it gets given back. Volume confirms, it never leads.',
   candle:
     'The shape of one or two bars. A body that swallows the previous bar in the other colour (engulfing) says the side that was winning got overwhelmed within a single bar; a long wick with a small body (hammer, shooting star) says an extreme was reached and rejected; a body of almost nothing (doji) says the two sides finished level. These are the oldest patterns in the trade and the most local — one bar of evidence, usually worth acting on only where a bigger reason already sits.',
-  orb: 'The opening range is the high and low of the first hour of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the New York open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system.',
+  orb: 'The opening range is the high and low of the first hour of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the New York open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. Gold and crypto never close, so the range here follows whichever of Tokyo, Frankfurt and New York opened last — at nine in the morning in Berlin the New York range is sixteen hours old and the levels people are trading around are Frankfurt\'s. Only the New York one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
+  vwap:
+    'The volume-weighted average price since the session opened — every trade since the bell, each counted for the size it was. It is the number institutional desks are measured against (fill above it on a buy and you did worse than the day), which is a large part of why price keeps returning to it: size that has to be worked leans against the line rather than chasing away from it. Above it the buyers who showed up today are in front, below it the sellers are. Two things separate it from the moving averages here — it starts fresh at the open instead of dragging the last fifty bars behind it, and it weights the busy hour over the dead one. It is also why it decays: by the end of a long session it has averaged so much that it stops moving, and overnight it means nothing at all, which is why this one goes quiet once its session is more than eight hours behind. Gold and crypto have no closing bell, so the session here is whichever of Tokyo, Frankfurt and New York opened last.',
   htf: 'The trend on the timeframe one step above the one you are looking at. A cross on the hourly means something different depending on whether the daily is climbing or falling, and trades taken against the bigger timeframe need to be right about timing as well as direction. It is the oldest filter there is and the one most often skipped.',
 }
 
@@ -1053,18 +1064,41 @@ export function candlePatterns(c: Candle[]): Signal[] {
 /** Opening-range breakout — the "first 15 minutes" trick. Marks the high/low of the 00:00-UTC 15m
  *  bar (the session-open range for these 24/7 markets) and says whether price has cleared it.
  *  Meant for 15m candles; returns null if the window holds no session-open bar. */
-/** Minutes-of-day in a timezone, DST included — the session open has to follow the clock people
- *  actually trade to, not a fixed UTC offset. */
-const minuteIn = (ms: number, tz: string) => {
-  const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false })
-    .formatToParts(new Date(ms))
-  const g = (t: string) => +(p.find((x) => x.type === t)?.value ?? 0)
-  return (g('hour') % 24) * 60 + g('minute')
-}
-
-/** The New York open, 09:30 local. Backtesting put this well ahead of every other anchor. */
-const NY_OPEN = 9 * 60 + 30
 const RANGE_MIN = 60 // how much of the session sets the range
+/** The one whose numbers we have: the New York open is the anchor that was actually backtested. */
+const TESTED = 'New York'
+
+/**
+ * The most recent session open in the window: which bar it is, and which desk it belongs to.
+ *
+ * A gapping feed names it for us — the bar after an overnight or weekend hole is the open, whatever
+ * the clock says. A 24/7 feed never gaps, so the open has to be looked up: the last bar the open
+ * falls inside, scanning back from now, which is whichever market opened most recently.
+ *
+ * The bar it falls *inside*, not the one that starts on it, which is the same rule the session
+ * lines on the chart are drawn by: New York opens at 09:30 and an hourly bar starts at 09:00, so an
+ * exact match would make the tested anchor invisible on every chart but the 15m one.
+ *
+ * Weekends are skipped — Bitcoin prints a bar at 09:30 New York on a Saturday and nobody whatsoever
+ * opened for business. So is a bar big enough to swallow a whole session: an open inside a daily
+ * candle is not an opening range, it is a date.
+ */
+function sessionAnchor(c: Candle[], step: number): { at: number; where: string } | null {
+  for (let i = c.length - 1; i > 0; i--) {
+    if (c[i].t - c[i - 1].t > step * 1.5) return { at: i, where: 'session' }
+  }
+  const barMin = step / 60_000
+  if (barMin > 120) return null
+  for (let i = c.length - 1; i >= 0; i--) {
+    for (const s of SESSIONS) {
+      const { day, min } = localClock(c[i].t, s.tz)
+      if (min > s.min || min + barMin <= s.min) continue
+      const wd = new Date(Date.UTC(+day.slice(0, 4), +day.slice(4, 6) - 1, +day.slice(6))).getUTCDay()
+      if (wd !== 0 && wd !== 6) return { at: i, where: s.where }
+    }
+  }
+  return null
+}
 
 export type Range = {
   t: number
@@ -1072,26 +1106,25 @@ export type Range = {
   until: number
   high: number
   low: number
+  /** Which desk's open set it — 'New York' is the one the backtest below was run on. */
+  where: string
   /** Whether the break clears the three tests that separated a losing rule from a break-even one. */
   quality: { wide: boolean; volume: boolean }
   signal: Signal
 }
 
 export function orb(c: Candle[]): Range | null {
-  let at = -1
-  // stocks: the session-open bar is the first one after the overnight/weekend gap
   const step = Math.min(...c.slice(1).map((x, i) => x.t - c[i].t).filter((d) => d > 0))
-  for (let i = c.length - 1; i > 0; i--) {
-    if (c[i].t - c[i - 1].t > step * 1.5) { at = i; break }
-  }
   /* 24/7 assets never gap, so the session has to be named. It used to be the 00:00-UTC roll, which
      is a date boundary rather than a moment anyone shows up for — backtested over 219 days of BTC
      and ETH it lost 0.64R a trade. The New York open, the same test, was the best of the three
-     candidates by a distance. See GUIDES.orb for the numbers. */
-  if (at < 0) for (let i = c.length - 1; i >= 0; i--) {
-    if (minuteIn(c[i].t, 'America/New_York') === NY_OPEN) { at = i; break }
-  }
-  if (at < 0) return null
+     candidates by a distance. See GUIDES.orb for the numbers.
+     It now follows whichever desk opened last, because at nine in the morning in Berlin the New
+     York range is sixteen hours old and the one being traded around is Frankfurt's. Only the tested
+     anchor votes, though — see the tone below. */
+  const anchor = sessionAnchor(c, step)
+  if (!anchor) return null
+  const { at, where } = anchor
   const open = c[at]
   // the first hour, not the first bar: a wider range is a wider stop, and the fees that eat this
   // play are a fixed share of price, so they cost proportionally less against a bigger R
@@ -1110,15 +1143,76 @@ export function orb(c: Candle[]): Range | null {
   // doesn't claim more than it measured. Track the breaking bar if that ever needs to be exact.
   const surge = volumeSurge(c)
   const volume = surge == null || surge >= 1.2
-  const weak = [!wide && 'the range is tighter than a normal bar', !volume && 'it is trading on thin volume']
-    .filter(Boolean).join(' and ')
-
   const hrs = Math.round((c.at(-1)!.t - open.t) / 36e5)
   const age = hrs < 1 ? 'set this hour' : `set ${hrs}h ago`
+  /* This is a same-session play: the range is the hour the day's participants arrived in, and the
+     break that follows it is the day's. Sixteen hours later those are yesterday's levels — still
+     worth drawing, because other people can see them too, but not worth a vote in a 15m tally.
+     ponytail: 8h is the New York session plus its afternoon; if the anchor ever stops being the NY
+     open this has to follow it. */
+  const stale = hrs >= 8
+  /* Frankfurt's range at nine in the morning is the one people are actually trading around, and it
+     is drawn and described like any other — but the 219 days behind this play were run on the New
+     York open, and a reading that votes on the strength of a test it wasn't in is the tool
+     borrowing credibility it hasn't got. So the other desks inform and only this one votes. */
+  const untested = where !== TESTED && where !== 'session'
+  const weak = [
+    stale && 'the range is from a session that has since closed',
+    untested && `this is the ${where} open, and the numbers behind the play were run on New York's`,
+    !wide && 'the range is tighter than a normal bar',
+    !volume && 'it is trading on thin volume',
+  ].filter(Boolean).join(' and ')
   const caveat = weak ? ` — but ${weak}` : ''
+  const whose = where === 'session' ? 'session-open' : `${where} open's`
   const signal: Signal =
-    price > high ? { label: 'Opening-range breakout', tone: weak ? 'flat' : 'bull', kind: 'orb' as const, detail: `price cleared the session-open high ${fmtPrice(high)}, ${age}${caveat}` }
-    : price < low ? { label: 'Opening-range breakdown', tone: weak ? 'flat' : 'bear', kind: 'orb' as const, detail: `price broke the session-open low ${fmtPrice(low)}, ${age}${caveat}` }
-    : { label: 'Inside opening range', tone: 'flat', kind: 'orb' as const, detail: `holding between ${fmtPrice(low)} and ${fmtPrice(high)} (${age}) — guides wait for a break` }
-  return { t: open.t, until, high, low, quality: { wide, volume }, signal }
+    price > high ? { label: 'Opening-range breakout', tone: weak ? 'flat' : 'bull', kind: 'orb' as const, detail: `price cleared the ${whose} high ${fmtPrice(high)}, ${age}${caveat}` }
+    : price < low ? { label: 'Opening-range breakdown', tone: weak ? 'flat' : 'bear', kind: 'orb' as const, detail: `price broke the ${whose} low ${fmtPrice(low)}, ${age}${caveat}` }
+    : { label: 'Inside opening range', tone: 'flat', kind: 'orb' as const, detail: `holding between ${fmtPrice(low)} and ${fmtPrice(high)}, the ${whose} hour (${age}) — guides wait for a break` }
+  return { t: open.t, until, high, low, where, quality: { wide, volume }, signal }
+}
+
+/**
+ * The average price actually paid since the session opened, weighted by how much traded at each —
+ * the session-anchored VWAP. It is the reference intraday desks work against: above it the buyers
+ * who showed up today are in front, below it the sellers are, and it is where a lot of size is
+ * benchmarked, which is part of why price keeps coming back to it.
+ *
+ * Different from the moving averages above it in two ways that matter: it starts fresh at the open
+ * rather than dragging yesterday behind it, and it counts the busy bars for more than the quiet
+ * ones. Both are why it is the number the open is read against.
+ *
+ * Needs volume, which not every feed here gives, and needs an intraday bar — a session average
+ * inside a daily candle is a category error, so both cases return null rather than a guess.
+ */
+export function sessionVwap(c: Candle[]): { vwap: number; where: string; signal: Signal } | null {
+  if (c.length < 2) return null
+  const step = Math.min(...c.slice(1).map((x, i) => x.t - c[i].t).filter((d) => d > 0))
+  if (!isFinite(step) || step > 2 * 36e5) return null
+  const anchor = sessionAnchor(c, step)
+  if (!anchor) return null
+  const bars = c.slice(anchor.at)
+  if (bars.some((b) => typeof b.v !== 'number')) return null
+  const vol = bars.reduce((s, b) => s + b.v!, 0)
+  if (!(vol > 0)) return null
+  // the typical price of a bar, which is what a VWAP is built from — a close alone ignores where
+  // the bar actually spent its time
+  const vwap = bars.reduce((s, b) => s + ((b.h + b.l + b.c) / 3) * b.v!, 0) / vol
+  const price = c.at(-1)!.c
+  const a = atr(c)
+  // inside a quarter of a normal bar's travel is not "above" anything, it is the same price
+  const clear = a != null ? a * 0.25 : vwap * 0.001
+  const gap = ((price - vwap) / vwap) * 100
+  const hrs = Math.round((c.at(-1)!.t - bars[0].t) / 36e5)
+  // the same rule the range gets: past one session this is an average of a day nobody is trading
+  const stale = hrs >= 8
+  const where = anchor.where === 'session' ? 'the session' : `the ${anchor.where} open`
+  const since = `${fmtPrice(vwap)} since ${where}`
+  const tone = stale || Math.abs(price - vwap) < clear ? 'flat' as const
+    : price > vwap ? 'bull' as const : 'bear' as const
+  const detail = stale
+    ? `${since}, ${hrs}h ago — too long back to read as this session's average`
+    : tone === 'flat'
+      ? `price is at the average paid ${since} — the session is even, and this is the level it keeps returning to`
+      : `price is ${Math.abs(gap).toFixed(2)}% ${gap > 0 ? 'above' : 'below'} the average paid ${since} — the ${gap > 0 ? 'buyers' : 'sellers'} who turned up are in front`
+  return { vwap, where: anchor.where, signal: { label: 'Session VWAP', tone, kind: 'vwap' as const, detail } }
 }
