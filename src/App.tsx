@@ -51,7 +51,7 @@ const typingIn = (el: EventTarget | null) =>
 const emptyField = (el: EventTarget | null) =>
   (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && !el.value
 
-/** Section headers for Everything, where the list reads as kinds rather than one flat run. */
+/** Section headers for the type-sorted lists, where a list reads as kinds rather than one flat run. */
 const TYPE_HEADS: Record<ItemType, string> = { task: 'Tasks', idea: 'Ideas', note: 'Notes' }
 
 export default function App() {
@@ -507,11 +507,15 @@ export default function App() {
                 <EmptyState view={s.sel} query={query} onCapture={() => boxRef.current?.focus()} />
               ) : (
                 items.map((it) => {
-                  // Everything reads as sections by kind; the dated views keep their day headers
+                  // every type-sorted list reads as sections by kind; the dated views keep their
+                  // day headers, and Done stays a flat run of what finished last
                   const label = query ? null
-                    : s.sel === 'all' ? TYPE_HEADS[it.type]
-                    : isGrouped(s) && it.due ? dayLabel(it.due)
-                    : null
+                    : isGrouped(s) ? (it.due ? dayLabel(it.due) : null)
+                    : s.sel === 'done' ? null
+                    // finished rows sink below every kind, so they head as what they are rather
+                    // than re-opening the section their type belongs to
+                    : it.done ? 'Done'
+                    : TYPE_HEADS[it.type]
                   const head = label && label !== group ? label : null
                   if (label) group = label
                   return (
