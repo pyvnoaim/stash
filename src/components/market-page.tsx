@@ -538,11 +538,28 @@ export default function MarketPage() {
             )}
             {view && !error && (
               <>
+                {/* Pointer events rather than mouse: they are the same handlers on a phone, where
+                    this chart had no input at all. touch-pan-y leaves the vertical swipe to the
+                    page and hands the horizontal one to the pan; a mostly-vertical drag arrives
+                    as pointercancel, which just lets go. */}
                 <div
-                  className="absolute inset-0 cursor-crosshair active:cursor-grabbing"
-                  onMouseDown={(e) => { grab.current = { x: e.clientX, scroll }; setHover(null) }}
-                  onMouseUp={() => { grab.current = null }}
-                  onMouseMove={(e) => {
+                  className="absolute inset-0 cursor-crosshair touch-pan-y active:cursor-grabbing"
+                  onPointerDown={(e) => {
+                    // capture, so a drag that leaves the box keeps panning instead of stalling
+                    e.currentTarget.setPointerCapture(e.pointerId)
+                    grab.current = { x: e.clientX, scroll }
+                    if (e.pointerType === 'mouse') setHover(null)
+                  }}
+                  onPointerUp={(e) => {
+                    // a finger has no hover, so the crosshair rides on the tap: a press that never
+                    // travelled reads the bar under it rather than having panned nowhere
+                    if (grab.current && e.pointerType !== 'mouse' && Math.abs(e.clientX - grab.current.x) < 6 && n) {
+                      const r = e.currentTarget.getBoundingClientRect()
+                      setHover(Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * xSpan))))
+                    }
+                    grab.current = null
+                  }}
+                  onPointerMove={(e) => {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
                     if (grab.current) {
@@ -551,11 +568,13 @@ export default function MarketPage() {
                       setScroll(Math.max(0, Math.min(candles.length - winBars, grab.current.scroll + bars)))
                       return
                     }
+                    if (e.pointerType !== 'mouse') return // touch never hovers; its crosshair is the tap above
                     const f = (e.clientX - r.left) / r.width
                     // clamps in the future strip, so hovering it reads the last bar rather than nothing
                     setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
                   }}
-                  onMouseLeave={() => { grab.current = null; setHover(null) }}
+                  onPointerCancel={() => { grab.current = null }}
+                  onPointerLeave={(e) => { grab.current = null; if (e.pointerType === 'mouse') setHover(null) }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
                   <defs>
