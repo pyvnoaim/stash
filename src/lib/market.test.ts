@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -102,6 +102,25 @@ assert.deepEqual(desks(21), [])
 assert.deepEqual(desks(1), ['Tokyo']) // 10:00 in Tokyo, and only there
 // Saturday is nobody, however wide awake the crypto feed is
 assert.deepEqual(openDesks(Date.UTC(2024, 6, 6, 14)), [])
+
+/* The open as an instruction, in the four moments it has. The fixture opens at 09:30 New York and
+   its fifth bar closes above the hour's high, so: 20 minutes before, nothing to do; 30 minutes in,
+   the hour is still building; and after it, the break with a side on it. */
+const playAt = (mins: number, bars = orbBars) => openPlay(bars, open + mins * 60_000)
+assert.match(playAt(-20)!.say, /New York opens in 20 minutes/)
+assert.equal(playAt(-20)!.tone, 'wait')
+assert.match(playAt(30, orbBars.slice(0, 2))!.say, /still forming/)
+const broke = playAt(75)!
+assert.match(broke.say, /New York's high/)
+/* …and 'wait', not 'go': five bars are too few for an ATR, so the range cannot pass the width test,
+   and a play that can't check its own filter stands you down rather than pretending it passed. */
+assert.equal(broke.tone, 'wait')
+// inside the range there is a trigger but no trade, and past the session there is nothing to say
+assert.match(openPlay(orbBars.slice(0, 4), open + 75 * 60_000)!.say, /range is set|worth less/)
+// 23:00 UTC: the New York range is eight and a half hours behind, and Tokyo is still an hour off —
+// which is the one moment of the day this has nothing to say. Half an hour later it announces Tokyo.
+assert.equal(openPlay(orbBars, open + 8.5 * 3600_000), null)
+assert.match(openPlay(orbBars, open + 9 * 3600_000)!.say, /Tokyo opens in 30 minutes/)
 
 /* Session VWAP: the average price paid since that open, weighted by what traded at each. Most of
    the size went through at 100 and price has walked to 108, so the average sits well below it. */
