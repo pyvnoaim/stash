@@ -462,106 +462,102 @@ export default function MarketPage() {
             </Button>
           ))}
         </div>
-        {/* opening range pins 15m, so the interval picker only shows in Standard */}
-        {preset === 'standard' && (
-          <div className="bg-muted/50 ml-auto flex gap-1 rounded-lg p-1">
-            {INTERVALS.map((iv) => (
-              <Button key={iv} size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
-                className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
-                {iv}
+        {/* what you're looking at on the left; how you're looking at it in one group on the right,
+            so the row reads as two clusters instead of six controls fighting for the same line */}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* opening range pins 15m, so the interval picker only shows in Standard */}
+          {preset === 'standard' && (
+            <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+              {INTERVALS.map((iv) => (
+                <Button key={iv} size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
+                  className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
+                  {iv}
+                </Button>
+              ))}
+            </div>
+          )}
+          <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+            {PRESETS.map((p) => (
+              <Button key={p.id} size="sm" variant={preset === p.id ? 'secondary' : 'ghost'}
+                className={cn('h-7', preset !== p.id && 'text-muted-foreground')} onClick={() => setPreset(p.id)}>
+                {p.label}
               </Button>
             ))}
           </div>
-        )}
-        <div className={cn('bg-muted/50 flex gap-1 rounded-lg p-1', preset === 'orb' && 'ml-auto')}>
-          {PRESETS.map((p) => (
-            <Button key={p.id} size="sm" variant={preset === p.id ? 'secondary' : 'ghost'}
-              className={cn('h-7', preset !== p.id && 'text-muted-foreground')} onClick={() => setPreset(p.id)}>
-              {p.label}
-            </Button>
-          ))}
+          {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
+          <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', (!live || stale) && 'text-muted-foreground')}
+            onClick={() => setLive((v) => !v)}
+            title={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
+              : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
+            <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
+            Live
+          </Button>
+          <Button size="icon" variant="ghost" className="size-8" onClick={() => setNonce((n) => n + 1)} title="Refresh">
+            <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+          </Button>
         </div>
-        {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
-        <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', (!live || stale) && 'text-muted-foreground')}
-          onClick={() => setLive((v) => !v)}
-          title={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
-            : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
-          <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
-          Live
-        </Button>
-        <Button size="icon" variant="ghost" className="size-8" onClick={() => setNonce((n) => n + 1)} title="Refresh">
-          <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
-        </Button>
       </div>
 
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
-      {/* price + window change, with the overall signal verdict on the right */}
-      <div className="flex items-center gap-3">
-        <AssetLogo src={current.logo} className="size-7" />
-        <span className="text-2xl tabular-nums">{price != null ? fmt(price) : '—'}</span>
-        {price != null && (
-          <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-            {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
-          </span>
-        )}
-        {/* the price above is the last bar the feed gave us, and off the network that bar is however
-            old the cache is — say which, rather than let a stale number pass for the current one */}
-        {stale && candles.length > 0 && (
-          <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
-            <CloudOff className="size-3.5" />
-            {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
-          </span>
-        )}
-        {view && (
-          <span className={cn('ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
-            <bias.Icon className="size-3.5" />
-            {bias.label}
-            <span className="opacity-70 tabular-nums">{bulls}/{bears}</span>
-          </span>
-        )}
-      </div>
-
-      {/* The answer first, before the chart: "what do I do" is the question the page exists for,
-          and it used to sit below 300px of candles. Everything under it is the working. */}
-      {verdict && (
-        <Card className={cn('py-3', against ? 'border-amber-600/40' : 'border-foreground/30')}>
-          <CardContent className="px-3 pb-2">
-              <p className="flex items-center gap-2">
-                <span className={cn('text-base font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
+      {/* The answer first, as one block: the price, the tally's side, the verdict, the levels, and
+          what you're actually in. "What do I do" is the question the page exists for, and it used
+          to arrive as three separate pieces the eye had to gather before the chart. */}
+      <Card className={cn('py-3', against ? 'border-amber-600/40' : 'border-foreground/30')}>
+        <CardContent className="px-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <AssetLogo src={current.logo} className="size-7" />
+            <span className="text-2xl tabular-nums">{price != null ? fmt(price) : '—'}</span>
+            {price != null && (
+              <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
+              </span>
+            )}
+            {/* the price above is the last bar the feed gave us, and off the network that bar is however
+                old the cache is — say which, rather than let a stale number pass for the current one */}
+            {stale && candles.length > 0 && (
+              <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+                <CloudOff className="size-3.5" />
+                {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
+              </span>
+            )}
+            {view && (
+              <span className={cn('ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
+                <bias.Icon className="size-3.5" />
+                {bias.label}
+                <span className="opacity-70 tabular-nums">{bulls}/{bears}</span>
+              </span>
+            )}
+          </div>
+          {verdict && (
+            <>
+              <p className="mt-3 flex items-center gap-2">
+                <span className={cn('text-lg font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
                 {/* which chart this verdict is off — the two horizons disagree often, and a hint with
                     no timeframe on it is the kind you act on for the wrong reason */}
                 <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
                   {cfg.label} · {interval}
                 </span>
               </p>
-            <p className="text-muted-foreground text-xs">{verdict.why}</p>
-          </CardContent>
-          {/* faded when the verdict above already said not to take it — the levels are still there to
-              read, they just stop competing with the answer for attention */}
-          {plan && (
-          <CardContent className={cn('flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm',
-            verdict?.tone === 'wait' && 'opacity-60')}>
+              <p className="text-muted-foreground text-xs">{verdict.why}</p>
+            </>
+          )}
+        </CardContent>
+        {/* faded when the verdict above already said not to take it — the levels are still there to
+            read, they just stop competing with the answer for attention */}
+        {plan && (
+        <CardContent className={cn('border-t px-3 pt-3 text-sm', verdict?.tone === 'wait' && 'opacity-60')}>
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">
               {dir === 'long' ? 'Long' : 'Short'} setup
               <span className="text-muted-foreground font-normal">
                 {' · '}{dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the {cfg.fast}-MA
               </span>
             </span>
-            <span className="text-sky-600 dark:text-sky-400">Entry <span className="font-medium tabular-nums">{fmt(plan.entry)}</span></span>
-            <span className="text-destructive">Stop <span className="font-medium tabular-nums">{fmt(plan.stop)}</span></span>
-            <span className="text-emerald-600 dark:text-emerald-400">Target <span className="font-medium tabular-nums">{fmt(plan.target)}</span></span>
-            {/* R:R used to be 2.00 by construction and could never warn you off anything */}
-            {/* spelled out as well as ratio'd: "0.70" means nothing until you see it's 1.310 for 900 */}
-            <span className={cn('ml-auto', plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}
-              title={`Risk ${fmt(risk)} per unit for a shot at ${fmt(reward)}`}>
-              Risk <span className="tabular-nums">{fmt(risk)}</span> to make <span className="tabular-nums">{fmt(reward)}</span>
-              <span className={cn('ml-1 font-medium tabular-nums', !plan.thin && 'text-foreground')}>({plan.rr.toFixed(2)}×)</span>
-            </span>
             {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
                 watch that kept re-reading it would quietly become a different trade every bar */}
             {!inIt && (
-            <Button size="sm" variant={watched ? 'secondary' : 'outline'}
+            <Button size="sm" variant={watched ? 'secondary' : 'outline'} className="ml-auto"
               onClick={() => (watched
                 ? removeWatch(watched.id)
                 : dir !== 'flat' && addWatch({
@@ -572,48 +568,64 @@ export default function MarketPage() {
               {watched ? 'Alerting' : 'Alert me'}
             </Button>
             )}
-            {/* the button explained where it sits — it was the one thing on this card you had to
-                already know. One line, gone once it is on. */}
-            {!inIt && !watched && (
-              <p className="text-muted-foreground w-full text-xs">
-                Alert me saves these levels as they stand and the bell tells you when price reaches
-                the entry, the target, or the stop. Nothing is traded.
-              </p>
-            )}
-            {against && (
-              <p className="text-amber-600 dark:text-amber-500 w-full text-xs">
-                Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
-              </p>
-            )}
-            {/* Not amber: this one isn't a warning off, it's the sentence that stops the {interval}
-                card and the {ANCHOR[interval]} card reading as the tool contradicting itself. */}
-            {counter && (
-              <p className="text-muted-foreground w-full text-xs">
-                Counter-trend — the {ANCHOR[interval]} chart leans {dir === 'long' ? 'down' : 'up'}, so this is a{' '}
-                {interval} {dir} against it. That is a real trade, not the same one the {ANCHOR[interval]} chart is
-                offering; it wants a tighter stop and no waiting around for the target.
-              </p>
-            )}
-          </CardContent>
+          </div>
+          {/* the levels as an instrument row, label over number — the same read-out pattern as the
+              Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
+              means nothing until you see it's 1.310 for 900. */}
+          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+            {([
+              ['Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400'],
+              ['Stop', fmt(plan.stop), 'text-destructive'],
+              ['Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400'],
+              ['Risk to reward', `${fmt(risk)} → ${fmt(reward)} (${plan.rr.toFixed(2)}×)`,
+                plan.thin ? 'text-amber-600 dark:text-amber-500' : ''],
+            ] as const).map(([k, v, cls]) => (
+              <div key={k}>
+                <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
+                <p className={cn('font-medium tabular-nums', cls)}>{v}</p>
+              </div>
+            ))}
+          </div>
+          {/* the button explained where it sits — it was the one thing on this card you had to
+              already know. One line, gone once it is on. */}
+          {!inIt && !watched && (
+            <p className="text-muted-foreground mt-2 text-xs">
+              Alert me saves these levels as they stand and the bell tells you when price reaches
+              the entry, the target, or the stop. Nothing is traded.
+            </p>
           )}
-        </Card>
-      )}
-
-      {/* what you are actually in on this asset, if anything — under the plan, because the plan is
-          what the tool thinks and this is what you did, and they are not always the same thing */}
-      <Position asset={current.id} label={current.label} horizon={cfg.label}
-        price={last ?? null} plan={plan} dir={dir} />
+          {against && (
+            <p className="text-amber-600 dark:text-amber-500 mt-2 text-xs">
+              Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
+            </p>
+          )}
+          {/* Not amber: this one isn't a warning off, it's the sentence that stops the {interval}
+              card and the {ANCHOR[interval]} card reading as the tool contradicting itself. */}
+          {counter && (
+            <p className="text-muted-foreground mt-2 text-xs">
+              Counter-trend — the {ANCHOR[interval]} chart leans {dir === 'long' ? 'down' : 'up'}, so this is a{' '}
+              {interval} {dir} against it. That is a real trade, not the same one the {ANCHOR[interval]} chart is
+              offering; it wants a tighter stop and no waiting around for the target.
+            </p>
+          )}
+        </CardContent>
+        )}
+        {/* what you are actually in on this asset, if anything — the card's last word, because the
+            plan is what the tool thinks and this is what you did, and they are not always the same */}
+        <Position asset={current.id} label={current.label} horizon={cfg.label}
+          price={last ?? null} plan={plan} dir={dir} />
+      </Card>
 
       {/* the open, when there is something to act on — in the opening-range preset, always: there
           the open is the whole subject */}
       <OpenPlay candles={candles} full={preset === 'orb'} />
-      {/* who is at their desks — context for the candles it sits on top of */}
-      <OpenNow at={candles.at(-1)?.t} />
 
       {/* the chart: price line, the two MAs whose cross the guides watch, and the S/R band */}
       <Card className="py-3">
         <CardContent className="px-3">
-          <div ref={plot} className="relative h-[300px]">
+          {/* who is at their desks — context for the candles it sits directly on top of */}
+          <OpenNow at={candles.at(-1)?.t} />
+          <div ref={plot} className="relative h-[300px] md:h-[380px]">
             {error && <p className="text-destructive absolute inset-0 flex items-center justify-center text-sm">{error}</p>}
             {loading && (
               <div className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm">
@@ -898,7 +910,7 @@ function OpenNow({ at }: { at?: number }) {
   const desks = openDesks(at)
   const both = desks.length > 1
   return (
-    <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+    <div className="text-muted-foreground mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       {desks.map((s) => (
         <span key={s.label} className="inline-flex items-center gap-1.5">
           <span className="size-1.5 rounded-full" style={{ background: s.color }} />
@@ -1021,8 +1033,7 @@ function Position({ asset, label, horizon, price, plan, dir }: {
     const money = r != null ? moneyOf(r, stakeOf(held)) : null
     const long = held.dir === 'long'
     return (
-      <Card className="py-3">
-        <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 px-3 text-sm">
+      <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm">
           <span className="font-medium">
             You are {long ? 'long' : 'short'} {held.label}
             <span className="text-muted-foreground font-normal">
@@ -1051,14 +1062,14 @@ function Position({ asset, label, horizon, price, plan, dir }: {
             counted — on a perp held for days the funding is real money this does not know about.
           </p>
         </CardContent>
-      </Card>
     )
   }
 
   return (
+    <CardContent className="border-t px-3 pt-3">
     <Popover open={open} onOpenChange={(v) => (v ? start() : setOpen(false))}>
       <PopoverTrigger asChild>
-        <Button size="sm" variant="outline" className="self-start">I'm in this trade</Button>
+        <Button size="sm" variant="ghost" className="text-muted-foreground -mx-2 -my-1 h-7">I'm in this trade</Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 grid gap-3">
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
@@ -1087,6 +1098,7 @@ function Position({ asset, label, horizon, price, plan, dir }: {
         <Button size="sm" disabled={!sane || !geometry} onClick={save}>Track it</Button>
       </PopoverContent>
     </Popover>
+    </CardContent>
   )
 }
 
