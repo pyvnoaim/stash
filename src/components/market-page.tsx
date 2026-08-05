@@ -18,7 +18,7 @@ import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   localClock, openDesks, openPlay, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
   TREND_NETWORK,
-  type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
+  type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Trend,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -866,6 +866,8 @@ export default function MarketPage() {
 
       {/* outside the fragment above, so they are there while the desk loads, errors, or waits for
           a stock key — none of them needs any of that */}
+      <Scan />
+
       <Record />
 
       <Trending />
@@ -1166,6 +1168,139 @@ function Record() {
                  fee is counted — it is the plan's own arithmetic, not a broker's.`
               : `Set what a setup is worth in Settings → Markets and these read in euros as well as
                  in R.`}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/** One asset's answer, compressed to a row. `tier` is the sort: 3 the entry is here, 2 wait for
+ *  the level, 1 a setup the desk would talk you out of, 0 nothing to do. */
+type ScanRow = {
+  a: Asset
+  dir: 'long' | 'short' | 'flat'
+  bulls: number
+  bears: number
+  plan: Plan | null
+  tier: 0 | 1 | 2 | 3
+  say: string
+}
+
+/** The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — run
+ *  over one asset without rendering it. Same calls, same order, so a row here never disagrees with
+ *  what opening the asset shows. */
+async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon]): Promise<ScanRow | null> {
+  const up = HIGHER[cfg.interval]
+  const [candles, higher] = await Promise.all([
+    fetchCandles(a, cfg.interval, ''),
+    up ? fetchCandles(a, up, '').then((c) => trendFilter(c, cfg.slow, up)).catch(() => null)
+       : Promise.resolve<Signal | null>(null),
+  ])
+  if (!candles.length) return null
+  const view = signals(candles, cfg)
+  const vwap = sessionVwap(candles)
+  const { bulls, bears, dir } = tally([...(higher ? [higher] : []), ...(vwap ? [vwap.signal] : []), ...view.signals])
+  const price = candles.at(-1)!.c
+  const entryMA = view.smaFast.at(-1)
+  const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr) : null
+  const against = !!plan && !!higher
+    && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
+  // the verdict ladder from the card above, compressed to a phrase — same branches, same order
+  const [tier, say]: [ScanRow['tier'], string] =
+    dir === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
+    : !plan ? [0, 'no clean setup — price already ran']
+    : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks']
+    : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']
+    : [2, `${dir === 'long' ? 'buy' : 'sell'} the ${cfg.fast}-MA at ${fmtPrice(plan.entry, price)}`]
+  return { a, dir, bulls, bears, plan, tier, say }
+}
+
+// how actionable the row's phrase is, by tier — the same palette the verdict card speaks in
+const TIER_CLS = [
+  'text-muted-foreground',
+  'text-amber-600 dark:text-amber-500',
+  'text-foreground',
+  'text-emerald-600 dark:text-emerald-400',
+] as const
+
+/**
+ * Which asset is worth opening, without opening them: every keyless asset through the desk's own
+ * read, best first. The picker can say what one asset thinks once you're on it; at the open the
+ * question is which of eleven to even look at, and this is that pass in one card. Clicking a row
+ * puts the desk on it. Stocks sit it out: eight more chart fetches against a feed that allows
+ * eight calls a minute, on a market that also has a closing bell.
+ * ponytail: fetched once per visit and on the refresh button, no live poll — these reads move by
+ * the bar (an hour, a day), not by the tick.
+ */
+function Scan() {
+  const { marketHorizon: horizon } = useStash()
+  const cfg = HORIZONS[horizon]
+  const [rows, setRows] = useState<ScanRow[] | null>(null)
+  const [nonce, setNonce] = useState(0)
+  // the worker answers these routes from cache offline — rows drawn from old bars must say so
+  const online = useOnline()
+
+  useEffect(() => {
+    let on = true
+    setRows(null)
+    void Promise.all(
+      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg).catch(() => null)),
+    ).then((r) => {
+      if (!on) return
+      setRows(r.filter((x): x is ScanRow => !!x)
+        .sort((x, y) => y.tier - x.tier || (y.plan?.rr ?? 0) - (x.plan?.rr ?? 0)))
+    })
+    return () => { on = false }
+  }, [cfg, nonce])
+
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-heading text-sm tracking-wide uppercase">Scan</span>
+          <span className="text-muted-foreground text-xs">
+            every keyless chart, the {cfg.label.toLowerCase()} read, best first
+          </span>
+          <Button size="icon" variant="ghost" className="ml-auto size-6" title="Refresh"
+            onClick={() => setNonce((n) => n + 1)}>
+            <RefreshCw className={cn('size-3.5', rows === null && 'animate-spin')} />
+          </Button>
+        </div>
+        {rows === null && <p className="text-muted-foreground py-4 text-sm">Reading every chart…</p>}
+        {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">The feed is not answering.</p>}
+        {!online && !!rows?.length && (
+          <p className="text-amber-600 dark:text-amber-500 mb-1 flex items-center gap-1.5 text-xs">
+            <CloudOff className="size-3.5" /> Offline — these reads are as old as the bars the cache had.
+          </p>
+        )}
+        {rows?.map((r) => (
+          <button key={r.a.id} type="button"
+            onClick={(e) => {
+              setMarketAsset(r.a.id)
+              // the desk is at the top of a page you are at the bottom of — go to the answer
+              e.currentTarget.closest('.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
+            className="hover:bg-accent -mx-1.5 flex w-[calc(100%+0.75rem)] items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-sm">
+            <span className="flex w-28 shrink-0 items-center gap-2 truncate font-medium">
+              <AssetLogo src={r.a.logo} />{r.a.label}
+            </span>
+            <span className={cn('w-12 shrink-0 text-xs font-medium',
+              r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400'
+              : r.dir === 'short' ? 'text-destructive' : 'text-muted-foreground')}>
+              {r.dir === 'long' ? 'Long' : r.dir === 'short' ? 'Short' : 'Flat'}
+            </span>
+            <span className="text-muted-foreground w-8 shrink-0 font-mono text-xs tabular-nums">{r.bulls}/{r.bears}</span>
+            <span className={cn('min-w-0 flex-1 truncate text-xs', TIER_CLS[r.tier])}>{r.say}</span>
+            {r.plan && (
+              <span className={cn('shrink-0 font-mono text-xs tabular-nums',
+                r.plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}>
+                {r.plan.rr.toFixed(1)}×
+              </span>
+            )}
+          </button>
+        ))}
+        <p className="text-muted-foreground mt-2 text-xs">
+          Stocks need their key and their own rate limit, so they sit this one out — open them from the picker.
         </p>
       </CardContent>
     </Card>
