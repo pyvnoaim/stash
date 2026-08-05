@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  localClock, openDesks, openPlay, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
+  localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
   TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Trend,
 } from '@/lib/market'
@@ -362,7 +362,7 @@ export default function MarketPage() {
     : !plan
       ? {
           text: 'No clean setup', tone: 'wait' as const,
-          why: `the tally leans ${dir}, but price has already run past the level this setup would aim at — there is nothing left between the ${cfg.fast}-MA and the swing`,
+          why: `the tally leans ${dir}, but price is already past the ${cfg.fast}-MA — entering here would be chasing; wait for the pull-back`,
         }
     : plan.thin || against
       ? {
@@ -542,12 +542,10 @@ export default function MarketPage() {
           {plan && (
           <CardContent className={cn('flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm',
             verdict?.tone === 'wait' && 'opacity-60')}>
-            {/* the wording follows the geometry: the entry only reads as a pull-back when the MA is
-                actually below the price. It wasn't, on roughly half the bars. */}
             <span className="font-medium">
               {dir === 'long' ? 'Long' : 'Short'} setup
               <span className="text-muted-foreground font-normal">
-                {' · '}{PLAN_WORDS[plan.kind]} the {cfg.fast}-MA
+                {' · '}{dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the {cfg.fast}-MA
               </span>
             </span>
             <span className="text-sky-600 dark:text-sky-400">Entry <span className="font-medium tabular-nums">{fmt(plan.entry)}</span></span>
