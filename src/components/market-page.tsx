@@ -16,7 +16,8 @@ import { cn } from '@/lib/utils'
 import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  localClock, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter, TREND_NETWORK,
+  localClock, openDesks, orb, PLAN_WORDS, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
+  TREND_NETWORK,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Trend,
 } from '@/lib/market'
 
@@ -28,6 +29,11 @@ const PRESETS = [
   { id: 'orb', label: 'Opening range' },
 ] as const
 type Preset = (typeof PRESETS)[number]['id']
+
+/** One session open on the chart: where it sits, whose it is, and when — in the reader's own clock. */
+type SessionMark = { x: number; color: string; label: string; t: number; future: boolean }
+/** One shape whether or not there is anything to draw, so neither caller has to check first. */
+const NO_MARKS: { marks: SessionMark[]; overlaps: { x0: number; x1: number }[] } = { marks: [], overlaps: [] }
 
 const VISIBLE = 60 // bars drawn by default; MAs/signals still use every fetched bar
 const MIN_BARS = 20, MAX_BARS = 400 // how far the wheel can zoom in and out
@@ -250,38 +256,53 @@ export default function MarketPage() {
   // Mark the first bar that reaches the open each local day — works whether bars run continuously
   // (crypto) or resume after an overnight gap (stocks, whose first bar of the day already sits at 09:30).
   const sessionMarks = useMemo(() => {
-    if (interval === '1d' || interval === '1w') return []
+    if (interval === '1d' || interval === '1w') return NO_MARKS
     // a candle must actually START at the session open (within one bar) to count — so a session that
     // falls inside a closed-market gap (Asia/Europe on a US-hours stock) is skipped, not stamped on
     // the first bar after the gap. Continuous 24/7 crypto still catches every session.
     const barMin = { '15m': 15, '1h': 60, '4h': 240 }[interval] ?? 60
     const v = vis
     const m = v.length
-    if (m < 2) return []
+    if (m < 2) return NO_MARKS
     // the same scan runs over the drawn bars and the projected ones, so an open that hasn't happened
     // yet gets marked in the empty right-hand room. ponytail: projected bars just repeat the last
     // bar's spacing — right for the 24/7 feeds; on a gapped stock feed the mark still counts real
     // time to the open, it only ignores that no bars print while the market is shut.
     const step = v.at(-1)!.t - v.at(-2)!.t
     const ts = [...v.map((c) => c.t), ...Array.from({ length: future }, (_, k) => v.at(-1)!.t + (k + 1) * step)]
-    const marks: { x: number; color: string; label: string; future: boolean }[] = []
+    const at = (i: number) => (i / (m - 1 + future)) * 100
+    const marks: SessionMark[] = []
     for (const s of SESSIONS) {
       let prev = localClock(ts[0], s.tz)
       for (let i = 1; i < ts.length; i++) {
         const cur = localClock(ts[i], s.tz)
         if (cur.min >= s.min && cur.min < s.min + barMin && (cur.day !== prev.day || prev.min < s.min))
-          marks.push({ x: (i / (m - 1 + future)) * 100, color: s.color, label: s.label, future: i >= m })
+          marks.push({ x: at(i), color: s.color, label: s.label, t: ts[i], future: i >= m })
         prev = cur
       }
     }
-    return marks
+    /* And the stretches where two desks are at work at once — Frankfurt and New York overlap for two
+       hours a day, and that is when most of gold's range gets made. Drawn as a band rather than said
+       in a sentence: the point of it is which candles happened inside it. */
+    const overlaps: { x0: number; x1: number }[] = []
+    for (let i = 0; i < ts.length; i++) {
+      if (openDesks(ts[i]).length < 2) continue
+      const last = overlaps.at(-1)
+      if (last && last.x1 === at(i - 1)) last.x1 = at(i)
+      else overlaps.push({ x0: at(i), x1: at(i) })
+    }
+    return { marks, overlaps }
   }, [vis, interval, future])
-  // the opens still ahead of the last bar — labelled on the chart, since that's the point of the gap.
-  // Only while the view sits at the live edge; scrolled back, "ahead of the last drawn bar" is history.
-  const nextOpens = stop === candles.length ? sessionMarks.filter((mk) => mk.future) : []
+  /* Every mark gets its name and the time it happened on your own clock — an unlabelled dotted line
+     is a line you have to go and decode in the legend, and the whole question it answers is "which
+     desk, and when". Scrolled back off the live edge, the ones still ahead are history rather than
+     news, so they lose the brightness and read like the rest. */
+  const atEdgeNow = stop === candles.length
+  const sessionLabel = (t: number) =>
+    new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 
   // only the sessions that actually landed a line get a legend entry
-  const shownSessions = SESSIONS.filter((s) => sessionMarks.some((mk) => mk.label === s.label))
+  const shownSessions = SESSIONS.filter((s) => sessionMarks.marks.some((mk) => mk.label === s.label))
 
   // opening-range levels + breakout signal, computed off the full window so the 00:00 bar is found.
   // memoised so it doesn't re-scan (and re-spread) the whole candle array on every hover re-render
@@ -474,6 +495,7 @@ export default function MarketPage() {
 
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
+      <OpenNow at={candles.at(-1)?.t} />
       {/* price + window change, with the overall signal verdict on the right */}
       <div className="flex items-center gap-3">
         <AssetLogo src={current.logo} className="size-7" />
@@ -546,13 +568,19 @@ export default function MarketPage() {
                   {[25, 50, 75].map((gy) => (
                     <line key={gy} x1="0" x2="100" y1={gy} y2={gy} className="stroke-border/60" strokeWidth={1} vectorEffect="non-scaling-stroke" />
                   ))}
-                  {/* Session opens — Asia / Europe / US. The ones already passed sit right back in the
-                      background so they read as texture behind the candles rather than ten dotted
-                      verticals competing with them; the ones still ahead, which are the part you'd
-                      act on, stay bright. */}
-                  {sessionMarks.map((mk, i) => (
+                  {/* The hours two desks are open at once — the overlap that makes most of the day's
+                      range. A wash behind everything, no border: it is the background the candles
+                      happened against, not a level. */}
+                  {sessionMarks.overlaps.map((ov, i) => (
+                    <rect key={`ov-${i}`} x={ov.x0} y="0" width={Math.max(ov.x1 - ov.x0, 0.3)} height="100"
+                      className="fill-amber-400/8 dark:fill-amber-300/8" stroke="none" />
+                  ))}
+                  {/* Session opens — Asia / Europe / US. The ones already passed sit back so they read
+                      as texture behind the candles rather than dotted verticals competing with them;
+                      the ones still ahead, which are the part you'd act on, stay bright. */}
+                  {sessionMarks.marks.map((mk, i) => (
                     <line key={`s-${i}`} x1={mk.x} x2={mk.x} y1="0" y2="100"
-                      stroke={mk.color} strokeWidth={1} strokeOpacity={mk.future ? 0.8 : 0.16}
+                      stroke={mk.color} strokeWidth={1} strokeOpacity={mk.future && atEdgeNow ? 0.8 : 0.3}
                       strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
                   ))}
                   {/* The setup's levels, or the plain S/R band when there's no setup. Only the entry
@@ -629,9 +657,14 @@ export default function MarketPage() {
                 </svg>
 
                 {/* which session each upcoming line is, named where it sits — the reason for the gap */}
-                {nextOpens.map((mk, i) => (
-                  <span key={`n-${i}`} className="pointer-events-none absolute bottom-1 -translate-x-1/2 text-[10px] whitespace-nowrap"
-                    style={{ left: `${mk.x}%`, color: mk.color }}>{mk.label}</span>
+                {/* the name of the desk and the time on your clock, at the head of its own line —
+                    the two things the line was silently standing for */}
+                {sessionMarks.marks.map((mk, i) => (
+                  <span key={`n-${i}`}
+                    className="pointer-events-none absolute top-1 -translate-x-1/2 text-[10px] whitespace-nowrap tabular-nums"
+                    style={{ left: `${mk.x}%`, color: mk.color, opacity: mk.future && atEdgeNow ? 1 : 0.55 }}>
+                    {mk.label} {sessionLabel(mk.t)}
+                  </span>
                 ))}
 
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
@@ -805,6 +838,42 @@ export default function MarketPage() {
  * is worth. Nothing was ever bought, no fee is modelled, and the wording is careful about that —
  * "had you taken it" is the whole claim. Set no stake and it says R and nothing else.
  */
+/**
+ * Who is at their desks, right now, on your own clock. The chart marks the opens and says nothing
+ * about the closes, which is half a day's information: gold's range is mostly made in the two hours
+ * Frankfurt and New York are both working, and the stretch when neither is is the one where a break
+ * has nobody behind it.
+ *
+ * Read off the last bar rather than the wall clock, so it never claims a session the drawn chart
+ * has no data from — the "as of" note beside the price is the one that says how old that is.
+ */
+function OpenNow({ at }: { at?: number }) {
+  if (at == null) return null
+  const desks = openDesks(at)
+  const both = desks.length > 1
+  return (
+    <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      {desks.map((s) => (
+        <span key={s.label} className="inline-flex items-center gap-1.5">
+          <span className="size-1.5 rounded-full" style={{ background: s.color }} />
+          {s.where} open
+          <span className="opacity-70 tabular-nums">till {closeAt(s, at)}</span>
+        </span>
+      ))}
+      {both && <span className="text-amber-600 dark:text-amber-500">the overlap — where most of the day's range gets made</span>}
+      {!desks.length && <span>No exchange open — thin hours, and a break made in them is the kind that gets given back</span>}
+    </div>
+  )
+}
+
+/** That desk's closing bell as a time on your clock: its local close, carried back through the day
+ *  the bar happened on. */
+function closeAt(s: (typeof SESSIONS)[number], at: number) {
+  const { min } = localClock(at, s.tz)
+  return new Date(at + (s.end - min) * 60_000)
+    .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
 /**
  * A trade you are actually in, as opposed to one the tool is watching for you. It is the same
  * `Watch` row the bell already reads — money and leverage written on it — so nothing downstream
