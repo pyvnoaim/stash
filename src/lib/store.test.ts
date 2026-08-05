@@ -391,6 +391,11 @@ assert.deepEqual(visible(getState(), '').map((i) => i.id).sort(), ['down', 'up']
 select(sub.id)
 assert.deepEqual(visible(getState(), '').map((i) => i.id), ['down'])   // and not the other way
 
+// a project reads as sections by kind — a note captured first still sits below the tasks
+addItem(item({ id: 'memo', pid: sub.id, type: 'note' }))
+addItem(item({ id: 'chore', pid: sub.id, type: 'task' }))
+assert.deepEqual(visible(getState(), '').map((i) => i.id), ['chore', 'down', 'memo'])
+
 // the sidebar reads parents each followed by their own
 assert.deepEqual(flatProjects(getState()).map((x) => x.name), ['Development', 'Kova'])
 

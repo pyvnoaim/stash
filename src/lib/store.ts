@@ -901,7 +901,8 @@ export function visible(s: State, query: string): Item[] {
   }
   // Everything reads as sections by kind; sort is stable, so each kind keeps its own order
   if (s.sel === 'all') return list.sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type])
-  return list.sort((a, b) => Number(a.done) - Number(b.done)) // manual order, finished items sink
+  // manual order within each kind: tasks, then ideas, then notes, finished items sink
+  return list.sort((a, b) => Number(a.done) - Number(b.done) || TYPE_RANK[a.type] - TYPE_RANK[b.type])
 }
 
 /* ---------- actions ---------- */
