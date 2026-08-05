@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -90,6 +90,18 @@ const hourly = [13, 14, 15, 16].map((h, i) => ({ t: Date.UTC(2024, 0, 2, h), o: 
 assert.equal(orb(hourly)?.t, Date.UTC(2024, 0, 2, 14))
 assert.equal(orb(hourly)?.where, 'New York')
 assert.equal(orb([0, 1, 2, 3].map((d) => ({ t: Date.UTC(2024, 0, 2 + d), o: 100, h: 105, l: 95, c: 100, v: 10 }))), null)
+
+/* Who is at their desks. A summer Tuesday, in UTC: Frankfurt works 07:00–15:30, New York
+   13:30–20:00, so 13:30–15:30 is the overlap that makes the day's range — and 21:00, with Tokyo
+   still hours away, is nobody at all. */
+const desks = (h: number, m = 0) => openDesks(Date.UTC(2024, 6, 2, h, m)).map((s) => s.where)
+assert.deepEqual(desks(8), ['Frankfurt'])
+assert.deepEqual(desks(14), ['Frankfurt', 'New York'])
+assert.deepEqual(desks(16), ['New York'])
+assert.deepEqual(desks(21), [])
+assert.deepEqual(desks(1), ['Tokyo']) // 10:00 in Tokyo, and only there
+// Saturday is nobody, however wide awake the crypto feed is
+assert.deepEqual(openDesks(Date.UTC(2024, 6, 6, 14)), [])
 
 /* Session VWAP: the average price paid since that open, weighted by what traded at each. Most of
    the size went through at 100 and price has walked to 108, so the average sits well below it. */

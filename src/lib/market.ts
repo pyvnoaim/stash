@@ -363,12 +363,28 @@ export const MOVER_FLOOR = 0.75  // percent, under which nothing counts however 
  *
  * Here rather than in the chart that draws them, because server/push.ts knocks on the same three
  * and an open in two places is two opens the week a country moves its clocks.
+ *
+ * `end` is the closing bell, same local clock. It earns its place on the overlap: for two hours a
+ * day Frankfurt and New York are both at their desks, and that is when most of gold's daily range
+ * gets made. Tokyo's lunch break is not modelled — ponytail: it is an hour in the middle of a
+ * session nobody here trades, and no reading turns on it.
  */
 export const SESSIONS = [
-  { label: 'Asia', where: 'Tokyo', tz: 'Asia/Tokyo', min: 9 * 60, color: '#f43f5e' },       // 09:00, no DST
-  { label: 'Europe', where: 'Frankfurt', tz: 'Europe/Berlin', min: 9 * 60, color: '#6366f1' },
-  { label: 'US', where: 'New York', tz: 'America/New_York', min: 9 * 60 + 30, color: '#14b8a6' },
+  // 09:00–15:00, no DST all year
+  { label: 'Asia', where: 'Tokyo', tz: 'Asia/Tokyo', min: 9 * 60, end: 15 * 60, color: '#f43f5e' },
+  { label: 'Europe', where: 'Frankfurt', tz: 'Europe/Berlin', min: 9 * 60, end: 17 * 60 + 30, color: '#6366f1' },
+  { label: 'US', where: 'New York', tz: 'America/New_York', min: 9 * 60 + 30, end: 16 * 60, color: '#14b8a6' },
 ]
+
+/** Which desks are at their desks at that moment — weekends are nobody. Used for the line over the
+ *  chart that says whether you are in the overlap or in the hours that go nowhere. */
+export function openDesks(at: number): typeof SESSIONS {
+  return SESSIONS.filter((s) => {
+    const { day, min } = localClock(at, s.tz)
+    const wd = new Date(Date.UTC(+day.slice(0, 4), +day.slice(4, 6) - 1, +day.slice(6))).getUTCDay()
+    return wd !== 0 && wd !== 6 && min >= s.min && min < s.end
+  })
+}
 
 // One formatter per timezone, built once. The chart's session scan calls this ~210 times and reruns
 // on every live tick; constructing a fresh Intl.DateTimeFormat each call measured 8.8ms a tick
