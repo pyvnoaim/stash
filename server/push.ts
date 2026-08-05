@@ -332,27 +332,41 @@ export function createPush(db: DatabaseSync) {
   const MOVERS = ASSETS.filter((a) => a.source === 'binance')
   type Row = { symbol: string, openPrice: string, lastPrice: string, highPrice: string, lowPrice: string }
   /* The tick's raw readings, not its sentences. Whether a move is worth waking someone for is that
-     person's dial now, so the two calls are made once and the wording happens per document — which
+     person's dial now, so the calls are made once and the wording happens per document — which
      is arithmetic over a dozen rows, not a request. */
-  let ticks: { hour: Row[], day: Row[], hr: string } | null = null
+  let ticks: { hour: Row[], four: Row[], day: Row[], hr: string } | null = null
 
-  /** The movers as one person's thresholds see them. */
+  /** The movers as one person's thresholds see them. Two windows through the one rule: the hour
+   *  for a spike, and the four hours behind it for the grind an hour cannot see — gold's 1.4%
+   *  morning of 5 Aug 2026, half the day's range, never printed a single hour over the floor.
+   *  The four-hour read is also what carries a small-hours move past the quiet hours below: the
+   *  spike's own hour is history by eight, but the window it sits in is still warm. */
   function moversFor(dials: Dials): Alert[] {
     if (!ticks) return []
-    const { hour, day, hr } = ticks
-    return MOVERS.flatMap((a): Alert[] => {
-      const h = hour.find((r) => r.symbol === a.id)
-      const d = day.find((r) => r.symbol === a.id)
-      if (!h || !d) return []
-      const m = moverMove(+h.openPrice, +h.lastPrice, +d.highPrice, +d.lowPrice, dials)
-      if (!m) return []
-      return [{
-        key: `mkt-${a.id}-${m.up ? 'up' : 'down'}-${hr}`,
-        title: `${a.label} ${m.up ? 'up' : 'down'} ${Math.abs(m.pct).toFixed(1)}% in an hour`,
-        body: `${fmtPrice(+h.lastPrice)} — ${Math.round(m.bite * 100)}% of the day's range, in one hour`,
-        target: 'market',
-      }]
-    })
+    const { hour, four, day, hr } = ticks
+    /* The four-hour window stays warm as long as the run does, so its key is the quarter-day
+       rather than the hour — one knock per quarter, not four retellings of one grind. */
+    const q = hr.slice(0, 11) + 'q' + Math.floor(+hr.slice(11) / 4)
+    const out = new Map<string, Alert>()
+    for (const { win, span, stamp } of [{ win: hour, span: 'an hour', stamp: hr }, { win: four, span: '4 hours', stamp: q }]) {
+      for (const a of MOVERS) {
+        const h = win.find((r) => r.symbol === a.id)
+        const d = day.find((r) => r.symbol === a.id)
+        if (!h || !d) continue
+        const m = moverMove(+h.openPrice, +h.lastPrice, +d.highPrice, +d.lowPrice, dials)
+        if (!m) continue
+        // the hour is looked at first, so when both windows catch one run the sharper sentence wins
+        const id = `${a.id}-${m.up ? 'up' : 'down'}`
+        if (out.has(id)) continue
+        out.set(id, {
+          key: `mkt-${id}-${stamp}`,
+          title: `${a.label} ${m.up ? 'up' : 'down'} ${Math.abs(m.pct).toFixed(1)}% in ${span}`,
+          body: `${fmtPrice(+h.lastPrice)} — ${Math.round(m.bite * 100)}% of the day's range, in ${span === 'an hour' ? 'one hour' : span}`,
+          target: 'market',
+        })
+      }
+    }
+    return [...out.values()]
   }
 
   async function refreshMovers(at = Date.now()) {
@@ -360,14 +374,16 @@ export function createPush(db: DatabaseSync) {
     const ticker = (query: string) =>
       fetch(`https://api.binance.com/api/v3/ticker${query}&symbols=${syms}`).then((r) => r.json())
     try {
-      // the hour just gone, and the day it sits in for scale — the two moverMove reads
-      const [hour, day] = await Promise.all([ticker('?windowSize=1h'), ticker('/24hr?')]) as Row[][]
-      if (!Array.isArray(hour) || !Array.isArray(day)) { ticks = null; return }
+      // the hour just gone, the four behind it, and the day they sit in for scale
+      const [hour, four, day] = await Promise.all([
+        ticker('?windowSize=1h'), ticker('?windowSize=4h'), ticker('/24hr?'),
+      ]) as Row[][]
+      if (!Array.isArray(hour) || !Array.isArray(four) || !Array.isArray(day)) { ticks = null; return }
       /* The hour is in the key, so a move that keeps going is one knock an hour rather than one a
          minute, and the same asset moving again tomorrow is news again — the trick the digest key
          plays with the date. ponytail: a run that straddles two clock hours knocks twice. Being
          told about a pump twice is the failure worth having here; the other one is this thread. */
-      ticks = { hour, day, hr: new Date(at).toISOString().slice(0, 13) }
+      ticks = { hour, four, day, hr: new Date(at).toISOString().slice(0, 13) }
     } catch {
       ticks = null   // a feed that is down says nothing, rather than waking someone over a guess
     }

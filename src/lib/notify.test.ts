@@ -265,4 +265,20 @@ assert.equal(pump.id, 'mkt-BTCUSDT-up')
 assert.deepEqual(moverAlerts([{ ...btc, open: 0 }]), [])
 assert.deepEqual(moverAlerts([{ ...btc, high: 63000, low: 63000 }]), [])
 
+/* The grind the hour cannot see — gold's morning of 5 Aug 2026, real figures: 1.4% over four
+   hours, half the day's range, and the best single hour in it was 0.66%, under the floor. The
+   four-hour window is what turns that from silence into a sentence. */
+const gold = { asset: 'PAXGUSDT', label: 'Gold', open: 4095.3, last: 4153.25, high: 4163.19, low: 4044.71, hours: 4 }
+const bestHour = { ...gold, open: 4126.06, last: 4153.25, hours: 1 } // its steepest hour: 0.66%
+assert.deepEqual(moverAlerts([bestHour]), [])
+const [grind] = moverAlerts([bestHour, gold])
+assert.match(grind.title, /Gold up 1.4% in 4 hours/)
+assert.match(grind.detail, /49% of the day's range, in 4 hours/)
+
+// when both windows catch one run, the hour's sharper sentence wins — one alert, one id
+const both = moverAlerts([{ ...btc, hours: 4 }, btc])
+assert.equal(both.length, 1)
+assert.match(both[0].title, /in an hour/)
+assert.equal(both[0].id, 'mkt-BTCUSDT-up')
+
 console.log('movers ok')
