@@ -46,6 +46,11 @@ const hammer = candlePatterns([
 ]).map((s) => s.label)
 assert.ok(hammer.includes('Hammer'))
 
+// a live feed's last bar is still forming — seconds in, its body is nothing and it would read as a
+// doji every bar; the pattern signals wait for the close
+const forming = [...bull.slice(0, 30), { t: 30, o: 30, h: 30.05, l: 29.95, c: 30.01 }]
+assert.ok(!signals(forming).signals.some((s) => s.label === 'Doji'))
+
 // Opening range: the New York open (09:30 local — 14:30 UTC in January) starts it, the first hour
 // sets it, and a later close beyond it is the break. Anchored there rather than at midnight UTC
 // because the midnight version lost money over 219 days of testing and this one didn't.
@@ -262,6 +267,13 @@ assert.ok(labelsOf(DEMOS.sr).includes('Near support'))
 // at the period the guide's own panel draws, so the picture shows the claim
 const demoRsi = (d: { candles: { c: number }[]; rsiPeriod?: number }) => rsi(closesOf(d), d.rsiPeriod ?? DEMO_RSI)
 assert.equal(divergence(DEMOS.divergence.candles, demoRsi(DEMOS.divergence)), 'bull')
+// but a single slide straddling the halfway line is not one: a hammer at bar 14 and a marginally
+// lower wick with a higher close at bar 15 are the same move, not two visits to a level
+const oneMove = Array.from({ length: 30 }, (_, i) => {
+  const cl = i < 14 ? 110 - i : i === 14 ? 92 : 95 + (i - 15) * 0.5
+  return { t: i, o: cl + 0.5, h: cl + 1, l: i === 14 ? 90 : i === 15 ? 89 : cl - 1, c: cl }
+})
+assert.equal(divergence(oneMove, rsi(oneMove.map((x) => x.c))), null)
 // asserted at the periods the dialog actually draws, not the live chart's — see DEMO_MACD
 const demoMacd = (d: { candles: { c: number }[] }) => macd(closesOf(d), ...DEMO_MACD)
 assert.equal(lastCross(demoMacd(DEMOS.macd).line, demoMacd(DEMOS.macd).signal)?.dir, 'up')
