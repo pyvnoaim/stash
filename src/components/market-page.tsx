@@ -13,7 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
-import { addWatch, clearResults, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
+import { addWatch, clearResults, closeWatch, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
@@ -117,6 +117,8 @@ export default function MarketPage() {
   const [notLive, setNotLive] = useState(false)
   const stale = !online || notLive
   const cfg = HORIZONS[horizon]
+  // the exchange's word on what's held, for drawing the real position over whatever the plan says
+  const kraken = useExchangePositions()
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -393,6 +395,8 @@ export default function MarketPage() {
      position — a real trade quietly overwritten by a hypothetical one. The position is watched at
      all three of its own levels anyway, so there is nothing the button would add. */
   const inIt = watches.some((w) => w.asset === current.id && isPosition(w))
+  // the exchange position on this very chart, if there is one — its levels get drawn with the plan's
+  const held = kraken.rows.find((p) => assetOf(p.symbol) === current.id)
 
   // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
   // computed off every fetched bar, so the 200-MA is real from the first visible bar
@@ -725,6 +729,20 @@ export default function MarketPage() {
                         className="stroke-muted-foreground/50" strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                     ))
                   )}
+                  {/* Money actually on this chart: the Kraken position's own levels, over whatever
+                      the plan says. Entry wears the side's colour and the exits their meaning —
+                      the plan's lines are hypothesis, these are the trade. Off-frame ones stay in
+                      the card, same rule as the plan's. */}
+                  {held && (
+                    [
+                      { lvl: held.entry, cls: held.side === 'long' ? 'stroke-emerald-500' : 'stroke-destructive', w: 1.25 },
+                      ...(held.stop != null ? [{ lvl: held.stop, cls: 'stroke-destructive/70', w: 1 }] : []),
+                      ...(held.target != null ? [{ lvl: held.target, cls: 'stroke-emerald-500/70', w: 1 }] : []),
+                    ].filter((l) => l.lvl >= lo && l.lvl <= hi).map((l, i) => (
+                      <line key={`k-${i}`} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
+                        className={l.cls} strokeWidth={l.w} strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />
+                    ))
+                  )}
                   {/* opening-range band: the session-open 15m high/low the breakout play watches */}
                   {range && (
                     <>
@@ -974,7 +992,86 @@ type ExchangePosition = {
   symbol: string; side: 'long' | 'short'; size: number; entry: number
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
-  stop: number | null; target: number | null
+  stop: number | null; target: number | null; funding: number | null
+}
+
+/** PF_XBTUSD → BTCUSDT: strip the futures prefix, Kraken's XBT back to BTC, USD to the USDT id
+ *  the rest of the app charts in. */
+const assetOf = (symbol: string) =>
+  symbol.replace(/^(PF|PI|FI)_/, '').replace(/^XBT/, 'BTC').replace(/USD$/, 'USDT')
+
+const KRAKEN_OPEN = 'stash-kraken-open'
+
+/**
+ * A position that was here last look and is gone this one has closed. Its exit is looked up in the
+ * fills and the trade files itself into the record — the same Result a hand-entered position
+ * writes, so the bell announces it and the record counts it, with no second code path. The last
+ * look is kept in localStorage, so a close that happened while the app was shut is still caught
+ * and written down at the next open, priced at its actual fill.
+ */
+async function fileClosed(next: ExchangePosition[]) {
+  let prev: ExchangePosition[] = []
+  try { prev = JSON.parse(localStorage.getItem(KRAKEN_OPEN) ?? '[]') } catch { /* first look */ }
+  localStorage.setItem(KRAKEN_OPEN, JSON.stringify(next))
+  const gone = prev.filter((p) => !next.some((n) => n.symbol === p.symbol))
+  if (!gone.length) return
+  const fills: { symbol: string; price: number; time: number }[] =
+    await fetch('/api/fills').then((r) => (r.ok ? r.json() : { fills: [] })).then((d) => d.fills ?? []).catch(() => [])
+  for (const p of gone) {
+    /* ponytail: no resting stop, no defined risk — there is no honest R to write, and the record
+       is a scoreboard in R. A stopless trade's close still shows in the bell's fills-free world:
+       it simply leaves the card. */
+    if (p.stop == null || !(p.entry > 0) || p.entry === p.stop) continue
+    const fill = fills.find((f) => f.symbol === p.symbol) // newest first, as the exchange sends them
+    const exit = fill?.price ?? p.mark // no fill found: the last mark seen is the honest fallback
+    if (exit == null) continue
+    const r = p.side === 'long' ? (exit - p.entry) / (p.entry - p.stop) : (p.entry - exit) / (p.stop - p.entry)
+    const opened = p.openedAt ? Date.parse(p.openedAt) : Date.now()
+    const id = assetOf(p.symbol)
+    closeWatch({
+      // the open stamp is in the id, so closing and reopening the same symbol is two trades —
+      // and two looks racing on one close is still one row, which is closeWatch's own dedupe
+      id: `kraken-${p.symbol}-${p.openedAt ?? p.entry}`,
+      asset: id,
+      label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol.replace(/^(PF|PI|FI)_/, ''),
+      horizon: 'Kraken',
+      dir: p.side, entry: p.entry, stop: p.stop, target: p.target ?? exit,
+      ts: opened, entryAt: opened, closedAt: fill?.time || Date.now(),
+      /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —
+         in profit files as 'target', at a loss as 'stopped'. The record has no third word, and the
+         R beside it is exact either way. */
+      level: r >= 0 ? 'target' : 'stop', exit, r,
+      // ponytail: no size/lev — the feed's size is coins, Watch.size is euros, and a currency
+      // guess would price a real trade wrong. The row reads in R; the bell says "had you taken
+      // it", which is the one wrong word this shortcut costs.
+    })
+  }
+}
+
+/**
+ * The exchange feed, polled while something is looking. Only an answered request moves anything:
+ * a failed fetch keeps the last state, and — the part that matters — never reaches fileClosed,
+ * where an empty answer would read as everything having closed at once.
+ */
+function useExchangePositions() {
+  const [feed, setFeed] = useState<{ rows: ExchangePosition[]; equity: number | null }>({ rows: [], equity: null })
+  useEffect(() => {
+    let dead = false
+    const load = () =>
+      fetch('/api/positions')
+        .then(async (r) => {
+          if (!r.ok) return // offline, no key, exchange down: keep whatever the last answer was
+          const d = await r.json()
+          const rows: ExchangePosition[] = d.positions ?? []
+          void fileClosed(rows)
+          if (!dead) setFeed({ rows, equity: d.equity ?? null })
+        })
+        .catch(() => {})
+    load()
+    const h = window.setInterval(load, 60_000)
+    return () => { dead = true; window.clearInterval(h) }
+  }, [])
+  return feed
 }
 
 /**
@@ -984,57 +1081,68 @@ type ExchangePosition = {
  * this component is one failed fetch and no pixels. The Overview shows the same card.
  *
  * ponytail: the pct is price move from entry, not return on margin — leverage is not in the
- * feed's read scope. Anyone leveraged knows to multiply.
+ * feed's read scope. Anyone leveraged knows to multiply. The R beside it is real, though: risk
+ * is entry-to-stop, which the resting stop defines.
  */
 export function KrakenPositions() {
-  const [rows, setRows] = useState<ExchangePosition[]>([])
-  useEffect(() => {
-    let dead = false
-    const load = () =>
-      fetch('/api/positions')
-        .then((r) => (r.ok ? r.json() : { positions: [] }))
-        .then((d) => { if (!dead) setRows(d.positions ?? []) })
-        .catch(() => {}) // offline or the exchange is down: keep whatever the last answer was
-    load()
-    const h = window.setInterval(load, 60_000)
-    return () => { dead = true; window.clearInterval(h) }
-  }, [])
+  const { rows, equity } = useExchangePositions()
+  // how far price stands from a level, from where it is now — signed as the move itself would be
+  const away = (lvl: number, mark: number) => {
+    const d = (lvl / mark - 1) * 100
+    return `(${d >= 0 ? '+' : ''}${d.toFixed(1)}%)`
+  }
   if (!rows.length) return null
   return (
     <Card className="py-3">
       <CardContent className="grid gap-1.5 px-3 text-sm">
-        <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open on Kraken</p>
-        {rows.map((p) => (
-          <div key={p.symbol} className="grid gap-0.5">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
-              <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
-              <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
-              <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
-              {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
-              {p.pct != null && (
-                <span className={cn('ml-auto font-mono tabular-nums',
-                  p.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                  {/* dollars beside the percent: same sign by construction, so one colour carries both */}
-                  {p.pnl != null && `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · `}
-                  {p.pct >= 0 ? '+' : ''}{p.pct.toFixed(2)}%
-                </span>
+        <div className="flex items-baseline gap-2">
+          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open on Kraken</p>
+          {equity != null && (
+            <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
+              equity ${equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+          )}
+        </div>
+        {rows.map((p) => {
+          // running R off the resting stop: the one number that says how the trade is going in
+          // its own risk unit. Absent without a stop — risk nobody defined can't be counted in.
+          const r = p.mark != null && p.stop != null && p.entry !== p.stop
+            ? (p.side === 'long' ? (p.mark - p.entry) / (p.entry - p.stop) : (p.entry - p.mark) / (p.stop - p.entry))
+            : null
+          return (
+            <div key={p.symbol} className="grid gap-0.5">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
+                <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
+                <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
+                <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
+                {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
+                {p.pct != null && (
+                  <span className={cn('ml-auto font-mono tabular-nums',
+                    p.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {/* dollars and R beside the percent: same sign by construction, one colour carries all */}
+                    {p.pnl != null && `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · `}
+                    {p.pct >= 0 ? '+' : ''}{p.pct.toFixed(2)}%
+                    {r != null && ` · ${rLabel(r)}`}
+                  </span>
+                )}
+              </div>
+              {(p.value != null || p.stop != null || p.target != null || p.openedAt != null) && (
+                <p className="text-muted-foreground text-xs">
+                  {[
+                    p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                    p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? away(p.stop, p.mark) : ''}`.trim(),
+                    p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? away(p.target, p.mark) : ''}`.trim(),
+                    p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
+                    p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
+                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                    })}`,
+                  ].filter(Boolean).join(' · ')}
+                </p>
               )}
             </div>
-            {(p.value != null || p.stop != null || p.target != null || p.openedAt != null) && (
-              <p className="text-muted-foreground text-xs">
-                {[
-                  p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-                  p.stop != null && `stop ${fmtPrice(p.stop)}`,
-                  p.target != null && `target ${fmtPrice(p.target)}`,
-                  p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
-                    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                  })}`,
-                ].filter(Boolean).join(' · ')}
-              </p>
-            )}
-          </div>
-        ))}
+          )
+        })}
       </CardContent>
     </Card>
   )

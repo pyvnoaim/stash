@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
-import { positions } from './kraken.ts'
+import { fills, positions } from './kraken.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -948,14 +948,16 @@ export function start({
     /* The exchange's word on what the caller holds, off their own stored key, proxied so it never
        reaches a browser. 501 with no key on the account — the market page reads any non-200 as
        "no panel" and moves on. */
-    if (path === '/api/positions' && req.method === 'GET') {
+    if ((path === '/api/positions' || path === '/api/fills') && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const row = q.kraken.get(user.id) as { kraken: string | null } | undefined
       if (!row?.kraken) return send(res, 501, { error: 'no exchange key on this account' })
       const { key, secret } = JSON.parse(row.kraken) as { key: string, secret: string }
       try {
-        return send(res, 200, { positions: await positions(key, secret) })
+        return send(res, 200, path === '/api/fills'
+          ? { fills: await fills(key, secret) }
+          : await positions(key, secret))
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
