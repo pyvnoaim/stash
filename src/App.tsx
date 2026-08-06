@@ -454,7 +454,7 @@ export default function App() {
               throw all of it away. It is still never loaded until the tab is first opened. */}
           {seenPdf && (
             <div className={cn('flex min-h-0 flex-1 flex-col', page !== PDF && 'hidden')}>
-              <Suspense fallback={<Waiting name="PDF" />}>
+              <Suspense fallback={<Waiting name="PDF editor" />}>
                 <PdfEditor visible={page === PDF} />
               </Suspense>
             </div>

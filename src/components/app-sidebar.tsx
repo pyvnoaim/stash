@@ -484,7 +484,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
               <SidebarMenuItem>
                 <SidebarMenuButton isActive={s.sel === PDF} onClick={() => go(PDF)}>
                   <FileText />
-                  <span>PDF</span>
+                  <span>PDF editor</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
