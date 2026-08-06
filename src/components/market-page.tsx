@@ -8,7 +8,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
-import { euro, fundingOf, isPosition, liqOf, moneyOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { euro, isPosition, liqOf, netOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
@@ -938,7 +938,9 @@ export default function MarketPage() {
 
       {/* outside the fragment above, so they are there while the desk loads, errors, or waits for
           a stock key — none of them needs any of that */}
-      <Scan orbMode={preset === 'orb'} />
+      {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
+          or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
+      <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
 
       <Record />
 
@@ -1320,8 +1322,7 @@ function Position({ asset, label, horizon, price, plan, dir }: {
     const r = price != null ? rOf(held, price) : null
     // net of funding, the same subtraction the bell's read-out makes — two numbers for one trade
     // would be a bug report waiting to be filed
-    const gross = r != null ? moneyOf(r, stakeOf(held)) : null
-    const money = gross === null ? null : gross - fundingOf(held, dials.funding, Date.now())
+    const money = r != null ? netOf(held, r, 0, dials.funding, Date.now()) : null
     const long = held.dir === 'long'
     return (
       <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm">
@@ -1403,10 +1404,7 @@ function Record() {
      money: one you were in prices itself off its own size and leverage, one that was only ever
      watched off the stake in Settings. Null only when not a single row has a figure at all.
      Net of funding to the close, the same subtraction the bell's result alert makes. */
-  const cashOf = (r: typeof results[number]) => {
-    const gross = moneyOf(r.r, stakeOf(r, stake))
-    return gross === null ? null : gross - fundingOf(r, dials.funding, r.closedAt)
-  }
+  const cashOf = (r: typeof results[number]) => netOf(r, r.r, stake, dials.funding, r.closedAt)
   /* Which of your selves trades well: the same trades, cut by the horizon that made them. The
      R-per-trade is the expectancy — the one number that says whether a lane pays to keep driving. */
   const lanes = [...results.reduce((m, r) => {
@@ -1518,10 +1516,9 @@ type ScanRow = {
 /** The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — run
  *  over one asset without rendering it. Same calls, same order, so a row here never disagrees with
  *  what opening the asset shows. */
-async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], orbMode: boolean): Promise<ScanRow | null> {
-  // the orb preset pins the desk to 15m bars and adds the opening-range vote — mirror both, or a
-  // row here contradicts the card the click lands on
-  const interval: Interval = orbMode ? '15m' : cfg.interval
+async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Interval, orbMode: boolean): Promise<ScanRow | null> {
+  // the interval is the desk's own, passed in — reading the horizon's default here while the desk
+  // sat on 15m bars is how a row said Long while the card the click lands on said Short
   const up = HIGHER[interval]
   const [candles, higher] = await Promise.all([
     fetchCandles(a, interval, ''),
@@ -1567,7 +1564,7 @@ const TIER_CLS = [
  * ponytail: fetched once per visit and on the refresh button, no live poll — these reads move by
  * the bar (an hour, a day), not by the tick.
  */
-function Scan({ orbMode }: { orbMode: boolean }) {
+function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
   const { marketHorizon: horizon } = useStash()
   const cfg = HORIZONS[horizon]
   const [rows, setRows] = useState<ScanRow[] | null>(null)
@@ -1579,14 +1576,14 @@ function Scan({ orbMode }: { orbMode: boolean }) {
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg, orbMode).catch(() => null)),
+      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg, interval, orbMode).catch(() => null)),
     ).then((r) => {
       if (!on) return
       setRows(r.filter((x): x is ScanRow => !!x)
         .sort((x, y) => y.tier - x.tier || (y.plan?.rr ?? 0) - (x.plan?.rr ?? 0)))
     })
     return () => { on = false }
-  }, [cfg, nonce, orbMode])
+  }, [cfg, nonce, orbMode, interval])
 
   return (
     <Card className="py-3">
@@ -1594,7 +1591,7 @@ function Scan({ orbMode }: { orbMode: boolean }) {
         <div className="mb-2 flex items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">Scan</span>
           <span className="text-muted-foreground text-xs">
-            every keyless chart, the {orbMode ? 'opening-range' : cfg.label.toLowerCase()} read, best first
+            every keyless chart, the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read, best first
           </span>
           <Button size="icon" variant="ghost" className="ml-auto size-6" title="Refresh"
             onClick={() => setNonce((n) => n + 1)}>

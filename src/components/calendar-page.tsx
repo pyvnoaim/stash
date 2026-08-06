@@ -5,9 +5,8 @@ import { cn } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import { PROJECT_DRAG } from '@/lib/utils'
 import { chargesBetween, patch, project, select, SUBS, useStash, type Item, type Sub } from '@/lib/store'
+import { euro, netOf, rLabel, signedEuro } from '@/lib/notify'
 import { calendar, type CalEvent } from '@/lib/sync'
-
-const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const stamp = (d: Date) => d.toLocaleDateString('sv')
@@ -67,6 +66,25 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     }
     return m
   }, [s.subs, from, to])
+
+  /* Closed trades land on the day they ended, summed in the record's own money — a position you
+     were in off its size and leverage, a watched plan off the stake in Settings, net of funding:
+     the exact figure the market page's record shows per row. A day with no priced row reads in R,
+     and a day mixing both says both — cash for the money rows, R for the rest — so an unpriced
+     win never vanishes behind a priced loss. */
+  const pnlByDay = useMemo(() => {
+    const m = new Map<string, { cash: number | null; r: number; unpricedR: number }>()
+    for (const r of s.results) {
+      const key = stamp(new Date(r.closedAt))
+      const cash = netOf(r, r.r, s.stake, s.dials.funding, r.closedAt)
+      const at = m.get(key) ?? { cash: null, r: 0, unpricedR: 0 }
+      at.r += r.r
+      if (cash !== null) at.cash = (at.cash ?? 0) + cash
+      else at.unpricedR += r.r
+      m.set(key, at)
+    }
+    return m
+  }, [s.results, s.stake, s.dials.funding])
 
   /* What the subscribed calendar has on these days, if there is one. The server fetches and caches
      it, so paging back and forth over a month costs one request each way and nothing after that.
@@ -152,6 +170,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
               const key = stamp(d)
               const outside = d.getMonth() !== cursor.getMonth()
               const list = byDay.get(key) ?? []
+              const pnl = pnlByDay.get(key)
               return (
                 <div
                   key={key}
@@ -164,15 +183,34 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                     over === key && 'ring-primary bg-accent ring-1 ring-inset',
                   )}
                 >
-                  <span
-                    className={cn(
-                      'mb-0.5 flex size-5 shrink-0 items-center justify-center self-start rounded-full text-xs tabular-nums',
-                      outside && 'text-muted-foreground/50',
-                      key === t && 'bg-foreground text-background font-medium',
+                  <div className="mb-0.5 flex shrink-0 items-center justify-between gap-1">
+                    <span
+                      className={cn(
+                        'flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums',
+                        outside && 'text-muted-foreground/50',
+                        key === t && 'bg-foreground text-background font-medium',
+                      )}
+                    >
+                      {d.getDate()}
+                    </span>
+                    {/* what the day's closed trades paid, out of the record — the exchange-filed
+                        closes and the hand-entered ones alike, since both land there */}
+                    {pnl && (
+                      <span
+                        title="Closed trades this day, from the market page's record"
+                        className={cn(
+                          'truncate font-mono text-[10px] tabular-nums sm:text-xs',
+                          (pnl.cash ?? pnl.r) >= 0
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : 'text-destructive',
+                        )}
+                      >
+                        {pnl.cash === null ? rLabel(pnl.r)
+                          : pnl.unpricedR ? `${signedEuro(pnl.cash)} · ${rLabel(pnl.unpricedR)}`
+                          : signedEuro(pnl.cash)}
+                      </span>
                     )}
-                  >
-                    {d.getDate()}
-                  </span>
+                  </div>
 
                   {/* what is already on the day, out of the subscribed calendar. Not a button:
                       there is nothing to open and nothing to edit — it is somebody else's record,

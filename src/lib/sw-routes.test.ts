@@ -45,17 +45,23 @@ for (const url of [
   ...(await asked(() => fetchCandles(stock, '1d', 'KEY'))),
 ]) assert.ok(cached(url), `candles should be cached: ${url}`)
 
+// a pinned Wednesday 15:00 UTC — the stock feeds rightly skip their calls off-hours, so with real
+// wall-clock time these assertions would go vacuous (or fail) every evening and weekend
+const OPEN = Date.parse('2026-01-07T15:00:00Z')
+
 // prices are not, on either feed, and must never quietly become so
-for (const url of [
+const priceUrls = [
   ...(await asked(() => fetchPrices([crypto.id], ''))),
-  ...(await asked(() => fetchPrices([stock.id], 'KEY'))),
-]) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
+  ...(await asked(() => fetchPrices([stock.id], 'KEY', OPEN))),
+]
+assert.ok(priceUrls.length >= 2, 'fetchPrices asked for nothing on one of the feeds')
+for (const url of priceUrls) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
 
 /* The stocks' mover sweep hits the same endpoint the candles do, and must land the other side of
    that line: it is a live reading, and served from cache it announces an hour that is over to
    someone offline who has no way to check. The two are told apart by outputsize, which is exactly
    the sort of arrangement that rots silently — hence this. */
-const hourUrls = await asked(() => fetchStockHours([stock.id], 'KEY'))
+const hourUrls = await asked(() => fetchStockHours([stock.id], 'KEY', OPEN))
 assert.ok(hourUrls.length, 'fetchStockHours asked for nothing')
 for (const url of hourUrls) assert.ok(!cached(url), `the hour sweep must never be cached: ${url}`)
 

@@ -146,7 +146,8 @@ export default function SubsPage() {
         <Stat label="Expenses / month" value={money(totals.expenseM)} sub={`${money(totals.expenseY)} / year`} />
         <Stat label="Net / month" value={money(totals.netM)} sub={`${money(totals.netM * 12)} / year`} strong
           valueClass={totals.netM >= 0 ? MONEY_IN : 'text-destructive'} />
-        <Stat label="Set aside / month" value={money(totals.reserve)} sub="for yearly & quarterly bills" />
+        <Stat label="Set aside / month" value={money(totals.reserve)}
+          sub={`covers ${money(totals.reserve * 12)} / year in yearly & quarterly bills`} />
       </div>
 
       {/* which side you're editing. The header above always shows both. */}
