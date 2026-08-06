@@ -11,3 +11,28 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+
+  # The image is built here, not on the VPS: Portainer strips .git from its clone, so a build
+  # there can never learn its own commit — About said "source" forever. CI's checkout has the
+  # repo, the sha stamps in, and Portainer only pulls.
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/pyvnoaim/stash:latest
+            ghcr.io/pyvnoaim/stash:${{ github.sha }}
