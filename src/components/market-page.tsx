@@ -411,7 +411,9 @@ export default function MarketPage() {
      With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
      the feed's entry/stop/target are the trade's real ones. */
   const mine = watches.find((w) => w.asset === current.id && isPosition(w))
-  const liq = mine ? liqOf(mine) : null
+  // the exchange's own liquidation price where the feed carries one — that is the number that
+  // actually fires — and the entry ± entry/lev estimate off the hand-entered position otherwise
+  const liq = held?.liq ?? (mine ? liqOf(mine) : null)
   const posLines = [
     ...(held ? [
       { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
@@ -1023,12 +1025,15 @@ function closeAt(s: (typeof SESSIONS)[number], at: number) {
     .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-/** One Kraken Futures position row, as /api/positions shapes it. */
+/** One exchange position row, as /api/positions shapes it — Kraken or Bitget, one shape. */
 type ExchangePosition = {
   symbol: string; side: 'long' | 'short'; size: number; entry: number
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
   stop: number | null; target: number | null; funding: number | null
+  /** The exchange's own liquidation price, where its feed says one (Bitget does, Kraken doesn't). */
+  liq?: number | null
+  venue?: string
 }
 
 /** PF_XBTUSD → BTCUSDT: strip the futures prefix, Kraken's XBT back to BTC, USD to the USDT id
@@ -1067,10 +1072,11 @@ async function fileClosed(next: ExchangePosition[]) {
     closeWatch({
       // the open stamp is in the id, so closing and reopening the same symbol is two trades —
       // and two looks racing on one close is still one row, which is closeWatch's own dedupe
-      id: `kraken-${p.symbol}-${p.openedAt ?? p.entry}`,
+      id: `${p.venue ?? 'kraken'}-${p.symbol}-${p.openedAt ?? p.entry}`,
       asset: id,
       label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol.replace(/^(PF|PI|FI)_/, ''),
-      horizon: 'Kraken',
+      // the record names the venue the trade really ran on, now that there is more than one
+      horizon: p.venue === 'bitget' ? 'Bitget' : 'Kraken',
       dir: p.side, entry: p.entry, stop: p.stop, target: p.target ?? exit,
       ts: opened, entryAt: opened, closedAt: fill?.time || Date.now(),
       /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —

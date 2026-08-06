@@ -343,7 +343,24 @@ function MarketsPanel() {
         />
       </Section>
 
-      <KrakenSection />
+      <ExchangeSection
+        route="/api/kraken"
+        title="Kraken Futures key"
+        hint="Read-only, from Kraken → Settings → API → Futures: General API read only, Withdrawal
+          no access. It signs requests, so it lives on the server with your account rather than on
+          this machine, and it is never shown back — the market page grows a card of what you
+          actually hold. Nothing here can trade."
+      />
+
+      <ExchangeSection
+        route="/api/bitget"
+        title="Bitget Futures key"
+        passphrase
+        hint="Read-only, from Bitget → API Management: Read permission only. Bitget cuts a key in
+          three parts — key, secret and the passphrase you chose making it — and all three live on
+          the server, never shown back. Its positions join the same card, wearing the exchange's
+          own liquidation price. Nothing here can trade."
+      />
 
       <Dials />
     </>
@@ -351,32 +368,40 @@ function MarketsPanel() {
 }
 
 /**
- * The other key, going the other way: the Twelve Data key above stays on this machine because it
- * only reads public prices; a Kraken key signs against an account, so it is typed here and kept
+ * The other keys, going the other way: the Twelve Data key above stays on this machine because it
+ * only reads public prices; an exchange key signs against an account, so it is typed here and kept
  * on the server, each account its own. It never comes back — the server will only say whether
  * one is set — so the fields always read empty, and saving again replaces what is there.
  */
-function KrakenSection() {
+function ExchangeSection({ route, title, hint, passphrase = false }: {
+  route: string
+  title: string
+  hint: string
+  /** Bitget cuts its credential in three; Kraken in two. */
+  passphrase?: boolean
+}) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
   const [have, setHave] = useState<boolean | undefined>()
   const [key, setKey] = useState('')
   const [secret, setSecret] = useState('')
+  const [pass, setPass] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (user) void fetch('/api/kraken').then((r) => r.json()).then((j) => setHave(!!j.set)).catch(() => {})
-  }, [user])
+    if (user) void fetch(route).then((r) => r.json()).then((j) => setHave(!!j.set)).catch(() => {})
+  }, [user, route])
   // no account, no server to keep a key on — the section is simply not there
   if (!user) return null
 
-  const save = async (k: string, s: string) => {
+  const name = title.split(' ')[0]
+  const save = async (k: string, s: string, p: string) => {
     setBusy(true)
     try {
-      const r = await fetch('/api/kraken', { method: 'POST', body: JSON.stringify({ key: k, secret: s }) })
+      const r = await fetch(route, { method: 'POST', body: JSON.stringify({ key: k, secret: s, ...(passphrase && { passphrase: p }) }) })
       const j = await r.json()
       if (!r.ok) throw new Error(j.error ?? r.status)
       setHave(!!j.set)
-      setKey(''); setSecret('')
-      toast(j.set ? 'Kraken key saved' : 'Kraken key removed')
+      setKey(''); setSecret(''); setPass('')
+      toast(j.set ? `${name} key saved` : `${name} key removed`)
     } catch (e) {
       toast(String((e as Error).message))
     } finally {
@@ -384,15 +409,13 @@ function KrakenSection() {
     }
   }
 
+  const whole = !!key.trim() && !!secret.trim() && (!passphrase || !!pass.trim())
   return (
     <Section
-      title="Kraken Futures key"
-      hint="Read-only, from Kraken → Settings → API → Futures: General API read only, Withdrawal
-        no access. It signs requests, so it lives on the server with your account rather than on
-        this machine, and it is never shown back — the market page grows a card of what you
-        actually hold. Nothing here can trade."
+      title={title}
+      hint={hint}
       action={have && (
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '')}>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '', '')}>
           Remove
         </Button>
       )}
@@ -402,7 +425,11 @@ function KrakenSection() {
         onChange={(e) => setKey(e.target.value)} />
       <PasswordInput placeholder="API secret" autoComplete="off" value={secret}
         onChange={(e) => setSecret(e.target.value)} />
-      <Button size="sm" disabled={busy || !key.trim() || !secret.trim()} onClick={() => save(key.trim(), secret.trim())}>
+      {passphrase && (
+        <PasswordInput placeholder="Passphrase" autoComplete="off" value={pass}
+          onChange={(e) => setPass(e.target.value)} />
+      )}
+      <Button size="sm" disabled={busy || !whole} onClick={() => save(key.trim(), secret.trim(), pass.trim())}>
         Save
       </Button>
     </Section>
