@@ -34,10 +34,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # buildx + the gha cache: without it every publish runs `npm ci` from nothing inside docker.
+      # Cached, the dependency layer only rebuilds when package-lock changes — the build is just vite.
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ghcr.io/pyvnoaim/stash:latest
             ghcr.io/pyvnoaim/stash:${{ github.sha }}
