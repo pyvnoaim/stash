@@ -131,7 +131,9 @@ async function run(): Promise<void> {
   setSnap({ status: 'busy' })
   try {
     const at = rev
-    const body = JSON.stringify({ state: { ...getState(), apiKey: '' }, device })
+    // the Twelve Data key rides along: typed on one device, the stocks work on all of them.
+    // The backup export still strips it — a file handed to someone else is a different promise.
+    const body = JSON.stringify({ state: getState(), device })
     let r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(m.v) }, body })
     if (r.status === 409) {
       // another device wrote while we were away. Ours is the newer edit, so it wins —

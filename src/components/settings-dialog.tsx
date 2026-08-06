@@ -335,7 +335,7 @@ function MarketsPanel() {
       <Section
         title="Stock data key"
         hint="Free key from twelvedata.com — needed only for the stock feeds. Crypto and gold work
-          without it, and it is kept on this machine."
+          without it. Synced with your account, so typing it here is typing it everywhere."
       >
         {/* a key is checked against the one on a website, so it is the field most worth revealing */}
         <PasswordInput
@@ -364,10 +364,10 @@ const VENUES = [
 ] as const
 
 /**
- * The other keys, going the other way: the Twelve Data key above stays on this machine because it
- * only reads public prices; an exchange key signs against an account, so it is typed here and kept
- * on the server, each account its own. It never comes back — the server will only say whether
- * one is set — so the fields always read empty, and saving again replaces what is there.
+ * The other keys, kept differently: the Twelve Data key above rides the synced document because
+ * the browser is what calls the price feed; an exchange key signs against an account, so it is
+ * typed here and kept on the server, each account its own. It never comes back — the server will
+ * only say whether one is set — so the fields always read empty, and saving again replaces it.
  *
  * One venue at a time, picked at the top: three stacked key forms was a wall of fields, and
  * nobody sets more than one in a sitting. A ✓ in the picker marks the venues already set.
