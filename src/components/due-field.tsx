@@ -34,7 +34,9 @@ export function DueField({ id, due, at, placeholder, onPick, onTime }: {
         <Button
           id={id}
           variant="outline"
-          className={cn('w-full justify-start overflow-hidden font-normal', !due && 'text-muted-foreground')}
+          // shrink: the button base says shrink-0, and a w-full flex child that cannot shrink
+          // pushes the clock past the panel's edge — this button gives room, the clock never does
+          className={cn('w-full shrink justify-start overflow-hidden font-normal', !due && 'text-muted-foreground')}
         >
           <CalendarIcon className="size-3.5 shrink-0" />
           {due ? (
