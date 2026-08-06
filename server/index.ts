@@ -30,6 +30,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { fills, positions } from './kraken.ts'
 import { positions as bitgetPositions } from './bitget.ts'
+import { positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -361,6 +362,8 @@ export function start({
   try { db.exec('alter table users add column kraken text') } catch { /* already there */ }
   // the same for Bitget, whose keys come in three parts: JSON {key, secret, passphrase}
   try { db.exec('alter table users add column bitget text') } catch { /* already there */ }
+  // and MEXC, two-part like Kraken's
+  try { db.exec('alter table users add column mexc text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -391,6 +394,8 @@ export function start({
     setKraken: db.prepare('update users set kraken = ? where id = ?'),
     bitget: db.prepare('select bitget from users where id = ?'),
     setBitget: db.prepare('update users set bitget = ? where id = ?'),
+    mexc: db.prepare('select mexc from users where id = ?'),
+    setMexc: db.prepare('update users set mexc = ? where id = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -931,42 +936,28 @@ export function start({
        would be a browser that can be read. It never travels back out: GET answers only whether one
        is set. Stored as given rather than hashed, since signing needs it back — which is exactly
        why the key is made read-only at the exchange: a copied database leaks a viewer, not a wallet. */
-    if (path === '/api/kraken') {
+    /* One route per venue, one rule for all of them: the credential never travels back out —
+       GET answers only whether one is set. Bitget cuts its key in three parts, the others in
+       two, and every part arrives together or not at all: a fraction of a credential is a
+       config that fails at three in the morning. */
+    const venue = /^\/api\/(kraken|bitget|mexc)$/.exec(path)?.[1] as 'kraken' | 'bitget' | 'mexc' | undefined
+    if (venue) {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
+      const get = { kraken: q.kraken, bitget: q.bitget, mexc: q.mexc }[venue]
+      const set = { kraken: q.setKraken, bitget: q.setBitget, mexc: q.setMexc }[venue]
       if (req.method === 'GET') {
-        return send(res, 200, { set: !!(q.kraken.get(user.id) as { kraken: string | null } | undefined)?.kraken })
-      }
-      if (req.method === 'POST') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const key = String(b?.key ?? '').trim(), secret = String(b?.secret ?? '').trim()
-        // both or neither: half a credential is a config that fails at three in the morning
-        if (!!key !== !!secret) return send(res, 400, { error: 'a key and its secret arrive together' })
-        q.setKraken.run(key ? JSON.stringify({ key, secret }) : null, user.id)
-        log('kraken', user.name, via(req))
-        return send(res, 200, { set: !!key })
-      }
-      return send(res, 405, { error: 'method not allowed' })
-    }
-
-    /* Bitget's key, held to the same rule as Kraken's above — it never travels back out. Three
-       parts instead of two, because that is how Bitget cuts one. */
-    if (path === '/api/bitget') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (req.method === 'GET') {
-        return send(res, 200, { set: !!(q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget })
+        return send(res, 200, { set: !!(get.get(user.id) as Record<string, string | null> | undefined)?.[venue] })
       }
       if (req.method === 'POST') {
         let b: any
         try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
         const key = String(b?.key ?? '').trim(), secret = String(b?.secret ?? '').trim(), passphrase = String(b?.passphrase ?? '').trim()
-        // all three or none: two thirds of a credential is a config that fails at three in the morning
-        const given = [key, secret, passphrase].filter(Boolean).length
-        if (given !== 0 && given !== 3) return send(res, 400, { error: 'the key, its secret and its passphrase arrive together' })
-        q.setBitget.run(key ? JSON.stringify({ key, secret, passphrase }) : null, user.id)
-        log('bitget', user.name, via(req))
+        const parts = venue === 'bitget' ? [key, secret, passphrase] : [key, secret]
+        const given = parts.filter(Boolean).length
+        if (given !== 0 && given !== parts.length) return send(res, 400, { error: 'every part of the credential arrives together' })
+        set.run(key ? JSON.stringify(venue === 'bitget' ? { key, secret, passphrase } : { key, secret }) : null, user.id)
+        log(venue, user.name, via(req))
         return send(res, 200, { set: !!key })
       }
       return send(res, 405, { error: 'method not allowed' })
@@ -981,24 +972,25 @@ export function start({
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const kr = (q.kraken.get(user.id) as { kraken: string | null } | undefined)?.kraken
-      const bg = (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget
-      if (!kr && !bg) return send(res, 501, { error: 'no exchange key on this account' })
+      const stored = [
+        { venue: 'kraken', raw: kr, go: (c: any) => positions(c.key, c.secret) },
+        { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
+        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret) },
+      ].filter((v) => v.raw)
+      if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       try {
         if (path === '/api/fills') {
-          // Kraken only: bitget.ts prices a vanished position at its last mark instead (see there)
+          // Kraken only: the others price a vanished position at its last mark instead (see there)
           if (!kr) return send(res, 200, { fills: [] })
           const { key, secret } = JSON.parse(kr) as { key: string, secret: string }
           return send(res, 200, { fills: await fills(key, secret) })
         }
-        const feeds = await Promise.all([
-          kr ? (({ key, secret }) => positions(key, secret))(JSON.parse(kr) as { key: string, secret: string }) : null,
-          bg ? (({ key, secret, passphrase }) => bitgetPositions(key, secret, passphrase))(JSON.parse(bg) as { key: string, secret: string, passphrase: string }) : null,
-        ])
+        const feeds = await Promise.all(stored.map((v) => v.go(JSON.parse(v.raw!))))
         return send(res, 200, {
-          positions: feeds.flatMap((f, i) => (f?.positions ?? []).map((p) => ({ ...p, venue: i === 0 ? 'kraken' : 'bitget' }))),
-          // one number when either venue says one, summed when both do — null only when neither
-          equity: feeds.every((f) => f?.equity == null) ? null
-            : Math.round(feeds.reduce((n, f) => n + (f?.equity ?? 0), 0) * 100) / 100,
+          positions: feeds.flatMap((f, i) => f.positions.map((p) => ({ ...p, venue: stored[i].venue }))),
+          // one number when any venue says one, summed when several do — null only when none
+          equity: feeds.every((f) => f.equity == null) ? null
+            : Math.round(feeds.reduce((n, f) => n + (f.equity ?? 0), 0) * 100) / 100,
         })
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })

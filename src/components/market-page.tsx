@@ -1076,7 +1076,7 @@ async function fileClosed(next: ExchangePosition[]) {
       asset: id,
       label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol.replace(/^(PF|PI|FI)_/, ''),
       // the record names the venue the trade really ran on, now that there is more than one
-      horizon: p.venue === 'bitget' ? 'Bitget' : 'Kraken',
+      horizon: { bitget: 'Bitget', mexc: 'MEXC' }[p.venue ?? ''] ?? 'Kraken',
       dir: p.side, entry: p.entry, stop: p.stop, target: p.target ?? exit,
       ts: opened, entryAt: opened, closedAt: fill?.time || Date.now(),
       /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —
