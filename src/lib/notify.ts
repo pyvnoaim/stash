@@ -133,7 +133,9 @@ export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev
  * not at it. Close enough to be worth a buzz; a rate per exchange if the few percent matters.
  */
 export const liqOf = (w: Pick<Watch, 'entry' | 'dir' | 'size' | 'lev'>) => {
-  if (!isPosition(w)) return null
+  // lev > 0 as well as set: the form holds it to ≥ 1, but this reads a stored document, and a
+  // negative leverage would put a long's "liquidation" above its entry — nonsense that would fire
+  if (!isPosition(w) || w.lev! <= 0) return null
   const liq = w.entry * (1 + (w.dir === 'long' ? -1 : 1) / w.lev!)
   return isFinite(liq) && liq > 0 ? liq : null
 }
