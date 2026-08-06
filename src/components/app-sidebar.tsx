@@ -431,7 +431,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                 folds — the sentinel can never collide with a project id, and the synced document
                 is what makes the choice hold across reloads and devices alike */}
             <SidebarGroupLabel asChild className="font-heading tracking-wider uppercase">
-              <button type="button" className="w-full cursor-pointer" onClick={() => toggleCollapsed(TAGS_FOLD)}>
+              <button type="button" aria-expanded={!s.collapsed.includes(TAGS_FOLD)} className="w-full cursor-pointer" onClick={() => toggleCollapsed(TAGS_FOLD)}>
                 Tags
                 <ChevronRight className={cn('ml-auto size-3.5 transition-transform', !s.collapsed.includes(TAGS_FOLD) && 'rotate-90')} />
               </button>
