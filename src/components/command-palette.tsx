@@ -28,7 +28,7 @@ const VIEW_ICONS = {
 const PAGES = [
   { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
   { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
-  { id: PDF, name: 'PDF', icon: FileText },
+  { id: PDF, name: 'PDF editor', icon: FileText },
   { id: SUBS, name: 'Subscriptions', icon: Wallet },
 ]
 

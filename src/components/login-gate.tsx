@@ -106,7 +106,7 @@ const TOOLS = [
   { icon: CalendarRange, label: 'Calendar' },
   { icon: Wallet, label: 'Subscriptions' },
   { icon: CandlestickChart, label: 'Markets' },
-  { icon: FileText, label: 'PDF' },
+  { icon: FileText, label: 'PDF editor' },
 ]
 
 /** Already in the list before the demo runs — the app is not empty when you arrive. */
