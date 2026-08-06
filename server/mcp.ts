@@ -31,19 +31,39 @@ const market = await import('../src/lib/market.ts')
 const { parseCapture } = await import('../src/lib/parse.ts')
 
 const UA = 'stash-mcp'   // names this client in the sessions list, so it can be revoked on sight
-const url = (process.env.STASH_URL ?? 'http://localhost:8787').replace(/\/+$/, '')
-const user = (process.env.STASH_USER ?? '').trim().toLowerCase()
-const pass = process.env.STASH_PASS ?? ''
-const tdKey = process.env.STASH_TD_KEY ?? ''
 
-/* The password crosses this wire on the first call. Localhost is the dev server and its own
-   business; anything else on plain http is a credential in the clear, which is worth saying out
-   loud rather than refusing — a LAN behind a tunnel is a real setup and this cannot tell. */
-if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(url)) {
-  process.stderr.write(`stash-mcp: STASH_URL is plain http — the password crosses ${url} in the clear\n`)
+/** The stdio server's configuration, read when first needed rather than at import — index.ts
+ *  imports this module for the factory alone, in a process where these variables are nobody's. */
+const envCfg = () => ({
+  url: (process.env.STASH_URL ?? 'http://localhost:8787').replace(/\/+$/, ''),
+  user: (process.env.STASH_USER ?? '').trim().toLowerCase(),
+  pass: process.env.STASH_PASS ?? '',
+  tdKey: process.env.STASH_TD_KEY ?? '',
+})
+
+/**
+ * One tool at a time, across every caller. The store is a single module-level document — every
+ * tool pulls its caller's document into it and the writers push it back — so two calls in flight
+ * (one client asking for several tools at once, or two different users through the hosted /mcp
+ * route) would interleave their pulls and push one person's document under another's name. The
+ * queue is global for exactly that reason: it is the store that is shared, not the session.
+ * ponytail: one global queue, not a lock per document — there is one document slot.
+ */
+let queue: Promise<unknown> = Promise.resolve()
+const serial = <T>(fn: () => Promise<T>): Promise<T> => {
+  const next = queue.then(fn, fn)   // runs either way: one failed call must not stall the rest
+  queue = next.catch(() => {})
+  return next
 }
 
 /* ---------- the session ---------- */
+
+/**
+ * Everything one signed-in caller needs, closed over their own credentials: the stdio server is
+ * one of these built from the environment, and the hosted /mcp route builds one per user. The
+ * session cookie and document version live here; the store and the queue stay shared above.
+ */
+export function createStash({ url, user, pass, tdKey = '' }: { url: string, user: string, pass: string, tdKey?: string }) {
 
 let cookie = ''
 
@@ -414,26 +434,7 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
   },
 }
 
-/* ---------- MCP over stdio: newline-delimited JSON-RPC, no framing and no SDK ---------- */
-
-/**
- * One tool at a time. The store is a single module-level document — every tool pulls the server's
- * into it and the writers push it back — so two calls in flight interleave their pulls and the
- * second one adopts over the first one's edit before it has been sent. A client is entitled to ask
- * for several tools at once, and Claude does, so the queue is here rather than in a rule nobody
- * can enforce. They are network-bound and short; the cost of standing in line is a few hundred ms.
- * ponytail: one global queue, not a lock per document — there is one document.
- */
-let queue: Promise<unknown> = Promise.resolve()
-const serial = <T>(fn: () => Promise<T>): Promise<T> => {
-  const next = queue.then(fn, fn)   // runs either way: one failed call must not stall the rest
-  queue = next.catch(() => {})
-  return next
-}
-
-const say = (msg: unknown) => process.stdout.write(JSON.stringify(msg) + '\n')
-
-export async function rpc(m: any): Promise<any> {
+return async function rpc(m: any): Promise<any> {
   const id = m?.id
   const reply = (result: unknown) => ({ jsonrpc: '2.0', id, result })
   try {
@@ -469,6 +470,16 @@ export async function rpc(m: any): Promise<any> {
       : { jsonrpc: '2.0', id, error: { code: -32603, message: text } }
   }
 }
+}
+
+/* ---------- MCP over stdio: newline-delimited JSON-RPC, no framing and no SDK ---------- */
+
+/** The environment's own context — what the stdio loop runs and what the test imports. Built on
+ *  the first call, not at import: the test sets the variables after this module is already loaded. */
+let envRpc: ReturnType<typeof createStash> | null = null
+export const rpc = (m: any) => (envRpc ??= createStash(envCfg()))(m)
+
+const say = (msg: unknown) => process.stdout.write(JSON.stringify(msg) + '\n')
 
 /* Only when run as the server — importing this file (the test does) must not eat stdin. Through
    realpath on the way past, because `import.meta.filename` already is one: on macOS a repo under
@@ -479,6 +490,13 @@ const isMain = (() => {
 })()
 
 if (isMain) {
+  /* The password crosses this wire on the first call. Localhost is the dev server and its own
+     business; anything else on plain http is a credential in the clear, which is worth saying out
+     loud rather than refusing — a LAN behind a tunnel is a real setup and this cannot tell. */
+  const { url } = envCfg()
+  if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(url)) {
+    process.stderr.write(`stash-mcp: STASH_URL is plain http — the password crosses ${url} in the clear\n`)
+  }
   const inflight = new Set<Promise<unknown>>()
   let buf = ''
   process.stdin.setEncoding('utf8').on('data', (chunk: string) => {

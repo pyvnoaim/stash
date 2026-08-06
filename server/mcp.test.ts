@@ -110,5 +110,43 @@ assert.match(bad.result.content[0].text, /no item nope/)
 const gone: any = await send('tools/call', { name: 'stash_nope', arguments: {} })
 assert.match(gone.result.content[0].text, /no such tool/)
 
+/* ---------- the same dispatcher over HTTP: what `claude mcp add --transport http` reaches ---------- */
+
+const http = (body: unknown, auth?: string) => fetch(`${url}/mcp`, {
+  method: 'POST', body: JSON.stringify(body),
+  headers: auth ? { authorization: auth } : {},
+})
+
+// no header, and a header that is not user:pass, are both refused before any JSON-RPC happens
+assert.equal((await http({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 401)
+assert.equal((await http({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, 'Basic justaname')).status, 401)
+
+// plain user:pass and its base64 spelling are the same credential
+for (const auth of ['Basic leon:longenough', `Basic ${Buffer.from('leon:longenough').toString('base64')}`]) {
+  const r = await http({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, auth)
+  assert.equal(r.status, 200)
+  const j: any = await r.json()
+  assert.ok(j.result.tools.some((t: any) => t.name === 'stash_capture'), 'tools listed over http')
+}
+
+// a write through the wire lands in the same document the stdio context reads
+const wrote: any = await (await http({
+  jsonrpc: '2.0', id: 2, method: 'tools/call',
+  params: { name: 'stash_capture', arguments: { text: 'came in over http' } },
+}, 'Basic leon:longenough')).json()
+assert.ok(!wrote.result.isError, wrote.result.content[0].text)
+assert.equal((await call('stash_read', { query: 'over http' })).count, 1)
+
+// a wrong password holds the tool list open (it is in the public repo) but no document behind it
+const spy: any = await (await http({
+  jsonrpc: '2.0', id: 3, method: 'tools/call',
+  params: { name: 'stash_read', arguments: {} },
+}, 'Basic leon:wrongpass')).json()
+assert.equal(spy.result.isError, true)
+assert.match(spy.result.content[0].text, /login .* failed/)
+
+// a lone notification is accepted and answered with nothing, as the spec asks
+assert.equal((await http({ jsonrpc: '2.0', method: 'notifications/initialized' }, 'Basic leon:longenough')).status, 202)
+
 server.close()
 console.log('mcp ok')
