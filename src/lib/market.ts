@@ -343,6 +343,11 @@ export const priceDigits = (ref: number) => {
 }
 
 /** Locale-formatted price at the precision `ref` deserves. `ref` defaults to the value itself. */
+/** PF_XBTUSD → BTCUSDT: strip the futures prefix, Kraken's XBT back to BTC, USD to the USDT id
+ *  the rest of the app charts in. Bitget and MEXC rows arrive already speaking BTCUSDT. */
+export const assetOf = (symbol: string) =>
+  symbol.replace(/^(PF|PI|FI)_/, '').replace(/^XBT/, 'BTC').replace(/USD$/, 'USDT')
+
 export const fmtPrice = (n: number, ref = n) => {
   const d = priceDigits(ref)
   return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })

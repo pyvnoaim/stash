@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
-import { nextCharge, SUBS, MARKET, type Result, type State, type Watch } from './store.ts'
-import { DIALS, fmtPrice, moverMove, type Dials, type Trend } from './market.ts'
+import { nextCharge, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
+import { assetOf, DIALS, fmtPrice, moverMove, type Dials, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -92,6 +92,51 @@ export function watchAlerts(
     }[hit]
     // the level is in the id, so dismissing "at entry" doesn't also silence the stop that follows
     return [{ id: `watch-${w.id}-${hit}`, ...a, target: MARKET, asset: w.asset }]
+  })
+}
+
+/**
+ * The bare alarms against the live price: set below and reached from underneath, or set above and
+ * fallen to — the side was written down when the alarm was made, so a level crossed and crossed
+ * back doesn't flap between meanings. Pure like everything here; the bell hands the prices in.
+ * The alert repeats while the price stands past the level; dismissing buys the usual day of quiet,
+ * and deleting the alarm (in the popover that made it) is how it stops for good.
+ */
+export function alarmAlerts(alarms: Alarm[], prices: Record<string, number>): Alert[] {
+  return alarms.flatMap((a) => {
+    const p = prices[a.asset]
+    if (typeof p !== 'number' || !isFinite(p)) return []
+    if (a.above ? p < a.price : p > a.price) return []
+    return [{
+      id: `alarm-${a.id}`,
+      title: `${a.label} crossed ${fmtPrice(a.price)}`,
+      detail: `${fmtPrice(p)} now — the level you asked about, from ${a.above ? 'below' : 'above'}`,
+      tone: 'due' as const,
+      target: MARKET,
+      asset: a.asset,
+    }]
+  })
+}
+
+/** The shape of an exchange row this cares about — market-page owns the full one. */
+type NakedRow = { symbol: string; side: 'long' | 'short'; entry: number; stop: number | null; venue?: string }
+
+/**
+ * Real money with nothing resting to end it: an exchange position whose feed shows no stop order.
+ * The most expensive thing on the desk to not notice, and the feed already says it — this only
+ * turns the null into a sentence. Repeats while true; dismissing buys the day of quiet.
+ */
+export function nakedAlerts(rows: NakedRow[]): Alert[] {
+  return rows.filter((p) => p.stop == null).map((p) => {
+    const venue = { bitget: 'Bitget', mexc: 'MEXC' }[p.venue ?? ''] ?? 'Kraken'
+    return {
+      id: `naked-${p.venue ?? 'kraken'}-${p.symbol}`,
+      title: `${p.symbol.replace(/^(PF|PI|FI)_/, '')} has no stop`,
+      detail: `${venue} ${p.side} from ${price(p.entry)} — nothing resting to end it`,
+      tone: 'warn' as const,
+      target: MARKET,
+      asset: assetOf(p.symbol),
+    }
   })
 }
 

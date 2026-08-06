@@ -12,8 +12,9 @@
  * kept in `meta`, and a signed JWT naming the service being asked. node:crypto does all of it.
  *
  * What it decides to knock about:
- *  - a saved Markets setup whose entry, stop or target the live price has reached. Crypto and gold
- *    only: the stock feed needs the Twelve Data key, which deliberately never leaves the browser.
+ *  - a saved Markets setup whose entry, stop or target the live price has reached, and a bare
+ *    alarm whose level it has crossed. Crypto and gold only — see the ponytail note in
+ *    refreshPrices for why the stocks still aren't priced here.
  *  - a listed asset that has just moved hard, whether or not anything was ever saved on it. The
  *    same rule and the same two numbers the in-app bell uses, imported rather than copied.
  *  - an item that named an hour, once that hour has come round where the phone is.
@@ -153,6 +154,22 @@ export function alertsOf(
       body: (hit === 'entry' ? `${price(p)} — the ${side} entry ${price(w.entry)} is here`
         : hit === 'target' ? `${price(p)} — the ${side} target ${price(w.target)} is reached`
           : `${price(p)} — through the ${side} stop ${price(w.stop)}`) + paid,
+      target: 'market',
+    })
+  }
+
+  /* The bare alarms, the same crossing test the bell reads: the side was written down when the
+     alarm was made, so a level crossed and crossed back doesn't flap. The key is the alarm's own
+     id — one knock per alarm, however long price stays past it. */
+  for (const a of Array.isArray(s?.alarms) ? s.alarms : []) {
+    const p = prices[a?.asset]
+    const lvl = Number(a?.price)
+    if (typeof p !== 'number' || !isFinite(p) || !isFinite(lvl) || lvl <= 0) continue
+    if (a.above ? p < lvl : p > lvl) continue
+    out.push({
+      key: `alarm-${a.id}`,
+      title: `${a.label || a.asset} crossed ${fmtPrice(lvl)}`,
+      body: `${fmtPrice(p)} now — the level you asked about`,
       target: 'market',
     })
   }
@@ -318,14 +335,18 @@ export function createPush(db: DatabaseSync) {
   const watchesOf = (user: number): any[] => {
     const row = q.doc.get(user) as { json: string } | undefined
     if (!row) return []
-    try { return JSON.parse(row.json).watches ?? [] } catch { return [] }
+    try {
+      const doc = JSON.parse(row.json)
+      // the alarms watch prices the same way the setups do, so they ride the same fetch
+      return [...(doc.watches ?? []), ...(doc.alarms ?? [])]
+    } catch { return [] }
   }
 
   async function refreshPrices(users: number[]) {
     const want = new Set<string>()
     for (const u of users) {
-      // Binance symbols only. A stock needs the Twelve Data key, and that key is kept on the
-      // machine it was typed on — this process has no way to ask, and should not.
+      // ponytail: Binance symbols only. The Twelve Data key rides the synced doc now, so pricing
+      // stocks here is possible — it just isn't done yet; the watcher stays crypto-and-gold.
       for (const w of watchesOf(u)) if (typeof w?.asset === 'string' && w.asset.endsWith('USDT')) want.add(w.asset)
     }
     if (!want.size) { prices = {}; return }

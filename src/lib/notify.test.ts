@@ -1,7 +1,7 @@
 // npm test — the bell count comes from here, so a wrong alert is a wrong nudge
 import assert from 'node:assert/strict'
 // type-only, so it's erased and store still loads lazily below, after the globals are stubbed
-import type { Item, Result, State, Watch } from './store.ts'
+import type { Alarm, Item, Result, State, Watch } from './store.ts'
 import type { Trend } from './market.ts'
 
 // notify imports store, which touches localStorage and listeners at import time
@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, nakedAlerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
 
@@ -23,7 +23,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT',
+  subView: 'expense', watches: [], alarms: [], results: [], stake: 0, marketAsset: 'BTCUSDT',
   marketHorizon: 'short', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
@@ -141,6 +141,29 @@ assert.equal(watchAlerts([wide], { BTCUSDT: 91 })[0].title, 'Bitcoin · Trading 
 assert.equal(pos(89)[0].title, 'Bitcoin · Trading liquidated')
 // a plan nobody took cannot be liquidated, however wide its stop
 assert.equal(watchAlerts([{ ...long, stop: 85 }], { BTCUSDT: 84 })[0].title, 'Bitcoin · Trading setup broken')
+
+/* ---------- bare alarms, and positions with nothing resting ---------- */
+
+// set below 100 and waiting for a rise: quiet under the level, one alert at and past it
+const alarm: Alarm = { id: 'al1', asset: 'BTCUSDT', label: 'Bitcoin', price: 100, above: true, ts: 0 }
+assert.deepEqual(alarmAlerts([alarm], { BTCUSDT: 99 }), [])
+assert.equal(alarmAlerts([alarm], { BTCUSDT: 100 })[0].id, 'alarm-al1')
+assert.ok(alarmAlerts([alarm], { BTCUSDT: 101 })[0].title.includes('Bitcoin crossed'))
+// the side was written down at creation, so the same level set from above reads the other way
+assert.deepEqual(alarmAlerts([{ ...alarm, above: false }], { BTCUSDT: 101 }), [])
+assert.equal(alarmAlerts([{ ...alarm, above: false }], { BTCUSDT: 99 }).length, 1)
+// no price says nothing, the same rule every alert here holds to
+assert.deepEqual(alarmAlerts([alarm], {}), [])
+
+// a position with no stop resting is the alert; one with a stop is not a word
+const naked = nakedAlerts([
+  { symbol: 'PF_XBTUSD', side: 'long', entry: 100, stop: null, venue: 'kraken' },
+  { symbol: 'ETHUSDT', side: 'short', entry: 200, stop: 210, venue: 'bitget' },
+])
+assert.equal(naked.length, 1)
+assert.equal(naked[0].id, 'naked-kraken-PF_XBTUSD')
+assert.equal(naked[0].asset, 'BTCUSDT') // Kraken's name, mapped back to the chart the click opens
+assert.ok(naked[0].title.includes('XBTUSD has no stop'))
 
 /* ---------- what actually happened: the window opening, and the trade ending ---------- */
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { AlarmClock, Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,9 +13,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
-import { addWatch, clearResults, closeWatch, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
+import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
-  ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
   TREND_NETWORK, usMarketOpen,
   type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Trend,
@@ -534,7 +534,7 @@ export default function MarketPage() {
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
           is the one row here that is fact rather than reading. Absent unless the server has a key
           and Kraken reports something open. */}
-      <KrakenPositions />
+      <ExchangePositions />
 
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
@@ -551,6 +551,7 @@ export default function MarketPage() {
                 {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
               </span>
             )}
+            <AlarmButton asset={current.id} label={current.label} price={price ?? null} />
             {/* the price above is the last bar the feed gave us, and off the network that bar is however
                 old the cache is — say which, rather than let a stale number pass for the current one */}
             {stale && candles.length > 0 && (
@@ -1036,10 +1037,6 @@ type ExchangePosition = {
   venue?: string
 }
 
-/** PF_XBTUSD → BTCUSDT: strip the futures prefix, Kraken's XBT back to BTC, USD to the USDT id
- *  the rest of the app charts in. */
-const assetOf = (symbol: string) =>
-  symbol.replace(/^(PF|PI|FI)_/, '').replace(/^XBT/, 'BTC').replace(/USD$/, 'USDT')
 
 const KRAKEN_OPEN = 'stash-kraken-open'
 
@@ -1117,16 +1114,16 @@ function useExchangePositions() {
 }
 
 /**
- * What Kraken says is actually open — the read-only feed off the caller's own key (Settings →
- * Markets), proxied through the server so the key stays there. Renders nothing at all unless
- * this account has a key saved and the exchange reports an open position: for everyone else
- * this component is one failed fetch and no pixels. The Overview shows the same card.
+ * What the exchanges say is actually open — every venue with a key saved (Settings → Markets),
+ * proxied through the server so the keys stay there. Renders nothing at all unless an exchange
+ * reports an open position: for everyone else this component is one failed fetch and no pixels.
+ * The Overview shows the same card, which is what makes its header the desk's status line.
  *
  * ponytail: the pct is price move from entry, not return on margin — leverage is not in the
  * feed's read scope. Anyone leveraged knows to multiply. The R beside it is real, though: risk
  * is entry-to-stop, which the resting stop defines.
  */
-export function KrakenPositions() {
+export function ExchangePositions() {
   const { rows, equity } = useExchangePositions()
   // how far price stands from a level, from where it is now — signed as the move itself would be
   const away = (lvl: number, mark: number) => {
@@ -1134,11 +1131,22 @@ export function KrakenPositions() {
     return `(${d >= 0 ? '+' : ''}${d.toFixed(1)}%)`
   }
   if (!rows.length) return null
+  /* The strip that answers "am I fine?" without opening a single row: how many are open, and the
+     nearest liquidation as a distance — the worst number on the desk, said first. Only where a
+     feed vouches for a liq price; an estimate has no place next to real money. */
+  const dists = rows.flatMap((p) => (p.liq != null && p.mark != null && p.mark > 0
+    ? [Math.abs(p.mark - p.liq) / p.mark * 100] : []))
+  const nearestLiq = dists.length ? Math.min(...dists) : null
+  const venues = new Set(rows.map((p) => p.venue ?? 'kraken'))
+  const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' }[v ?? ''] ?? 'Kraken')
   return (
     <Card className="py-3">
       <CardContent className="grid gap-1.5 px-3 text-sm">
         <div className="flex items-baseline gap-2">
-          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open on Kraken</p>
+          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open positions</p>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {rows.length} open{nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
+          </span>
           {equity != null && (
             <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
               equity ${equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -1156,6 +1164,8 @@ export function KrakenPositions() {
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                 {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
                 <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
+                {/* which venue holds it — only worth a word once more than one does */}
+                {venues.size > 1 && <span className="text-muted-foreground text-xs">{venueName(p.venue)}</span>}
                 <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
                 <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
                 {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
@@ -1175,6 +1185,7 @@ export function KrakenPositions() {
                     p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
                     p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? away(p.stop, p.mark) : ''}`.trim(),
                     p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? away(p.target, p.mark) : ''}`.trim(),
+                    p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? away(p.liq, p.mark) : ''}`.trim(),
                     p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
                     p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
                       day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -1187,6 +1198,57 @@ export function KrakenPositions() {
         })}
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * A bare level on this asset — "tell me at 100k" without the ceremony of an entry, a stop and a
+ * target. Which side it fires from is decided here, from where price stands as it is set, so a
+ * level crossed and crossed back doesn't flap between meanings. The bell and the phone both ring
+ * it; deleting it here is how it stops for good.
+ */
+function AlarmButton({ asset, label, price }: { asset: string; label: string; price: number | null }) {
+  const { alarms } = useStash()
+  const mine = alarms.filter((a) => a.asset === asset)
+  const [v, setV] = useState('')
+  const lvl = Number(v.replace(',', '.'))
+  // a level the price already stands on would fire on the next tick and mean nothing
+  const ok = price != null && isFinite(lvl) && lvl > 0 && lvl !== price
+  const set = () => {
+    if (!ok) return
+    addAlarm({ id: uid(), asset, label, price: lvl, above: lvl > price!, ts: Date.now() })
+    setV('')
+  }
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="Price alarms"
+          className={cn('text-muted-foreground hover:text-foreground', mine.length > 0 && 'text-foreground')}>
+          <AlarmClock className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="grid w-64 gap-2">
+        <p className="text-sm font-medium">Alarm on {label}</p>
+        <p className="text-muted-foreground text-xs">
+          One knock when price crosses the level, from whichever side it stands on now — here and on the phone.
+        </p>
+        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); set() }}>
+          <Input inputMode="decimal" aria-label="Alarm level" placeholder={price != null ? String(price) : 'Level'}
+            value={v} onChange={(e) => setV(e.target.value)} />
+          <Button type="submit" size="sm" disabled={!ok}>Set</Button>
+        </form>
+        {mine.map((a) => (
+          <div key={a.id} className="flex items-center justify-between text-sm">
+            <span className="tabular-nums">
+              {fmtPrice(a.price)} <span className="text-muted-foreground text-xs">from {a.above ? 'below' : 'above'}</span>
+            </span>
+            <Button variant="ghost" size="icon-xs" aria-label="Remove alarm" onClick={() => removeAlarm(a.id)}>
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        ))}
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -1345,6 +1407,18 @@ function Record() {
     const gross = moneyOf(r.r, stakeOf(r, stake))
     return gross === null ? null : gross - fundingOf(r, dials.funding, r.closedAt)
   }
+  /* Which of your selves trades well: the same trades, cut by the horizon that made them. The
+     R-per-trade is the expectancy — the one number that says whether a lane pays to keep driving. */
+  const lanes = [...results.reduce((m, r) => {
+    const k = r.horizon || '—'
+    return m.set(k, [...(m.get(k) ?? []), r])
+  }, new Map<string, typeof results>())]
+    .map(([name, rs]) => ({
+      name, n: rs.length,
+      hit: rs.filter((r) => r.level === 'target').length,
+      avg: rs.reduce((sum, r) => sum + r.r, 0) / rs.length,
+    }))
+    .sort((a, b) => b.n - a.n)
   const money = results.some((r) => cashOf(r) !== null)
     ? results.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
   const real = results.some(isPosition)
@@ -1376,6 +1450,18 @@ function Record() {
           >
             Clear
           </Button>
+        </div>
+        {/* the same trades cut by lane — expectancy per horizon is what the record is kept to say */}
+        <div className="text-muted-foreground mb-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+          {lanes.map((l) => (
+            <span key={l.name} className="tabular-nums">
+              <span className="font-medium">{l.name}</span>
+              {' '}{l.n} trade{l.n === 1 ? '' : 's'} · {Math.round((l.hit / l.n) * 100)}% hit ·{' '}
+              <span className={l.avg >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
+                {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R/trade
+              </span>
+            </span>
+          ))}
         </div>
         {results.map((r) => {
           const hit = r.level === 'target'

@@ -141,6 +141,18 @@ export interface Result extends Watch {
 /** How many finished setups are kept. Past a few dozen it is a spreadsheet, not a scoreboard. */
 const KEEP_RESULTS = 50
 
+/** A price and which way through it counts — decided from where price stood when it was set. */
+export interface Alarm {
+  id: string
+  /** An ASSETS id from market.ts, e.g. 'BTCUSDT'. */
+  asset: string
+  label: string
+  price: number
+  /** True when the alarm waits for price to rise to the level, false for a fall. */
+  above: boolean
+  ts: number
+}
+
 /** What to set aside each month to cover it: a €120 yearly abo is €10 a month. The whole point. */
 export const monthlyCost = (sub: Sub) => (sub.cost * PER_YEAR[sub.cycle]) / 12
 export const yearlyCost = (sub: Sub) => sub.cost * PER_YEAR[sub.cycle]
@@ -266,6 +278,9 @@ export interface State {
   subView: 'expense' | 'income'
   /** Saved Markets setups the bell watches the live price against. */
   watches: Watch[]
+  /** Bare price alarms — a level and nothing else, for "tell me at 100k" without the ceremony of
+   *  an entry, a stop and a target. The bell and the push server both read them. */
+  alarms: Alarm[]
   /** The ones that finished, newest first. */
   results: Result[]
   /**
@@ -371,7 +386,7 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense',
-  watches: [], results: [], stake: 0, marketAsset: 'BTCUSDT', marketHorizon: 'short',
+  watches: [], alarms: [], results: [], stake: 0, marketAsset: 'BTCUSDT', marketHorizon: 'short',
   dials: { ...DIALS }, dismissed: {},
 })
 
@@ -481,6 +496,21 @@ export function load(data: unknown): State {
     // moment it loads. The app can't build one — tradePlan checks the geometry — but a hand-edited
     // backup can, and this is the boundary that decides what the bell is allowed to shout about.
     .filter(liveGeometry)
+
+  // alarms hold to the watches' rule: a level that isn't a positive number is dropped, not kept
+  const aseen = new Set<string>()
+  st.alarms = (Array.isArray(st.alarms) ? st.alarms : [])
+    .filter((a) => a && a.id && !aseen.has(String(a.id)) && aseen.add(String(a.id)))
+    .map((a) => ({
+      id: String(a.id),
+      asset: String(a.asset ?? ''),
+      label: String(a.label || a.asset || 'Alarm'),
+      price: Number(a.price),
+      above: !!a.above,
+      ts: typeof a.ts === 'number' ? a.ts : Date.now(),
+    }))
+    .filter((a) => a.asset && isFinite(a.price) && a.price > 0)
+    .slice(0, 100)
 
   /* The record of the finished ones. Same geometry rule, since these are the same setups one step
      later — plus the two things only a finished one has: when it ended and what it did. A row
@@ -985,6 +1015,9 @@ export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))
 export const resetDials = () => set((s) => ({ ...s, dials: { ...DIALS } }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
+
+export const addAlarm = (a: Alarm) => set((s) => ({ ...s, alarms: [a, ...s.alarms].slice(0, 100) }))
+export const removeAlarm = (id: string) => set((s) => ({ ...s, alarms: s.alarms.filter((a) => a.id !== id) }))
 
 /** A live price was seen at the entry: the window really opened, once, at this moment. */
 export const openWatch = (id: string, at: number) => set((s) => ({

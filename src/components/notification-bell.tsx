@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, openWatch, setMarketAsset, snoozeAlerts, snoozeUntil, useStash } from '@/lib/store'
 import { ASSETS, fetchNew, fetchPrices, fetchStockHours, fetchTrending, type Trend } from '@/lib/market'
 import {
-  alerts, moverAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
+  alarmAlerts, alerts, moverAlerts, nakedAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
 } from '@/lib/notify'
 
@@ -112,7 +112,8 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   // saved setups, re-priced on a timer. The joined ids are the dep so the poll only restarts when
   // the set of watched assets actually changes, not on every unrelated write to the store.
   const [live, setLive] = useState<Record<string, number>>({})
-  const assets = [...new Set(s.watches.map((w) => w.asset))].sort().join(',')
+  // the alarms' assets ride the same poll: a level is watched with the same clock as a setup
+  const assets = [...new Set([...s.watches.map((w) => w.asset), ...s.alarms.map((a) => a.asset)])].sort().join(',')
   useEffect(() => {
     if (!assets) { setLive({}); return }
     let on = true
@@ -139,6 +140,28 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   }, [live, s.watches])
 
   const done = useMemo(() => resultAlerts(s.results, s.stake, undefined, s.dials), [s.results, s.stake, s.dials])
+
+  const rung = useMemo(() => alarmAlerts(s.alarms, live), [s.alarms, live])
+
+  /* The exchange rows, for the one thing the bell has to say about them: a position with no stop
+     resting. Polled here as well as on the Markets page because the bell is always mounted and the
+     page is not — the server answers both from one 30-second cache, so the exchange is not asked
+     twice. A non-answer keeps the last rows, the same rule the page holds to. */
+  const [exch, setExch] = useState<{ symbol: string; side: 'long' | 'short'; entry: number; stop: number | null; venue?: string }[]>([])
+  useEffect(() => {
+    let on = true
+    const tick = () => fetch('/api/positions')
+      .then(async (r) => {
+        if (!r.ok) return   // no key on this account, or the exchange is down: nothing to nag about
+        const d = await r.json()
+        if (on) setExch(d.positions ?? [])
+      })
+      .catch(() => {})
+    tick()
+    const h = setInterval(tick, POLL)
+    return () => { on = false; clearInterval(h) }
+  }, [])
+  const naked = useMemo(() => nakedAlerts(exch), [exch])
 
   /* the memecoin end, on the same timer. This is the half that has to be a poll rather than the
      movers' one-shot: a pool that opened twenty minutes ago stops being news within the hour, and
@@ -175,7 +198,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     ...new Map(trendAlerts(trends, s.dials).map((x) => [x.id, x])).values(),
   ], [movers, stockMovers, trends, s.dials])
 
-  const shown = [...stateAlerts, ...setups, ...done, ...market].filter((a) => !gone(a.id))
+  const shown = [...stateAlerts, ...naked, ...setups, ...rung, ...done, ...market].filter((a) => !gone(a.id))
   const drop = dismissAlerts
   /* When "later" is, in words — read when the popover renders, which is the only time it is
      looked at. A tab left open past five gets the answer from before then, and the button still

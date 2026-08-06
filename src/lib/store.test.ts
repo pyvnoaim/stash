@@ -110,6 +110,18 @@ assert.equal(load({ sel: 'a' }).sel, 'today')
 assert.equal(load({ theme: 'dark' }).theme, 'dark')
 assert.equal(load({ theme: 'neon' }).theme, 'auto')
 
+// alarms: junk prices and duplicate ids are dropped, the label falls back to the asset
+const al = load({ alarms: [
+  { id: 'a', asset: 'BTCUSDT', price: '5' },
+  { id: 'b', asset: 'ETHUSDT', price: 0 },       // a level of zero can't be crossed
+  { id: 'a', asset: 'SOLUSDT', price: 2 },       // second 'a' is a duplicate, not a row
+  null,
+] }).alarms
+assert.equal(al.length, 1)
+assert.equal(al[0].price, 5)
+assert.equal(al[0].label, 'BTCUSDT')
+assert.equal(al[0].above, false)
+
 /* ---------- the two actions that could lose items ---------- */
 
 const item = (over: Partial<Item>): Item => ({
