@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, structureBreak } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -282,6 +282,17 @@ assert.ok(squeeze(closesOf(DEMOS.squeeze), 10, 40)!.rank <= 0.15)
 assert.ok(volumeSurge(DEMOS.volume.candles, 12)! >= 1.8)
 assert.ok(candlePatterns(DEMOS.candle.candles).some((s) => s.label === 'Bullish engulfing'))
 assert.equal(trend(DEMOS.htf.candles, 12), 'up')
+// the structure demo has to actually change character: a downtrend's swing high, closed back above
+const sb = structureBreak(DEMOS.structure.candles)
+assert.equal(sb?.dir, 'up')
+assert.equal(sb?.choch, true)
+assert.equal(sb?.level, 108.5) // the marked swing high — mark[0] is that bar
+assert.equal(DEMOS.structure.candles[DEMOS.structure.mark![0]].h, sb?.level)
+// cut before the bounce, the same bars are plain continuation: a lower low inside the downtrend (BOS)
+const bos = structureBreak(DEMOS.structure.candles.slice(0, 11))
+assert.equal(bos?.dir, 'down')
+assert.equal(bos?.choch, false)
+assert.equal(structureBreak(DEMOS.structure.candles.slice(0, 4)), null) // too few bars for a confirmed swing
 // the opening-range demo is drawn as a band and a break, so it has to break
 const orbDemo = DEMOS.orb.candles
 assert.ok(orbDemo.at(-1)!.c > Math.max(...orbDemo.slice(0, 4).map((b) => b.h)))
@@ -297,6 +308,8 @@ assert.ok(candlePatterns(flipped('candle').candles).some((s) => s.label === 'Bea
 assert.equal(DEMOS.rsi.flipOn, 'bull')
 assert.ok(rsi(closesOf(flipped('rsi')), DEMO_RSI).at(-1)! <= 30)
 assert.equal(lastCross(demoMacd(flipped('macd')).line, demoMacd(flipped('macd')).signal)?.dir, 'down')
+assert.equal(structureBreak(flipped('structure').candles)?.dir, 'down')
+assert.equal(structureBreak(flipped('structure').candles)?.choch, true)
 // the mirror reflects about the fixture's own midpoint, so the price range is unchanged
 const before = DEMOS.trend.candles, after = flipped('trend').candles
 assert.equal(Math.min(...before.map((b) => b.l)).toFixed(6), Math.min(...after.map((b) => b.l)).toFixed(6))
