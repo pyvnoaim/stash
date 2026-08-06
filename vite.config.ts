@@ -1,20 +1,18 @@
-import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import pkg from './package.json' with { type: 'json' }
 
-/* Which build this is, stamped in at build time — the update prompt tells you a new one is
-   waiting, and this is the other half: what you are on now. A checkout without git, or a source
-   tarball, still builds; it simply has nothing to call itself. */
-const build = (() => {
-  try { return execFileSync('git', ['rev-parse', '--short', 'HEAD']).toString().trim() } catch { return 'source' }
-})()
+/* Which build this is — package.json's version, which every build context has. A git sha would
+   read finer, but Portainer strips .git from its clone before building, so the sha only exists
+   where this app is not built. Bump with `npm version patch` when a release should say so;
+   __BUILT_AT__ below tells any two builds of one version apart. */
 
 export default defineConfig({
   define: {
-    __BUILD__: JSON.stringify(build),
+    __BUILD__: JSON.stringify(pkg.version),
     __BUILT_AT__: JSON.stringify(new Date().toISOString()),
   },
   plugins: [
