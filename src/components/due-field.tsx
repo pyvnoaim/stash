@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { CalendarIcon, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Calendar } from '@/components/ui/calendar'
+import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
@@ -94,18 +95,14 @@ export function DueField({ id, due, at, placeholder, onPick, onTime }: {
       {/* the browser's own clock: it knows the 24h/AM-PM the machine is set to, and on a phone it
           is the wheel everyone already uses. Disabled without a date, since an hour on no day is
           not a time — the same rule the parser and the store hold to. */}
-      <input
+      <Input
         type="time"
         aria-label="Time"
         disabled={!due}
         value={at ?? ''}
         onChange={(e) => onTime(e.target.value || null)}
-        className={cn(
-          'border-input bg-transparent dark:bg-input/30 h-9 shrink-0 rounded-md border px-2 py-1 font-mono text-sm tabular-nums shadow-xs',
-          'focus-visible:border-ring focus-visible:ring-ring/50 outline-none focus-visible:ring-[3px]',
-          'disabled:cursor-not-allowed disabled:opacity-50',
-          !at && 'text-muted-foreground',
-        )}
+        // w-auto shrink-0: the clock keeps its size, the date button beside it is what gives way
+        className={cn('w-auto shrink-0 font-mono tabular-nums', !at && 'text-muted-foreground')}
       />
     </div>
   )
