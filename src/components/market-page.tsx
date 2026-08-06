@@ -400,8 +400,17 @@ export default function MarketPage() {
      position — a real trade quietly overwritten by a hypothetical one. The position is watched at
      all three of its own levels anyway, so there is nothing the button would add. */
   const inIt = watches.some((w) => w.asset === current.id && isPosition(w))
-  // the exchange position on this very chart, if there is one — its levels get drawn with the plan's
+  // the exchange position on this very chart, if there is one — its levels get drawn with the plan's.
+  // The whole position wears fuchsia — the one hue nothing else on the chart uses (candles are
+  // emerald/red, plan entry sky, MAs sky/amber, range violet, sessions rose/indigo/teal), and the
+  // one that stays apart from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by
+  // weight and dash, and the legend below shows exactly those dashes.
   const held = kraken.rows.find((p) => assetOf(p.symbol) === current.id)
+  const posLines = held ? [
+    { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
+    ...(held.stop != null ? [{ label: 'stop', lvl: held.stop, w: 1, dash: '2 3', op: 0.6 }] : []),
+    ...(held.target != null ? [{ label: 'target', lvl: held.target, w: 1, dash: '8 4', op: 0.6 }] : []),
+  ] : []
 
   // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
   // computed off every fetched bar, so the 200-MA is real from the first visible bar
@@ -735,19 +744,14 @@ export default function MarketPage() {
                     ))
                   )}
                   {/* Money actually on this chart: the Kraken position's own levels, over whatever
-                      the plan says. Entry wears the side's colour and the exits their meaning —
-                      the plan's lines are hypothesis, these are the trade. Off-frame ones stay in
-                      the card, same rule as the plan's. */}
-                  {held && (
-                    [
-                      { lvl: held.entry, cls: held.side === 'long' ? 'stroke-emerald-500' : 'stroke-destructive', w: 1.25 },
-                      ...(held.stop != null ? [{ lvl: held.stop, cls: 'stroke-destructive/70', w: 1 }] : []),
-                      ...(held.target != null ? [{ lvl: held.target, cls: 'stroke-emerald-500/70', w: 1 }] : []),
-                    ].filter((l) => l.lvl >= lo && l.lvl <= hi).map((l, i) => (
-                      <line key={`k-${i}`} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
-                        className={l.cls} strokeWidth={l.w} strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />
-                    ))
-                  )}
+                      the plan says — the plan's lines are hypothesis, these are the trade. All
+                      three in the position's own fuchsia; the legend names each dash. Off-frame
+                      ones stay in the card, same rule as the plan's. */}
+                  {posLines.filter((l) => l.lvl >= lo && l.lvl <= hi).map((l) => (
+                    <line key={`k-${l.label}`} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
+                      className="stroke-fuchsia-600" strokeWidth={l.w} strokeOpacity={l.op}
+                      strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
+                  ))}
                   {/* opening-range band: the session-open 15m high/low the breakout play watches */}
                   {range && (
                     <>
@@ -858,6 +862,20 @@ export default function MarketPage() {
                 </span>
               ))}
               {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 translate-y-[-3px] align-middle" /> opening range</span>}
+              {/* the position's levels, chip drawn with the very dash the chart uses — and the
+                  same off-frame arrow as the MAs, so a target above the frame says where it went */}
+              {posLines.map((l) => {
+                const seen = l.lvl >= lo && l.lvl <= hi
+                return (
+                  <span key={l.label} className={cn(!seen && 'opacity-60')}>
+                    <svg width="16" height="3" className="mr-0.5 inline-block translate-y-[-2px] align-middle">
+                      <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-fuchsia-600"
+                        strokeWidth={l.w} strokeOpacity={l.op} strokeDasharray={l.dash} />
+                    </svg> {l.label}
+                    {!seen && <span className="ml-1">off frame {l.lvl > hi ? '↑' : '↓'}</span>}
+                  </span>
+                )
+              })}
               <span className="ml-auto tabular-nums">
                 <span className="mr-4 opacity-70">drag to pan · scroll to zoom · {n} bars</span>
                 support {fmt(view.support)} · resistance {fmt(view.resistance)}
