@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, structureBreak } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, structureBreak, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -423,3 +423,10 @@ for (const junk of [null, 'nope', {}, { NVDA: {} }, { NVDA: { values: [] } }]) {
 assert.equal(parseStockHours({ values: hours.NVDA.values }, ['NVDA'], at).length, 1)
 
 console.log('market: ok')
+
+// usMarketOpen gates every Twelve Data call: a mid-session Wednesday asks, a Saturday and a
+// European overnight do not — those were the polls that spent the day's 800 credits on a shut market
+assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 15, 0)), true)  // Wed 15:00 UTC — NY morning
+assert.equal(usMarketOpen(Date.UTC(2026, 7, 8, 15, 0)), false) // Saturday
+assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 3, 0)), false)  // overnight
+assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 21, 30)), true) // the wide edge still counts

@@ -33,7 +33,10 @@ const STOCKS = ASSETS.filter((a) => a.source === 'twelvedata' && a.group === 'St
 const POLL = 60_000 // how often saved setups are re-priced while the app is open
 /* Five minutes: 288 calls a day against the 800 allowed, leaving room for the setup poll beside
    it. An hourly bar barely moves inside five minutes, so nothing is missed for the arithmetic. */
-const STOCK_POLL = 5 * 60_000
+/* Every batched call costs one credit per symbol on a 800-a-day budget: eight stocks on five
+   minutes was 96 an hour, which is the whole day's allowance spent by mid-session. Fifteen
+   minutes still catches "moved 3% in the last hour" with the day's budget to spare. */
+const STOCK_POLL = 15 * 60_000
 
 export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
@@ -105,7 +108,9 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   useEffect(() => {
     if (!assets) { setLive({}); return }
     let on = true
-    const tick = () => fetchPrices(assets.split(','), s.apiKey).then((p) => { if (on) setLive(p) })
+    // merged over the last answer: off-hours fetchPrices omits the stocks entirely (see
+    // usMarketOpen), and a watched stock's closing price is still the true one to read it at
+    const tick = () => fetchPrices(assets.split(','), s.apiKey).then((p) => { if (on) setLive((prev) => ({ ...prev, ...p })) })
     tick()
     const h = setInterval(tick, POLL)
     return () => { on = false; clearInterval(h) }
