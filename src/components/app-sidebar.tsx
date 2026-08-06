@@ -44,6 +44,9 @@ const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
 ]
 
 
+/** The tags group's fold, kept in `collapsed` beside the project ids — none of which it can be. */
+const TAGS_FOLD = '__tags__'
+
 const VIEW_ICONS = {
   today: CalendarDays,
   upcoming: CalendarClock,
@@ -424,7 +427,16 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         {/* no group at all until something is tagged — an empty heading is just furniture */}
         {tags.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel className="font-heading tracking-wider uppercase">Tags</SidebarGroupLabel>
+            {/* the heading folds the list, and the fold rides in `collapsed` beside the project
+                folds — the sentinel can never collide with a project id, and the synced document
+                is what makes the choice hold across reloads and devices alike */}
+            <SidebarGroupLabel asChild className="font-heading tracking-wider uppercase">
+              <button type="button" className="w-full cursor-pointer" onClick={() => toggleCollapsed(TAGS_FOLD)}>
+                Tags
+                <ChevronRight className={cn('ml-auto size-3.5 transition-transform', !s.collapsed.includes(TAGS_FOLD) && 'rotate-90')} />
+              </button>
+            </SidebarGroupLabel>
+            {!s.collapsed.includes(TAGS_FOLD) && (
             <SidebarGroupContent>
               <SidebarMenu>
                 {tags.map(([t, n]) => (
@@ -442,6 +454,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                 ))}
               </SidebarMenu>
             </SidebarGroupContent>
+            )}
           </SidebarGroup>
         )}
         {/* neither of these is a list of items — one is a dashboard and one is a document editor,
