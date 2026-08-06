@@ -1,6 +1,8 @@
 services:
   stash:
-    build: .
+    # Pulled, not built: Portainer deletes .git from its clone, so a VPS build cannot stamp its
+    # commit into About. CI builds this image on every push to main (see .github/workflows/ci.yml).
+    image: ghcr.io/pyvnoaim/stash:latest
     restart: unless-stopped
     # Optional: lets the hosted MCP route read the stocks — everything else runs the same without it.
     environment:
