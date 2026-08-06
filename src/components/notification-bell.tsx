@@ -230,7 +230,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
             {shown.map((a) => (
               <div key={a.id} className="hover:bg-accent group/noti flex items-start gap-2 px-3 py-2">
                 <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[a.tone])} />
-                <button type="button" className="min-w-0 flex-1 text-left"
+                <button type="button" className="min-w-0 flex-1 text-left" title={a.title}
                   onClick={() => { if (a.asset) setMarketAsset(a.asset); onNavigate(a.target); setOpen(false) }}>
                   <span className="block truncate text-sm">{a.title}</span>
                   <span className="text-muted-foreground block text-xs">{a.detail}</span>
