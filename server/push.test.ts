@@ -38,6 +38,16 @@ assert.equal(at(short, { BTCUSDT: 111 })[0].key, 'watch-w2-stop')
 // no horizon, no separator hanging off the label
 assert.equal(at(short, { BTCUSDT: 100 })[0].title, 'Bitcoin at entry')
 
+/* Liquidation: only a position has one, and only a stop set beyond it lets it fire first.
+   €50 at 5×: the long from 100 dies at 80, and the stop at 70 is one the exchange never honours. */
+const taken = { watches: [{ ...long.watches[0], stop: 70, size: 50, lev: 5 }] }
+assert.equal(at(taken, { BTCUSDT: 79 })[0].key, 'watch-w1-liq')
+assert.ok(at(taken, { BTCUSDT: 79 })[0].body.includes('€50.00 margin is gone'))
+// the same wide stop on a plan nobody took is just a stop
+assert.equal(at({ watches: [{ ...long.watches[0], stop: 70 }] }, { BTCUSDT: 69 })[0].key, 'watch-w1-stop')
+// a short mirrors: at 5× the short from 100 dies at 120, before its 125 stop
+assert.equal(at({ watches: [{ ...short.watches[0], stop: 125, size: 50, lev: 5 }] }, { BTCUSDT: 121 })[0].key, 'watch-w2-liq')
+
 /* ---------- the morning digest ---------- */
 
 const items = {

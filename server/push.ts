@@ -103,12 +103,29 @@ export function alertsOf(
     if (typeof p !== 'number' || !isFinite(p)) continue
     const long = w.dir !== 'short'
     const reached = (lvl: number) => (long ? p <= lvl : p >= lvl)
-    const hit = reached(w.stop) ? 'stop'
-      : (long ? p >= w.target : p <= w.target) ? 'target'
-        : reached(w.entry) ? 'entry' : null
+    /* Liquidation first, the same order notify.ts reads in: it only beats the stop when the stop
+       was set beyond it, and then the exchange ends the trade before the stop ever could. Longhand
+       like stakeOf below, for the same reason. entry ± entry/lev, no maintenance margin. */
+    const took = Number(w.size) > 0 && Number(w.lev) > 0
+    const liqAt = took ? w.entry * (1 + (long ? -1 : 1) / Number(w.lev)) : NaN
+    const liq = isFinite(liqAt) && liqAt > 0 ? liqAt : null
+    const hit = liq !== null && reached(liq) ? 'liq'
+      : reached(w.stop) ? 'stop'
+        : (long ? p >= w.target : p <= w.target) ? 'target'
+          : reached(w.entry) ? 'entry' : null
     if (!hit) continue
     const who = w.horizon ? `${w.label} · ${w.horizon}` : w.label
     const side = long ? 'long' : 'short'
+    if (hit === 'liq') {
+      // the margin is the loss — that is what liquidation means — so no R arithmetic here
+      out.push({
+        key: `watch-${w.id}-liq`,
+        title: `${who} liquidated`,
+        body: `${price(p)} — past the estimated ${side} liquidation ${price(liq!)}, the ${euro(Number(w.size))} margin is gone`,
+        target: 'market',
+      })
+      continue
+    }
     /* What it did, and — where a stake is set — what that is in money. The same arithmetic
        notify.ts does in the app (rOf × stake): R off the plan's own geometry, nothing bought,
        no fee counted. Only on an outcome; at the entry nothing has happened yet. */
@@ -116,7 +133,6 @@ export function alertsOf(
        distance is the share of it at risk. Same arithmetic as stakeOf in notify.ts — kept here in
        longhand rather than imported, because market.ts is the one module this process shares with
        the app and notify.ts would drag the store's world across with it. */
-    const took = Number(w.size) > 0 && Number(w.lev) > 0
     const own = (Number(w.size) * Number(w.lev) * Math.abs(w.entry - w.stop)) / w.entry
     /* isFinite as well as > 0: these numbers come out of a stored document rather than off the
        form that made them, and an entry of zero divides its way to an Infinity that formats as a

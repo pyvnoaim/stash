@@ -35,7 +35,11 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>, st
     if (typeof p !== 'number' || !isFinite(p)) return []
     const below = w.dir === 'long' // which way price has to travel for a level to be "reached"
     const reached = (lvl: number) => (below ? p <= lvl : p >= lvl)
-    const hit = reached(w.stop) ? 'stop' : (below ? p >= w.target : p <= w.target) ? 'target' : reached(w.entry) ? 'entry' : null
+    /* Liquidation outranks even the stop: it only wins when the stop was set beyond it, and then
+       the exchange ends the trade before the stop ever could — the worst news, and the true one. */
+    const liq = liqOf(w)
+    const hit = liq !== null && reached(liq) ? 'liq'
+      : reached(w.stop) ? 'stop' : (below ? p >= w.target : p <= w.target) ? 'target' : reached(w.entry) ? 'entry' : null
     const side = w.dir === 'long' ? 'Long' : 'Short'
     // the horizon is in the title: two setups on one asset can fire at once, and "which chart is
     // this?" is the first thing you'd ask of an alert that just said the coin's name
@@ -66,6 +70,17 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>, st
       }]
     }
     if (!hit) return []
+    // the margin is the loss — that is what liquidation means — so no R arithmetic to do here
+    if (hit === 'liq') {
+      return [{
+        id: `watch-${w.id}-liq`,
+        title: `${who} liquidated`,
+        detail: `${price(p)} — past the estimated ${side.toLowerCase()} liquidation ${price(liq!)}, the ${euro(w.size!)} margin is gone`,
+        tone: 'warn' as const,
+        target: MARKET,
+        asset: w.asset,
+      }]
+    }
     const a = {
       entry: { title: `${who} at entry`, detail: `${price(p)} — the ${side.toLowerCase()} entry ${price(w.entry)} is here`, tone: 'due' as const },
       target: { title: `${who} hit target`, detail: `${price(p)} — ${side} target ${price(w.target)} reached`, tone: 'info' as const },
@@ -108,6 +123,20 @@ export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake
 
 /** Whether this row is money you actually have on the table, which is a different sentence. */
 export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
+
+/**
+ * Where the exchange takes the position away — entry ± entry/lev, the price at which the move
+ * against you equals the margin you put in. Only a position has one; a watched plan cannot be
+ * liquidated. `> 0` also throws out the 1× long, whose "liquidation" is the asset at zero.
+ *
+ * ponytail: no maintenance margin — a real exchange pulls the plug a little before this price,
+ * not at it. Close enough to be worth a buzz; a rate per exchange if the few percent matters.
+ */
+export const liqOf = (w: Pick<Watch, 'entry' | 'dir' | 'size' | 'lev'>) => {
+  if (!isPosition(w)) return null
+  const liq = w.entry * (1 + (w.dir === 'long' ? -1 : 1) / w.lev!)
+  return isFinite(liq) && liq > 0 ? liq : null
+}
 
 /** Signed, so a loss reads as one rather than as a number that happens to be smaller. */
 export const signedEuro = (n: number) => (n >= 0 ? '+' : '−') + euro(Math.abs(n))

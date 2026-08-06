@@ -113,6 +113,18 @@ assert.ok(pos(105)[0].detail.includes('+€50') && watchAlerts([{ ...position, l
 // half a position is no position: without both numbers it falls back to the stake, as it always did
 assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€200'))
 
+/* Liquidation: at 10× the long from 100 dies at 90. A stop inside that (95) ends the trade first
+   and reads as the stop it was; a stop set beyond it (85) is one the exchange never lets fire. */
+const wide: Watch = { ...position, stop: 85 }
+assert.equal(watchAlerts([wide], { BTCUSDT: 89 })[0].title, 'Bitcoin · Trading liquidated')
+assert.ok(watchAlerts([wide], { BTCUSDT: 89 })[0].detail.includes('€100.00 margin is gone'))
+// above the liquidation and the wide stop alike: still just the entry zone
+assert.equal(watchAlerts([wide], { BTCUSDT: 91 })[0].title, 'Bitcoin · Trading at entry')
+// gapped past stop and liquidation at once — the worst news is the one that gets said
+assert.equal(pos(89)[0].title, 'Bitcoin · Trading liquidated')
+// a plan nobody took cannot be liquidated, however wide its stop
+assert.equal(watchAlerts([{ ...long, stop: 85 }], { BTCUSDT: 84 })[0].title, 'Bitcoin · Trading setup broken')
+
 /* ---------- what actually happened: the window opening, and the trade ending ---------- */
 
 const NOW = 1_700_000_000_000
