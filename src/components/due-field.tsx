@@ -43,8 +43,11 @@ export function DueField({ id, due, at, placeholder, onPick, onTime }: {
           {due ? (
             <>
               <span className="shrink-0">{dayLabel(due)}</span>
-              {/* the ISO date gives up room first, so the clear button never spills past the edge */}
-              <span className="text-muted-foreground min-w-0 truncate font-mono text-xs tabular-nums">{due}</span>
+              {/* the label already carries the date — "Aug 14", "Tomorrow" — so the ISO one only
+                  appears where the word alone loses it: "Overdue" of what day? */}
+              {dayLabel(due) === 'Overdue' && (
+                <span className="text-muted-foreground min-w-0 truncate font-mono text-xs tabular-nums">{due}</span>
+              )}
               {/* nested clickable clears without opening the popover — no in-popover button, no dead space */}
               <span
                 role="button"
