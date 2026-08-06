@@ -29,6 +29,14 @@ export type Position = {
   /** Price move from entry, signed by the side: positive is in your favour. ponytail: price move,
    *  not return on margin — leverage is not in the read scope, and a made-up ROE is worse than none. */
   pct: number | null
+  /** Unrealised price PnL in the quote currency: (mark − entry) × size, signed by the side.
+   *  ponytail: funding not included — the feed's unrealizedFunding is pennies and a second number
+   *  next to this one would only invite adding them up wrong. */
+  pnl: number | null
+  /** What the position is worth at the mark: size × mark, in the quote currency. */
+  value: number | null
+  /** When the exchange filled it — the feed's own ISO stamp, passed through untouched. */
+  openedAt: string | null
 }
 
 /** Join the positions to their marks. Positions come back with lowercase symbols and the ticker
@@ -39,17 +47,20 @@ export function merge(open: unknown[], tickers: unknown[]): Position[] {
     (tickers as { symbol?: unknown; markPrice?: unknown }[])
       .map((t) => [String(t.symbol ?? '').toUpperCase(), Number(t.markPrice)] as const),
   )
-  return (open as { symbol?: unknown; side?: unknown; price?: unknown; size?: unknown }[]).map((p) => {
+  return (open as { symbol?: unknown; side?: unknown; price?: unknown; size?: unknown; fillTime?: unknown }[]).map((p) => {
     const symbol = String(p.symbol ?? '').toUpperCase()
     const side = p.side === 'short' ? 'short' as const : 'long' as const
     const entry = Number(p.price)
+    const size = Number(p.size)
     const m = marks.get(symbol)
     const mark = m != null && isFinite(m) ? m : null
     // two decimals on the wire: 110/100 is "10.000000000000009" in floats, and no reader wants that
-    const pct = mark != null && entry > 0
-      ? Math.round((mark / entry - 1) * (side === 'long' ? 100 : -100) * 100) / 100
-      : null
-    return { symbol, side, size: Number(p.size), entry, mark, pct }
+    const round = (n: number) => Math.round(n * 100) / 100
+    const pct = mark != null && entry > 0 ? round((mark / entry - 1) * (side === 'long' ? 100 : -100)) : null
+    const pnl = mark != null && isFinite(size) ? round((mark - entry) * size * (side === 'long' ? 1 : -1)) : null
+    const value = mark != null && isFinite(size) ? round(size * mark) : null
+    const openedAt = typeof p.fillTime === 'string' ? p.fillTime : null
+    return { symbol, side, size, entry, mark, pct, pnl, value, openedAt }
   })
 }
 
