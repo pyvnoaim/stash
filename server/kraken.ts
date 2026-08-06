@@ -4,7 +4,7 @@
  * positions, one public call for the mark prices, joined here so the browser gets a handful of
  * clean rows and never sees a credential.
  *
- * The key lives in the environment (KRAKEN_FUTURES_KEY / KRAKEN_FUTURES_SECRET) and is created
+ * The key is each account's own, stored server-side by the /api/kraken route and created
  * read-only on Kraken's side too — this file could not place an order even if it wanted to.
  */
 import { createHash, createHmac } from 'node:crypto'
@@ -53,10 +53,12 @@ export function merge(open: unknown[], tickers: unknown[]): Position[] {
   })
 }
 
-let cached: { at: number; data: Position[] } | null = null
+// per key, since every account brings its own. ponytail: clear-all past 64 — the roster is ten people.
+const cached = new Map<string, { at: number; data: Position[] }>()
 
 export async function positions(key: string, secret: string): Promise<Position[]> {
-  if (cached && Date.now() - cached.at < TTL) return cached.data
+  const hit = cached.get(key)
+  if (hit && Date.now() - hit.at < TTL) return hit.data
   const path = '/api/v3/openpositions'
   const nonce = String(Date.now())
   const [open, tickers] = await Promise.all([
@@ -68,6 +70,7 @@ export async function positions(key: string, secret: string): Promise<Position[]
   ])
   if (open?.result !== 'success') throw new Error(String(open?.error ?? 'the exchange did not answer'))
   const data = merge(open.openPositions ?? [], tickers?.tickers ?? [])
-  cached = { at: Date.now(), data }
+  if (cached.size >= 64) cached.clear()
+  cached.set(key, { at: Date.now(), data })
   return data
 }

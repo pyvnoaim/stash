@@ -390,18 +390,21 @@ setup is dead), and when it hits the target.
 
 ### What Kraken says you hold
 
-The desk's one row of fact among the readings: give the server a **read-only** Kraken Futures key
-— `KRAKEN_FUTURES_KEY` and `KRAKEN_FUTURES_SECRET` in its environment, never in the browser — and
-a card above the verdicts lists what the exchange actually has open: symbol, side, size, entry
-against the current mark, and the move from entry signed by the side. The server signs the
-requests and joins in the mark prices, so no credential ever reaches a browser; the exchange is
-asked at most every thirty seconds however many tabs poll; and the card renders nothing at all
-when you are flat, when no key is set, or for anyone but the admin — the key in the environment
-belongs to whoever deployed the server, and their positions are not the roster's business. The
-percentage is price move, not return on margin: leverage is not in a read-only feed's scope, and
-a made-up ROE would be worse than none. Create the key read-only on Kraken's side too, with
-withdrawal set to no access — this code could not place an order even if it wanted to, and the
-key should not be able to either.
+The desk's one row of fact among the readings: give your account a **read-only** Kraken Futures
+key — **Settings → Markets → Kraken Futures key**, each account its own — and a card above the
+verdicts lists what the exchange actually has open: symbol, side, size, entry against the current
+mark, and the move from entry signed by the side. The key is typed in the browser but kept on the
+server, because it signs requests — the opposite arrangement from the Twelve Data key above it,
+which only reads public prices and therefore never leaves the machine. It never comes back out
+either: the server will only say whether one is set, and saving again replaces it. The server
+signs the requests and joins in the mark prices; the exchange is asked at most every thirty
+seconds per key however many tabs poll; and the card renders nothing at all when you are flat or
+have no key saved. The percentage is price move, not return on margin: leverage is not in a
+read-only feed's scope, and a made-up ROE would be worse than none. Create the key read-only on
+Kraken's side too, with withdrawal set to no access — this code could not place an order even if
+it wanted to, and the key should not be able to either. Stored as given rather than hashed, since
+signing needs it back — which is exactly why read-only matters: a copied database leaks a viewer,
+not a wallet.
 
 ### How they went
 
@@ -806,9 +809,9 @@ docker compose up -d --build                            # PROXY_NET names the pr
 docker compose exec stash node server/index.ts invite   # the first code; the rest come from the menu
 ```
 
-Three optional variables on the container: `KRAKEN_FUTURES_KEY` and `KRAKEN_FUTURES_SECRET` turn
-the desk's positions card on, and `STASH_TD_KEY` lets the hosted MCP route read the stocks —
-absent, each of those simply is not there, and everything else runs the same.
+One optional variable on the container: `STASH_TD_KEY` lets the hosted MCP route read the stocks
+— absent, they answer with what is missing, and everything else runs the same. The Kraken keys
+are not the container's: each account sets its own in Settings → Markets.
 
 Data sits in one named volume; backing it up is copying one SQLite file. The push keypair is a row
 in it, so restoring that file keeps every phone subscribed — a new keypair would quietly

@@ -343,8 +343,69 @@ function MarketsPanel() {
         />
       </Section>
 
+      <KrakenSection />
+
       <Dials />
     </>
+  )
+}
+
+/**
+ * The other key, going the other way: the Twelve Data key above stays on this machine because it
+ * only reads public prices; a Kraken key signs against an account, so it is typed here and kept
+ * on the server, each account its own. It never comes back — the server will only say whether
+ * one is set — so the fields always read empty, and saving again replaces what is there.
+ */
+function KrakenSection() {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const [have, setHave] = useState<boolean | undefined>()
+  const [key, setKey] = useState('')
+  const [secret, setSecret] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (user) void fetch('/api/kraken').then((r) => r.json()).then((j) => setHave(!!j.set)).catch(() => {})
+  }, [user])
+  // no account, no server to keep a key on — the section is simply not there
+  if (!user) return null
+
+  const save = async (k: string, s: string) => {
+    setBusy(true)
+    try {
+      const r = await fetch('/api/kraken', { method: 'POST', body: JSON.stringify({ key: k, secret: s }) })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error ?? r.status)
+      setHave(!!j.set)
+      setKey(''); setSecret('')
+      toast(j.set ? 'Kraken key saved' : 'Kraken key removed')
+    } catch (e) {
+      toast(String((e as Error).message))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section
+      title="Kraken Futures key"
+      hint="Read-only, from Kraken → Settings → API → Futures: General API read only, Withdrawal
+        no access. It signs requests, so it lives on the server with your account rather than on
+        this machine, and it is never shown back — the market page grows a card of what you
+        actually hold. Nothing here can trade."
+      action={have && (
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '')}>
+          Remove
+        </Button>
+      )}
+    >
+      {have && <p className="text-muted-foreground text-sm">A key is on this account. Saving replaces it.</p>}
+      <PasswordInput placeholder="API key" autoComplete="off" value={key}
+        onChange={(e) => setKey(e.target.value)} />
+      <PasswordInput placeholder="API secret" autoComplete="off" value={secret}
+        onChange={(e) => setSecret(e.target.value)} />
+      <Button size="sm" disabled={busy || !key.trim() || !secret.trim()} onClick={() => save(key.trim(), secret.trim())}>
+        Save
+      </Button>
+    </Section>
   )
 }
 

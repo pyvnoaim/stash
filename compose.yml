@@ -2,11 +2,9 @@ services:
   stash:
     build: .
     restart: unless-stopped
-    # Kraken Futures, read-only — set both in Portainer's stack environment to turn the
-    # positions panel on; absent, the route answers 501 and the panel never draws.
+    # Optional: lets the hosted MCP route read the stocks — everything else runs the same without it.
     environment:
-      KRAKEN_FUTURES_KEY: ${KRAKEN_FUTURES_KEY:-}
-      KRAKEN_FUTURES_SECRET: ${KRAKEN_FUTURES_SECRET:-}
+      STASH_TD_KEY: ${STASH_TD_KEY:-}
     # A volume that already existed before the container dropped to the node user is still owned by
     # root, and Docker never re-stamps one it did not just create. Once, on an existing deployment:
     #   docker compose run --rm --user root --entrypoint chown stash -R node:node /data
