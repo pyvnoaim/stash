@@ -26,7 +26,7 @@ const rows = merge(
 // a long that rose and a short that fell are both in your favour: both pct and pnl positive
 assert.deepEqual(rows[0], {
   symbol: 'PF_XBTUSD', side: 'long', size: 0.5, entry: 100, mark: 110, pct: 10,
-  pnl: 5, value: 55, openedAt: '2026-08-05T12:00:00.000Z', stop: 90, target: 130, funding: -0.13,
+  pnl: 5, value: 55, openedAt: '2026-08-05T12:00:00.000Z', stop: 90, target: 130, liq: null, funding: -0.13,
 })
 assert.equal(rows[1].pct, 5)
 assert.equal(rows[1].side, 'short')
@@ -38,7 +38,7 @@ assert.equal(rows[1].target, null)
 // no ticker for it: the row stays — entry and size are still true — and the mark is honestly null
 assert.deepEqual(rows[2], {
   symbol: 'PF_SOLUSD', side: 'long', size: 10, entry: 50, mark: null, pct: null,
-  pnl: null, value: null, openedAt: null, stop: null, target: null, funding: null,
+  pnl: null, value: null, openedAt: null, stop: null, target: null, liq: null, funding: null,
 })
 
 // equity sums every wallet in the account, whichever shape it reports in — and sub-penny funding

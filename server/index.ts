@@ -29,6 +29,7 @@ import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { fills, positions } from './kraken.ts'
+import { positions as bitgetPositions } from './bitget.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -358,6 +359,8 @@ export function start({
   try { db.exec('alter table users add column cal text') } catch { /* already there */ }
   // each account's own read-only exchange key, JSON {key, secret} — see the /api/kraken route
   try { db.exec('alter table users add column kraken text') } catch { /* already there */ }
+  // the same for Bitget, whose keys come in three parts: JSON {key, secret, passphrase}
+  try { db.exec('alter table users add column bitget text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -386,6 +389,8 @@ export function start({
     setCal: db.prepare('update users set cal = ? where id = ?'),
     kraken: db.prepare('select kraken from users where id = ?'),
     setKraken: db.prepare('update users set kraken = ? where id = ?'),
+    bitget: db.prepare('select bitget from users where id = ?'),
+    setBitget: db.prepare('update users set bitget = ? where id = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -945,19 +950,56 @@ export function start({
       return send(res, 405, { error: 'method not allowed' })
     }
 
-    /* The exchange's word on what the caller holds, off their own stored key, proxied so it never
-       reaches a browser. 501 with no key on the account — the market page reads any non-200 as
-       "no panel" and moves on. */
+    /* Bitget's key, held to the same rule as Kraken's above — it never travels back out. Three
+       parts instead of two, because that is how Bitget cuts one. */
+    if (path === '/api/bitget') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      if (req.method === 'GET') {
+        return send(res, 200, { set: !!(q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget })
+      }
+      if (req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const key = String(b?.key ?? '').trim(), secret = String(b?.secret ?? '').trim(), passphrase = String(b?.passphrase ?? '').trim()
+        // all three or none: two thirds of a credential is a config that fails at three in the morning
+        const given = [key, secret, passphrase].filter(Boolean).length
+        if (given !== 0 && given !== 3) return send(res, 400, { error: 'the key, its secret and its passphrase arrive together' })
+        q.setBitget.run(key ? JSON.stringify({ key, secret, passphrase }) : null, user.id)
+        log('bitget', user.name, via(req))
+        return send(res, 200, { set: !!key })
+      }
+      return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* The exchanges' word on what the caller holds, off their own stored keys, proxied so they
+       never reach a browser. 501 with no key on the account — the market page reads any non-200
+       as "no panel" and moves on. Both venues or neither: one feed failing while the other
+       answered would read as its positions having closed, and fileClosed in the app would write
+       trades down off a mark that was really an outage. */
     if ((path === '/api/positions' || path === '/api/fills') && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const row = q.kraken.get(user.id) as { kraken: string | null } | undefined
-      if (!row?.kraken) return send(res, 501, { error: 'no exchange key on this account' })
-      const { key, secret } = JSON.parse(row.kraken) as { key: string, secret: string }
+      const kr = (q.kraken.get(user.id) as { kraken: string | null } | undefined)?.kraken
+      const bg = (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget
+      if (!kr && !bg) return send(res, 501, { error: 'no exchange key on this account' })
       try {
-        return send(res, 200, path === '/api/fills'
-          ? { fills: await fills(key, secret) }
-          : await positions(key, secret))
+        if (path === '/api/fills') {
+          // Kraken only: bitget.ts prices a vanished position at its last mark instead (see there)
+          if (!kr) return send(res, 200, { fills: [] })
+          const { key, secret } = JSON.parse(kr) as { key: string, secret: string }
+          return send(res, 200, { fills: await fills(key, secret) })
+        }
+        const feeds = await Promise.all([
+          kr ? (({ key, secret }) => positions(key, secret))(JSON.parse(kr) as { key: string, secret: string }) : null,
+          bg ? (({ key, secret, passphrase }) => bitgetPositions(key, secret, passphrase))(JSON.parse(bg) as { key: string, secret: string, passphrase: string }) : null,
+        ])
+        return send(res, 200, {
+          positions: feeds.flatMap((f, i) => (f?.positions ?? []).map((p) => ({ ...p, venue: i === 0 ? 'kraken' : 'bitget' }))),
+          // one number when either venue says one, summed when both do — null only when neither
+          equity: feeds.every((f) => f?.equity == null) ? null
+            : Math.round(feeds.reduce((n, f) => n + (f?.equity ?? 0), 0) * 100) / 100,
+        })
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }

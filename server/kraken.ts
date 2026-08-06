@@ -42,6 +42,9 @@ export type Position = {
    *  of partial exits would need a list, and nobody here trades in ladders yet. */
   stop: number | null
   target: number | null
+  /** The exchange's own liquidation price, where the feed says one. Kraken's v3 rows don't;
+   *  Bitget's do — the chart prefers this over any estimate, since it is the number that fires. */
+  liq: number | null
   /** Funding accrued and not yet realized, straight off the feed with its own sign convention. */
   funding: number | null
 }
@@ -76,7 +79,7 @@ export function merge(open: unknown[], tickers: unknown[], orders: unknown[] = [
     const fund = Number(p.unrealizedFunding)
     return {
       symbol, side, size, entry, mark, pct, pnl, value, openedAt,
-      stop: trig('stp'), target: trig('take_profit'),
+      stop: trig('stp'), target: trig('take_profit'), liq: null,
       // sub-penny funding rounds to 0.00, and "funding −$0.00" is a line that says nothing
       funding: isFinite(fund) && round(fund) !== 0 ? round(fund) : null,
     }
