@@ -135,7 +135,7 @@ export function SettingsDialog({ open, onOpenChange }: {
               <h2 className="font-heading text-lg tracking-wide">{title}</h2>
               {here === 'account' && user && <AccountPanel name={user.name} avatar={user.avatar} />}
               {here === 'history' && <HistoryPanel onDone={() => onOpenChange(false)} />}
-              {here === 'links' && <LinksPanel />}
+              {here === 'links' && <><LinksPanel /><McpSection /></>}
               {here === 'people' && user && <PeoplePanel me={user.name} />}
               {here === 'data' && <DataPanel />}
               {here === 'markets' && <MarketsPanel />}
@@ -800,6 +800,36 @@ function CalendarSub() {
  *
  * The links themselves are cut in Edit project, beside the people. This list only ever removes.
  */
+/**
+ * The one-line install for the MCP server this same origin hosts at /mcp — Claude Code speaks to
+ * the stash with the tools the app itself uses. The password is deliberately a placeholder: this
+ * dialog does not know it and would not print it if it did.
+ */
+function McpSection() {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  if (!user) return null
+  const cmd = `claude mcp add --transport http stash ${location.origin}/mcp --header "Authorization: Basic ${user.name}:YOUR-PASSWORD"`
+  return (
+    <Section
+      title="Claude"
+      hint="Run this once in a terminal and Claude Code can read and write this stash — capture,
+        edit, projects, the markets desk. It signs in as you, shows up under Account → Sessions,
+        and stops working when your password changes. Put your password where the placeholder is."
+    >
+      <div className="flex items-center gap-2">
+        <Input readOnly value={cmd} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { void navigator.clipboard?.writeText(cmd); toast('Command copied') }}
+        >
+          <Copy /> Copy
+        </Button>
+      </div>
+    </Section>
+  )
+}
+
 function LinksPanel() {
   const s = useStash()
   const [list, setList] = useState<Link[] | null>(null)

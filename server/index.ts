@@ -29,6 +29,7 @@ import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { positions } from './kraken.ts'
+import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
 
 /** The whole document, not an upload endpoint. */
@@ -540,6 +541,9 @@ export function start({
 
   const base = resolve(root)
 
+  /** MCP contexts by user and password hash — built and bounded in the /mcp route. */
+  const mcps = new Map<string, ReturnType<typeof createStash>>()
+
   /** One-use signup code — the admin API and the CLI both come through here, tests too. */
   const invite = () => {
     // 64 bits: not a code anyone guesses, and it is one-use and expiring on top of that
@@ -929,6 +933,47 @@ export function start({
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
+    }
+
+    /* MCP over plain HTTP: the same dispatcher the stdio server runs, mounted where the app
+       already lives — `claude mcp add --transport http` and no clone, no node, no path. The
+       credentials ride the Authorization header because an MCP client keeps no cookie jar;
+       the context they build logs in through /api/login like any device, so it appears in the
+       sessions list and dies with a password change. Not CSRF-able: a browser cannot be made
+       to send an Authorization header cross-origin without a preflight this never answers. */
+    if (path === '/mcp') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'POST JSON-RPC here — install: claude mcp add --transport http stash <this url> --header "Authorization: Basic user:pass"' })
+      const raw = /^(?:basic|bearer)\s+(.+)$/i.exec(req.headers.authorization ?? '')?.[1] ?? ''
+      // base64 if it decodes to user:pass, plain user:pass otherwise — the header is typed by a
+      // person into one command, and demanding they base64 it first is a support question waiting
+      let creds = raw
+      try { const dec = Buffer.from(raw, 'base64').toString('utf8'); if (dec.includes(':')) creds = dec } catch { /* plain */ }
+      const at = creds.indexOf(':')
+      if (at < 1) return send(res, 401, { error: 'Authorization: Basic user:pass (plain or base64)' })
+      const mu = creds.slice(0, at).trim().toLowerCase(), mp = creds.slice(at + 1)
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+      /* One context per user-and-password, kept so the session survives between calls. Keyed by
+         the pass's hash, not the pass: this map lives as long as the process. A wrong password
+         still builds one — it fails on its first login, rate-limited there like any other guess.
+         ponytail: clear-all past 32, an LRU for a server whose whole roster is ten people. */
+      const ck = `${mu}:${hashToken(mp)}`
+      let mcp = mcps.get(ck)
+      if (!mcp) {
+        if (mcps.size >= 32) mcps.clear()
+        const a = server.address()
+        mcp = createStash({
+          url: `http://127.0.0.1:${typeof a === 'object' && a ? a.port : port}`,
+          user: mu, pass: mp, tdKey: process.env.STASH_TD_KEY ?? '',
+        })
+        mcps.set(ck, mcp)
+      }
+      // a batch is legal in older protocol revisions, three lines here, and answered in order
+      const out = Array.isArray(b)
+        ? (await Promise.all(b.map((m) => mcp(m)))).filter((x) => x != null)
+        : await mcp(b)
+      // a notification alone gets the 202 the spec asks for, with nothing to say
+      return out == null || (Array.isArray(out) && !out.length) ? send(res, 202, {}) : send(res, 200, out)
     }
 
     /* Your own account, gone: the sessions, the documents and every share go with it on the
