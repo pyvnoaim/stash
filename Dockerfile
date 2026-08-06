@@ -2,7 +2,8 @@
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# git so the build can name itself — vite stamps `git rev-parse --short HEAD` into Settings → About
+RUN apk add --no-cache git && npm ci
 COPY . .
 RUN npm run build
 
