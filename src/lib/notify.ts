@@ -138,7 +138,8 @@ export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev
  * an accountant. Per-asset live rates need a feed, not a dial.
  */
 export const fundingOf = (w: Pick<Watch, 'size' | 'lev' | 'entryAt'>, rate: number, at: number) =>
-  (isPosition(w) && w.entryAt && rate > 0 ? w.size! * w.lev! * (rate / 100) * ((at - w.entryAt) / 28_800_000) : 0)
+  // max(0): an entryAt ahead of this clock — skew, or a hand-edited doc — must not pay you funding
+  (isPosition(w) && w.entryAt && rate > 0 ? w.size! * w.lev! * (rate / 100) * (Math.max(0, at - w.entryAt) / 28_800_000) : 0)
 
 /**
  * Where the exchange takes the position away — entry ± entry/lev, the price at which the move
@@ -337,7 +338,10 @@ export function alerts(s: State, at = Date.now()): Alert[] {
          push half already knocks at this same minute (see push.ts), and the bell should agree. */
       const late = !!it.at && it.at <= clock
       out.push({
-        id: `task-${it.id}`,
+        /* the flip is in the id, the same way the watch levels carry theirs: dismissing the
+           morning's "due 10:15" is not dismissing the alarm — at 10:15 it comes back as new,
+           which is what the push half already does with its own at- key */
+        id: late ? `task-${it.id}-late` : `task-${it.id}`,
         title: it.text || 'Untitled',
         detail: it.at ? (late ? `was due ${it.at}` : `due ${it.at}`) : 'due today',
         tone: late ? 'warn' : 'due',

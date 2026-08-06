@@ -63,6 +63,9 @@ assert.equal(alerts(timed, clockAt('09:00'))[0].detail, 'due 10:15')
 assert.equal(alerts(timed, clockAt('09:00'))[0].tone, 'due')
 assert.equal(alerts(timed, clockAt('10:15'))[0].tone, 'warn') // the named minute itself is already the hour
 assert.equal(alerts(timed, clockAt('11:00'))[0].detail, 'was due 10:15')
+// the flip is a new alert: dismissing the morning row must not swallow the alarm itself
+assert.equal(alerts(timed, clockAt('11:00'))[0].id, 'task-d-late')
+assert.equal(alerts(timed, clockAt('09:00'))[0].id, 'task-d')
 
 // saved setups: a long entered at 100, stopped at 95, targeting 110
 const long: Watch = { id: 'w1', asset: 'BTCUSDT', label: 'Bitcoin', horizon: 'Trading', dir: 'long', entry: 100, stop: 95, target: 110, ts: 0 }
