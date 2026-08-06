@@ -62,6 +62,19 @@ export function fetchCandles(asset: Asset, interval: Interval, apiKey: string): 
  * or an id that isn't listed is simply absent from the result: a missing price fires no alert, and
  * that is the right way round for something that would otherwise nag you about a number it guessed.
  */
+/**
+ * Whether the US session could be printing new prices — Mon–Fri, 13:00–21:30 UTC, wide enough to
+ * cover daylight saving on both ends. Every Twelve Data call gates on this: the free tier is 800
+ * credits a day at one credit per symbol, and a poll against a shut market spends them asking for
+ * a number that cannot have changed. ponytail: no holiday calendar — a closed Thanksgiving burns a
+ * few polls, and a calendar is a dependency with a maintenance schedule.
+ */
+export const usMarketOpen = (now = Date.now()) => {
+  const d = new Date(now)
+  const h = d.getUTCHours() + d.getUTCMinutes() / 60
+  return d.getUTCDay() >= 1 && d.getUTCDay() <= 5 && h >= 13 && h <= 21.5
+}
+
 export async function fetchPrices(ids: string[], apiKey: string): Promise<Record<string, number>> {
   const assets = ids.map((id) => ASSETS.find((a) => a.id === id)).filter((a): a is Asset => !!a)
   const bn = assets.filter((a) => a.source === 'binance').map((a) => a.id)
@@ -77,7 +90,8 @@ export async function fetchPrices(ids: string[], apiKey: string): Promise<Record
         if (Array.isArray(rows)) for (const r of rows) put(r.symbol, r.price)
       }),
   )
-  if (td.length && apiKey) jobs.push(
+  // a shut market's last price is the closing price the caller already has — see usMarketOpen
+  if (td.length && apiKey && usMarketOpen()) jobs.push(
     fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(td.join(','))}&apikey=${encodeURIComponent(apiKey)}`)
       .then((r) => r.json())
       .then((j: Record<string, { price?: string }> & { price?: string }) => {
@@ -136,7 +150,9 @@ export function parseStockHours(json: unknown, ids: string[], now = Date.now()):
  * spends by lunchtime. A key it does not have, or a feed that fails, says nothing at all.
  */
 export function fetchStockHours(ids: string[], apiKey: string, now = Date.now()): Promise<Hour[]> {
-  if (!apiKey || !ids.length) return Promise.resolve([])
+  // off-hours the answer is a session that ended, which STOCK_STALE would discard anyway —
+  // skipping the call discards it before it costs ids.length credits
+  if (!apiKey || !ids.length || !usMarketOpen(now)) return Promise.resolve([])
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(ids.join(','))}`
     + `&interval=1h&outputsize=8&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`
   return fetch(url).then((r) => r.json()).then((j) => parseStockHours(j, ids, now)).catch(() => [])

@@ -17,7 +17,7 @@ import { addWatch, clearResults, closeWatch, removeWatch, setApiKey, setMarketAs
 import {
   ANCHOR, ASSETS, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, tally, tradePlan, trendFilter,
-  TREND_NETWORK,
+  TREND_NETWORK, usMarketOpen,
   type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Trend,
 } from '@/lib/market'
 
@@ -38,7 +38,9 @@ const NO_MARKS: { marks: SessionMark[]; overlaps: { x0: number; x1: number }[] }
 const VISIBLE = 60 // bars drawn by default; MAs/signals still use every fetched bar
 const MIN_BARS = 20, MAX_BARS = 400 // how far the wheel can zoom in and out
 const LIVE = 5000 // how often the forming candle is repriced
-const LIVE_SLOW = 15_000 // …and how often for stocks, whose free tier allows 8 calls a minute
+// …and how often for stocks: their feed's 800-credit day bought four hours at 15s a tick, and a
+// daily bar repriced on the minute is still a live chart
+const LIVE_SLOW = 60_000
 const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a minute, this asks 1
 const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
@@ -197,6 +199,9 @@ export default function MarketPage() {
          rows every fifteen seconds, forever, against a feed that allows eight calls a minute, and
          never converge because the answer keeps coming back the same. */
       if (Date.now() >= t + BAR_MS[interval] && Date.now() >= nextRoll.current) {
+        // a stock bar cannot roll while its market is shut — all night, this retry was buying
+        // the same closed session over and over at a credit a call
+        if (current.source === 'twelvedata' && !usMarketOpen()) return
         nextRoll.current = Date.now() + (current.source === 'twelvedata' ? ROLL_RETRY_SLOW : ROLL_RETRY)
         fetchCandles(current, interval, apiKey)
           .then((fresh) => { if (on && fresh.length) setCandles(fresh) })
