@@ -26,7 +26,10 @@ const MOVERS = ASSETS.filter((a) => a.source === 'binance')
    sweep above rather than in it: the key, which lives in this browser and never reaches the push
    server — so this half is in-tab only, and a closed phone still hears about crypto alone — and
    Twelve Data's free tier of 800 calls a day, which a poll on the minute would spend by lunch. */
-const STOCKS = ASSETS.filter((a) => a.source === 'twelvedata')
+// the Stocks group only, not everything Twelve Data serves: the sweep's batch call pays one
+// credit per symbol and eight stocks already spend the free tier's whole minute. The index
+// ETFs sit it out — an hour that moves SPY a whole percent is one the stocks will be shouting about anyway.
+const STOCKS = ASSETS.filter((a) => a.source === 'twelvedata' && a.group === 'Stocks')
 const POLL = 60_000 // how often saved setups are re-priced while the app is open
 /* Five minutes: 288 calls a day against the 800 allowed, leaving room for the setup poll beside
    it. An hourly bar barely moves inside five minutes, so nothing is missed for the arithmetic. */

@@ -38,6 +38,11 @@ export const ASSETS: Asset[] = [
   { id: 'AMZN', label: 'Amazon', source: 'twelvedata', group: 'Stocks', logo: logo('amazon') },
   { id: 'MSFT', label: 'Microsoft', source: 'twelvedata', group: 'Stocks', logo: logo('microsoft') },
   { id: 'GOOGL', label: 'Alphabet', source: 'twelvedata', group: 'Stocks', logo: logo('google') },
+  // the three big index ETFs — their own group, which also keeps them out of the movers sweep:
+  // that batch call pays one credit per symbol and the stocks already spend all 8 of a minute
+  { id: 'SPY', label: 'S&P 500', source: 'twelvedata', group: 'ETFs', logo: logo('spy') },
+  { id: 'QQQ', label: 'Nasdaq 100', source: 'twelvedata', group: 'ETFs', logo: logo('qqq') },
+  { id: 'DIA', label: 'Dow Jones', source: 'twelvedata', group: 'ETFs', logo: logo('dia') },
 ]
 
 export const INTERVALS = ['15m', '1h', '4h', '1d', '1w'] as const
