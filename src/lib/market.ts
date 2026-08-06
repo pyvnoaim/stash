@@ -649,6 +649,32 @@ export function divergence(c: Candle[], rsiSeries: (number | null)[], w = 30): '
   return null
 }
 
+/**
+ * The latest close through a confirmed swing level — the structure read the SMC crowd draws as
+ * CHoCH/BOS labels. A swing is a bar whose high (or low) stands past its `k` neighbours on both
+ * sides, so it only exists `k` bars after the fact; a close beyond the last unbroken swing is the
+ * break. `choch` is what makes it two signals in one: a break *against* the previous break's
+ * direction is a change of character — the earliest structural sign of a turn — while a break the
+ * same way is continuation (BOS), which is why a violent drop inside a downtrend prints nothing
+ * new: the character never changed.
+ */
+export function structureBreak(c: Candle[], k = 2): { dir: 'up' | 'down'; choch: boolean; level: number; ago: number } | null {
+  let hi: number | null = null, lo: number | null = null
+  let prev: 'up' | 'down' | null = null
+  let out: { dir: 'up' | 'down'; choch: boolean; level: number; ago: number } | null = null
+  for (let j = k * 2; j < c.length; j++) {
+    // the bar whose pivot status the k bars since have now confirmed
+    const p = j - k
+    const around = (f: (b: Candle) => boolean) => c.slice(p - k, p).every(f) && c.slice(p + 1, p + k + 1).every(f)
+    if (around((b) => b.h <= c[p].h)) hi = c[p].h
+    if (around((b) => b.l >= c[p].l)) lo = c[p].l
+    const cl = c[j].c
+    if (hi != null && cl > hi) { out = { dir: 'up', choch: prev === 'down', level: hi, ago: c.length - 1 - j }; prev = 'up'; hi = null }
+    else if (lo != null && cl < lo) { out = { dir: 'down', choch: prev === 'up', level: lo, ago: c.length - 1 - j }; prev = 'down'; lo = null }
+  }
+  return out
+}
+
 /* ---------- demo data for the guides ----------
    Each guide opens with a small chart of the thing it describes. The bars below are synthetic, but
    nothing about the picture is: the demo chart runs the same sma/rsi/macd/orb code the live one
@@ -809,6 +835,17 @@ export const DEMOS: Record<GuideKey, Demo> = {
   },
   // a climb, a dip that holds above the slow average, then the climb resumes — price on the up side
   htf: { candles: walk([...wave(10, 100, 1.2, 2), ...wave(6, 112, -0.9, 1.6), ...wave(14, 107, 1.1, 2.2)]), ma: [4, 12] },
+  // lower lows, a bounce that sets a swing high, one more low — then a close back above that swing:
+  // the downtrend's character changes. Explicit bars, because the swings are the whole point.
+  structure: {
+    candles: ohlc([
+      [112, 113, 110.5, 111], [111, 112, 109, 109.5], [109.5, 110.5, 107.5, 108], [108, 109, 105.5, 106],
+      [106, 107, 104, 104.5], [104.5, 106.5, 104, 106], [106, 107.5, 105, 107], [107, 108.5, 106, 106.5],
+      [106.5, 107, 103.5, 104], [104, 105, 102, 102.5], [102.5, 103.5, 101, 101.5], [101.5, 104.5, 101, 104],
+      [104, 107, 103.5, 106.5], [106.5, 109.5, 106, 109],
+    ]),
+    mark: [7, 13], // the swing high, and the close back through it
+  },
 }
 
 /** The same fixture upside down, mirrored through the middle of its own range: a rally becomes a
@@ -823,7 +860,7 @@ export const mirrorDemo = (d: Demo): Demo => {
 /** Which concept a signal belongs to — the key its guide is written against. */
 export type GuideKey =
   | 'ma-cross' | 'trend' | 'rsi' | 'sr' | 'divergence' | 'macd'
-  | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap'
+  | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap' | 'structure'
 
 /** How many bars a moving-average cross keeps its vote. See the note where it is used. */
 export const FRESH_CROSS = 20
@@ -868,6 +905,8 @@ export const GUIDES: Record<GuideKey, string> = {
   orb: 'The opening range is the high and low of the first hour of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the New York open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. Gold and crypto never close, so the range here follows whichever of Tokyo, Frankfurt and New York opened last — at nine in the morning in Berlin the New York range is sixteen hours old and the levels people are trading around are Frankfurt\'s. Only the New York one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
   vwap:
     'The volume-weighted average price since the session opened — every trade since the bell, each counted for the size it was. It is the number institutional desks are measured against (fill above it on a buy and you did worse than the day), which is a large part of why price keeps returning to it: size that has to be worked leans against the line rather than chasing away from it. Above it the buyers who showed up today are in front, below it the sellers are. Two things separate it from the moving averages here — it starts fresh at the open instead of dragging the last fifty bars behind it, and it weights the busy hour over the dead one. It is also why it decays: by the end of a long session it has averaged so much that it stops moving, and overnight it means nothing at all, which is why this one goes quiet once its session is more than eight hours behind. Gold and crypto have no closing bell, so the session here is whichever of Tokyo, Frankfurt and New York opened last.',
+  structure:
+    'Market structure is the sequence of swing highs and swing lows — a swing being a bar whose high or low stands past its neighbours on both sides, which means it only exists in hindsight, a couple of bars after it happened. An uptrend is higher highs and higher lows; when price closes through the last swing low, that sequence has broken. A break against the standing direction is called a change of character (CHoCH) — the earliest structural sign of a turn. A break that extends the standing direction is a break of structure (BOS) — plain continuation, and deliberately quieter news. Two honest caveats: swings confirm bars after the fact, so this label always arrives late by construction; and a move in the trend\'s own direction, however violent, prints no character change at all — a huge drop inside a downtrend is the trend working, not the trend turning.',
   htf: 'The trend on the timeframe one step above the one you are looking at. A cross on the hourly means something different depending on whether the daily is climbing or falling, and trades taken against the bigger timeframe need to be right about timing as well as direction. It is the oldest filter there is and the one most often skipped.',
 }
 
@@ -1003,6 +1042,22 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      and its two minutes of volume against twenty full bars reads as a surge that never comes. */
   const closed = c.slice(0, -1)
   out.push(...candlePatterns(closed))
+
+  /* Structure: the latest close through a confirmed swing. A character change (CHoCH) is a turn cue
+     and votes while fresh, on the same clock as the MA cross; a plain continuation break (BOS) is
+     the trend already counted by the cards above, so it stays flat — information, not a second vote
+     for the side that is winning. */
+  const sb = structureBreak(closed)
+  if (sb) {
+    const up = sb.dir === 'up', stale = sb.ago > FRESH_CROSS
+    const aged = stale ? ' — long enough ago that it is background, not news' : ''
+    out.push({
+      label: sb.choch ? `Character change ${up ? 'up' : 'down'}` : `Structure break ${up ? 'up' : 'down'}`,
+      tone: sb.choch && !stale ? (up ? 'bull' : 'bear') : 'flat',
+      kind: 'structure' as const,
+      detail: `price closed ${up ? 'above the last swing high' : 'below the last swing low'} at ${fmtPrice(sb.level, price)} ${sb.ago} bar${sb.ago === 1 ? '' : 's'} ago — ${sb.choch ? `the first structural crack in the ${up ? 'down' : 'up'}trend (CHoCH)` : `the ${up ? 'up' : 'down'}trend extending itself (BOS)`}${aged}`,
+    })
+  }
 
   // The three below describe conditions rather than direction, so they carry a flat tone and stay
   // out of the bull/bear tally — a volatility reading isn't a vote for either side.
