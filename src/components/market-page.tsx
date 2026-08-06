@@ -976,10 +976,10 @@ type ExchangePosition = {
 }
 
 /**
- * What Kraken says is actually open on the account — the read-only feed, proxied through the
- * server so the key stays there. Renders nothing at all unless the server has a key, the caller
- * is the admin, and the exchange reports an open position: for everyone else this component is
- * one failed fetch and no pixels.
+ * What Kraken says is actually open — the read-only feed off the caller's own key (Settings →
+ * Markets), proxied through the server so the key stays there. Renders nothing at all unless
+ * this account has a key saved and the exchange reports an open position: for everyone else
+ * this component is one failed fetch and no pixels.
  *
  * ponytail: the pct is price move from entry, not return on margin — leverage is not in the
  * feed's read scope. Anyone leveraged knows to multiply.

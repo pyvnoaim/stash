@@ -356,6 +356,8 @@ export function start({
   try { db.exec('alter table users add column feed text') } catch { /* already there */ }
   // and the calendar coming the other way: the one .ics URL this account subscribes to
   try { db.exec('alter table users add column cal text') } catch { /* already there */ }
+  // each account's own read-only exchange key, JSON {key, secret} — see the /api/kraken route
+  try { db.exec('alter table users add column kraken text') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -382,6 +384,8 @@ export function start({
        by asking for another, which is what makes the old string stop working. */
     calOf: db.prepare('select cal from users where id = ?'),
     setCal: db.prepare('update users set cal = ? where id = ?'),
+    kraken: db.prepare('select kraken from users where id = ?'),
+    setKraken: db.prepare('update users set kraken = ? where id = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -918,16 +922,38 @@ export function start({
       return send(res, 200, { alerts: push.alerts(user.id, tz) })
     }
 
-    /* The exchange's word on what you hold, proxied so the signing key never reaches a browser.
-       Admin only: the key in the environment belongs to whoever deployed this, and their open
-       positions are not the roster's business. 501 with no key configured — the market page reads
-       any non-200 as "no panel" and moves on. */
+    /* Each account's own exchange key, kept here because it signs requests — a browser holding it
+       would be a browser that can be read. It never travels back out: GET answers only whether one
+       is set. Stored as given rather than hashed, since signing needs it back — which is exactly
+       why the key is made read-only at the exchange: a copied database leaks a viewer, not a wallet. */
+    if (path === '/api/kraken') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      if (req.method === 'GET') {
+        return send(res, 200, { set: !!(q.kraken.get(user.id) as { kraken: string | null } | undefined)?.kraken })
+      }
+      if (req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const key = String(b?.key ?? '').trim(), secret = String(b?.secret ?? '').trim()
+        // both or neither: half a credential is a config that fails at three in the morning
+        if (!!key !== !!secret) return send(res, 400, { error: 'a key and its secret arrive together' })
+        q.setKraken.run(key ? JSON.stringify({ key, secret }) : null, user.id)
+        log('kraken', user.name, via(req))
+        return send(res, 200, { set: !!key })
+      }
+      return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* The exchange's word on what the caller holds, off their own stored key, proxied so it never
+       reaches a browser. 501 with no key on the account — the market page reads any non-200 as
+       "no panel" and moves on. */
     if (path === '/api/positions' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (!user.admin) return send(res, 403, { error: 'forbidden' })
-      const key = process.env.KRAKEN_FUTURES_KEY, secret = process.env.KRAKEN_FUTURES_SECRET
-      if (!key || !secret) return send(res, 501, { error: 'no exchange key configured' })
+      const row = q.kraken.get(user.id) as { kraken: string | null } | undefined
+      if (!row?.kraken) return send(res, 501, { error: 'no exchange key on this account' })
+      const { key, secret } = JSON.parse(row.kraken) as { key: string, secret: string }
       try {
         return send(res, 200, { positions: await positions(key, secret) })
       } catch (e) {

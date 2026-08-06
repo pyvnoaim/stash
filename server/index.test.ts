@@ -597,6 +597,24 @@ r = await post('/api/signup', { user: 'ines', pass: 'longenough', invite: ` ${me
 assert.equal(r.status, 200)
 assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', invite: messy })).status, 403)
 
+/* ---------- the exchange key: set, replaced, never shown, gone ---------- */
+
+const kInv = server.invite()
+const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
+// no session, no key business at all
+assert.equal((await get('/api/kraken')).status, 401)
+// no key on the account yet: the status says so, and positions has nothing to sign with
+assert.deepEqual(await (await get('/api/kraken', kUser)).json(), { set: false })
+assert.equal((await get('/api/positions', kUser)).status, 501)
+// half a credential is refused rather than stored
+assert.equal((await post('/api/kraken', { key: 'only-half' }, kUser)).status, 400)
+// a whole one lands, and the answer never carries the secret back
+assert.deepEqual(await (await post('/api/kraken', { key: 'k', secret: 's' }, kUser)).json(), { set: true })
+assert.deepEqual(await (await get('/api/kraken', kUser)).json(), { set: true })
+// empty both takes it off again
+assert.deepEqual(await (await post('/api/kraken', {}, kUser)).json(), { set: false })
+assert.equal((await get('/api/positions', kUser)).status, 501)
+
 /* a run of wrong codes from one address cools off — the invite space is 64 bits wide, but nothing
    should be free to work through it. Last, because the cool-off outlives the test that trips it. */
 for (let i = 0; i < 11; i++) {
