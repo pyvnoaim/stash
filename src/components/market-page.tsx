@@ -973,18 +973,19 @@ function closeAt(s: (typeof SESSIONS)[number], at: number) {
 type ExchangePosition = {
   symbol: string; side: 'long' | 'short'; size: number; entry: number
   mark: number | null; pct: number | null
+  pnl: number | null; value: number | null; openedAt: string | null
 }
 
 /**
  * What Kraken says is actually open — the read-only feed off the caller's own key (Settings →
  * Markets), proxied through the server so the key stays there. Renders nothing at all unless
  * this account has a key saved and the exchange reports an open position: for everyone else
- * this component is one failed fetch and no pixels.
+ * this component is one failed fetch and no pixels. The Overview shows the same card.
  *
  * ponytail: the pct is price move from entry, not return on margin — leverage is not in the
  * feed's read scope. Anyone leveraged knows to multiply.
  */
-function KrakenPositions() {
+export function KrakenPositions() {
   const [rows, setRows] = useState<ExchangePosition[]>([])
   useEffect(() => {
     let dead = false
@@ -1003,17 +1004,31 @@ function KrakenPositions() {
       <CardContent className="grid gap-1.5 px-3 text-sm">
         <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open on Kraken</p>
         {rows.map((p) => (
-          <div key={p.symbol} className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
-            <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
-            <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
-            <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
-            {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
-            {p.pct != null && (
-              <span className={cn('ml-auto font-mono tabular-nums',
-                p.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {p.pct >= 0 ? '+' : ''}{p.pct.toFixed(2)}%
-              </span>
+          <div key={p.symbol} className="grid gap-0.5">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
+              <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
+              <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
+              <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
+              {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
+              {p.pct != null && (
+                <span className={cn('ml-auto font-mono tabular-nums',
+                  p.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {/* dollars beside the percent: same sign by construction, so one colour carries both */}
+                  {p.pnl != null && `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · `}
+                  {p.pct >= 0 ? '+' : ''}{p.pct.toFixed(2)}%
+                </span>
+              )}
+            </div>
+            {(p.value != null || p.openedAt != null) && (
+              <p className="text-muted-foreground text-xs">
+                {[
+                  p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                  p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
+                    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                  })}`,
+                ].filter(Boolean).join(' · ')}
+              </p>
             )}
           </div>
         ))}
