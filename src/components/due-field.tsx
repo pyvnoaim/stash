@@ -85,7 +85,9 @@ export function DueField({ id, due, at, placeholder, onPick, onTime }: {
   if (!onTime) return picker
 
   return (
-    <div className="flex gap-2">
+    // min-w-0 so the row can shrink below the date button's content width — without it the grid
+    // track holds at min-content and the clock sits past the panel's edge, reachable only by scroll
+    <div className="flex min-w-0 gap-2">
       {picker}
       {/* the browser's own clock: it knows the 24h/AM-PM the machine is set to, and on a phone it
           is the wheel everyone already uses. Disabled without a date, since an hour on no day is
