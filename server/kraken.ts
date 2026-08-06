@@ -37,16 +37,22 @@ export type Position = {
   value: number | null
   /** When the exchange filled it — the feed's own ISO stamp, passed through untouched. */
   openedAt: string | null
+  /** The stop and take-profit resting against it, read off the open orders: the trigger price of
+   *  the symbol's `stp` / `take_profit` order. ponytail: first order of each type wins — a ladder
+   *  of partial exits would need a list, and nobody here trades in ladders yet. */
+  stop: number | null
+  target: number | null
 }
 
 /** Join the positions to their marks. Positions come back with lowercase symbols and the ticker
  *  list with uppercase ones, so the join is on the uppercased form. A symbol the ticker list does
  *  not know keeps its row — entry and size are still true — with the mark honestly missing. */
-export function merge(open: unknown[], tickers: unknown[]): Position[] {
+export function merge(open: unknown[], tickers: unknown[], orders: unknown[] = []): Position[] {
   const marks = new Map(
     (tickers as { symbol?: unknown; markPrice?: unknown }[])
       .map((t) => [String(t.symbol ?? '').toUpperCase(), Number(t.markPrice)] as const),
   )
+  const trigs = orders as { symbol?: unknown; orderType?: unknown; stopPrice?: unknown }[]
   return (open as { symbol?: unknown; side?: unknown; price?: unknown; size?: unknown; fillTime?: unknown }[]).map((p) => {
     const symbol = String(p.symbol ?? '').toUpperCase()
     const side = p.side === 'short' ? 'short' as const : 'long' as const
@@ -60,7 +66,12 @@ export function merge(open: unknown[], tickers: unknown[]): Position[] {
     const pnl = mark != null && isFinite(size) ? round((mark - entry) * size * (side === 'long' ? 1 : -1)) : null
     const value = mark != null && isFinite(size) ? round(size * mark) : null
     const openedAt = typeof p.fillTime === 'string' ? p.fillTime : null
-    return { symbol, side, size, entry, mark, pct, pnl, value, openedAt }
+    // the trigger price of this symbol's resting stop / take-profit, if one is out there
+    const trig = (type: string) => {
+      const at = Number(trigs.find((o) => String(o.symbol ?? '').toUpperCase() === symbol && o.orderType === type)?.stopPrice)
+      return isFinite(at) && at > 0 ? at : null
+    }
+    return { symbol, side, size, entry, mark, pct, pnl, value, openedAt, stop: trig('stp'), target: trig('take_profit') }
   })
 }
 
@@ -70,17 +81,21 @@ const cached = new Map<string, { at: number; data: Position[] }>()
 export async function positions(key: string, secret: string): Promise<Position[]> {
   const hit = cached.get(key)
   if (hit && Date.now() - hit.at < TTL) return hit.data
-  const path = '/api/v3/openpositions'
-  const nonce = String(Date.now())
-  const [open, tickers] = await Promise.all([
+  // distinct nonces: two authed calls fire together, and a shared stamp is a rejected pair
+  const authed = (path: string, nonce: string) =>
     fetch(BASE + path, {
       headers: { APIKey: key, Nonce: nonce, Authent: authent(secret, path, nonce) },
       signal: AbortSignal.timeout(10_000),
-    }).then((r) => r.json()),
+    }).then((r) => r.json())
+  const now = Date.now()
+  const [open, orders, tickers] = await Promise.all([
+    authed('/api/v3/openpositions', String(now)),
+    // the stop and target are garnish on the row: if this call dies the positions still show
+    authed('/api/v3/openorders', String(now + 1)).catch(() => null),
     fetch(`${BASE}/api/v3/tickers`, { signal: AbortSignal.timeout(10_000) }).then((r) => r.json()),
   ])
   if (open?.result !== 'success') throw new Error(String(open?.error ?? 'the exchange did not answer'))
-  const data = merge(open.openPositions ?? [], tickers?.tickers ?? [])
+  const data = merge(open.openPositions ?? [], tickers?.tickers ?? [], orders?.openOrders ?? [])
   if (cached.size >= 64) cached.clear()
   cached.set(key, { at: Date.now(), data })
   return data

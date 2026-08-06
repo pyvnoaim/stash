@@ -974,6 +974,7 @@ type ExchangePosition = {
   symbol: string; side: 'long' | 'short'; size: number; entry: number
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
+  stop: number | null; target: number | null
 }
 
 /**
@@ -1020,10 +1021,12 @@ export function KrakenPositions() {
                 </span>
               )}
             </div>
-            {(p.value != null || p.openedAt != null) && (
+            {(p.value != null || p.stop != null || p.target != null || p.openedAt != null) && (
               <p className="text-muted-foreground text-xs">
                 {[
                   p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                  p.stop != null && `stop ${fmtPrice(p.stop)}`,
+                  p.target != null && `target ${fmtPrice(p.target)}`,
                   p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
                     day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
                   })}`,
