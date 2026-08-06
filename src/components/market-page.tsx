@@ -8,7 +8,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
-import { euro, isPosition, liqOf, moneyOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { euro, fundingOf, isPosition, liqOf, moneyOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
@@ -1204,7 +1204,7 @@ function Position({ asset, label, horizon, price, plan, dir }: {
   plan: { entry: number; stop: number; target: number } | null
   dir: 'long' | 'short' | 'flat'
 }) {
-  const { watches } = useStash()
+  const { watches, dials } = useStash()
   const held = watches.find((w) => w.asset === asset && isPosition(w))
   const [open, setOpen] = useState(false)
   const [f, setF] = useState({ side: 'long', entry: '', stop: '', target: '', size: '', lev: '' })
@@ -1250,7 +1250,10 @@ function Position({ asset, label, horizon, price, plan, dir }: {
 
   if (held) {
     const r = price != null ? rOf(held, price) : null
-    const money = r != null ? moneyOf(r, stakeOf(held)) : null
+    // net of funding, the same subtraction the bell's read-out makes — two numbers for one trade
+    // would be a bug report waiting to be filed
+    const gross = r != null ? moneyOf(r, stakeOf(held)) : null
+    const money = gross === null ? null : gross - fundingOf(held, dials.funding, Date.now())
     const long = held.dir === 'long'
     return (
       <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm">
@@ -1278,8 +1281,8 @@ function Position({ asset, label, horizon, price, plan, dir }: {
             Not in it any more
           </Button>
           <p className="text-muted-foreground w-full text-xs">
-            {euro(stakeOf(held))} at risk between here and the stop. No fees and no funding are
-            counted — on a perp held for days the funding is real money this does not know about.
+            {euro(stakeOf(held))} at risk between here and the stop. Funding comes off at the flat
+            rate set in Settings → Markets; fees and the venue's real rate it does not know.
           </p>
         </CardContent>
     )
@@ -1323,15 +1326,19 @@ function Position({ asset, label, horizon, price, plan, dir }: {
 }
 
 function Record() {
-  const { results, stake } = useStash()
+  const { results, stake, dials } = useStash()
   if (!results.length) return null
 
   const total = results.reduce((n, r) => n + r.r, 0)
   const won = results.filter((r) => r.level === 'target').length
   /* Row by row rather than off the total, because the rows are no longer all the same kind of
      money: one you were in prices itself off its own size and leverage, one that was only ever
-     watched off the stake in Settings. Null only when not a single row has a figure at all. */
-  const cashOf = (r: typeof results[number]) => moneyOf(r.r, stakeOf(r, stake))
+     watched off the stake in Settings. Null only when not a single row has a figure at all.
+     Net of funding to the close, the same subtraction the bell's result alert makes. */
+  const cashOf = (r: typeof results[number]) => {
+    const gross = moneyOf(r.r, stakeOf(r, stake))
+    return gross === null ? null : gross - fundingOf(r, dials.funding, r.closedAt)
+  }
   const money = results.some((r) => cashOf(r) !== null)
     ? results.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
   const real = results.some(isPosition)
