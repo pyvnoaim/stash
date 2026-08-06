@@ -19,6 +19,9 @@ import {
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
 import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
@@ -343,65 +346,62 @@ function MarketsPanel() {
         />
       </Section>
 
-      <ExchangeSection
-        route="/api/kraken"
-        title="Kraken Futures key"
-        hint="Read-only, from Kraken → Settings → API → Futures: General API read only, Withdrawal
-          no access. It signs requests, so it lives on the server with your account rather than on
-          this machine, and it is never shown back — the market page grows a card of what you
-          actually hold. Nothing here can trade."
-      />
-
-      <ExchangeSection
-        route="/api/bitget"
-        title="Bitget Futures key"
-        passphrase
-        hint="Read-only, from Bitget → API Management: Read permission only. Bitget cuts a key in
-          three parts — key, secret and the passphrase you chose making it — and all three live on
-          the server, never shown back. Its positions join the same card, wearing the exchange's
-          own liquidation price. Nothing here can trade."
-      />
+      <ExchangeSection />
 
       <Dials />
     </>
   )
 }
 
+/** The venues an account key can come from, and how each cuts one. */
+const VENUES = [
+  { id: 'kraken', name: 'Kraken', route: '/api/kraken', passphrase: false,
+    hint: 'Read-only, from Kraken → Settings → API → Futures: General API read only, Withdrawal no access.' },
+  { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
+    hint: 'Read-only, from Bitget → API Management: Read permission only. Bitget cuts a key in three parts — the passphrase is the one you chose making it.' },
+  { id: 'mexc', name: 'MEXC', route: '/api/mexc', passphrase: false,
+    hint: 'Read-only, from MEXC → API Management: futures Read permission only.' },
+] as const
+
 /**
  * The other keys, going the other way: the Twelve Data key above stays on this machine because it
  * only reads public prices; an exchange key signs against an account, so it is typed here and kept
  * on the server, each account its own. It never comes back — the server will only say whether
  * one is set — so the fields always read empty, and saving again replaces what is there.
+ *
+ * One venue at a time, picked at the top: three stacked key forms was a wall of fields, and
+ * nobody sets more than one in a sitting. A ✓ in the picker marks the venues already set.
  */
-function ExchangeSection({ route, title, hint, passphrase = false }: {
-  route: string
-  title: string
-  hint: string
-  /** Bitget cuts its credential in three; Kraken in two. */
-  passphrase?: boolean
-}) {
+function ExchangeSection() {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
-  const [have, setHave] = useState<boolean | undefined>()
+  const [venue, setVenue] = useState<(typeof VENUES)[number]['id']>('kraken')
+  const [have, setHave] = useState<Record<string, boolean>>({})
   const [key, setKey] = useState('')
   const [secret, setSecret] = useState('')
   const [pass, setPass] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (user) void fetch(route).then((r) => r.json()).then((j) => setHave(!!j.set)).catch(() => {})
-  }, [user, route])
+    if (user) {
+      for (const v of VENUES) {
+        void fetch(v.route).then((r) => r.json()).then((j) => setHave((h) => ({ ...h, [v.id]: !!j.set }))).catch(() => {})
+      }
+    }
+  }, [user])
   // no account, no server to keep a key on — the section is simply not there
   if (!user) return null
 
-  const name = title.split(' ')[0]
+  const v = VENUES.find((x) => x.id === venue)!
+  const pick = (id: typeof venue) => { setVenue(id); setKey(''); setSecret(''); setPass('') }
+
   const save = async (k: string, s: string, p: string) => {
     setBusy(true)
     try {
-      const r = await fetch(route, { method: 'POST', body: JSON.stringify({ key: k, secret: s, ...(passphrase && { passphrase: p }) }) })
+      const r = await fetch(v.route, { method: 'POST', body: JSON.stringify({ key: k, secret: s, ...(v.passphrase && { passphrase: p }) }) })
       const j = await r.json()
       if (!r.ok) throw new Error(j.error ?? r.status)
-      setHave(!!j.set)
+      setHave((h) => ({ ...h, [v.id]: !!j.set }))
       setKey(''); setSecret(''); setPass('')
-      toast(j.set ? `${name} key saved` : `${name} key removed`)
+      toast(j.set ? `${v.name} key saved` : `${v.name} key removed`)
     } catch (e) {
       toast(String((e as Error).message))
     } finally {
@@ -409,23 +409,35 @@ function ExchangeSection({ route, title, hint, passphrase = false }: {
     }
   }
 
-  const whole = !!key.trim() && !!secret.trim() && (!passphrase || !!pass.trim())
+  const whole = !!key.trim() && !!secret.trim() && (!v.passphrase || !!pass.trim())
   return (
     <Section
-      title={title}
-      hint={hint}
-      action={have && (
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '', '')}>
-          Remove
-        </Button>
-      )}
+      title="Exchange key"
+      hint={`${v.hint} It signs requests, so it lives on the server with your account rather than
+        on this machine, and it is never shown back — the market page grows a card of what you
+        actually hold, across every venue with a key here. Nothing here can trade.`}
+      action={
+        <Select value={venue} onValueChange={(id) => pick(id as typeof venue)}>
+          <SelectTrigger size="sm" aria-label="Exchange"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {VENUES.map((x) => (
+              <SelectItem key={x.id} value={x.id}>{x.name}{have[x.id] ? ' ✓' : ''}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      }
     >
-      {have && <p className="text-muted-foreground text-sm">A key is on this account. Saving replaces it.</p>}
+      {have[v.id] && (
+        <div className="flex items-center justify-between">
+          <p className="text-muted-foreground text-sm">A {v.name} key is on this account. Saving replaces it.</p>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '', '')}>Remove</Button>
+        </div>
+      )}
       <PasswordInput placeholder="API key" autoComplete="off" value={key}
         onChange={(e) => setKey(e.target.value)} />
       <PasswordInput placeholder="API secret" autoComplete="off" value={secret}
         onChange={(e) => setSecret(e.target.value)} />
-      {passphrase && (
+      {v.passphrase && (
         <PasswordInput placeholder="Passphrase" autoComplete="off" value={pass}
           onChange={(e) => setPass(e.target.value)} />
       )}
