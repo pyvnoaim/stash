@@ -6,7 +6,7 @@ import { cn, MONEY_IN } from '@/lib/utils'
 import { addDays, dayLabel, today } from '@/lib/parse'
 import { inProject, MARKET, monthlyCost, setMarketAsset, SUBS, tagCounts, useStash, type Item } from '@/lib/store'
 import { ASSETS, fmtPrice } from '@/lib/market'
-import { KrakenPositions } from '@/components/market-page'
+import { ExchangePositions } from '@/components/market-page'
 import { treemap } from '@/lib/treemap'
 
 const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
@@ -498,7 +498,7 @@ export default function Overview({ onTag, onNavigate }: {
       )}
 
       {/* the same card the desk shows — renders nothing unless a key is saved and something is open */}
-      <KrakenPositions />
+      <ExchangePositions />
 
       <Panel title="Markets" sub="Biggest 24-hour moves · tap one through to the desk">
         {/* the desk opens on whatever was tapped, rather than on Bitcoin and a hunt through the picker */}

@@ -48,6 +48,13 @@ assert.equal(at({ watches: [{ ...long.watches[0], stop: 70 }] }, { BTCUSDT: 69 }
 // a short mirrors: at 5× the short from 100 dies at 120, before its 125 stop
 assert.equal(at({ watches: [{ ...short.watches[0], stop: 125, size: 50, lev: 5 }] }, { BTCUSDT: 121 })[0].key, 'watch-w2-liq')
 
+/* ---------- the bare alarms ---------- */
+
+const alarmed = { alarms: [{ id: 'al1', asset: 'BTCUSDT', label: 'Bitcoin', price: 100, above: true }] }
+assert.deepEqual(at(alarmed, { BTCUSDT: 99 }), [])   // still under the level: not a word
+assert.equal(at(alarmed, { BTCUSDT: 101 })[0].key, 'alarm-al1')
+assert.ok(at(alarmed, { BTCUSDT: 101 })[0].title.includes('Bitcoin crossed'))
+
 /* ---------- the morning digest ---------- */
 
 const items = {
