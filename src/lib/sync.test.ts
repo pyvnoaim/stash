@@ -28,7 +28,7 @@ globalThis.fetch = (async (path: any, init?: RequestInit) => {
   return r
 }) as typeof fetch
 
-const { addItem, getState, uid } = await import('./store.ts')
+const { addItem, getState, setApiKey, uid } = await import('./store.ts')
 const { getSync, login, logout, signup, startSync, syncNow } = await import('./sync.ts')
 startSync()  // wires onPersist, asks /api/me (nobody yet — 'out')
 await new Promise((r) => setTimeout(r, 50))   // let that first answer land before asserting on it
@@ -46,20 +46,22 @@ assert.equal(getSync().status, 'ok')
 
 // an edit lands on the server via push
 add('second')
+setApiKey('td-key')
 await flush()
 await syncNow()
 const onServer = async () => (await (await fetch('/state')).json()).state
 assert.deepEqual((await onServer()).items.map((i: any) => i.text), ['second', 'first'])
 
-// ...and the key never travels
-assert.equal((await onServer()).apiKey, '')
+// ...and the stocks key travels with it — typed once, every device reads the stocks
+assert.equal((await onServer()).apiKey, 'td-key')
 
-// a second device: empty local, pulls what the first pushed
+// a second device: empty local, pulls what the first pushed — the key included
 disk.clear()
 cookie = ''
 assert.equal(await login('leon', 'longenough'), null)
 assert.equal(getSync().status, 'ok')
 assert.deepEqual(getState().items.map((i) => i.text), ['second', 'first'])
+assert.equal(getState().apiKey, 'td-key')
 
 // both edit while apart: this device pushes into a 409 and wins; the other's write is a snapshot
 await real(`${url}/state`, {

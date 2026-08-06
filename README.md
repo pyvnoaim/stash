@@ -632,8 +632,9 @@ while the server is unreachable opens your own data rather than the sign-in scre
 
 One rule decides every conflict: the device that edited last wins, and the fifty versions the
 server keeps per user are the undo for the day that rule picks wrong. There is no merge engine —
-recovery over prevention, at a fraction of the code. The Twelve Data key is stripped from every
-push, the same promise the backup export makes: it never leaves the machine you typed it on.
+recovery over prevention, at a fraction of the code. The Twelve Data key rides the sync — typed on
+one device, the stocks work on all of them — while the backup export still strips it, since a file
+handed to someone else is a different promise than your own server.
 
 Signup wants an invite code: sixteen hex characters out of `randomBytes`, good once and dead after
 a week, so a code that leaks somewhere is a code that stops working. Wrong codes from one address

@@ -255,7 +255,8 @@ export interface State {
   /** Parent projects folded shut in the sidebar. */
   collapsed: string[]
   chart: ChartStyle
-  /** Twelve Data key for the Markets stock feeds. Stays local, never travels in a backup. */
+  /** Twelve Data key for the Markets stock feeds. Rides the sync so every device reads the
+   *  stocks; stripped from an exported backup, which is a file handed to someone else. */
   apiKey: string
   /** Only the bindings that were changed; anything missing is the default in `HOTKEYS`. Local,
    *  like the theme — a keyboard is a property of the machine, not of the stash. */
