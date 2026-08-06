@@ -28,6 +28,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
+import { positions } from './kraken.ts'
 import { chargeAt, createPush } from './push.ts'
 
 /** The whole document, not an upload endpoint. */
@@ -911,6 +912,23 @@ export function start({
       const raw = new URL(req.url ?? '/', 'http://x').searchParams.get('tz')
       const tz = raw !== null && isFinite(Number(raw)) ? Number(raw) : undefined
       return send(res, 200, { alerts: push.alerts(user.id, tz) })
+    }
+
+    /* The exchange's word on what you hold, proxied so the signing key never reaches a browser.
+       Admin only: the key in the environment belongs to whoever deployed this, and their open
+       positions are not the roster's business. 501 with no key configured — the market page reads
+       any non-200 as "no panel" and moves on. */
+    if (path === '/api/positions' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      if (!user.admin) return send(res, 403, { error: 'forbidden' })
+      const key = process.env.KRAKEN_FUTURES_KEY, secret = process.env.KRAKEN_FUTURES_SECRET
+      if (!key || !secret) return send(res, 501, { error: 'no exchange key configured' })
+      try {
+        return send(res, 200, { positions: await positions(key, secret) })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
     }
 
     /* Your own account, gone: the sessions, the documents and every share go with it on the
