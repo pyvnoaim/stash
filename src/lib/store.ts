@@ -1114,6 +1114,16 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
   })
 }
 
+/** Every row wearing the old tag wears the new one instead — and one already wearing both keeps a
+ *  single copy, which is what merging two tags is. Rows in projects shared read-only keep theirs:
+ *  this device may not write them, and a rename that half-took would leave one tag split in two. */
+export const renameTag = (from: string, to: string) => set((s) => ({
+  ...s,
+  items: s.items.map((i) => (i.tags.includes(from) && !readOnly(s, i.pid)
+    ? { ...i, tags: [...new Set(i.tags.map((x) => (x === from ? to : x)))], editedAt: Date.now(), ...(me && { editedBy: me }) }
+    : i)),
+}))
+
 /** Returns the cleared items so the caller can offer an undo, or null if there were none. */
 export function clearDone() {
   const gone = state.items.filter((i) => i.done && !readOnly(state, i.pid))

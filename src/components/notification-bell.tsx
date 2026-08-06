@@ -46,7 +46,15 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
      on whichever poll happens next — which for the stocks is five minutes of wondering if it took. */
   const [movers, setMovers] = useState<Mover[]>([])
 
-  const stateAlerts = useMemo(() => alerts(s), [s.items, s.subs]) // eslint-disable-line react-hooks/exhaustive-deps
+  /* The minute, as state: a task that names 10:15 has to turn overdue at 10:15, not at the next
+     edit of the document — this is the one dependency that makes time itself re-run the memo. */
+  const [minute, setMinute] = useState(() => Date.now())
+  useEffect(() => {
+    const h = setInterval(() => setMinute(Date.now()), POLL)
+    return () => clearInterval(h)
+  }, [])
+
+  const stateAlerts = useMemo(() => alerts(s, minute), [s.items, s.subs, minute]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* On the same minute as everything else, because a move is only news while it is happening — the
      one-shot on start this replaces could only ever report what had already finished overnight.
@@ -115,7 +123,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     const h = setInterval(tick, POLL)
     return () => { on = false; clearInterval(h) }
   }, [assets, s.apiKey])
-  const setups = useMemo(() => watchAlerts(s.watches, live, s.stake), [s.watches, live, s.stake])
+  const setups = useMemo(() => watchAlerts(s.watches, live, s.stake, s.dials), [s.watches, live, s.stake, s.dials])
 
   /* The same prices, written down. A setup whose entry the price has really reached is marked as
      having opened, and one that has since run to its target or its stop leaves the live list for
@@ -130,7 +138,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     closed.forEach(closeWatch)
   }, [live, s.watches])
 
-  const done = useMemo(() => resultAlerts(s.results, s.stake), [s.results, s.stake])
+  const done = useMemo(() => resultAlerts(s.results, s.stake, undefined, s.dials), [s.results, s.stake, s.dials])
 
   /* the memecoin end, on the same timer. This is the half that has to be a poll rather than the
      movers' one-shot: a pool that opened twenty minutes ago stops being news within the hour, and

@@ -9,7 +9,7 @@ Object.assign(globalThis, {
 })
 
 const {
-  addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo,
+  addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
   openWatch, closeWatch, clearResults, dismissAlerts, snoozeAlerts, snoozeUntil,
@@ -139,6 +139,18 @@ assert.deepEqual(getState().items.map((i) => i.id).sort(), ['open', 'shut'])
 clearDone()
 assert.equal(clearDone(), null)
 assert.deepEqual(getState().items.map((i) => i.id), ['open'])
+
+/* ---------- renaming a tag: every wearer follows, and a collision is a merge ---------- */
+
+addItem(item({ id: 't1', tags: ['wartung'] }))
+addItem(item({ id: 't2', tags: ['wartung', 'support'] })) // wears both — the merge case
+addItem(item({ id: 't3', tags: ['template'] }))           // untouched bystander
+renameTag('wartung', 'support')
+const tagsOf = (id: string) => getState().items.find((i) => i.id === id)?.tags
+assert.deepEqual(tagsOf('t1'), ['support'])
+assert.deepEqual(tagsOf('t2'), ['support'])                // one copy, not two
+assert.deepEqual(tagsOf('t3'), ['template'])
+for (const id of ['t1', 't2', 't3']) removeItem(id)
 
 /* ---------- reordering by drag: the index maths either works or silently loses the row ---------- */
 

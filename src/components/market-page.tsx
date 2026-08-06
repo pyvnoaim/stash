@@ -8,7 +8,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
-import { euro, isPosition, moneyOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { euro, isPosition, liqOf, moneyOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
@@ -406,11 +406,24 @@ export default function MarketPage() {
   // one that stays apart from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by
   // weight and dash, and the legend below shows exactly those dashes.
   const held = kraken.rows.find((p) => assetOf(p.symbol) === current.id)
-  const posLines = held ? [
-    { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
-    ...(held.stop != null ? [{ label: 'stop', lvl: held.stop, w: 1, dash: '2 3', op: 0.6 }] : []),
-    ...(held.target != null ? [{ label: 'target', lvl: held.target, w: 1, dash: '8 4', op: 0.6 }] : []),
-  ] : []
+  /* The hand-entered position on this asset is the one that knows its leverage, so it is the one
+     with a liquidation price — the exchange feed's rows deliberately carry no lev (see kraken.ts).
+     With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
+     the feed's entry/stop/target are the trade's real ones. */
+  const mine = watches.find((w) => w.asset === current.id && isPosition(w))
+  const liq = mine ? liqOf(mine) : null
+  const posLines = [
+    ...(held ? [
+      { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
+      ...(held.stop != null ? [{ label: 'stop', lvl: held.stop, w: 1, dash: '2 3', op: 0.6 }] : []),
+      ...(held.target != null ? [{ label: 'target', lvl: held.target, w: 1, dash: '8 4', op: 0.6 }] : []),
+    ] : mine ? [
+      { label: 'entry', lvl: mine.entry, w: 1.5, dash: '6 3', op: 1 },
+      { label: 'stop', lvl: mine.stop, w: 1, dash: '2 3', op: 0.6 },
+      { label: 'target', lvl: mine.target, w: 1, dash: '8 4', op: 0.6 },
+    ] : []),
+    ...(liq != null ? [{ label: 'liq', lvl: liq, w: 1, dash: '1 3', op: 0.8 }] : []),
+  ]
 
   // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
   // computed off every fetched bar, so the 200-MA is real from the first visible bar

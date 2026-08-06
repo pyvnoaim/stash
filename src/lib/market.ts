@@ -457,6 +457,9 @@ export type Dials = {
   newLiq: number
   /** Minutes' warning before an exchange opens. 0 is off, which is what it ships as. */
   openIn: number
+  /** Perp funding, percent of notional per 8 hours — what holding a position quietly costs.
+   *  One flat rate for every asset; 0 turns the estimate off. */
+  funding: number
 }
 
 export const DIALS: Dials = {
@@ -464,6 +467,8 @@ export const DIALS: Dials = {
   trendMove: 25, trendFresh: 6, trendLiq: 50_000, newLiq: 15_000,
   // three knocks a day is a lot to hand someone who never asked for them
   openIn: 0,
+  // the perpetual-swap baseline rate; what most venues charge in a calm market
+  funding: 0.01,
 }
 
 /** What each dial may be set to. A bite of zero is every tick of every day, and there is no
@@ -473,6 +478,8 @@ const RANGE: Record<keyof Dials, [number, number]> = {
   trendFresh: [0.5, 72], trendLiq: [0, 5_000_000], newLiq: [0, 5_000_000],
   // an hour's warning is the most that is still news; the push tick is a minute, so under one is 0
   openIn: [0, 60],
+  // 1%/8h is a memecoin squeeze; anything past that is a number to disbelieve, not to set
+  funding: [0, 1],
 }
 
 /** The dials off a document — a user's, or a hand-edited backup's. Anything missing, unreadable or

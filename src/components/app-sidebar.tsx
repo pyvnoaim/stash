@@ -8,9 +8,14 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -30,7 +35,7 @@ import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
   addProject, CALENDAR, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
-  canNest, childProjects, rootProjects, setProjectSort, tagCounts, toggleCollapsed, useStash,
+  canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, useStash,
   VIEWS, type Item, type Project, type ProjectSort,
 } from '@/lib/store'
 
@@ -72,6 +77,20 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [settings, setSettings] = useState(false)
+  const [tagEdit, setTagEdit] = useState<{ from: string; to: string } | null>(null)
+
+  /** The new name, held to the same shape addTags writes: lowercase, no #, no spaces. Renaming
+   *  onto a tag that already exists is the merge — the store's Set makes the two one. */
+  const commitTag = () => {
+    if (!tagEdit) return
+    const to = tagEdit.to.trim().replace(/^#/, '').split(/[\s,#]+/)[0]?.toLowerCase() ?? ''
+    if (to && to !== tagEdit.from) {
+      renameTag(tagEdit.from, to)
+      // renaming the tag being searched for follows it, rather than leaving an empty search up
+      if (tag === tagEdit.from) onTag(to)
+    }
+    setTagEdit(null)
+  }
   const [over, setOver] = useState<string | null>(null)
   const [edge, setEdge] = useState<{ id: string; where: 'above' | 'below' | 'in' } | null>(null)
   // what is in flight. A ref, not a dataTransfer type: drags never leave this document, and
@@ -440,17 +459,26 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             <SidebarGroupContent>
               <SidebarMenu>
                 {tags.map(([t, n]) => (
-                  <SidebarMenuItem key={t}>
-                    <SidebarMenuButton
-                      isActive={tag === t}
-                      onClick={() => { onTag(t); setOpenMobile(false) }}
-                    >
-                      <span className="text-muted-foreground ml-0.5 font-mono">#</span>
-                      <span className="truncate">{t}</span>
-                    </SidebarMenuButton>
-                    {/* nothing open under it any more, but the tag and its finished work remain */}
-                    <SidebarMenuBadge className={cn(!n && 'opacity-40')}>{n}</SidebarMenuBadge>
-                  </SidebarMenuItem>
+                  <ContextMenu key={t}>
+                    <ContextMenuTrigger asChild>
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          isActive={tag === t}
+                          onClick={() => { onTag(t); setOpenMobile(false) }}
+                        >
+                          <span className="text-muted-foreground ml-0.5 font-mono">#</span>
+                          <span className="truncate">{t}</span>
+                        </SidebarMenuButton>
+                        {/* nothing open under it any more, but the tag and its finished work remain */}
+                        <SidebarMenuBadge className={cn(!n && 'opacity-40')}>{n}</SidebarMenuBadge>
+                      </SidebarMenuItem>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuItem onSelect={() => setTagEdit({ from: t, to: t })}>
+                        <PencilLine /> Rename tag
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 ))}
               </SidebarMenu>
             </SidebarGroupContent>
@@ -502,6 +530,24 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
       </SidebarFooter>
 
       <SettingsDialog open={settings} onOpenChange={setSettings} />
+
+      <Dialog open={!!tagEdit} onOpenChange={(v) => !v && setTagEdit(null)}>
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Rename tag</DialogTitle>
+            <DialogDescription>Every row wearing #{tagEdit?.from} takes the new name. Renaming onto an existing tag merges the two.</DialogDescription>
+          </DialogHeader>
+          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); commitTag() }}>
+            <Input
+              autoFocus
+              aria-label="New tag name"
+              value={tagEdit?.to ?? ''}
+              onChange={(e) => setTagEdit((x) => x && { ...x, to: e.target.value })}
+            />
+            <Button type="submit">Rename</Button>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <ProjectDialog
         open={!!dialog}
