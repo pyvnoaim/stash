@@ -423,6 +423,8 @@ const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string
     hint: 'Dollars in the pool before either reading counts. This is the one that separates a market from a rug with a chart on it — raise it first.' },
   { k: 'newLiq', label: 'New list floor', unit: '$',
     hint: 'And the floor the New list on the Markets page is filtered by, which is a shortlist rather than an interruption, so it can afford to be lower.' },
+  { k: 'funding', label: 'Perp funding', unit: '%/8h',
+    hint: 'What holding a leveraged position quietly costs: this share of the notional per 8 hours comes off every position\'s read-out. One flat rate for everything — 0.01 is the venues\' calm-market baseline. Zero turns the estimate off.' },
   { k: 'openIn', label: 'Before a market opens', unit: 'min',
     hint: 'A push that much before Frankfurt or New York opens — where the volume that moves gold and crypto arrives. Zero is off, and it ships off. Tokyo opens in the middle of the European night and is held back by the quiet hours like anything else.' },
 ]

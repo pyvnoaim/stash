@@ -29,7 +29,9 @@ const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits
  * and what it is running at is the answer — the same arithmetic the finished record uses, on a
  * price that hasn't finished yet.
  */
-export function watchAlerts(watches: Watch[], prices: Record<string, number>, stake = 0): Alert[] {
+export function watchAlerts(
+  watches: Watch[], prices: Record<string, number>, stake = 0, d: Dials = DIALS, at = Date.now(),
+): Alert[] {
   return watches.flatMap((w) => {
     const p = prices[w.asset]
     if (typeof p !== 'number' || !isFinite(p)) return []
@@ -54,7 +56,9 @@ export function watchAlerts(watches: Watch[], prices: Record<string, number>, st
        profit, and there is no losing case to write. A trade going the other way is either back at
        its entry or through its stop, and both of those already have the word for it. */
     if (w.entryAt && !hit) {
-      const money = moneyOf(rOf(w, p), stakeOf(w, stake))
+      // funding comes off the running read-out — the number on a held perp is net of what holding costs
+      const gross = moneyOf(rOf(w, p), stakeOf(w, stake))
+      const money = gross === null ? null : gross - fundingOf(w, d.funding, at)
       return [{
         // no level in the id: this one alert is the whole running read-out, and dismissing it is
         // saying "stop telling me about this trade until it ends", which it then does
@@ -125,6 +129,18 @@ export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake
 export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
 
 /**
+ * What holding the position has quietly cost so far: notional × the funding dial, per 8 hours
+ * since the window opened. Zero for a watched plan — nothing held, nothing paid — and zero with
+ * the dial at 0, which is the off switch.
+ *
+ * ponytail: one flat rate for every asset and hour, set in Settings → Markets. Real funding is a
+ * rate per venue per 8h window and flips sign; this is the "reads a little rich" correction, not
+ * an accountant. Per-asset live rates need a feed, not a dial.
+ */
+export const fundingOf = (w: Pick<Watch, 'size' | 'lev' | 'entryAt'>, rate: number, at: number) =>
+  (isPosition(w) && w.entryAt && rate > 0 ? w.size! * w.lev! * (rate / 100) * ((at - w.entryAt) / 28_800_000) : 0)
+
+/**
  * Where the exchange takes the position away — entry ± entry/lev, the price at which the move
  * against you equals the margin you put in. Only a position has one; a watched plan cannot be
  * liquidated. `> 0` also throws out the 1× long, whose "liquidation" is the asset at zero.
@@ -189,10 +205,12 @@ const RESULT_FRESH = 12 * 3600_000
  * already happened — which is the point of it: the window opened, it ran, and this is what it
  * paid. On a plan that was only ever watched, what it would have paid, and the wording says so.
  */
-export function resultAlerts(results: Result[], stake: number, at = Date.now()): Alert[] {
+export function resultAlerts(results: Result[], stake: number, at = Date.now(), d: Dials = DIALS): Alert[] {
   return results.filter((r) => at - r.closedAt < RESULT_FRESH).map((r) => {
     const won = r.level === 'target'
-    const money = moneyOf(r.r, stakeOf(r, stake))
+    // what it paid, net of the funding the holding quietly cost — accrued to the close, not to now
+    const gross = moneyOf(r.r, stakeOf(r, stake))
+    const money = gross === null ? null : gross - fundingOf(r, d.funding, r.closedAt)
     const who = r.horizon ? `${r.label} · ${r.horizon}` : r.label
     return {
       id: `result-${r.id}`,
@@ -304,14 +322,28 @@ export function trendAlerts(trends: Trend[], d: Dials = DIALS): Alert[] {
 }
 
 /** Overdue/today tasks first (most urgent), then subscriptions charging within three days. */
-export function alerts(s: State): Alert[] {
+export function alerts(s: State, at = Date.now()): Alert[] {
   const t = today()
+  // the clock's word in the item's own format, so "is the hour past?" is one string compare
+  const clock = new Date(at).toTimeString().slice(0, 5)
   const out: Alert[] = []
 
   for (const it of s.items) {
     if (it.done || !it.due) continue
     if (it.due < t) out.push({ id: `task-${it.id}`, title: it.text || 'Untitled', detail: 'overdue', tone: 'warn', target: 'today' })
-    else if (it.due === t) out.push({ id: `task-${it.id}`, title: it.text || 'Untitled', detail: 'due today', tone: 'due', target: 'today' })
+    else if (it.due === t) {
+      /* A task that named its hour reads against the clock: before it, the hour is the detail;
+         past it, the row turns overdue rather than sitting on "due today" until midnight — the
+         push half already knocks at this same minute (see push.ts), and the bell should agree. */
+      const late = !!it.at && it.at <= clock
+      out.push({
+        id: `task-${it.id}`,
+        title: it.text || 'Untitled',
+        detail: it.at ? (late ? `was due ${it.at}` : `due ${it.at}`) : 'due today',
+        tone: late ? 'warn' : 'due',
+        target: 'today',
+      })
+    }
   }
 
   const soon = s.subs

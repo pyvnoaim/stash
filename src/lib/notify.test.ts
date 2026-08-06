@@ -56,6 +56,14 @@ assert.ok(sa[0].detail.includes('30'))
 
 assert.deepEqual(alerts(base), []) // nothing due → no alerts
 
+// a task that named its hour: before it the hour is the detail, past it the row turns overdue
+const timed: State = { ...base, items: [{ ...task({ id: 'd', text: 'Call', due: t, done: false }), at: '10:15' }] }
+const clockAt = (hhmm: string) => Date.parse(`${t}T${hhmm}:00`) // local, same clock alerts reads
+assert.equal(alerts(timed, clockAt('09:00'))[0].detail, 'due 10:15')
+assert.equal(alerts(timed, clockAt('09:00'))[0].tone, 'due')
+assert.equal(alerts(timed, clockAt('10:15'))[0].tone, 'warn') // the named minute itself is already the hour
+assert.equal(alerts(timed, clockAt('11:00'))[0].detail, 'was due 10:15')
+
 // saved setups: a long entered at 100, stopped at 95, targeting 110
 const long: Watch = { id: 'w1', asset: 'BTCUSDT', label: 'Bitcoin', horizon: 'Trading', dir: 'long', entry: 100, stop: 95, target: 110, ts: 0 }
 const fire = (p: number, w = long) => watchAlerts([w], { BTCUSDT: p })
@@ -103,13 +111,19 @@ assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }, 200), [])
    Long from 100 with the stop at 95: €100 at 10× is €1,000 on the market, 5% of which is the €50
    between here and the stop — so 1R is €50 and the sentence stops saying "had you taken it". */
 const position: Watch = { ...running, size: 100, lev: 10 }
-const pos = (p: number) => watchAlerts([position], { BTCUSDT: p }, 999)
+// at = the entryAt: nothing has been held for any time yet, so no funding muddies the geometry
+const pos = (p: number, at = 1) => watchAlerts([position], { BTCUSDT: p }, 999, undefined, at)
 assert.ok(pos(105)[0].detail.includes('+€50'))
 assert.ok(pos(105)[0].detail.includes('on your position'))
 assert.ok(!pos(105)[0].detail.includes('had you taken it'))
 assert.ok(pos(102.5)[0].detail.includes('+€25'))
 // leverage is the part that has to reach the money: the same €100 at 1× is a tenth of it
-assert.ok(pos(105)[0].detail.includes('+€50') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, 999)[0].detail.includes('+€5'))
+assert.ok(pos(105)[0].detail.includes('+€50') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, 999, undefined, 1)[0].detail.includes('+€5'))
+/* Funding comes off a held position's read-out: €1,000 notional at the default 0.01%/8h is 10
+   cents a window, three windows in a day — +€50 gross reads +€49.70 held for one. A plan holds
+   nothing and still reads its full €200. */
+assert.ok(pos(105, 1 + 24 * 3600_000)[0].detail.includes('+€49.70'))
+assert.ok(run(105, 200)[0].detail.includes('+€200'))
 // half a position is no position: without both numbers it falls back to the stake, as it always did
 assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€200'))
 

@@ -139,8 +139,13 @@ export function alertsOf(
        euro sign and a lemniscate. A knock with no money in it beats a knock with nonsense in it. */
     const stake = took && isFinite(own) ? own : Number(s?.stake) || 0
     const r = long ? (p - w.entry) / (w.entry - w.stop) : (w.entry - p) / (w.stop - w.entry)
-    const paid = hit !== 'entry' && stake > 0 && isFinite(stake) && isFinite(r)
-      ? ` · ${r >= 0 ? '+' : '−'}${euro(Math.abs(r * stake))}${took ? '' : ' had you taken it'}`
+    /* Net of funding on a held position — notional × the funding dial per 8h since the window
+       opened, the same arithmetic as fundingOf in notify.ts, longhand for the same reason as the
+       stake above. A watched plan pays none; neither does a dial set to 0. */
+    const fund = took && w.entryAt ? Number(w.size) * Number(w.lev) * (dialsOf(s).funding / 100) * ((at - w.entryAt) / 28_800_000) : 0
+    const gain = r * stake - fund
+    const paid = hit !== 'entry' && stake > 0 && isFinite(stake) && isFinite(gain)
+      ? ` · ${gain >= 0 ? '+' : '−'}${euro(Math.abs(gain))}${took ? '' : ' had you taken it'}`
       : ''
     out.push({
       key: `watch-${w.id}-${hit}`,
