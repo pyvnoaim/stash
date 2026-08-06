@@ -75,7 +75,7 @@ export const usMarketOpen = (now = Date.now()) => {
   return d.getUTCDay() >= 1 && d.getUTCDay() <= 5 && h >= 13 && h <= 21.5
 }
 
-export async function fetchPrices(ids: string[], apiKey: string): Promise<Record<string, number>> {
+export async function fetchPrices(ids: string[], apiKey: string, now = Date.now()): Promise<Record<string, number>> {
   const assets = ids.map((id) => ASSETS.find((a) => a.id === id)).filter((a): a is Asset => !!a)
   const bn = assets.filter((a) => a.source === 'binance').map((a) => a.id)
   const td = assets.filter((a) => a.source === 'twelvedata').map((a) => a.id)
@@ -91,7 +91,7 @@ export async function fetchPrices(ids: string[], apiKey: string): Promise<Record
       }),
   )
   // a shut market's last price is the closing price the caller already has — see usMarketOpen
-  if (td.length && apiKey && usMarketOpen()) jobs.push(
+  if (td.length && apiKey && usMarketOpen(now)) jobs.push(
     fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(td.join(','))}&apikey=${encodeURIComponent(apiKey)}`)
       .then((r) => r.json())
       .then((j: Record<string, { price?: string }> & { price?: string }) => {

@@ -57,8 +57,7 @@ export function watchAlerts(
        its entry or through its stop, and both of those already have the word for it. */
     if (w.entryAt && !hit) {
       // funding comes off the running read-out — the number on a held perp is net of what holding costs
-      const gross = moneyOf(rOf(w, p), stakeOf(w, stake))
-      const money = gross === null ? null : gross - fundingOf(w, d.funding, at)
+      const money = netOf(w, rOf(w, p), stake, d.funding, at)
       return [{
         // no level in the id: this one alert is the whole running read-out, and dismissing it is
         // saying "stop telling me about this trade until it ends", which it then does
@@ -186,6 +185,14 @@ export const fundingOf = (w: Pick<Watch, 'size' | 'lev' | 'entryAt'>, rate: numb
   // max(0): an entryAt ahead of this clock — skew, or a hand-edited doc — must not pay you funding
   (isPosition(w) && w.entryAt && rate > 0 ? w.size! * w.lev! * (rate / 100) * (Math.max(0, at - w.entryAt) / 28_800_000) : 0)
 
+/** The row's cash at `r`, net of funding to `at` — null when nothing prices it. The one
+ *  subtraction the bell, the record, the held-position card and the calendar all make; changing
+ *  how money nets out means changing it here, once. */
+export const netOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev' | 'entryAt'>, r: number, stake: number, rate: number, at: number) => {
+  const gross = moneyOf(r, stakeOf(w, stake))
+  return gross === null ? null : gross - fundingOf(w, rate, at)
+}
+
 /**
  * Where the exchange takes the position away — entry ± entry/lev, the price at which the move
  * against you equals the margin you put in. Only a position has one; a watched plan cannot be
@@ -255,8 +262,7 @@ export function resultAlerts(results: Result[], stake: number, at = Date.now(), 
   return results.filter((r) => at - r.closedAt < RESULT_FRESH).map((r) => {
     const won = r.level === 'target'
     // what it paid, net of the funding the holding quietly cost — accrued to the close, not to now
-    const gross = moneyOf(r.r, stakeOf(r, stake))
-    const money = gross === null ? null : gross - fundingOf(r, d.funding, r.closedAt)
+    const money = netOf(r, r.r, stake, d.funding, r.closedAt)
     const who = r.horizon ? `${r.label} · ${r.horizon}` : r.label
     return {
       id: `result-${r.id}`,
