@@ -498,6 +498,11 @@ export default function MarketPage() {
         </div>
       </div>
 
+      {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
+          is the one row here that is fact rather than reading. Absent unless the server has a key
+          and Kraken reports something open. */}
+      <KrakenPositions />
+
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
       {/* The answer first, as one block: the price, the tally's side, the verdict, the levels, and
@@ -962,6 +967,59 @@ function closeAt(s: (typeof SESSIONS)[number], at: number) {
   const { min } = localClock(at, s.tz)
   return new Date(at + (s.end - min) * 60_000)
     .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+/** One Kraken Futures position row, as /api/positions shapes it. */
+type ExchangePosition = {
+  symbol: string; side: 'long' | 'short'; size: number; entry: number
+  mark: number | null; pct: number | null
+}
+
+/**
+ * What Kraken says is actually open on the account — the read-only feed, proxied through the
+ * server so the key stays there. Renders nothing at all unless the server has a key, the caller
+ * is the admin, and the exchange reports an open position: for everyone else this component is
+ * one failed fetch and no pixels.
+ *
+ * ponytail: the pct is price move from entry, not return on margin — leverage is not in the
+ * feed's read scope. Anyone leveraged knows to multiply.
+ */
+function KrakenPositions() {
+  const [rows, setRows] = useState<ExchangePosition[]>([])
+  useEffect(() => {
+    let dead = false
+    const load = () =>
+      fetch('/api/positions')
+        .then((r) => (r.ok ? r.json() : { positions: [] }))
+        .then((d) => { if (!dead) setRows(d.positions ?? []) })
+        .catch(() => {}) // offline or the exchange is down: keep whatever the last answer was
+    load()
+    const h = window.setInterval(load, 60_000)
+    return () => { dead = true; window.clearInterval(h) }
+  }, [])
+  if (!rows.length) return null
+  return (
+    <Card className="py-3">
+      <CardContent className="grid gap-1.5 px-3 text-sm">
+        <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open on Kraken</p>
+        {rows.map((p) => (
+          <div key={p.symbol} className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
+            <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
+            <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
+            <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
+            {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
+            {p.pct != null && (
+              <span className={cn('ml-auto font-mono tabular-nums',
+                p.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {p.pct >= 0 ? '+' : ''}{p.pct.toFixed(2)}%
+              </span>
+            )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
 }
 
 /**
