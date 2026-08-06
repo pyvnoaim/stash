@@ -318,9 +318,11 @@ Deleting gives the same undo toast every other delete in the app does.
 
 A read-only desk over other people's price feeds. Crypto and gold ride Binance's public API — no
 key, no signup; gold is PAXG, a token pegged to a troy ounce, and there is no liquid silver token
-so silver sits it out. The nine stocks ride Twelve Data, which needs a free key: paste it into
-Settings or into the prompt the page shows, and it stays on this machine and never travels in a
-backup.
+so silver sits it out. The stocks and the three big index ETFs — S&P 500, Nasdaq 100 and Dow
+Jones, a group of their own in the picker — ride Twelve Data, which needs a free key: paste it
+into Settings or into the prompt the page shows, and it stays on this machine and never travels in
+a backup. The ETFs deliberately sit out the movers sweep: that batch call pays one credit per
+symbol, and the stocks already spend the free tier's whole minute.
 
 The bars you have already loaded are kept by the service worker, so the desk still draws with no
 network — every signal here is maths over bars that closed, and those read the same on a plane as
@@ -385,6 +387,21 @@ timeframe gets said out loud too.
 **Alert me** on that card saves those three levels, and the bell then watches the live
 price against them: it tells you when price reaches the entry, when it runs through the stop (the
 setup is dead), and when it hits the target.
+
+### What Kraken says you hold
+
+The desk's one row of fact among the readings: give the server a **read-only** Kraken Futures key
+— `KRAKEN_FUTURES_KEY` and `KRAKEN_FUTURES_SECRET` in its environment, never in the browser — and
+a card above the verdicts lists what the exchange actually has open: symbol, side, size, entry
+against the current mark, and the move from entry signed by the side. The server signs the
+requests and joins in the mark prices, so no credential ever reaches a browser; the exchange is
+asked at most every thirty seconds however many tabs poll; and the card renders nothing at all
+when you are flat, when no key is set, or for anyone but the admin — the key in the environment
+belongs to whoever deployed the server, and their positions are not the roster's business. The
+percentage is price move, not return on margin: leverage is not in a read-only feed's scope, and
+a made-up ROE would be worse than none. Create the key read-only on Kraken's side too, with
+withdrawal set to no access — this code could not place an order even if it wanted to, and the
+key should not be able to either.
 
 ### How they went
 
@@ -563,6 +580,8 @@ is still in the file and still copies out.
 - `server/index.ts` — accounts, sessions and one versioned document per user, plus the calendar feed; Node + SQLite, no dependencies
 - `server/push.ts` — VAPID, the minute loop, and the rule that decides whether a phone is worth waking
 - `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
+- `server/kraken.ts` — Kraken Futures read-only: the signing, the mark-price join, and the thirty-second cache
+- `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
@@ -686,9 +705,19 @@ people in the sidebar, and **Leave project** in its menu — leaving takes nothi
 
 ## From Claude
 
-`server/mcp.ts` is an MCP server over stdio: it signs into your account like any other device and
-hands Claude seven tools. Registering it once is the whole setup — the key is optional, and only
-the nine stocks want it:
+`server/mcp.ts` is an MCP server: it signs into your account like any other device and hands
+Claude seven tools. The server hosts it at `/mcp`, so installing needs no clone, no node and no
+path — one command, which **Settings → Links → Claude** shows pre-filled with your own domain and
+name, next to a copy button:
+
+```sh
+claude mcp add --transport http stash https://stash.example/mcp \
+  --header "Authorization: Basic leon:YOUR-PASSWORD"
+```
+
+Plain `user:pass` and its base64 spelling both work — the header is typed by a person into one
+command, and demanding base64 first is a support question waiting. The same dispatcher also still
+runs over stdio from a checkout, which is what dev and the test use:
 
 ```sh
 claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e STASH_PASS=… \
@@ -715,8 +744,11 @@ disagreed with the one on screen would be worse than none.
 Each call pulls `/state`, runs the store's actions over it and pushes the result back with
 `If-Match`, so a capture from Claude is the write the capture bar makes and reaches every device on
 the next sync. Two edits landing in the same instant resolve the way `sync.ts` decides it: the
-later one wins, and the earlier is a server snapshot rather than a loss. The session shows up in
-Settings → Devices as `stash-mcp` and can be revoked there like any other.
+later one wins, and the earlier is a server snapshot rather than a loss. Either way in, the
+context logs in through `/api/login` like any device — it shows up in the sessions list as
+`stash-mcp`, can be revoked there like any other, and stops working when the password changes.
+The hosted route is not CSRF-able: a browser cannot be made to send an Authorization header
+cross-origin without a preflight the server never answers.
 
 One tool runs at a time, on purpose. The store is a single document that every call pulls the
 server's into, so two in flight would interleave their pulls and the second would adopt over the
@@ -726,8 +758,8 @@ device's document comes in by: a date that cannot exist is dropped there rather 
 as set and then quietly thrown away by the next reader.
 
 Three limits worth knowing. The Twelve Data key never leaves the browser it was typed into — the
-sync blanks it on every push — so the nine stocks need `STASH_TD_KEY` in the MCP server's own
-environment; the eleven keyless assets need nothing. This only runs while Claude is calling it: no
+sync blanks it on every push — so the stocks and ETFs need `STASH_TD_KEY` in the MCP server's own
+environment (the container's, for the hosted route); the eleven keyless assets need nothing. This only runs while Claude is calling it: no
 watching, no alerts, nothing in the background. And some of what comes back is other people's
 writing — rows out of a project shared with you, and token symbols off GeckoTerminal, which are
 whoever-minted-it's text arriving in a model's context. It is data, not instruction, and none of
@@ -773,6 +805,10 @@ the app's own responses, so nothing else needs configuring in the proxy.
 docker compose up -d --build                            # PROXY_NET names the proxy's network if not npm_default
 docker compose exec stash node server/index.ts invite   # the first code; the rest come from the menu
 ```
+
+Three optional variables on the container: `KRAKEN_FUTURES_KEY` and `KRAKEN_FUTURES_SECRET` turn
+the desk's positions card on, and `STASH_TD_KEY` lets the hosted MCP route read the stocks —
+absent, each of those simply is not there, and everything else runs the same.
 
 Data sits in one named volume; backing it up is copying one SQLite file. The push keypair is a row
 in it, so restoring that file keeps every phone subscribed — a new keypair would quietly
