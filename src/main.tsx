@@ -29,14 +29,28 @@ const updateSW = registerSW({
   onRegisteredSW: (_url, r) => {
     holdRegistration(r)      // so Check now, in Settings, has something to ask
     if (!r) return
-    const check = () => { if (document.visibilityState === 'visible') void r.update() }
+    // at most once a minute: cmd-tabbing between two windows fires focus every time, and each of
+    // these is a request. A minute is far below any lag anyone would notice.
+    let last = 0
+    const check = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - last < 60_000) return
+      last = Date.now()
+      void r.update()
+    }
     /* Once, now. Installed to the Dock this is the only check that ever runs on a normal day: the
        app is opened, used and closed inside the hour, and visibilitychange does not fire on a
        launch — nothing is becoming visible, it already is. That left Settings → Check now, which
        asks this same question, as the only way an update was ever found. */
     check()
-    setInterval(check, 60 * 60 * 1000)
+    /* Quarter-hourly rather than hourly. A push is a release here, and an hour of lag on a window
+       that stays open all day meant the prompt landed long after the build did — the check itself
+       is a revalidation of one small file, so asking four times as often costs four 304s. */
+    setInterval(check, 15 * 60 * 1000)
     addEventListener('visibilitychange', check)
+    /* And on focus, which is the one a Dock app actually fires: cmd-tabbing back to a window that
+       was never hidden — only behind another one — is not a visibility change, so coming back to
+       it all afternoon asked nothing. */
+    addEventListener('focus', check)
   },
 })
 
