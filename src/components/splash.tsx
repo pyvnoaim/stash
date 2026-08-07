@@ -53,13 +53,12 @@ function paint(el: HTMLElement, word = 'stash', size = 13) {
 }
 
 /**
- * How the app opens: the wordmark snaps together out of the pixels the font is made of, then the
- * capture bar types the same word back — the one thing this app is for, doing itself once before
- * getting out of the way.
+ * How the app opens: the wordmark snaps together out of the pixels the font is made of, and then
+ * it is gone.
  *
  * It holds nothing up. The app is mounted and interactive underneath the whole time; this is a
- * sheet over the top of it that leaves after a second, and it never opens at all for someone who
- * asked for less motion.
+ * sheet over the top of it that leaves before anyone could have reached for anything, and it
+ * never opens at all for someone who asked for less motion.
  */
 export function Splash() {
   const [gone, setGone] = useState(skip)
@@ -68,10 +67,10 @@ export function Splash() {
   useEffect(() => {
     if (gone) return
     try { sessionStorage.setItem(SEEN, '1') } catch { /* private mode: it plays again, once */ }
-    const t = setTimeout(() => setGone(true), 1100)
+    const t = setTimeout(() => setGone(true), 800)
     /* Measured against the real face or not at all: a canvas that fell back to the system sans
-       would sample a matrix of the wrong shape, which is worse than no matrix. The bar below still
-       types either way. */
+       would sample a matrix of the wrong shape, which is worse than no matrix — and an empty sheet
+       for half a second is the same nothing the app used to open on. */
     void document.fonts.load('13px "Geist Pixel Square"')
       .then((faces) => { if (faces.length && grid.current) paint(grid.current) })
       .catch(() => {})
@@ -85,12 +84,7 @@ export function Splash() {
       aria-hidden="true"
       className="splash bg-background pointer-events-none fixed inset-0 z-[100] grid place-content-center"
     >
-      {/* both in the one cell, so the bar types where the wordmark just stood */}
-      <div ref={grid} className="splash-matrix relative col-start-1 row-start-1 justify-self-center" />
-      <div className="splash-bar font-heading col-start-1 row-start-1 flex h-9 items-center justify-self-center rounded-md border px-3 text-sm">
-        <span className="splash-type inline-block overflow-hidden align-bottom whitespace-nowrap">stash</span>
-        <span className="splash-caret bg-foreground ml-0.5 inline-block h-4 w-px" />
-      </div>
+      <div ref={grid} className="splash-matrix relative" />
     </div>
   )
 }
