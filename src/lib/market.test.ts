@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, deskSignals, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -323,6 +323,23 @@ const stair = [10, 11, 12, 10.5, 10.2, 10.4, 13, 14, 15, 13.5, 13.2, 13.4, 16, 1
   .map((c, i, a) => ({ t: i * 9e5, o: i ? a[i - 1] : c, h: c + 0.1, l: c - 0.1, c }))
 assert.equal(standingSwings(stair).high, null)
 assert.equal(standingSwings(stair).low?.price, 13.1)
+
+/* deskSignals is what stops the page, the Scan and server/mcp.ts answering the same question three
+   different ways — mcp.ts had already dropped the VWAP card and could hand out a side the screen
+   never showed. Pin the order (the higher-timeframe lean leads, it is the filter) and that each
+   optional card is counted exactly when it is there. */
+const sig = (label: string, tone: Signal['tone']): Signal => ({ label, tone, detail: '', kind: 'trend' })
+const htf = sig('htf', 'bull'), own = [sig('a', 'bear'), sig('b', 'flat')]
+assert.deepEqual(
+  deskSignals(htf, { signal: sig('range', 'bull') }, { signal: sig('vwap', 'bear') }, own)
+    .map((s) => s.label),
+  ['htf', 'range', 'vwap', 'a', 'b'],
+)
+// every optional slot empty leaves the indicator pass alone, and nothing is invented
+assert.deepEqual(deskSignals(null, null, null, own), own)
+// the bug itself: a missing vwap card is a missing vote, and one vote is a whole verdict
+assert.equal(tally(deskSignals(htf, null, null, [sig('a', 'bear')])).dir, 'flat')
+assert.equal(tally(deskSignals(htf, null, { signal: sig('vwap', 'bear') }, [sig('a', 'bear')])).dir, 'short')
 
 // the opening-range demo is drawn as a band and a break, so it has to break
 const orbDemo = DEMOS.orb.candles

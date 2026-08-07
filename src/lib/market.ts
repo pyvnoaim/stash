@@ -956,6 +956,34 @@ export function tally(list: Signal[]): { bulls: number; bears: number; dir: 'lon
 }
 
 /**
+ * Every card the desk counts, in the order it shows them — the higher-timeframe lean first, since
+ * it is the filter the rest get read through, then the two that come off their own scans, then the
+ * signals the indicator pass produced.
+ *
+ * Here for exactly the reason tally() is, and it is the same lesson learned twice: the page, the
+ * Scan and server/mcp.ts all answer this question, and a list assembled three times is three lists
+ * the day someone adds a signal. It had already gone wrong — mcp.ts built its own without the VWAP
+ * card, so on the default 1h read it counted one fewer vote than the screen and could answer Short
+ * where the desk said Flat, with an entry, a stop and a target attached. tally()'s note says a
+ * verdict that disagreed with the screen would be worse than no verdict; this is what makes that
+ * true rather than merely intended.
+ *
+ * `range` is the opening-range card and is null outside that preset — mcp passes null because it
+ * has no preset, which is the Standard read, not an omission.
+ */
+export const deskSignals = (
+  higher: Signal | null,
+  range: { signal: Signal } | null,
+  vwap: { signal: Signal } | null,
+  own: Signal[],
+): Signal[] => [
+  ...(higher ? [higher] : []),
+  ...(range ? [range.signal] : []),
+  ...(vwap ? [vwap.signal] : []),
+  ...own,
+]
+
+/**
  * What each reading is, what it's claiming, and when it turns up — for the guide that opens under a
  * signal. Written to be read by someone who hasn't done this before, and to say where the idea is
  * weak, because every one of these is a rule of thumb that a lot of people watch, not a law.

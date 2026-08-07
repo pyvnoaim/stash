@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, swings, tally, tradePlan, trendFilter,
+  deskSignals, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, swings, tally, tradePlan, trendFilter,
   TREND_NETWORK, usMarketOpen,
   type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -362,10 +362,7 @@ export default function MarketPage() {
     [structure, closed],
   )
   // the higher-timeframe lean leads: it's the filter the others get read through
-  const shownSignals = [
-    ...(higher ? [higher] : []), ...(range ? [range.signal] : []),
-    ...(vwap ? [vwap.signal] : []), ...(view?.signals ?? []),
-  ]
+  const shownSignals = deskSignals(higher, range, vwap, view?.signals ?? [])
 
   // one clean call: tally the bull vs bear cards into a Long / Short / Flat verdict for the horizon
   const { bulls, bears, dir } = tally(shownSignals)
@@ -1690,9 +1687,7 @@ async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Inte
   const view = signals(candles, cfg)
   const vwap = sessionVwap(candles)
   const range = orbMode ? orb(candles) : null
-  const { bulls, bears, dir } = tally([
-    ...(higher ? [higher] : []), ...(range ? [range.signal] : []), ...(vwap ? [vwap.signal] : []), ...view.signals,
-  ])
+  const { bulls, bears, dir } = tally(deskSignals(higher, range, vwap, view.signals))
   const price = candles.at(-1)!.c
   const entryMA = view.smaFast.at(-1)
   const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr) : null
