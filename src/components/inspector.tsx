@@ -62,6 +62,11 @@ function Links({ it }: { it: Item }) {
  * for most, which is a menu that appears the moment the panel opens, pushes the row's own tags
  * down the column, and answers a question nobody asked — the field is for adding a tag you have in
  * mind, and the help is for finishing it.
+ *
+ * It drops under the field rather than sitting below it as chips, and it is the same drop the
+ * search field in the header uses for `#` and `@`: one shape for "what could this word be", in
+ * both places it gets asked. Chips in a row reflowed the whole panel on every keystroke as their
+ * number changed, which is a lot of movement for a list that is about to disappear.
  */
 function TagSuggest({ pid, has, q, onPick }: {
   pid: string | null
@@ -79,16 +84,17 @@ function TagSuggest({ pid, has, q, onPick }: {
   if (!hits.length) return null
 
   return (
-    <div className="flex flex-wrap gap-1">
+    // absolute, so the fields under it stay where they are while this opens and closes over them
+    <div className="bg-popover absolute inset-x-0 top-full z-20 mt-1 rounded-md border p-1 shadow-md">
       {hits.map((t) => (
         <button
           key={t}
           type="button"
           // mousedown, or the field's own blur files the half-typed word before the click lands
           onMouseDown={(e) => { e.preventDefault(); onPick(t) }}
-          className="text-muted-foreground hover:text-foreground hover:bg-accent rounded-md border px-1.5 py-0.5 font-mono text-xs"
+          className="hover:bg-accent flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left font-mono text-xs"
         >
-          #{t}
+          <span className="truncate">#{t}</span>
         </button>
       ))}
     </div>
@@ -263,18 +269,21 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
 
       <div className="grid gap-2">
         <Label htmlFor="i-tags">Tags</Label>
-        {/* the field only ever adds — the chips below are the list, and each one removes itself */}
-        <Input
-          id="i-tags"
-          key={it.id}
-          ref={box}
-          placeholder="audio bug"
-          onChange={(e) => setTagq(e.currentTarget.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
-          // typed, then clicked away: the words were meant, so they land rather than evaporate
-          onBlur={(e) => addTags(e.currentTarget)}
-        />
-        <TagSuggest pid={it.pid} has={it.tags} q={tagq} onPick={pickTag} />
+        {/* the field only ever adds — the chips below are the list, and each one removes itself.
+            relative, so what it suggests hangs off the field rather than off the panel */}
+        <div className="relative">
+          <Input
+            id="i-tags"
+            key={it.id}
+            ref={box}
+            placeholder="audio bug"
+            onChange={(e) => setTagq(e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
+            // typed, then clicked away: the words were meant, so they land rather than evaporate
+            onBlur={(e) => addTags(e.currentTarget)}
+          />
+          <TagSuggest pid={it.pid} has={it.tags} q={tagq} onPick={pickTag} />
+        </div>
         {it.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {it.tags.map((t) => (
@@ -414,17 +423,19 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
         <Label htmlFor="s-tags">Tags</Label>
         {/* adds to every row, keeping whatever each already had — the field cannot show a list
             that differs per row, so it only ever adds */}
-        <Input
-          id="s-tags"
-          key={ids.join(' ')}
-          ref={box}
-          placeholder="Add to all"
-          onChange={(e) => setTagq(e.currentTarget.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
-          onBlur={(e) => addTags(e.currentTarget)}
-        />
-        {/* the first row's project stands for the selection: they are picked out of one list */}
-        <TagSuggest pid={picked[0].pid} has={common} q={tagq} onPick={pickTag} />
+        <div className="relative">
+          <Input
+            id="s-tags"
+            key={ids.join(' ')}
+            ref={box}
+            placeholder="Add to all"
+            onChange={(e) => setTagq(e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
+            onBlur={(e) => addTags(e.currentTarget)}
+          />
+          {/* the first row's project stands for the selection: they are picked out of one list */}
+          <TagSuggest pid={picked[0].pid} has={common} q={tagq} onPick={pickTag} />
+        </div>
         {/* only the ones every row carries: a chip that meant "some of these" would lie */}
         {common.length > 0 && (
           <div className="flex flex-wrap gap-1">
