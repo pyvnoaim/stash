@@ -155,10 +155,27 @@ const asset = (id: unknown) => {
 
 /* ---------- the tools ---------- */
 
+/** The revision this server actually implements — the handshake one, which 2026-07-28 still keeps
+ *  a documented fallback for. Moving up means `server/discover`, per-request `_meta` versions and
+ *  `resultType` on every result, so it is a number that changes with the code, not ahead of it. */
+const PROTOCOL = '2025-06-18'
+
+/** Reads nothing of yours can be lost to — the shape a client needs to know it may call this one
+ *  without asking. The default is the opposite, so only the tools that carry it are safe. */
+const READS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
+
 const str = { type: 'string' }
-const tools: Record<string, { description: string, schema: any, run: (a: any) => Promise<unknown> }> = {
+const tools: Record<string, {
+  description: string
+  schema: any
+  /** Behaviour, for a client deciding what to confirm. Absent means a writer that is not
+   *  destructive; `destructiveHint` marks the two calls that can take something away. */
+  annotations?: Record<string, boolean>
+  run: (a: any) => Promise<unknown>
+}> = {
 
   stash_read: {
+    annotations: READS,
     description: 'Read the stash: every project, and the items in one view. `query` takes the app\'s '
       + 'own search syntax — `#tag`, `@project` (which reaches its sub-projects), `+person`, and '
       + 'free text — and searches everything rather than the view when it is given.',
@@ -217,6 +234,8 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
   },
 
   stash_edit: {
+    // both can take a row away — the two calls a client should be asking about
+    annotations: { destructiveHint: true },
     description: 'Change one item by id, or remove it. `done` runs the app\'s own toggle, so '
       + 'finishing a repeating task opens the next occurrence. `project: null` moves it to Quick notes.',
     schema: {
@@ -294,7 +313,85 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
     },
   },
 
+  /**
+   * Subscriptions were the one top-level collection out here could not see at all — its own view,
+   * its own sorting, and every charge for a year ahead on the calendar feed, with no way to ask
+   * what they cost or to add the one that just started billing.
+   *
+   * One tool rather than a read and two writers, the same shape `stash_project` settled on: called
+   * with nothing it lists, called with a name it adds or patches that row, and it answers with the
+   * whole list either way — the totals are the reason anyone asks, and they move on every write.
+   */
+  stash_subs: {
+    // both can take a row away — the two calls a client should be asking about
+    annotations: { destructiveHint: true },
+    description: 'The recurring money: subscriptions out and income in, what each costs per month '
+      + 'and per year, and when it next charges. Called with no name it lists them. With a name it '
+      + 'adds that one (needs kind, cost and cycle) or changes the one already called that. '
+      + '`remove: true` takes it off the list. Costs are in whatever single currency you keep — '
+      + 'nothing here converts.',
+    schema: {
+      type: 'object',
+      properties: {
+        name: str,
+        kind: { type: 'string', enum: ['expense', 'income'] },
+        cost: { type: 'number', description: 'per billing cycle, not per month' },
+        cycle: { type: 'string', enum: [...store.CYCLES] },
+        due: { type: ['string', 'null'], description: 'next charge as YYYY-MM-DD, or null to undate it' },
+        rename: str,
+        remove: { type: 'boolean' },
+      },
+    },
+    run: async (a) => {
+      const s = await pull()
+      const wanted = 'name' in a ? String(a.name).trim() : ''
+      if ('name' in a && !wanted) throw new Error('a subscription needs a name')
+
+      if (wanted) {
+        const had = s.subs.find((x) => x.name.toLowerCase() === wanted.toLowerCase())
+        if (a.remove) {
+          if (!had) throw new Error(`no subscription "${wanted}"`)
+          store.removeSub(had.id)
+        } else if (had) {
+          store.patchSub(had.id, {
+            ...(a.rename && { name: String(a.rename).trim() }),
+            ...('kind' in a && { kind: a.kind }),
+            ...('cost' in a && { cost: Number(a.cost) }),
+            ...('cycle' in a && { cycle: a.cycle }),
+            ...('due' in a && { due: a.due }),
+          })
+        } else {
+          // a new row cannot be half-described: the three that have no sensible default are asked
+          // for by name, rather than filed as a €0 monthly expense nobody meant
+          const missing = ['kind', 'cost', 'cycle'].filter((k) => !(k in a))
+          if (missing.length) throw new Error(`a new subscription needs ${missing.join(', ')}`)
+          store.addSub(a.kind, wanted, Number(a.cost), a.cycle, a.due ?? null)
+        }
+        await push()
+      }
+
+      /* Off the pushed document rather than the ask — `load` drops an impossible date on the way
+         through, and a row reported as due on a day that was thrown away is the one lie that
+         matters here: it reads as dated, and then nothing is ever charged. */
+      const now = store.getState()
+      const list = now.subs.map((x) => ({
+        name: x.name,
+        kind: x.kind,
+        cost: x.cost,
+        cycle: x.cycle,
+        due: x.due,
+        next: store.nextCharge(x),
+        monthly: +store.monthlyCost(x).toFixed(2),
+        yearly: +store.yearlyCost(x).toFixed(2),
+      }))
+      const per = (kind: string) => +list.filter((x) => x.kind === kind)
+        .reduce((n, x) => n + x.monthly, 0).toFixed(2)
+      return { subs: list, monthlyOut: per('expense'), monthlyIn: per('income') }
+    },
+  },
+
   market_read: {
+    annotations: READS,
     description: 'The Markets desk\'s read on one asset: price, every signal it computes, the '
       + 'bull/bear tally and the setup that falls out of it — the same numbers the page shows. '
       + 'Not advice, and nothing here is a position.',
@@ -364,6 +461,7 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
   },
 
   market_trending: {
+    annotations: READS,
     description: 'The other market, off GeckoTerminal: Solana pools trending on the last hour, or '
       + 'the ones that just opened. None of this is in the asset list and none of it gets a chart — '
       + 'a moving average over a six-hour pool is a line through noise. Liquidity is the honest '
@@ -401,6 +499,7 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
   },
 
   market_setups: {
+    annotations: READS,
     description: 'The saved setups the bell is watching, and the record of the ones that finished — '
       + 'scored in R off the price actually seen when they ended. A row carrying size and leverage '
       + 'is a position that was really taken and its money is real; every other row is a plan, and '
@@ -448,8 +547,14 @@ return async function rpc(m: any): Promise<any> {
     switch (m?.method) {
       case 'initialize':
         return reply({
-          // whatever the client speaks, since every version so far agrees on the three calls below
-          protocolVersion: typeof m.params?.protocolVersion === 'string' ? m.params.protocolVersion : '2025-06-18',
+          /* The one we actually speak, whatever was asked for. It used to echo the client's own
+             version back under a comment saying every revision so far agreed on the calls below —
+             which stopped being true at 2026-07-28: negotiation moved into a per-request `_meta`
+             key, results grew a `resultType`, and `server/discover` became a call a server MUST
+             answer. Echoing meant telling a client asking for that revision "yes" and then
+             answering none of it. Naming this one is what lets a client fall back to the
+             handshake the spec still keeps for exactly this. */
+          protocolVersion: PROTOCOL,
           capabilities: { tools: {} },
           serverInfo: { name: 'stash', version: '1' },
         })
@@ -457,7 +562,10 @@ return async function rpc(m: any): Promise<any> {
         return reply({})
       case 'tools/list':
         return reply({
-          tools: Object.entries(tools).map(([name, t]) => ({ name, description: t.description, inputSchema: t.schema })),
+          tools: Object.entries(tools).map(([name, t]) => ({
+            name, description: t.description, inputSchema: t.schema,
+            ...(t.annotations && { annotations: t.annotations }),
+          })),
         })
       case 'tools/call': {
         const t = tools[m.params?.name]
