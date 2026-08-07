@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Wallet, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,6 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Hint } from '@/components/ui/tooltip'
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
+import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
@@ -581,50 +582,74 @@ export default function MarketPage() {
             to that timescale. Opening range pins 15m, so there the interval is left alone. */}
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
           {(Object.keys(HORIZONS) as Horizon[]).map((h) => (
-            <Button key={h} size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
-              className={cn('h-7', horizon !== h && 'text-muted-foreground')}
-              onClick={() => { setHorizon(h); if (preset === 'standard') setInterval(HORIZONS[h].interval) }}>
-              {HORIZONS[h].label}
-            </Button>
+            <Hint key={h} label={`${HORIZONS[h].fast}/${HORIZONS[h].slow}-MA on ${HORIZONS[h].interval} bars — every verdict, level and alert below is read at this scale`}>
+              <Button size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
+                className={cn('h-7', horizon !== h && 'text-muted-foreground')}
+                onClick={() => { setHorizon(h); if (preset === 'standard') setInterval(HORIZONS[h].interval) }}>
+                {HORIZONS[h].label}
+              </Button>
+            </Hint>
           ))}
         </div>
-        {/* what you're looking at on the left; how you're looking at it in one group on the right,
-            so the row reads as two clusters instead of six controls fighting for the same line */}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        {/* what you're looking at, then how you're looking at it — one divider between the two
+            clusters rather than `ml-auto`, which on a narrow window pushed the whole right-hand
+            cluster onto a second line and left the first half of that line empty. Packed left,
+            a wrap reads as the toolbar continuing. */}
+        <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
+        <div className="flex flex-wrap items-center gap-2">
           {/* opening range pins 15m, so the interval picker only shows in Standard */}
           {preset === 'standard' && (
             <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
               {INTERVALS.map((iv) => (
-                <Button key={iv} size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
-                  className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
-                  {iv}
-                </Button>
+                <Hint key={iv} label={`One candle is ${iv}${HIGHER[iv] ? ` · the trend filter checks the ${HIGHER[iv]}` : ''}`}>
+                  <Button size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
+                    className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
+                    {iv}
+                  </Button>
+                </Hint>
               ))}
             </div>
           )}
           <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
             {PRESETS.map((p) => (
-              <Button key={p.id} size="sm" variant={preset === p.id ? 'secondary' : 'ghost'}
-                className={cn('h-7', preset !== p.id && 'text-muted-foreground')} onClick={() => setPreset(p.id)}>
-                {p.label}
-              </Button>
+              <Hint key={p.id} label={p.id === 'standard'
+                ? 'The moving-average read: pull-backs to the fast MA, with the range and the trend filter around it'
+                : "The first 15 minutes of the US session as the day's range — breaks of it are the trade, and the bars are pinned to 15m"}>
+                <Button size="sm" variant={preset === p.id ? 'secondary' : 'ghost'}
+                  className={cn('h-7', preset !== p.id && 'text-muted-foreground')} onClick={() => setPreset(p.id)}>
+                  {p.label}
+                </Button>
+              </Hint>
             ))}
           </div>
           {/* the panel under the price — the readings that were voting while invisible */}
           <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
-            {([['none', 'None'], ['volume', 'Vol'], ['rsi', 'RSI'], ['macd', 'MACD']] as const).map(([id, label]) => (
-              <Button key={id} size="sm" variant={panel === id ? 'secondary' : 'ghost'}
-                className={cn('h-7', panel !== id && 'text-muted-foreground')} onClick={() => setPanel(id)}>
-                {label}
-              </Button>
+            {/* No "None" button: the one that is on turns itself off. Three pills instead of four,
+                and the way out of a panel is the thing you clicked to get into it. */}
+            {([
+              ['volume', 'Vol', 'Volume per bar, under the price — how much agreed with the move'],
+              ['rsi', 'RSI', 'RSI(14) with its 30 and 70 lines — one of the votes in the tally above'],
+              ['macd', 'MACD', 'MACD 12/26 and its 9 signal — the cross the verdict reads, drawn'],
+            ] as const).map(([id, label, hint]) => (
+              <Hint key={id} label={panel === id ? `${hint}. Click to close the panel.` : hint}>
+                <Button size="sm" variant={panel === id ? 'secondary' : 'ghost'}
+                  className={cn('h-7', panel !== id && 'text-muted-foreground')}
+                  onClick={() => setPanel(panel === id ? 'none' : id)}>
+                  {label}
+                </Button>
+              </Hint>
             ))}
           </div>
           {/* swings and the range they span — off is for reading the candles on their own */}
-          <Hint label={structure ? 'Swing highs and lows, the range they span, and the gaps price has not come back for' : 'Structure overlay off'}>
-            <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', !structure && 'text-muted-foreground')}
+          <Hint label={structure
+            ? 'Structure — swing highs and lows, the range they span, and the gaps price has not come back for. Click to hide.'
+            : 'Structure — swing highs and lows, the range they span, and the gaps price has not come back for. Off.'}>
+            {/* icon alone — the word cost the row 80px it did not have, and the tooltip says more
+                than the word did */}
+            <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
+              aria-pressed={structure} className={cn('size-8', !structure && 'text-muted-foreground')}
               onClick={() => setStructure((v) => !v)}>
               <Waypoints className="size-4" />
-              Structure
             </Button>
           </Hint>
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
@@ -660,9 +685,11 @@ export default function MarketPage() {
             <AssetLogo src={current.logo} className="size-7" />
             <span className="text-2xl tabular-nums">{price != null ? fmt(price) : '—'}</span>
             {price != null && (
-              <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
-              </span>
+              <Hint label={`The move across the ${n} bars on screen, ${interval} each — not the 24-hour change`}>
+                <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
+                </span>
+              </Hint>
             )}
             <AlarmButton asset={current.id} label={current.label} price={price ?? null} />
             {/* the price above is the last bar the feed gave us, and off the network that bar is however
@@ -674,11 +701,13 @@ export default function MarketPage() {
               </span>
             )}
             {view && (
-              <span className={cn('ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
-                <bias.Icon className="size-3.5" />
-                {bias.label}
-                <span className="opacity-70 tabular-nums">{bulls}/{bears}</span>
-              </span>
+              <Hint label={`How the readings voted on this chart: ${bulls} lean up, ${bears} lean down. The verdict below is what that adds up to, not a reading of its own.`}>
+                <span className={cn('ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
+                  <bias.Icon className="size-3.5" />
+                  {bias.label}
+                  <span className="opacity-70 tabular-nums">{bulls}/{bears}</span>
+                </span>
+              </Hint>
             )}
           </div>
           {verdict && (
@@ -687,9 +716,11 @@ export default function MarketPage() {
                 <span className={cn('text-lg font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
                 {/* which chart this verdict is off — the two horizons disagree often, and a hint with
                     no timeframe on it is the kind you act on for the wrong reason */}
-                <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
-                  {cfg.label} · {interval}
-                </span>
+                <Hint label={`Read off ${interval} bars with the ${cfg.fast}/${cfg.slow}-MA pair. The other horizon often says something else — this names which one is talking.`}>
+                  <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
+                    {cfg.label} · {interval}
+                  </span>
+                </Hint>
               </p>
               <p className="text-muted-foreground text-xs">{verdict.why}</p>
             </>
@@ -725,17 +756,32 @@ export default function MarketPage() {
               Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
               means nothing until you see it's 1.310 for 900. */}
           <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+            {/* the small grey number is the distance nobody was doing in their head: the entry's is
+                from where price stands now (how far until this is even live), the stop's and the
+                target's are from the entry, which is what they are risk and reward against. Two
+                reference points, so each tooltip names its own. */}
             {([
-              ['Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400'],
-              ['Stop', fmt(plan.stop), 'text-destructive'],
-              ['Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400'],
-              ['Risk to reward', `${fmt(risk)} → ${fmt(reward)} (${plan.rr.toFixed(2)}×)`,
-                plan.thin ? 'text-amber-600 dark:text-amber-500' : ''],
-            ] as const).map(([k, v, cls]) => (
-              <div key={k}>
-                <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
-                <p className={cn('font-medium tabular-nums', cls)}>{v}</p>
-              </div>
+              ['Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400', price != null ? away(plan.entry, price) : null,
+                `The ${cfg.fast}-MA: wait for price to come back ${dir === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`],
+              ['Stop', fmt(plan.stop), 'text-destructive', away(plan.stop, plan.entry),
+                `Just past the near swing, with a quarter of the ATR as buffer so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} from the entry. Broken, the idea was wrong.`],
+              ['Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400', away(plan.target, plan.entry),
+                `The far swing — a level someone is actually trading, never a projection off the entry. ${away(plan.target, plan.entry)} from the entry.`],
+              ['Risk to reward', `${fmt(risk)} → ${fmt(reward)}`,
+                plan.thin ? 'text-amber-600 dark:text-amber-500' : '', `${plan.rr.toFixed(2)}×`,
+                plan.thin
+                  ? 'Reward under 1R: right idea, maths that does not pay. Guides pass on these.'
+                  : 'Entry-to-stop against entry-to-target, per unit. Both in price, so the ratio is what you are paid for being right.'],
+            ] as const).map(([k, v, cls, sub, hint]) => (
+              <Hint key={k} label={hint}>
+                <div>
+                  <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
+                  <p className={cn('font-medium tabular-nums', cls)}>
+                    {v}
+                    {sub && <span className="text-muted-foreground ml-1.5 text-xs font-normal">{sub}</span>}
+                  </p>
+                </div>
+              </Hint>
             ))}
           </div>
           {/* the button explained where it sits — it was the one thing on this card you had to
@@ -1431,6 +1477,11 @@ function closeAt(s: (typeof SESSIONS)[number], at: number) {
     .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
+/** How far a level stands from where price is now, signed as the move itself would be. The plan's
+ *  levels and the exchange's rows both want it, and "4.307,30" alone never said how far away that
+ *  was on a chart you have to squint at. */
+const away = (lvl: number, from: number) => `${lvl >= from ? '+' : ''}${((lvl / from - 1) * 100).toFixed(1)}%`
+
 /** One exchange position row, as /api/positions shapes it — Kraken or Bitget, one shape. */
 type ExchangePosition = {
   symbol: string; side: 'long' | 'short'; size: number; entry: number
@@ -1533,11 +1584,6 @@ export function ExchangePositions() {
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
-  // how far price stands from a level, from where it is now — signed as the move itself would be
-  const away = (lvl: number, mark: number) => {
-    const d = (lvl / mark - 1) * 100
-    return `(${d >= 0 ? '+' : ''}${d.toFixed(1)}%)`
-  }
   const risk = openRisk(rows, watches.filter(isPosition), equity)
   /* Two currencies, never one total: the exchanges answer in their dollars and a hand-entered
      position is what you typed in euros. Joined with a + rather than added, because the sum of
@@ -1558,13 +1604,19 @@ export function ExchangePositions() {
       <CardContent className="grid gap-1.5 px-3 text-sm">
         <div className="flex items-baseline gap-2">
           <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open positions</p>
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {rows.length} open{nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
-          </span>
-          {equity != null && (
-            <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
-              equity ${equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <Hint label={nearestLiq != null
+            ? 'The worst single row: how far price has to travel before an exchange closes it for you. Only where the venue vouches for the number.'
+            : 'What the exchanges say is open right now, keys held server-side'}>
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {rows.length} open{nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
             </span>
+          </Hint>
+          {equity != null && (
+            <Hint label="Account equity as the venue reports it — wallet balance plus what is open, before fees">
+              <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
+                equity ${equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </Hint>
           )}
         </div>
         {/* The one thing the desk never said. It answers "should I buy this" all day, and nearest
@@ -1607,14 +1659,25 @@ export function ExchangePositions() {
                     {r != null && ` · ${rLabel(r)}`}
                   </span>
                 )}
+                {/* the one thing on this desk anyone shows anyone else: the asset, the side and
+                    what it is doing, as a picture that carries none of the account with it */}
+                <Hint label="A card of this position — asset, side and profit — to the share sheet, or saved as a picture">
+                  <Button variant="ghost" size="icon-xs" aria-label={`Share ${p.symbol} card`}
+                    className={cn('text-muted-foreground hover:text-foreground', p.pct == null && 'ml-auto')}
+                    onClick={() => void shareCard(p, r).then((how) => {
+                      if (how === 'saved') toast('Card saved', { description: 'No share sheet here, so it went to your downloads.' })
+                    }).catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
+                    <Share2 className="size-3.5" />
+                  </Button>
+                </Hint>
               </div>
               {(p.value != null || p.stop != null || p.target != null || p.openedAt != null) && (
                 <p className="text-muted-foreground text-xs">
                   {[
                     p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-                    p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? away(p.stop, p.mark) : ''}`.trim(),
-                    p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? away(p.target, p.mark) : ''}`.trim(),
-                    p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? away(p.liq, p.mark) : ''}`.trim(),
+                    p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? `(${away(p.stop, p.mark)})` : ''}`.trim(),
+                    p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? `(${away(p.target, p.mark)})` : ''}`.trim(),
+                    p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? `(${away(p.liq, p.mark)})` : ''}`.trim(),
                     p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
                     p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
                       day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -1786,9 +1849,12 @@ function Position({ asset, label, horizon, price, plan, dir }: {
 
   return (
     <CardContent className="border-t px-3 pt-3">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
     <Popover open={open} onOpenChange={(v) => (v ? start() : setOpen(false))}>
+      {/* it was a ghost button on a line of its own, which reads as a stray label rather than the
+          one control on this card that writes down a real trade. Outlined, and told what it does. */}
       <PopoverTrigger asChild>
-        <Button size="sm" variant="ghost" className="text-muted-foreground -mx-2 -my-1 h-7">I'm in this trade</Button>
+        <Button size="sm" variant="outline" className="h-7 gap-1.5"><Wallet className="size-3.5" />I'm in this trade</Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 grid gap-3">
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
@@ -1817,6 +1883,11 @@ function Position({ asset, label, horizon, price, plan, dir }: {
         <Button size="sm" disabled={!sane || !geometry} onClick={save}>Track it</Button>
       </PopoverContent>
     </Popover>
+    <p className="text-muted-foreground text-xs">
+      Money and leverage on the levels above, and the running profit sits here — this one is yours,
+      not a hypothetical.
+    </p>
+    </div>
     </CardContent>
   )
 }
