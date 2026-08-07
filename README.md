@@ -751,6 +751,7 @@ claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e ST
 | `stash_capture` | adds lines through the same parser the capture bar uses, so `@kova #audio tomorrow !` all mean what they mean when typed |
 | `stash_edit` | one item by id: text, note, date, hour, flag, tags, type, project, done, or gone |
 | `stash_project` | adds one, or renames, recolours and renests an existing one |
+| `stash_subs` | the recurring money in and out — lists with the monthly and yearly totals, adds, changes and removes |
 | `market_read` | the desk's read on an asset — price, every signal, the tally and the setup that falls out of it |
 | `market_trending` | Solana pools trending on the last hour, or the ones that just opened — `new` filtered by your own liquidity floor |
 | `market_setups` | the saved setups the bell is watching, and the record of the ones that finished |

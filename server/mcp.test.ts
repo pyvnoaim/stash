@@ -32,13 +32,24 @@ const call = async (name: string, args: unknown = {}) => {
   return JSON.parse(text)
 }
 
-// the handshake, and the tools it advertises
-const hello: any = await send('initialize', { protocolVersion: '2025-03-26' })
-assert.equal(hello.result.protocolVersion, '2025-03-26')   // whatever the client speaks
+/* The handshake names the revision this server implements, whatever was asked for. It used to
+   echo the client's own back, which said yes to 2026-07-28 — where negotiation moved into a
+   per-request `_meta` key and `server/discover` became a call a server MUST answer — and then
+   answered none of it. Asking as a client from the future is the case that has to hold. */
+const hello: any = await send('initialize', { protocolVersion: '2026-07-28' })
+assert.equal(hello.result.protocolVersion, '2025-06-18')
 assert.deepEqual(hello.result.capabilities, { tools: {} })
 const listed: any = await send('tools/list')
 assert.deepEqual(listed.result.tools.map((t: any) => t.name).sort(),
-  ['market_read', 'market_setups', 'market_trending', 'stash_capture', 'stash_edit', 'stash_project', 'stash_read'])
+  ['market_read', 'market_setups', 'market_trending', 'stash_capture', 'stash_edit', 'stash_project', 'stash_read', 'stash_subs'])
+
+/* Which of them can take something away, since that is the whole of what an annotation is for:
+   a client with no way to tell reads every call as equally safe. */
+const byName = Object.fromEntries(listed.result.tools.map((t: any) => [t.name, t.annotations]))
+assert.equal(byName.stash_read.readOnlyHint, true)
+assert.equal(byName.stash_edit.destructiveHint, true)
+assert.equal(byName.stash_subs.destructiveHint, true)
+assert.equal(byName.stash_capture, undefined, 'a writer that takes nothing away carries no hint')
 
 // a notification is not answered at all; an unknown method is
 assert.equal(await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }), null)
@@ -61,6 +72,28 @@ const state: any = await (await fetch(`${url}/state`, {
 assert.equal(state.state.items.length, 1)
 assert.equal(state.state.projects[0].name, 'Kova')
 assert.equal(state.state.apiKey, '')   // the Twelve Data key never travels, from here either
+
+/* Subscriptions, the collection this server could not see at all until now. One tool does the
+   four things, so what is asserted is that each of them lands on the server's own document and
+   that the totals come back off it — the totals are why anyone calls this rather than reading. */
+const added = await call('stash_subs', { name: 'Spotify', kind: 'expense', cost: 12, cycle: 'monthly' })
+assert.equal(added.subs.length, 1)
+assert.equal(added.monthlyOut, 12)
+// a quarterly charge is a third of itself per month, which is the number the view actually shows
+await call('stash_subs', { name: 'Domains', kind: 'expense', cost: 30, cycle: 'quarterly' })
+assert.equal((await call('stash_subs')).monthlyOut, 22)
+// income counts on its own side rather than netting off, the same as the two-tab view
+await call('stash_subs', { name: 'Retainer', kind: 'income', cost: 500, cycle: 'monthly' })
+const both = await call('stash_subs')
+assert.equal(both.monthlyOut, 22)
+assert.equal(both.monthlyIn, 500)
+// patching by name touches that row and nothing else
+await call('stash_subs', { name: 'spotify', cost: 15 })
+assert.equal((await call('stash_subs')).subs.find((x: any) => x.name === 'Spotify').cost, 15)
+// a new row cannot be filed half-described — a nameless €0 monthly expense is not what was meant
+await assert.rejects(() => call('stash_subs', { name: 'Mystery' }), /needs kind, cost, cycle/)
+await call('stash_subs', { name: 'Domains', remove: true })
+assert.deepEqual((await call('stash_subs')).subs.map((x: any) => x.name).sort(), ['Retainer', 'Spotify'])
 
 // the search syntax is the app's, sub-projects and all
 assert.equal((await call('stash_read', { query: '#audio' })).count, 1)
