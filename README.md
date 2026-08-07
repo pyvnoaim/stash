@@ -318,6 +318,14 @@ between weeks — and anything outside pulls it open rather than falling off it,
 or a 23:00 deploy is on the grid. Both views share one anchor: switching to Week lands on the week
 you were looking at, which is the whole point of switching.
 
+A line marks where the day has actually got to, redrawn every minute, so the grid says how much of
+today is left rather than only what is in it. It is drawn inside the hour it falls in rather than
+as a fraction of the whole column, because a busy hour's row is taller than an empty one and a
+percentage down the grid would point at the wrong time. It appears only when today is one of the
+seven on screen — and only when the hour it falls in is one of the hours drawn, so at three in the
+morning there is simply no line, which is better than widening the axis and moving every other
+week to accommodate it.
+
 ### Somebody else's calendar
 
 **Settings → Account → Calendar feed** cuts a link — `/ics/<128 bits of hex>` — that any calendar
