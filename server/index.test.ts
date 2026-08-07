@@ -46,17 +46,20 @@ assert.equal(r.headers.get('cache-control'), 'no-store')
 
 /* server/mcp.ts signs in with `user-agent: stash-mcp` under a comment saying that is what names
    it in the sessions list — the branch reading it did not exist, so every MCP context showed up as
-   "A browser" and left a row behind on every process start. One row, replaced, and named. */
+   "A browser" and left a row behind on every process start. It is read now, and signing in sweeps
+   the tool's own rows that have gone quiet.
+   What is asserted here is the half a test can hold a clock still for: the name, and that a second
+   live client is NOT swept. Cutting every MCP row on sign-in was the first draft, and two clients
+   against one account would have spent the day cancelling each other. */
 const mcpLogin = () => fetch(url + '/api/login', {
   method: 'POST', headers: { 'user-agent': 'stash-mcp' },
   body: JSON.stringify({ user: 'leon', pass: 'longenough' }),
 })
 assert.equal((await mcpLogin()).status, 200)
 assert.equal((await mcpLogin()).status, 200)
-assert.equal((await mcpLogin()).status, 200)
 const named = (await (await get('/api/sessions', leon)).json()).sessions as { device: string | null }[]
-assert.equal(named.filter((d) => d.device === 'Claude, over MCP').length, 1,
-  'three MCP logins are one row, not three')
+assert.equal(named.filter((d) => d.device === 'Claude, over MCP').length, 2,
+  'a second MCP client signing in must not cut the first one\'s session')
 // node's own fetch sends `user-agent: node`, so the other logins here are the unrecognised case
 // on purpose — what matters is that the one client that does name itself is read, not lumped in
 assert.equal(named.some((d) => d.device === 'A browser'), true)

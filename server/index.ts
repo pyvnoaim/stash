@@ -424,7 +424,7 @@ export function start({
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
-    dropDevice: db.prepare('delete from sessions where user = ? and device = ?'),
+    dropStaleDevice: db.prepare('delete from sessions where user = ? and device = ? and seen < ?'),
     sessions: db.prepare(`select hash, created, seen, device from sessions
       where user = ? order by seen desc`),
     touchSession: db.prepare('update sessions set seen = ? where hash = ?'),
@@ -545,12 +545,15 @@ export function start({
   }
 
   const newSession = (user: number, device: string | null = null) => {
-    /* One row for the tool, replaced rather than added to. It signs in again on every process
-       start — so on every deploy — and on every eviction from the context cache, and each of those
-       was leaving a row behind to idle out over a fortnight. A browser gets a row per device
-       because that is the question the list answers; this is one client that keeps coming back,
-       and the old cookie is no loss: mcp.ts logs in again on the 401. */
-    if (device === MCP_DEVICE) q.dropDevice.run(user, MCP_DEVICE)
+    /* The tool's own dead rows, swept as it signs in again. It logs in on every process start —
+       so on every deploy — and on every eviction from the context cache, and each of those left a
+       row behind to idle out over a fortnight. A browser gets a row per device because that is the
+       question the list answers; this is one client that keeps coming back.
+       Only the ones that have gone quiet, though. Deleting every MCP row outright is what the
+       first draft did, and two live clients — the hosted /mcp route and a local `npm run mcp`
+       against the same account — would then each cut the other's cookie on sign-in, each retry
+       once, and cut it again. Anything used in the last day is somebody's working session. */
+    if (device === MCP_DEVICE) q.dropStaleDevice.run(user, MCP_DEVICE, Date.now() - 86400_000)
     const t = randomBytes(32).toString('hex')
     q.addSession.run(hashToken(t), user, Date.now(), Date.now(), device)
     return t
@@ -1348,7 +1351,11 @@ export function start({
         if (have !== (now?.v ?? 0)) {
           return send(res, 409, { version: now?.v ?? 0, state: now ? JSON.parse(now.json) : null })
         }
-        const w = q.addPdoc.run(owner, pid, Date.now(), String(body.device ?? ''), JSON.stringify(body.state))
+        // the same rule as /state below: an identical write is not a version. sync.ts already
+        // declines to send one, but the guard belongs where every client meets it, not in one
+        const pjson = JSON.stringify(body.state)
+        if (now && now.json === pjson) return send(res, 200, { version: now.v })
+        const w = q.addPdoc.run(owner, pid, Date.now(), String(body.device ?? ''), pjson)
         q.prunePdoc.run(owner, pid, owner, pid, KEEP)
         return send(res, 200, { version: Number(w.lastInsertRowid) })
       }
