@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -340,6 +340,55 @@ assert.deepEqual(deskSignals(null, null, null, own), own)
 // the bug itself: a missing vwap card is a missing vote, and one vote is a whole verdict
 assert.equal(tally(deskSignals(htf, null, null, [sig('a', 'bear')])).dir, 'flat')
 assert.equal(tally(deskSignals(htf, null, { signal: sig('vwap', 'bear') }, [sig('a', 'bear')])).dir, 'short')
+
+/* ---------- the backtest ---------- */
+
+/* The property that matters most, and the one a backtest quietly breaks: no look-ahead. If the
+   walk ever read a bar it should not have, then changing bars *after* the last trade closed would
+   change the trades. So run it, find the last bar any trade touched, and rewrite everything past
+   that point into a completely different market — the answer has to be identical. */
+const btBars = Array.from({ length: 420 }, (_, i) => {
+  const p = 100 + Math.sin(i / 9) * 8 + Math.sin(i / 37) * 14 + i * 0.02
+  const o = p - Math.sin(i / 5) * 1.5
+  return { t: i * 36e5, o, h: Math.max(o, p) + 1.2, l: Math.min(o, p) - 1.2, c: p, v: 10 + (i % 7) }
+})
+const cfgShort = { fast: 9, slow: 21, srWindow: 20 }
+const base = backtest(btBars, cfgShort, { window: 300 })
+assert.ok(base.trades.length > 0, 'the fixture has to actually produce trades or this proves nothing')
+const lastTouched = Math.max(...base.trades.map((t) => t.closedAt))
+const tampered = btBars.map((b, i) => (i > lastTouched
+  ? { ...b, o: b.o * 3, h: b.h * 3.5, l: b.l * 0.4, c: b.c * 3 } // a different market entirely
+  : b))
+const rerun = backtest(tampered, cfgShort, { window: 300 })
+/* Only the trades that were finished before the tampering starts. The walk carries on past them
+   into the rewritten bars and finds its own trades there, which it is supposed to do — the claim
+   is that nothing already settled can be reached back into and changed. */
+assert.deepEqual(rerun.trades.filter((t) => t.closedAt <= lastTouched), base.trades)
+// …and the rewrite has to have actually done something, or the assertion above proves nothing
+assert.ok(rerun.trades.length > base.trades.length, 'tampering changed no trades — the test is vacuous')
+
+/* Every trade has to be causally ordered: planned, then entered, then exited. An entry on the
+   same bar the plan was made would be reading a close before it happened. */
+for (const t of base.trades) {
+  assert.ok(t.at < t.openedAt, 'entered on or before the bar the plan was made')
+  assert.ok(t.openedAt <= t.closedAt)
+  assert.ok(t.r === -1 || t.r > 0, 'a stop is exactly −1R and a target is the plan\'s own rr')
+  assert.equal(t.r === -1, t.exit === 'stop')
+  // the entry really was touched by the bar it opened on, at the price the plan named
+  const b = btBars[t.openedAt]
+  assert.ok(t.dir === 'long' ? b.l <= t.entry : b.h >= t.entry)
+}
+// one position at a time: no trade may start before the one before it has finished
+for (let k = 1; k < base.trades.length; k++) assert.ok(base.trades[k].at > base.trades[k - 1].closedAt)
+
+// the summary is arithmetic on the trades, not a second opinion about them
+assert.equal(base.hit, base.trades.filter((t) => t.exit === 'target').length / base.trades.length)
+const mean = base.trades.reduce((a, t) => a + t.r, 0) / base.trades.length
+assert.ok(Math.abs(base.expectancy - mean) < 1e-9)
+// too few bars to warm the slow MA is no trades rather than a divide by zero
+const tiny = backtest(btBars.slice(0, 10), cfgShort)
+assert.deepEqual([tiny.trades.length, tiny.median, tiny.expectancy, tiny.hit], [0, 0, 0, 0])
+assert.deepEqual(backtest([], cfgShort).trades, [])
 
 /* ---------- fair value gaps ---------- */
 

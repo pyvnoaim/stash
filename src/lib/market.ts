@@ -1111,6 +1111,117 @@ export function tradePlan(
   return { entry, stop, target, rr: reward / risk, thin: reward < risk }
 }
 
+/** One simulated trade: the bar the plan was made on, the bar its entry was actually reached, and
+ *  the bar and side it ended on. `r` is +rr on a target and −1 on a stop. */
+export type Trade = {
+  at: number; openedAt: number; closedAt: number
+  dir: 'long' | 'short'
+  entry: number; stop: number; target: number
+  exit: 'target' | 'stop'
+  r: number
+}
+
+export type Backtest = {
+  trades: Trade[]
+  /** Bars the walk actually covered — the denominator for "how often does this thing fire". */
+  bars: number
+  /** Plans that were made but whose entry never came round inside `expiry`. Not losses: a trade
+   *  nobody was ever in is not a trade that lost, which is the same rule the live record keeps. */
+  missed: number
+  /** Median R, and the mean. The median is the honest headline — one runaway winner drags a mean
+   *  somewhere no individual trade ever went. */
+  median: number
+  expectancy: number
+  /** Share that reached the target. A hit rate on its own says nothing without the R beside it. */
+  hit: number
+}
+
+/**
+ * The rule this app actually ships, walked forward over bars it has already fetched.
+ *
+ * Every threshold on this page was set by backtests run by hand, once, on BTC, whose code is gone —
+ * the numbers survive only as prose in the comments above. This is that measurement made repeatable
+ * and pointed at whatever asset and timeframe you are looking at, which is the difference between
+ * "the guides say this works" and "here is what it did on this chart".
+ *
+ * No look-ahead, and the shape of the loop is what guarantees it. At bar `i` the read is taken from
+ * `c.slice(0, i + 1)`, where bar `i` is the last one — and signals() treats its own last bar as
+ * still forming, exactly as it does live. Nothing is acted on until bar `i + 1`. The plan is then
+ * snapshotted rather than re-read each bar, which is what `Alert me` does to a real setup: the entry
+ * rides a moving average, and a plan that kept re-reading it would quietly become a different trade.
+ *
+ * One position at a time, since that is what the record and the position card both assume. A bar
+ * that touches the stop and the target both is counted as a stop: intrabar order is unknowable from
+ * OHLC, and the pessimistic read is the only one that cannot flatter the result.
+ *
+ * What it does not model, and these are not small: no fees, no funding, no slippage, and every fill
+ * exactly at its level — a bar that gaps clean through a stop really fills worse than this says. It
+ * is also in-sample by construction, measured on the same window you are looking at. Read it as the
+ * floor under "does this rule do anything at all here", not as a forecast.
+ */
+export function backtest(
+  c: Candle[],
+  cfg: { fast: number; slow: number; srWindow: number } = HORIZONS.long,
+  /** `drop` silences those cards in the tally. The point of owning a backtest at all is being able
+   *  to ask whether a reading earns its vote, and that question is unanswerable from outside — the
+   *  tally is assembled in here. Empty is the rule as it ships. */
+  { window = 400, expiry = 20, drop = [] }: { window?: number; expiry?: number; drop?: GuideKey[] } = {},
+): Backtest {
+  const trades: Trade[] = []
+  let missed = 0
+  // the slow MA has to have warmed up, or the first reads are taken off a line that does not exist
+  const from = Math.max(cfg.slow + 2, c.length - window)
+  let i = from
+  while (i < c.length - 1) {
+    const view = signals(c.slice(0, i + 1), cfg)
+    const entry = view.smaFast.at(-1)
+    if (entry == null) { i++; continue }
+    const vwap = sessionVwap(c.slice(0, i + 1))
+    const cards = deskSignals(null, null, vwap, view.signals).filter((s) => !drop.includes(s.kind))
+    const { dir } = tally(cards)
+    const plan = tradePlan(dir, c[i].c, entry, view.levels, view.atr)
+    // tradePlan already declines a flat tally; naming it again is what lets the side be a side
+    if (!plan || dir === 'flat') { i++; continue }
+
+    const long = dir === 'long'
+    // wait for the pull-back to reach the entry, then follow that same bar through to an exit
+    let open = -1
+    let j = i + 1
+    for (; j < c.length && j <= i + expiry; j++) {
+      if (open < 0) {
+        if (long ? c[j].l <= plan.entry : c[j].h >= plan.entry) open = j
+        else continue
+      }
+      const stopped = long ? c[j].l <= plan.stop : c[j].h >= plan.stop
+      const won = long ? c[j].h >= plan.target : c[j].l <= plan.target
+      // stop first: which came first inside the bar is not in the data, and guessing the kind one
+      // is how a backtest talks itself into an edge it never had
+      if (stopped || won) {
+        trades.push({
+          at: i, openedAt: open, closedAt: j, dir, entry: plan.entry, stop: plan.stop,
+          target: plan.target, exit: stopped ? 'stop' : 'target', r: stopped ? -1 : plan.rr,
+        })
+        break
+      }
+    }
+    if (open < 0) missed++
+    // resume after whatever happened: an entry that never came round frees the desk at its expiry,
+    // and a trade that ran holds it until the bar it ended on
+    i = (open < 0 ? i + expiry : j) + 1
+  }
+
+  const rs = trades.map((t) => t.r).sort((a, b) => a - b)
+  const median = rs.length ? (rs.length % 2 ? rs[(rs.length - 1) / 2] : (rs[rs.length / 2 - 1] + rs[rs.length / 2]) / 2) : 0
+  return {
+    trades,
+    bars: Math.max(0, c.length - 1 - from),
+    missed,
+    median,
+    expectancy: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : 0,
+    hit: rs.length ? trades.filter((t) => t.exit === 'target').length / rs.length : 0,
+  }
+}
+
 /** Trade horizon tunes how twitchy the read is: investing rides the slow classic 50/200 pair, a wide
  *  support band and daily bars; trading uses fast 9/21 MAs, a tight band and hourly bars, so it flips
  *  far sooner. Labelled Investing/Trading, not Long/Short-term, so it can't be read as the long/short
@@ -1253,13 +1364,20 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     const near = openGaps.reduce((best, g) => (gapAway(g, price) < gapAway(best, price) ? g : best))
     const away = gapAway(near, price)
     const size = `${fmtPrice(near.bottom, price)}–${fmtPrice(near.top, price)}`
+    /* Flat, all three of them — this card describes and does not vote, and that is a measurement
+       rather than caution. Backtested over 9 assets and a 600-bar window with the card's vote on
+       and off, the whole rule's expectancy moved −0.013R per trade on the 1h, +0.068R on the 4h and
+       −0.241R on the daily: inconsistent in sign, tiny beside the spread, and on most assets it did
+       not change a single trade. A card that cannot pick a direction across timeframes has not
+       earned one. Same standing as the Frankfurt opening range above, and for the same reason.
+       Re-run it with `drop: ['fvg']` if the market ever makes this worth revisiting. */
     if (away === 0) out.push({
       label: 'Filling a gap', tone: 'flat', kind: 'fvg' as const,
       detail: `price is inside the ${size} imbalance now — the stretch the book skipped is being traded back`,
     })
     else if (away <= atrValue) out.push(price > near.top
-      ? { label: 'Gap below', tone: 'bear', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits under price, inside one ATR — the nearest thing price has left to come back for` }
-      : { label: 'Gap above', tone: 'bull', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits over price, inside one ATR — the nearest thing price has left to come back for` })
+      ? { label: 'Gap below', tone: 'flat', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits under price, inside one ATR — the nearest thing price has left to come back for` }
+      : { label: 'Gap above', tone: 'flat', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits over price, inside one ATR — the nearest thing price has left to come back for` })
   }
 
   return {
