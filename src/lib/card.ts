@@ -46,13 +46,16 @@ export type CardWho = { name: string; avatar: string | null }
  * SVG carrying its own markup — is dropped and the card goes out with the name alone.
  */
 const AVATAR = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/
-const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? 'Kraken'
+/* ponytail: its own copy of market.ts's venueName. This file imports nothing on purpose — pure
+   string in, pure string out is what makes it testable — and a two-entry lookup is a cheaper
+   duplicate than a dependency on the whole feed module. */
+const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
 const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 /** The card, as SVG. Pure string in, pure string out — which is what makes it testable. */
 export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null): string {
-  const name = p.symbol.replace(/^(PF|PI|FI)_/, '')
+  const name = p.symbol
   const up = (p.pct ?? 0) >= 0
   // grey, not green, when the feed gave no mark: an unknown that wears the winning colour is a lie
   const ink = p.pct == null ? '#a1a1aa' : up ? '#34d399' : '#f87171'
@@ -115,7 +118,7 @@ export async function shareCard(p: CardPosition, r: number | null = null, who: C
   c.getContext('2d')!.drawImage(img, 0, 0)
   const blob = await new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('no card'))), 'image/png'))
   // the symbol is the exchange's word, not ours: anything that is not a filename comes out
-  const name = (p.symbol.replace(/^(PF|PI|FI)_/, '').replace(/[^\w.-]/g, '') || 'position') + '.png'
+  const name = (p.symbol.replace(/[^\w.-]/g, '') || 'position') + '.png'
   const file = new File([blob], name, { type: 'image/png' })
   if (navigator.canShare?.({ files: [file] })) {
     const done = await navigator.share({ files: [file] })

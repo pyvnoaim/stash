@@ -276,6 +276,9 @@ export interface State {
   subSort: SubSort
   /** Which side of Subscriptions is open — expenses or income. */
   subView: 'expense' | 'income'
+  /** Whether Calendar is showing the month or one week. The week is the only view with an hour
+   *  axis, so it is where a timed item finally sits at the time it says. */
+  calView: 'month' | 'week'
   /** Saved Markets setups the bell watches the live price against. */
   watches: Watch[]
   /** Bare price alarms — a level and nothing else, for "tell me at 100k" without the ceremony of
@@ -392,7 +395,7 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
-  subSort: 'recent', subView: 'expense',
+  subSort: 'recent', subView: 'expense', calView: 'month',
   watches: [], alarms: [], results: [], stake: 0, desk: false,
   marketAsset: 'BTCUSDT', marketHorizon: 'short',
   dials: { ...DIALS }, dismissed: {},
@@ -569,6 +572,7 @@ export function load(data: unknown): State {
   )
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
+  st.calView = st.calView === 'week' ? 'week' : 'month'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
   st.marketHorizon = st.marketHorizon === 'long' ? 'long' : 'short'
   // dialsOf owns the ranges: a hand-edited backup cannot set a threshold the bell has no wording for
@@ -1081,6 +1085,7 @@ export const setStake = (stake: number) =>
   set((s) => ({ ...s, stake: isFinite(stake) && stake > 0 ? stake : 0 }))
 export const setDesk = (desk: boolean) => set((s) => ({ ...s, desk }))
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
+export const setCalView = (calView: 'month' | 'week') => set((s) => ({ ...s, calView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
 /**

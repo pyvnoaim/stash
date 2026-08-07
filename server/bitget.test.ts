@@ -14,7 +14,7 @@ const rows = shape([
 ])
 
 assert.equal(rows.length, 2)
-// same arithmetic as the Kraken join: pct and pnl positive when the trade is in your favour
+// pct and pnl positive when the trade is in your favour, whichever side it is
 assert.deepEqual(rows[0], {
   symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 100, mark: 110, pct: 10,
   pnl: 5, value: 55, openedAt: '2025-08-05T13:20:00.000Z', stop: 90, target: 130, liq: 80.5, funding: null,

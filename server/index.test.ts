@@ -637,18 +637,73 @@ assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', inv
 const kInv = server.invite()
 const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
 // no session, no key business at all
-assert.equal((await get('/api/kraken')).status, 401)
+assert.equal((await get('/api/mexc')).status, 401)
 // no key on the account yet: the status says so, and positions has nothing to sign with
-assert.deepEqual(await (await get('/api/kraken', kUser)).json(), { set: false })
+assert.deepEqual(await (await get('/api/mexc', kUser)).json(), { set: false })
 assert.equal((await get('/api/positions', kUser)).status, 501)
 // half a credential is refused rather than stored
-assert.equal((await post('/api/kraken', { key: 'only-half' }, kUser)).status, 400)
+assert.equal((await post('/api/mexc', { key: 'only-half' }, kUser)).status, 400)
 // a whole one lands, and the answer never carries the secret back
-assert.deepEqual(await (await post('/api/kraken', { key: 'k', secret: 's' }, kUser)).json(), { set: true })
-assert.deepEqual(await (await get('/api/kraken', kUser)).json(), { set: true })
+assert.deepEqual(await (await post('/api/mexc', { key: 'k', secret: 's' }, kUser)).json(), { set: true })
+assert.deepEqual(await (await get('/api/mexc', kUser)).json(), { set: true })
 // empty both takes it off again
-assert.deepEqual(await (await post('/api/kraken', {}, kUser)).json(), { set: false })
+assert.deepEqual(await (await post('/api/mexc', {}, kUser)).json(), { set: false })
 assert.equal((await get('/api/positions', kUser)).status, 501)
+
+/* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
+
+/* kUser's session, rather than one more account: the signup limiter is deliberately tight and this
+   file has already spent most of its allowance by here. */
+const bUser = kUser
+const raw = (path: string, body: BodyInit, cookie = '', type = 'image/png') =>
+  fetch(url + path, { method: 'POST', headers: { cookie, 'content-type': type }, body })
+
+const onePng = Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'), Buffer.alloc(32)])
+
+// no session, no uploading and no reading
+assert.equal((await raw('/api/blob', onePng)).status, 401)
+assert.equal((await get(`/api/blob/${'a'.repeat(32)}`)).status, 401)
+
+// a real png lands and comes back with an id to point a note at
+const up = await raw('/api/blob', onePng, bUser)
+assert.equal(up.status, 200)
+const { id } = await up.json() as { id: string }
+assert.match(id, /^[0-9a-f]{32}$/)
+
+// and reads back as the bytes that went in, typed from the bytes rather than from the header
+const back = await get(`/api/blob/${id}`, bUser)
+assert.equal(back.status, 200)
+assert.equal(back.headers.get('content-type'), 'image/png')
+// never sniffed into something executable, never loadable by another origin
+assert.equal(back.headers.get('x-content-type-options'), 'nosniff')
+assert.equal(back.headers.get('cross-origin-resource-policy'), 'same-origin')
+assert.deepEqual(Buffer.from(await back.arrayBuffer()), onePng)
+
+/* An SVG calling itself a png is the attack this exists to refuse: it would be served from this
+   app's own origin, where a document that can carry script is a document that runs as the app. */
+assert.equal((await raw('/api/blob', Buffer.from('<svg onload="alert(1)"></svg>'), bUser)).status, 415)
+assert.equal((await raw('/api/blob', Buffer.from('not a picture at all'), bUser)).status, 415)
+// and over the cap the connection is cut rather than the body buffered and complained about after
+assert.equal((await raw('/api/blob', Buffer.alloc(6 * 1024 * 1024), bUser).catch(() => ({ status: 413 }))).status, 413)
+
+/* The per-account ceiling, without which a signed-in account can grow the database until the disk
+   is full — which takes the server down for everyone rather than for whoever did it.
+   What is checked is the accounting, not the comparison: filling 250 MB to watch a `>` flip would
+   write a quarter of a gigabyte on every test run to prove one operator, while the part that can
+   really be wrong is which rows get summed. */
+const kayId = (db.prepare('select id from users where name = ?').get('kay') as { id: number }).id
+const kayBytes = () =>
+  (db.prepare('select coalesce(sum(length(bytes)), 0) as n from blobs where owner = ?')
+    .get(kayId) as { n: number }).n
+assert.equal(kayBytes(), onePng.length)
+// somebody else's picture is not counted against this account's ceiling
+assert.equal((await raw('/api/blob', onePng, leon)).status, 200)
+assert.equal(kayBytes(), onePng.length, 'the quota must sum this account\'s pictures and only theirs')
+
+// a picture that never existed is a 404, not a leak of whether the id was ever real
+assert.equal((await get(`/api/blob/${'f'.repeat(32)}`, bUser)).status, 404)
+// an id that is not one at all does not reach the table
+assert.equal((await get('/api/blob/nope', bUser)).status, 404)
 
 /* a run of wrong codes from one address cools off — the invite space is 64 bits wide, but nothing
    should be free to work through it. Last, because the cool-off outlives the test that trips it. */

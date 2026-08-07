@@ -20,7 +20,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, swings, tally, tradePlan, trendFilter,
-  TREND_NETWORK, usMarketOpen,
+  TREND_NETWORK, usMarketOpen, venueName,
   topDown,
   type Asset, type Backtest, type Candle, type Cascade, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -148,7 +148,7 @@ export default function MarketPage() {
   const stale = !online || notLive
   const cfg = HORIZONS[horizon]
   // the exchange's word on what's held, for drawing the real position over whatever the plan says
-  const kraken = useExchangePositions()
+  const exch = useExchangePositions()
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -471,9 +471,9 @@ export default function MarketPage() {
   // emerald/red, plan entry sky, MAs sky/amber, range violet, sessions rose/indigo/teal), and the
   // one that stays apart from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by
   // weight and dash, and the legend below shows exactly those dashes.
-  const held = kraken.rows.find((p) => assetOf(p.symbol) === current.id)
+  const held = exch.rows.find((p) => assetOf(p.symbol) === current.id)
   /* The hand-entered position on this asset is the one that knows its leverage, so it is the one
-     with a liquidation price — the exchange feed's rows deliberately carry no lev (see kraken.ts).
+     with a liquidation price — the exchange feed's rows deliberately carry no lev (see bitget.ts).
      With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
      the feed's entry/stop/target are the trade's real ones. */
   const mine = watches.find((w) => w.asset === current.id && isPosition(w))
@@ -693,7 +693,7 @@ export default function MarketPage() {
 
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
           is the one row here that is fact rather than reading. Absent unless the server has a key
-          and Kraken reports something open. */}
+          and a venue reports something open. */}
       {/* Three questions, three tabs. The page was ten cards in one scroll — the chart, the sweep
           over every other asset, and the record of how the saved ones went are separate sittings,
           and stacking them meant the answer to the one you came for was somewhere in the middle. */}
@@ -1005,7 +1005,7 @@ export default function MarketPage() {
                       y1={y(s.price)} y2={y(s.price)}
                       className="stroke-foreground/55" strokeWidth={1} strokeDasharray="3 2" vectorEffect="non-scaling-stroke" />
                   ))}
-                  {/* Money actually on this chart: the Kraken position's own levels, over whatever
+                  {/* Money actually on this chart: the exchange position's own levels, over whatever
                       the plan says — the plan's lines are hypothesis, these are the trade. All
                       three in the position's own fuchsia; the legend names each dash. Off-frame
                       ones stay in the card, same rule as the plan's. */}
@@ -1545,42 +1545,44 @@ function closeAt(s: (typeof SESSIONS)[number], at: number) {
  *  was on a chart you have to squint at. */
 const away = (lvl: number, from: number) => `${lvl >= from ? '+' : ''}${((lvl / from - 1) * 100).toFixed(1)}%`
 
-/** One exchange position row, as /api/positions shapes it — Kraken or Bitget, one shape. */
+/** One exchange position row, as /api/positions shapes it — every venue, one shape. */
 type ExchangePosition = {
   symbol: string; side: 'long' | 'short'; size: number; entry: number
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
   stop: number | null; target: number | null; funding: number | null
-  /** The exchange's own liquidation price, where its feed says one (Bitget does, Kraken doesn't). */
+  /** The exchange's own liquidation price, where its feed says one. */
   liq?: number | null
   venue?: string
 }
 
 
-const KRAKEN_OPEN = 'stash-kraken-open'
+/* Renamed off `stash-kraken-open` when Kraken came off the desk, deliberately: the old key holds
+   that venue's last look, and rows that vanished because the venue did are not rows that closed.
+   A fresh key means the first look after the upgrade files nothing, which is the honest answer. */
+const LAST_OPEN = 'stash-exchange-open'
 
 /**
- * A position that was here last look and is gone this one has closed. Its exit is looked up in the
- * fills and the trade files itself into the record — the same Result a hand-entered position
- * writes, so the bell announces it and the record counts it, with no second code path. The last
- * look is kept in localStorage, so a close that happened while the app was shut is still caught
- * and written down at the next open, priced at its actual fill.
+ * A position that was here last look and is gone this one has closed, and the trade files itself
+ * into the record — the same Result a hand-entered position writes, so the bell announces it and
+ * the record counts it, with no second code path. The last look is kept in localStorage, so a
+ * close that happened while the app was shut is still caught and written down at the next open.
+ *
+ * ponytail: the exit is the last mark seen, not the fill. Neither venue left on the desk answers
+ * a fills call this code has a key for; add one when a mark-priced close in the record annoys.
  */
-async function fileClosed(next: ExchangePosition[]) {
+function fileClosed(next: ExchangePosition[]) {
   let prev: ExchangePosition[] = []
-  try { prev = JSON.parse(localStorage.getItem(KRAKEN_OPEN) ?? '[]') } catch { /* first look */ }
-  localStorage.setItem(KRAKEN_OPEN, JSON.stringify(next))
+  try { prev = JSON.parse(localStorage.getItem(LAST_OPEN) ?? '[]') } catch { /* first look */ }
+  localStorage.setItem(LAST_OPEN, JSON.stringify(next))
   const gone = prev.filter((p) => !next.some((n) => n.symbol === p.symbol))
   if (!gone.length) return
-  const fills: { symbol: string; price: number; time: number }[] =
-    await fetch('/api/fills').then((r) => (r.ok ? r.json() : { fills: [] })).then((d) => d.fills ?? []).catch(() => [])
   for (const p of gone) {
     /* ponytail: no resting stop, no defined risk — there is no honest R to write, and the record
-       is a scoreboard in R. A stopless trade's close still shows in the bell's fills-free world:
-       it simply leaves the card. */
+       is a scoreboard in R. A stopless trade's close is not hidden by this, it simply leaves the
+       card rather than landing in the record. */
     if (p.stop == null || !(p.entry > 0) || p.entry === p.stop) continue
-    const fill = fills.find((f) => f.symbol === p.symbol) // newest first, as the exchange sends them
-    const exit = fill?.price ?? p.mark // no fill found: the last mark seen is the honest fallback
+    const exit = p.mark // the last mark seen is the closest this has to a fill price
     if (exit == null) continue
     const r = p.side === 'long' ? (exit - p.entry) / (p.entry - p.stop) : (p.entry - exit) / (p.stop - p.entry)
     const opened = p.openedAt ? Date.parse(p.openedAt) : Date.now()
@@ -1588,13 +1590,13 @@ async function fileClosed(next: ExchangePosition[]) {
     closeWatch({
       // the open stamp is in the id, so closing and reopening the same symbol is two trades —
       // and two looks racing on one close is still one row, which is closeWatch's own dedupe
-      id: `${p.venue ?? 'kraken'}-${p.symbol}-${p.openedAt ?? p.entry}`,
+      id: `${p.venue ?? 'exchange'}-${p.symbol}-${p.openedAt ?? p.entry}`,
       asset: id,
-      label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol.replace(/^(PF|PI|FI)_/, ''),
+      label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol,
       // the record names the venue the trade really ran on, now that there is more than one
-      horizon: { bitget: 'Bitget', mexc: 'MEXC' }[p.venue ?? ''] ?? 'Kraken',
+      horizon: venueName(p.venue),
       dir: p.side, entry: p.entry, stop: p.stop, target: p.target ?? exit,
-      ts: opened, entryAt: opened, closedAt: fill?.time || Date.now(),
+      ts: opened, entryAt: opened, closedAt: Date.now(),
       /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —
          in profit files as 'target', at a loss as 'stopped'. The record has no third word, and the
          R beside it is exact either way. */
@@ -1621,7 +1623,7 @@ function useExchangePositions() {
           if (!r.ok) return // offline, no key, exchange down: keep whatever the last answer was
           const d = await r.json()
           const rows: ExchangePosition[] = d.positions ?? []
-          void fileClosed(rows)
+          fileClosed(rows)
           if (!dead) setFeed({ rows, equity: d.equity ?? null })
         })
         .catch(() => {})
@@ -1663,8 +1665,7 @@ export function ExchangePositions() {
   const dists = rows.flatMap((p) => (p.liq != null && p.mark != null && p.mark > 0
     ? [Math.abs(p.mark - p.liq) / p.mark * 100] : []))
   const nearestLiq = dists.length ? Math.min(...dists) : null
-  const venues = new Set(rows.map((p) => p.venue ?? 'kraken'))
-  const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' }[v ?? ''] ?? 'Kraken')
+  const venues = new Set(rows.map((p) => p.venue ?? 'exchange'))
   return (
     <Card className="py-3">
       <CardContent className="grid gap-1.5 px-3 text-sm">
@@ -1709,8 +1710,7 @@ export function ExchangePositions() {
           return (
             <div key={p.symbol} className="grid gap-0.5">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                {/* PF_XBTUSD is Kraken's name for it; XBTUSD is the readable half */}
-                <span className="font-medium">{p.symbol.replace(/^(PF|PI|FI)_/, '')}</span>
+                <span className="font-medium">{p.symbol}</span>
                 {/* which venue holds it — only worth a word once more than one does */}
                 {venues.size > 1 && <span className="text-muted-foreground text-xs">{venueName(p.venue)}</span>}
                 <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>

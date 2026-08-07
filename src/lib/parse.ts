@@ -58,6 +58,47 @@ export const addDays = (from: string, n: number) => shiftDays(new Date(from + 'T
 
 export const tomorrow = () => addDays(today(), 1)
 
+/** The Monday on or before a date. getDay() is 0=Sun, so shift it to a Mon-first index. */
+export const mondayOf = (d: Date) => {
+  const m = new Date(d)
+  m.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+  m.setHours(0, 0, 0, 0)
+  return m
+}
+
+/** 'HH:MM' → the hour it falls in, or null for anything that is not one. */
+export const hourOf = (at: string | null | undefined) => {
+  const s = String(at ?? '')
+  if (!/^\d{2}:\d{2}$/.test(s)) return null
+  const h = Number(s.slice(0, 2))
+  return h >= 0 && h < 24 ? h : null
+}
+
+/** An hour as the calendar labels it. */
+export const hhmm = (h: number) => `${String(h).padStart(2, '0')}:00`
+
+/* The hours the week grid always shows, even on a week with nothing in them: a grid that shrank to
+   fit whatever happened to be there would put 09:00 at the top one week and 14:00 the next, and a
+   time axis that moves is not one you can read at a glance. */
+const DAY_FROM = 7
+const DAY_TO = 21
+
+/**
+ * The hours a week draws: the standing window above, widened by anything that actually sits outside
+ * it, so an 06:30 stand-up or a 23:00 deploy pulls the grid open rather than falling off the end of
+ * it. Times it cannot read are simply not times and do not widen anything.
+ */
+export function hourWindow(times: (string | null | undefined)[]): number[] {
+  let lo = DAY_FROM, hi = DAY_TO
+  for (const t of times) {
+    const h = hourOf(t)
+    if (h == null) continue
+    lo = Math.min(lo, h)
+    hi = Math.max(hi, h)
+  }
+  return Array.from({ length: hi - lo + 1 }, (_, n) => lo + n)
+}
+
 /**
  * A time of day out of one word: `14:00`, `9:30pm`, `9am`. A colon or an am/pm is required, so a
  * bare `5` in "5 push-ups" stays a five — the one ambiguity that would quietly eat text.

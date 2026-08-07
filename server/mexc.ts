@@ -1,15 +1,15 @@
 /**
- * MEXC Futures, read-only — the third venue on the desk, held to the shape kraken.ts declared.
+ * MEXC Futures, read-only — the other venue on the desk, held to the shape bitget.ts declares.
  * One authed call for the positions, public calls for the marks and the contract sizes, and the
  * browser never sees a credential.
  *
  * MEXC counts a position in contracts, not coins: holdVol 10000 on BTC_USDT is 10000 × the
  * symbol's contractSize (0.0001 BTC), so the public contract list rides along to turn that into
- * the 1 BTC every other row here speaks. MEXC signs two-part like Kraken: hex HMAC-SHA256 over
- * accessKey + timestamp (+ params, of which these calls send none).
+ * the 1 BTC every other row here speaks. MEXC signs two-part, where Bitget takes three: hex
+ * HMAC-SHA256 over accessKey + timestamp (+ params, of which these calls send none).
  */
 import { createHmac } from 'node:crypto'
-import type { Feed, Position } from './kraken.ts'
+import type { Feed, Position } from './bitget.ts'
 
 const BASE = 'https://contract.mexc.com'
 /** The exchange is asked at most this often, however many tabs poll the route. */

@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { safeHref, spanOpen } from '@/lib/markdown'
+import { safeHref, safeSrc, spanOpen } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 
 /**
@@ -12,8 +12,10 @@ import { cn } from '@/lib/utils'
 /* A whole paragraph at a time, not a line: only a code span may run past the end of its line, so
    a pasted email body between backticks is one span. The rest bar newlines from their insides, or
    a stray * halfway down a note would italicise everything back up to the last one. */
+/* The image alternative sits before the link one deliberately: alternation is ordered, and
+   `![alt](src)` would otherwise match as a link with a stray ! left in front of it. */
 const INLINE =
-  /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|~~[^~\n]+~~|\+\+[^+\n]+\+\+|`[^`]+`|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s)]+)/g
+  /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|~~[^~\n]+~~|\+\+[^+\n]+\+\+|`[^`]+`|!\[[^\]\n]*\]\([^)\n]+\)|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s)]+)/g
 const link = (href: string, text: string, key: number) => (
   <a
     key={key}
@@ -39,6 +41,22 @@ function inline(text: string) {
         <code key={i} className="bg-muted rounded px-1 py-0.5 font-mono text-[0.85em] whitespace-pre-wrap">
           {part.slice(1, -1)}
         </code>
+      )
+    }
+    const img = part.match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
+    if (img) {
+      const src = safeSrc(img[2])
+      // an src this will not load reads as its alt text, not as a broken frame
+      if (!src) return <Fragment key={i}>{img[1]}</Fragment>
+      return (
+        <img
+          key={i}
+          src={src}
+          alt={img[1]}
+          loading="lazy"
+          // block, so a picture on its own line is not sat on a text baseline with a gap under it
+          className="my-1 block max-w-full rounded-md"
+        />
       )
     }
     const md = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)

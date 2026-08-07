@@ -23,6 +23,12 @@ const cachedBy = [...sw.matchAll(/registerRoute\((\/\^https[^,]+?\/),new e\.Netw
   .map((m) => new RegExp(m[1].slice(1, -1)))
 assert.equal(cachedBy.length, 2, 'expected the two candle routes in the built worker')
 
+/* The pictures in notes are the one CacheFirst route, and the only thing here that may be: a blob
+   id is random and its bytes never change, so a cached copy cannot be a stale answer to anything.
+   If this stops shipping, notes stop rendering their pictures offline. */
+assert(/registerRoute\(\/[^,]*blob[^,]*\/,new e\.CacheFirst/.test(sw),
+  'the note-pictures route is not in the built worker — notes would lose their pictures offline')
+
 // every URL the app asks for, taken from the module that builds them
 const seen: string[] = []
 globalThis.fetch = ((url: string) => {

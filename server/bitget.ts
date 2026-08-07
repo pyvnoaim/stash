@@ -1,13 +1,44 @@
 /**
- * Bitget Futures, read-only — the same deal as kraken.ts next door: what the exchange says you
- * hold, one authed call, shaped into the same rows and cached the same way, so the browser gets
- * one list whichever venue the money is on and never sees a credential.
+ * Bitget Futures, read-only: what the exchange says you hold, one authed call, shaped into rows
+ * and cached, so the browser gets one list whichever venue the money is on and never sees a
+ * credential.
  *
  * The key is stored server-side by the /api/bitget route, created read-only on Bitget's side too.
- * Bitget signs with three parts (key, secret, passphrase) where Kraken takes two.
+ * Bitget signs with three parts (key, secret, passphrase) where MEXC takes two.
+ *
+ * This file also declares the shape every venue answers in — it was kraken.ts's until that venue
+ * came off the desk, and mexc.ts reads it from here.
  */
 import { createHmac } from 'node:crypto'
-import type { Feed, Position } from './kraken.ts'
+
+export type Position = {
+  symbol: string
+  side: 'long' | 'short'
+  size: number
+  entry: number
+  mark: number | null
+  /** Price move from entry, signed by the side: positive is in your favour. ponytail: price move,
+   *  not return on margin — leverage is not in the read scope, and a made-up ROE is worse than none. */
+  pct: number | null
+  /** Unrealised price PnL in the quote currency: (mark − entry) × size, signed by the side.
+   *  ponytail: funding not included — where a feed reports it at all it is pennies, and a second
+   *  number next to this one would only invite adding them up wrong. */
+  pnl: number | null
+  /** What the position is worth at the mark: size × mark, in the quote currency. */
+  value: number | null
+  /** When the exchange filled it, as an ISO stamp. */
+  openedAt: string | null
+  /** The stop and take-profit resting against it, where the venue's feed carries them. */
+  stop: number | null
+  target: number | null
+  /** The exchange's own liquidation price, where the feed says one. The chart prefers this over
+   *  any estimate, since it is the number that fires. */
+  liq: number | null
+  /** Funding accrued and not yet realized, straight off the feed with its own sign convention. */
+  funding: number | null
+}
+
+export type Feed = { positions: Position[]; equity: number | null }
 
 const BASE = 'https://api.bitget.com'
 /** The exchange is asked at most this often, however many tabs poll the route. */
@@ -32,10 +63,10 @@ const authed = (key: string, secret: string, pass: string, path: string) => {
   }).then((r) => r.json())
 }
 
-/** One Bitget position row into the shape kraken.ts already speaks — the app has one word for
- *  "a position" and this keeps it that way. Bitget hands over what Kraken made us compute or
- *  estimate: the resting stop and target ride the row itself, and `liq` is the exchange's own
- *  liquidation price rather than anyone's arithmetic. */
+/** One Bitget position row into the shared shape above — the app has one word for "a position"
+ *  and this keeps it that way. Bitget is the generous feed of the two: the resting stop and target
+ *  ride the row itself, and `liq` is the exchange's own liquidation price rather than anyone's
+ *  arithmetic. */
 export function shape(rows: unknown[]): Position[] {
   const round = (n: number) => Math.round(n * 100) / 100
   const num = (v: unknown) => {
@@ -64,7 +95,7 @@ export function shape(rows: unknown[]): Position[] {
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.size) && p.size > 0)
 }
 
-/** Every account's USDT-margined equity, summed — the same garnish equityOf is for Kraken. */
+/** Every account's USDT-margined equity, summed — garnish on the rows, not the point of them. */
 export function equityOf(accounts: unknown): number | null {
   if (!Array.isArray(accounts)) return null
   let sum = 0, seen = false

@@ -9,6 +9,17 @@ const SAFE = /^(https?:|mailto:|#|\/(?!\/))/i
 export const safeHref = (href: string) => (SAFE.test(href.trim()) ? href.trim() : '#')
 
 /**
+ * An image is held to a tighter rule than a link, because a link waits to be clicked and an image
+ * fetches itself the moment the note is rendered. An `http://` one in a note somebody shared with
+ * you would report your address to whoever's server it names, before you had read a word — so only
+ * this app's own paths load, which in practice means the pictures uploaded to it.
+ *
+ * Anything else comes back null, and the renderer shows the alt text instead of a broken frame.
+ */
+const SAFE_SRC = /^\/(?!\/)/
+export const safeSrc = (src: string) => (SAFE_SRC.test(src.trim()) ? src.trim() : null)
+
+/**
  * True when a run of text leaves a ` code span open, so the line that closes it is still to come.
  * An email body pasted between backticks is the ordinary case: it spans lines, holds blank ones,
  * and starts lines with dashes and > that are its own text rather than markdown.

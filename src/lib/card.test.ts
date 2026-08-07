@@ -3,16 +3,15 @@ import test from 'node:test'
 import { cardSvg, type CardPosition } from './card.ts'
 
 const P: CardPosition = {
-  symbol: 'PF_XBTUSD', side: 'long', size: 0.5, entry: 60_000, mark: 67_400,
-  pct: 12.33, pnl: 3700, openedAt: '2026-08-03T09:00:00.000Z', venue: 'kraken',
+  symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 60_000, mark: 67_400,
+  pct: 12.33, pnl: 3700, openedAt: '2026-08-03T09:00:00.000Z', venue: 'bitget',
 }
 
 test('the card names the asset, the side and the profit', () => {
   const svg = cardSvg(P, 1.84)
-  assert.match(svg, /XBTUSD/)          // the futures prefix is exchange plumbing, not a name
-  assert.doesNotMatch(svg, /PF_/)
+  assert.match(svg, /BTCUSDT/)
   assert.match(svg, /Long/)
-  assert.match(svg, /Kraken/)
+  assert.match(svg, /Bitget/)
   assert.match(svg, /\+12\.33%/)
   assert.match(svg, /\+\$3,700\.00 unrealised/)
   assert.match(svg, /\+1\.84R/)

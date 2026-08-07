@@ -11,3 +11,8 @@ const here = readdirSync(new URL('.', import.meta.url))
   .map((f) => `server/${f}`)
 
 for (const f of here) assert.ok(shipped.includes(f), `${f} is not in the Dockerfile's COPY line — the container would crash on import`)
+
+// and the other way, which is the worse failure: COPY of a file that is not there does not warn,
+// it fails the build — so a module deleted from the repo and left on this line stops the deploy
+// dead, and the running container is whatever shipped last.
+for (const f of shipped) assert.ok(here.includes(f), `${f} is in the Dockerfile's COPY line but not in server/ — docker build would fail`)

@@ -88,6 +88,20 @@ export default defineConfig({
             cacheableResponse: { statuses: [200] },
             expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
           },
+        }, {
+          /* The pictures in notes. CacheFirst, not NetworkFirst, and it is the one thing here that
+             earns it: a blob id is 128 bits of randomness and the bytes behind it never change, so
+             a cached copy cannot be stale — there is no newer version of that id to miss. Which
+             makes a note read the same offline as on, the way the rest of the app does.
+             The market feeds above are the opposite case and stay NetworkFirst: a candle has a
+             newer version, and serving yesterday's as today's is the failure worth avoiding. */
+          urlPattern: /\/api\/blob\/[0-9a-f]{32}$/,
+          handler: 'CacheFirst',
+          options: {
+            cacheName: 'note-pictures',
+            cacheableResponse: { statuses: [200] },
+            expiration: { maxEntries: 200, maxAgeSeconds: 90 * 86400, purgeOnQuotaError: true },
+          },
         }],
       },
     }),

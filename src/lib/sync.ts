@@ -284,6 +284,32 @@ export const newFeed = (): Promise<string | null> =>
 export const dropFeed = (): Promise<void> =>
   call('/api/feed', { method: 'DELETE' }).then(() => undefined).catch(() => undefined)
 
+/* ---------- pictures in notes ---------- */
+
+/**
+ * Upload one and get back the path a note points at. The bytes go up as they are — no multipart,
+ * no base64 — because the body is one file and the server reads it as bytes; anything else would
+ * be a wrapper around a wrapper. What comes back is `/api/blob/<id>`, which is what `![](…)` in
+ * the note holds, so the document still carries nothing but text.
+ *
+ * Throws with a sentence worth showing: no account, too large, or not a picture.
+ */
+export async function uploadImage(file: File): Promise<string> {
+  try {
+    const j = await call('/api/blob', {
+      method: 'POST',
+      // the browser's own type, which the server checks against the bytes rather than believes
+      headers: { 'content-type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+    return `/api/blob/${j.id as string}`
+  } catch (e) {
+    // "unauthorized" is the true answer and a useless one — say what it would take instead
+    const m = errorOf(e)
+    throw new Error(m === 'unauthorized' ? 'pictures need an account: they live on the server' : m)
+  }
+}
+
 /* ---------- the calendar coming the other way ---------- */
 
 /** One event out of a subscribed calendar. Read-only, and never an item: it is somebody else's

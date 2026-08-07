@@ -21,7 +21,7 @@ assert.equal(spanOpen('Body: `Sehr geehrte Damen und Herren,\n\nVielen Dank.`'),
 assert.equal(spanOpen('run `npm test` first'), false)
 assert.equal(spanOpen('no ticks here'), false)
 
-import { safeHref } from './markdown.ts'
+import { safeHref, safeSrc } from './markdown.ts'
 
 // safe schemes pass through, trimmed
 assert.equal(safeHref('https://example.com'), 'https://example.com')
@@ -38,5 +38,21 @@ assert.equal(safeHref('data:text/html,<script>'), '#')
 // protocol-relative would navigate off-origin — the single-slash allowance must not admit it
 assert.equal(safeHref('//evil.com/login'), '#')
 assert.equal(safeHref('/local/page'), '/local/page')
+
+/* An image is held tighter than a link, because a link waits to be clicked and an image fetches
+   itself the moment a note is rendered — including a note somebody else shared with you. */
+
+// this app's own paths, which is where its uploaded pictures live
+assert.equal(safeSrc('/api/blob/' + 'a'.repeat(32)), '/api/blob/' + 'a'.repeat(32))
+assert.equal(safeSrc('  /api/blob/x  '), '/api/blob/x')
+
+// an off-origin image is a beacon: it reports the reader's address before a word has been read
+assert.equal(safeSrc('https://tracker.example/pixel.png'), null)
+assert.equal(safeSrc('http://tracker.example/pixel.png'), null)
+assert.equal(safeSrc('//tracker.example/pixel.png'), null)   // protocol-relative is off-origin too
+// and the schemes that were never pictures
+assert.equal(safeSrc('javascript:alert(1)'), null)
+assert.equal(safeSrc('data:image/svg+xml,<svg onload=alert(1)>'), null)
+assert.equal(safeSrc(''), null)
 
 console.log('markdown: ok')

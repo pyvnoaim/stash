@@ -28,7 +28,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
-import { fills, positions } from './kraken.ts'
+import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { positions as bitgetPositions } from './bitget.ts'
 import { positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
@@ -247,6 +247,22 @@ function readBody(req: IncomingMessage): Promise<any> {
   })
 }
 
+/** The body as the bytes it arrived as, capped — for the one route whose payload is a picture
+ *  rather than JSON. Same refusal as readBody: stop reading, do not buffer it and complain after. */
+function readBytes(req: IncomingMessage, cap: number): Promise<Buffer> {
+  return new Promise((ok, fail) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > cap) { fail(new Error('too large')); req.destroy(); return }
+      chunks.push(c)
+    })
+    req.on('end', () => ok(Buffer.concat(chunks)))
+    req.on('error', fail)
+  })
+}
+
 /** Hashing a miss against this keeps "no such user" as slow as "wrong password". */
 const DUMMY_SALT = randomBytes(16)
 /**
@@ -302,6 +318,15 @@ const SCHEMA = `
   );
   /* A shared project's own document: the project and its items, versioned exactly like a user's,
      so the conflict story and the snapshots are the ones already built rather than new ones. */
+  /* The pictures in notes. The bytes are here rather than in the document because that document is
+     pushed whole and kept fifty deep — see blob.ts. Owned by whoever uploaded, so deleting an
+     account takes its pictures with it; read by anyone signed in, because a note in a shared
+     project has to render for everyone on it and the 128-bit id is what stands in for the share. */
+  create table if not exists blobs (
+    id text primary key,
+    owner integer not null references users(id) on delete cascade,
+    mime text not null, bytes blob not null, ts integer not null
+  );
   create table if not exists pdocs (
     v integer primary key autoincrement,
     owner integer not null references users(id) on delete cascade,
@@ -363,12 +388,14 @@ export function start({
   try { db.exec('alter table users add column feed text') } catch { /* already there */ }
   // and the calendar coming the other way: the one .ics URL this account subscribes to
   try { db.exec('alter table users add column cal text') } catch { /* already there */ }
-  // each account's own read-only exchange key, JSON {key, secret} — see the /api/kraken route
-  try { db.exec('alter table users add column kraken text') } catch { /* already there */ }
-  // the same for Bitget, whose keys come in three parts: JSON {key, secret, passphrase}
+  // each account's own read-only exchange key — see the /api/bitget route. Bitget's key comes in
+  // three parts: JSON {key, secret, passphrase}
   try { db.exec('alter table users add column bitget text') } catch { /* already there */ }
-  // and MEXC, two-part like Kraken's
+  // and MEXC's in two: JSON {key, secret}
   try { db.exec('alter table users add column mexc text') } catch { /* already there */ }
+  // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
+  // than sitting in the file forever unread
+  try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -406,8 +433,15 @@ export function start({
        by asking for another, which is what makes the old string stop working. */
     calOf: db.prepare('select cal from users where id = ?'),
     setCal: db.prepare('update users set cal = ? where id = ?'),
-    kraken: db.prepare('select kraken from users where id = ?'),
-    setKraken: db.prepare('update users set kraken = ? where id = ?'),
+    addBlob: db.prepare('insert into blobs (id, owner, mime, bytes, ts) values (?, ?, ?, ?, ?)'),
+    blob: db.prepare('select mime, bytes from blobs where id = ?'),
+    blobBytes: db.prepare('select coalesce(sum(length(bytes)), 0) as n from blobs where owner = ?'),
+    /* Only this uploader's, and only ones old enough that the note pointing at them has had time to
+       be written and pushed. Every document ever stored is what they are checked against — old
+       versions included, or restoring one would come back with its pictures collected. */
+    sweepable: db.prepare('select id from blobs where owner = ? and ts < ?'),
+    allDocs: db.prepare('select json from docs union all select json from pdocs'),
+    dropBlob: db.prepare('delete from blobs where id = ?'),
     bitget: db.prepare('select bitget from users where id = ?'),
     setBitget: db.prepare('update users set bitget = ? where id = ?'),
     mexc: db.prepare('select mexc from users where id = ?'),
@@ -967,15 +1001,15 @@ export function start({
        is set. Stored as given rather than hashed, since signing needs it back — which is exactly
        why the key is made read-only at the exchange: a copied database leaks a viewer, not a wallet. */
     /* One route per venue, one rule for all of them: the credential never travels back out —
-       GET answers only whether one is set. Bitget cuts its key in three parts, the others in
-       two, and every part arrives together or not at all: a fraction of a credential is a
-       config that fails at three in the morning. */
-    const venue = /^\/api\/(kraken|bitget|mexc)$/.exec(path)?.[1] as 'kraken' | 'bitget' | 'mexc' | undefined
+       GET answers only whether one is set. Bitget cuts its key in three parts and MEXC in two,
+       and every part arrives together or not at all: a fraction of a credential is a config that
+       fails at three in the morning. */
+    const venue = /^\/api\/(bitget|mexc)$/.exec(path)?.[1] as 'bitget' | 'mexc' | undefined
     if (venue) {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const get = { kraken: q.kraken, bitget: q.bitget, mexc: q.mexc }[venue]
-      const set = { kraken: q.setKraken, bitget: q.setBitget, mexc: q.setMexc }[venue]
+      const get = { bitget: q.bitget, mexc: q.mexc }[venue]
+      const set = { bitget: q.setBitget, mexc: q.setMexc }[venue]
       if (req.method === 'GET') {
         return send(res, 200, { set: !!(get.get(user.id) as Record<string, string | null> | undefined)?.[venue] })
       }
@@ -993,28 +1027,89 @@ export function start({
       return send(res, 405, { error: 'method not allowed' })
     }
 
-    /* The exchanges' word on what the caller holds, off their own stored keys, proxied so they
-       never reach a browser. 501 with no key on the account — the market page reads any non-200
-       as "no panel" and moves on. Both venues or neither: one feed failing while the other
-       answered would read as its positions having closed, and fileClosed in the app would write
-       trades down off a mark that was really an outage. */
-    if ((path === '/api/positions' || path === '/api/fills') && req.method === 'GET') {
+    /* A picture for a note. The bytes stay out of the synced document — see blob.ts — which is why
+       this is the one thing in the app that needs an account: with no server there is nowhere for
+       them to be, and the editor says so rather than dropping the paste quietly. */
+    if (path === '/api/blob' && req.method === 'POST') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const kr = (q.kraken.get(user.id) as { kraken: string | null } | undefined)?.kraken
+      let bytes: Buffer
+      try { bytes = await readBytes(req, MAX_IMAGE) }
+      catch { return send(res, 413, { error: 'a picture has to be under 5 MB' }) }
+      /* What the bytes are, not what they were called. An SVG is a document that can carry script
+         and this serves from the app's own origin, so the allowlist is four raster formats. */
+      const mime = sniff(bytes)
+      if (!mime) return send(res, 415, { error: 'png, jpeg, gif or webp' })
+      /* What this account already holds. Checked after the sniff so a refusal names the real
+         reason, and before the insert so the cap is a cap rather than a report. */
+      const held = Number((q.blobBytes.get(user.id) as { n: number }).n)
+      if (held + bytes.length > MAX_PER_USER) {
+        return send(res, 507, { error: 'this account has used its picture storage — delete some notes\' pictures' })
+      }
+      const id = randomBytes(16).toString('hex')
+      q.addBlob.run(id, user.id, mime, bytes, Date.now())
+      /* Then collect what this account left behind: its own pictures, old enough that the note
+         pointing at one has had time to be written and pushed, that no stored document mentions.
+         On upload rather than on a timer — the moment someone adds a picture is the moment the
+         table is worth a look.
+
+         The candidates are asked for first, and almost always there are none, because the ordinary
+         life of a picture is to be uploaded and then referenced forever. That order is the whole
+         performance of this: the scan below reads every stored version of every document — fifty
+         per person and fifty per shared project, each one a whole stash — and doing that on every
+         upload to usually delete nothing would be the most expensive thing the server does.
+
+         ponytail: every version is scanned rather than only the newest, so restoring an old one
+         does not come back with its pictures collected. Index the ids out of the documents on
+         write if the sweep itself ever drags. */
+      const stale = q.sweepable.all(user.id, Date.now() - GRACE) as { id: string }[]
+      if (stale.length) {
+        const live = new Set<string>()
+        for (const d of q.allDocs.all() as { json: string }[]) {
+          for (const r of referenced(d.json)) live.add(r)
+        }
+        for (const b of stale) if (!live.has(b.id)) q.dropBlob.run(b.id)
+      }
+      return send(res, 200, { id })
+    }
+
+    /* And back out again. Any signed-in account may read one: a note in a shared project has to
+       render for everyone on it, and working out which share a picture belongs to means knowing
+       which note holds it — which is the document's business, not this table's. The id is 128 bits
+       of randomness and is what stands in for that, the same bargain the calendar feed makes. */
+    const pic = /^\/api\/blob\/([0-9a-f]{32})$/.exec(path)?.[1]
+    if (pic && req.method === 'GET') {
+      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
+      const row = q.blob.get(pic) as { mime: string, bytes: Uint8Array } | undefined
+      if (!row) return send(res, 404, { error: 'no such picture' })
+      res.writeHead(200, {
+        'content-type': row.mime,
+        'content-length': row.bytes.byteLength,
+        // the id is random and the bytes behind it never change, so this caches as hard as anything can
+        'cache-control': 'private, max-age=31536000, immutable',
+        // never sniffed into something executable, and never loadable by another site even by
+        // somebody holding the id
+        'x-content-type-options': 'nosniff',
+        'cross-origin-resource-policy': 'same-origin',
+        'content-disposition': 'inline',
+      })
+      return res.end(Buffer.from(row.bytes))
+    }
+
+    /* The exchanges' word on what the caller holds, off their own stored keys, proxied so they
+       never reach a browser. 501 with no key on the account — the market page reads any non-200
+       as "no panel" and moves on. Every venue or none: one feed failing while the other answered
+       would read as its positions having closed, and fileClosed in the app would write trades
+       down off a mark that was really an outage. */
+    if (path === '/api/positions' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
       const stored = [
-        { venue: 'kraken', raw: kr, go: (c: any) => positions(c.key, c.secret) },
         { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
         { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       try {
-        if (path === '/api/fills') {
-          // Kraken only: the others price a vanished position at its last mark instead (see there)
-          if (!kr) return send(res, 200, { fills: [] })
-          const { key, secret } = JSON.parse(kr) as { key: string, secret: string }
-          return send(res, 200, { fills: await fills(key, secret) })
-        }
         const feeds = await Promise.all(stored.map((v) => v.go(JSON.parse(v.raw!))))
         return send(res, 200, {
           positions: feeds.flatMap((f, i) => f.positions.map((p) => ({ ...p, venue: stored[i].venue }))),
