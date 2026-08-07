@@ -6,6 +6,12 @@
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- The opener samples its wordmark out of this face, and it opens over the sync gate, which
+         draws no text — so nothing on the page asks for the font in time to trigger `font-display:
+         swap`, and the fetch would start only when splash.tsx goes looking. Started here it is in
+         hand before the bundle has finished downloading. Vite rewrites the href to the hashed
+         asset at build; `crossorigin` is not optional, fonts are fetched CORS even same-origin. -->
+    <link rel="preload" href="./src/fonts/GeistPixel-Square.woff2" as="font" type="font/woff2" crossorigin />
     <title>Stash</title>
   </head>
   <body>
