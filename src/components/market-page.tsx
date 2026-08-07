@@ -21,7 +21,8 @@ import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, swings, tally, tradePlan, trendFilter,
   TREND_NETWORK, usMarketOpen,
-  type Asset, type Backtest, type Candle, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
+  topDown,
+  type Asset, type Backtest, type Candle, type Cascade, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -48,7 +49,14 @@ const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a 
 const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
-const BAR_MS: Record<Interval, number> = { '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
+/** The page's three sittings. `chart` is where you land — it is the asset you asked for. */
+const TABS = [
+  { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart and the readings behind the call' },
+  { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, and what is trending on-chain' },
+  { id: 'record', label: 'Record', hint: 'How the saved setups actually went, this rule backtested, and everyone else\'s desk' },
+] as const
+
+const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
 
 
 /* The service worker keeps the last candles it fetched, so the chart still draws with no network.
@@ -282,7 +290,7 @@ export default function MarketPage() {
     // a candle must actually START at the session open (within one bar) to count — so a session that
     // falls inside a closed-market gap (Asia/Europe on a US-hours stock) is skipped, not stamped on
     // the first bar after the gap. Continuous 24/7 crypto still catches every session.
-    const barMin = { '15m': 15, '1h': 60, '4h': 240 }[interval] ?? 60
+    const barMin = { '5m': 5, '15m': 15, '1h': 60, '4h': 240 }[interval] ?? 60
     const v = vis
     const m = v.length
     if (m < 2) return NO_MARKS
@@ -552,6 +560,10 @@ export default function MarketPage() {
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
   const up = change >= 0
+  const [tab, setTab] = useState<(typeof TABS)[number]['id']>('chart')
+  // which tabs have ever been opened — see the note by the Scan below
+  const [seen, setSeen] = useState<Partial<Record<(typeof TABS)[number]['id'], boolean>>>({ chart: true })
+
   // date under the crosshair; intraday intervals want the time too
   const stamp = (ms: number) => new Date(ms).toLocaleString(undefined, {
     month: 'short', day: 'numeric', ...(interval === '1d' || interval === '1w' ? {} : { hour: '2-digit', minute: '2-digit' }),
@@ -673,6 +685,24 @@ export default function MarketPage() {
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
           is the one row here that is fact rather than reading. Absent unless the server has a key
           and Kraken reports something open. */}
+      {/* Three questions, three tabs. The page was ten cards in one scroll — the chart, the sweep
+          over every other asset, and the record of how the saved ones went are separate sittings,
+          and stacking them meant the answer to the one you came for was somewhere in the middle. */}
+      <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-1">
+        {TABS.map(({ id, label, hint }) => (
+          <Hint key={id} label={hint}>
+            <Button
+              size="sm" variant={tab === id ? 'default' : 'ghost'} className="h-7"
+              aria-current={tab === id}
+              onClick={() => { setTab(id); setSeen((s) => ({ ...s, [id]: true })) }}
+            >
+              {label}
+            </Button>
+          </Hint>
+        ))}
+      </div>
+
+      <div className={cn('flex flex-col gap-4', tab !== 'chart' && 'hidden')}>
       <ExchangePositions />
 
       {needKey ? <KeyPrompt label={current.label} /> : (
@@ -1291,20 +1321,30 @@ export default function MarketPage() {
       )}
       </>
       )}
+      </div>
 
-      {/* outside the fragment above, so they are there while the desk loads, errors, or waits for
-          a stock key — none of them needs any of that */}
-      {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
-          or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
-      <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
+      {/* outside the chart tab, so they are there while the desk loads, errors, or waits for a
+          stock key — none of them needs any of that.
+          Hidden rather than unmounted: a tab switch that threw away the Scan's rows would send
+          sixty-odd chart calls back out to look for the answer it already had. Not rendered until
+          the tab is first opened, though — the sweep should cost nothing to someone who only ever
+          reads the chart. */}
+      {seen.scan && (
+        <div className={cn('flex flex-col gap-4', tab !== 'scan' && 'hidden')}>
+          {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
+              or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
+          <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
+          <Trending />
+        </div>
+      )}
 
-      <Measure candles={candles} cfg={cfg} interval={interval} asset={asset} />
-
-      <Record />
-
-      <Desk />
-
-      <Trending />
+      {seen.record && (
+        <div className={cn('flex flex-col gap-4', tab !== 'record' && 'hidden')}>
+          <Measure candles={candles} cfg={cfg} interval={interval} asset={asset} />
+          <Record />
+          <Desk />
+        </div>
+      )}
 
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
@@ -2093,10 +2133,20 @@ function Desk() {
   )
 }
 
+/** Which way one timeframe leans, and by how much — the strip is five of these. */
+type Lean = { dir: 'long' | 'short' | 'flat'; bulls: number; bears: number }
+
 /** One asset's answer, compressed to a row. `tier` is the sort: 3 the entry is here, 2 wait for
- *  the level, 1 a setup the desk would talk you out of, 0 nothing to do. */
+ *  the level, 1 a setup the desk would talk you out of, 0 nothing to do.
+ *  `by` is every timeframe's lean; the loose fields are the desk's own, which is the one the
+ *  phrase, the plan and the click all belong to. */
 type ScanRow = {
   a: Asset
+  by: Partial<Record<Interval, Lean>>
+  /** How many of the five lean the same way the desk's does — the row's real confidence. */
+  agree: number
+  /** The 4h → 15m → 5m cascade, off the same bars. Free here: they are all already fetched. */
+  cascade: Cascade
   dir: 'long' | 'short' | 'flat'
   bulls: number
   bears: number
@@ -2105,23 +2155,48 @@ type ScanRow = {
   say: string
 }
 
-/** The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — run
- *  over one asset without rendering it. Same calls, same order, so a row here never disagrees with
- *  what opening the asset shows. */
+/**
+ * The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — run
+ * over one asset without rendering it. Same calls, same order, so a row here never disagrees with
+ * what opening the asset shows.
+ *
+ * Run on every timeframe rather than only the desk's, because one interval's answer is not a view
+ * of anything: 15m said Long and 1d said Short and the row changed its mind each time the desk
+ * did, with no way to see that the two disagreed. Five leans side by side is the whole point —
+ * a Long that four timeframes agree on is a different trade from one only the fastest chart sees.
+ *
+ * Five calls an asset, not ten: HIGHER maps every interval to another one already in the set, so
+ * the trend filter each read applies is read off bars already fetched.
+ */
 async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Interval, orbMode: boolean, fee: number): Promise<ScanRow | null> {
+  const pairs = await Promise.all(INTERVALS.map(async (iv) =>
+    [iv, await fetchCandles(a, iv, '').catch(() => [] as Candle[])] as const))
+  const bars = Object.fromEntries(pairs) as Record<Interval, Candle[]>
   // the interval is the desk's own, passed in — reading the horizon's default here while the desk
   // sat on 15m bars is how a row said Long while the card the click lands on said Short
-  const up = HIGHER[interval]
-  const [candles, higher] = await Promise.all([
-    fetchCandles(a, interval, ''),
-    up ? fetchCandles(a, up, '').then((c) => trendFilter(c, cfg.slow, up)).catch(() => null)
-       : Promise.resolve<Signal | null>(null),
-  ])
-  if (!candles.length) return null
-  const view = signals(candles, cfg)
-  const vwap = sessionVwap(candles)
-  const range = orbMode ? orb(candles) : null
-  const { bulls, bears, dir } = tally(deskSignals(higher, range, vwap, view.signals))
+  if (!bars[interval]?.length) return null
+
+  /** One timeframe through the desk's read. Null where the feed gave that interval nothing. */
+  const read = (iv: Interval) => {
+    const candles = bars[iv]
+    if (!candles.length) return null
+    const up = HIGHER[iv]
+    const upBars = up ? bars[up] : undefined
+    const higher = up && upBars?.length ? trendFilter(upBars, cfg.slow, up) : null
+    const view = signals(candles, cfg)
+    // the opening range is a 15m reading — asking a weekly bar for one is asking for a date
+    const range = orbMode && iv === '15m' ? orb(candles) : null
+    return { candles, view, higher, up, ...tally(deskSignals(higher, range, sessionVwap(candles), view.signals)) }
+  }
+
+  const by: Partial<Record<Interval, Lean>> = {}
+  for (const iv of INTERVALS) {
+    const r = read(iv)
+    if (r) by[iv] = { dir: r.dir, bulls: r.bulls, bears: r.bears }
+  }
+
+  const here = read(interval)!
+  const { bulls, bears, dir, view, higher, up, candles } = here
   const price = candles.at(-1)!.c
   const entryMA = view.smaFast.at(-1)
   const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr, fee) : null
@@ -2134,7 +2209,8 @@ async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Inte
     : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
     : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']
     : [2, `${dir === 'long' ? 'buy' : 'sell'} the ${cfg.fast}-MA at ${fmtPrice(plan.entry, price)}`]
-  return { a, dir, bulls, bears, plan, tier, say }
+  const agree = dir === 'flat' ? 0 : INTERVALS.filter((iv) => by[iv]?.dir === dir).length
+  return { a, by, agree, cascade: topDown(bars, cfg, fee), dir, bulls, bears, plan, tier, say }
 }
 
 // how actionable the row's phrase is, by tier — the same palette the verdict card speaks in
@@ -2152,7 +2228,10 @@ const TIER_CLS = [
  * puts the desk on it. Stocks sit it out: eight more chart fetches against a feed that allows
  * eight calls a minute, on a market that also has a closing bell.
  * ponytail: fetched once per visit and on the refresh button, no live poll — these reads move by
- * the bar (an hour, a day), not by the tick.
+ * the bar (an hour, a day), not by the tick. Five intervals an asset rather than one is five times
+ * the calls on that one pass; Binance weights a klines call at 2 against 1200 a minute, so eleven
+ * assets is a tenth of the budget. A shared per-(asset, interval) cache is the lever if the desk
+ * ever polls this live.
  */
 function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
   const { marketHorizon: horizon, dials } = useStash()
@@ -2173,7 +2252,12 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
       // ranked on the net R:R, not the gross one — the whole point of the column is which of these
       // to look at first, and the fee is exactly what reorders the close ones
       setRows(r.filter((x): x is ScanRow => !!x)
-        .sort((x, y) => y.tier - x.tier || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
+        /* the completed cascade first — three timeframes in sequence is a better answer than any
+           single chart's grade, which is the whole reason it is computed. Then the desk's own
+           tier, then how many timeframes agree: between two setups of the same grade, the one the
+           slower charts are also behind is the one to look at first. */
+        .sort((x, y) => (y.cascade.stage === 3 ? 1 : 0) - (x.cascade.stage === 3 ? 1 : 0)
+          || y.tier - x.tier || y.agree - x.agree || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
     })
     return () => { on = false }
   }, [cfg, nonce, orbMode, interval, fee])
@@ -2184,7 +2268,7 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
         <div className="mb-2 flex items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">Scan</span>
           <span className="text-muted-foreground text-xs">
-            every keyless chart, the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read, best first
+            every keyless chart on every timeframe, ranked by the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read
           </span>
           <Hint label="Refresh">
             <Button size="icon" variant="ghost" aria-label="Refresh" className="ml-auto size-6"
@@ -2200,6 +2284,21 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
             <CloudOff className="size-3.5" /> Offline — these reads are as old as the bars the cache had.
           </p>
         )}
+        {/* the strip's heading, once — five arrows a row with no scale on them is a puzzle. The
+            desk's own timeframe is marked, since that is the one the phrase and the plan belong to */}
+        {!!rows?.length && (
+          <div className="text-muted-foreground mb-1 flex items-baseline gap-2 px-1.5 text-[10px]">
+            <span className="w-28 shrink-0" />
+            <span className="w-12 shrink-0" />
+            <span className="flex shrink-0 gap-1">
+              {INTERVALS.map((iv) => (
+                <span key={iv} className={cn('w-8 text-center tabular-nums', iv === interval && 'text-foreground')}>
+                  {iv}
+                </span>
+              ))}
+            </span>
+          </div>
+        )}
         {rows?.map((r) => (
           <button key={r.a.id} type="button"
             onClick={(e) => {
@@ -2207,7 +2306,8 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
               // the desk is at the top of a page you are at the bottom of — go to the answer
               e.currentTarget.closest('.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' })
             }}
-            className="hover:bg-accent -mx-1.5 flex w-[calc(100%+0.75rem)] items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-sm">
+            className="hover:bg-accent -mx-1.5 grid w-[calc(100%+0.75rem)] rounded-md px-1.5 py-1 text-left text-sm">
+            <span className="flex items-baseline gap-2">
             <span className="flex w-28 shrink-0 items-center gap-2 truncate font-medium">
               <AssetLogo src={r.a.logo} />{r.a.label}
             </span>
@@ -2216,7 +2316,26 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
               : r.dir === 'short' ? 'text-destructive' : 'text-muted-foreground')}>
               {r.dir === 'long' ? 'Long' : r.dir === 'short' ? 'Short' : 'Flat'}
             </span>
-            <span className="text-muted-foreground w-8 shrink-0 font-mono text-xs tabular-nums">{r.bulls}/{r.bears}</span>
+            {/* every timeframe at once. A dash is a feed that gave that interval nothing, which is
+                not the same as no side and must not read like one */}
+            <span className="flex shrink-0 gap-1">
+              {INTERVALS.map((iv) => {
+                const l = r.by[iv]
+                return (
+                  <span
+                    key={iv}
+                    title={l ? `${iv}: ${l.dir === 'flat' ? 'no side' : l.dir} ${l.bulls}/${l.bears}` : `${iv}: no bars`}
+                    className={cn('w-8 text-center font-mono text-xs',
+                      iv === interval && 'bg-muted rounded',
+                      !l ? 'text-muted-foreground/50'
+                      : l.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400'
+                      : l.dir === 'short' ? 'text-destructive' : 'text-muted-foreground')}
+                  >
+                    {!l ? '–' : l.dir === 'long' ? '▲' : l.dir === 'short' ? '▼' : '·'}
+                  </span>
+                )
+              })}
+            </span>
             <span className={cn('min-w-0 flex-1 truncate text-xs', TIER_CLS[r.tier])}>{r.say}</span>
             {r.plan && (
               <span className={cn('shrink-0 font-mono text-xs tabular-nums',
@@ -2224,10 +2343,23 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
                 {r.plan.net.toFixed(1)}×
               </span>
             )}
+            </span>
+            {/* the cascade, but only once it has something to say: a stage 0 or 1 is "the case
+                never got started", which the strip above already shows in five arrows */}
+            {r.cascade.stage >= 2 && (
+              <span className={cn('truncate pl-[7.5rem] text-xs',
+                r.cascade.stage === 3 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
+                {r.cascade.say}
+              </span>
+            )}
           </button>
         ))}
         <p className="text-muted-foreground mt-2 text-xs">
-          Stocks need their key and their own rate limit, so they sit this one out — open them from the picker.
+          ▲▼ is each timeframe's own lean, the desk's marked. A side every chart agrees on is the
+          one worth taking; one only the fastest sees is a trade against the tide. The second line,
+          where there is one, is the top-down cascade: the 4h sets the direction, the 15m has to
+          break structure with it, the 5m is the trigger — green means all three landed. Stocks need
+          their key and their own rate limit, so they sit this one out — open them from the picker.
         </p>
       </CardContent>
     </Card>
