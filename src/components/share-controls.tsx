@@ -83,7 +83,7 @@ export function ShareControls({ p }: { p: Project }) {
             <input
               type="checkbox"
               checked={subs}
-              className="accent-foreground mt-[3px] size-3.5 shrink-0"
+              className="accent-foreground mt-0.75 size-3.5 shrink-0"
               onChange={async (e) => {
                 setSubs(e.target.checked)
                 // it is the project's setting, not this invitation's: everyone already on it moves too
@@ -244,7 +244,7 @@ function LinkShare({ pid }: { pid: string }) {
                   type="checkbox"
                   checked={join}
                   disabled={busy}
-                  className="accent-foreground mt-[3px] size-3.5 shrink-0"
+                  className="accent-foreground mt-0.75 size-3.5 shrink-0"
                   onChange={(e) => cut(e.target.checked)}
                 />
                 <span>

@@ -171,7 +171,7 @@ export function CommandPalette({
               <CommandItem key={p.id} value={`project ${p.name}`} onSelect={run(() => select(p.id))}>
                 <span
                   style={p.color ? { backgroundColor: p.color } : undefined}
-                  className="bg-muted-foreground ml-0.5 h-3.5 w-[2px] shrink-0 rounded-full"
+                  className="bg-muted-foreground ml-0.5 h-3.5 w-0.5 shrink-0 rounded-full"
                 />
                 <span className={cn('truncate', p.parent && 'text-muted-foreground')}>
                   {p.parent ? `${project(s, p.parent)?.name} / ${p.name}` : p.name}

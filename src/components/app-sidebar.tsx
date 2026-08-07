@@ -238,7 +238,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             >
               <span
                 style={p.color ? { backgroundColor: p.color } : undefined}
-                className="bg-muted-foreground h-3.5 w-[2px] rounded-full transition-opacity group-hover/menu-item:opacity-0"
+                className="bg-muted-foreground h-3.5 w-0.5 rounded-full transition-opacity group-hover/menu-item:opacity-0"
               />
               {holds
                 ? <ChevronRight className={cn('absolute size-3.5 opacity-0 transition-[opacity,transform] group-hover/menu-item:opacity-100', !shut && 'rotate-90')} />
