@@ -357,10 +357,14 @@ export const priceDigits = (ref: number) => {
 }
 
 /** Locale-formatted price at the precision `ref` deserves. `ref` defaults to the value itself. */
-/** PF_XBTUSD → BTCUSDT: strip the futures prefix, Kraken's XBT back to BTC, USD to the USDT id
- *  the rest of the app charts in. Bitget and MEXC rows arrive already speaking BTCUSDT. */
-export const assetOf = (symbol: string) =>
-  symbol.replace(/^(PF|PI|FI)_/, '').replace(/^XBT/, 'BTC').replace(/USD$/, 'USDT')
+/** An exchange row's symbol into the id the rest of the app charts in. Bitget and MEXC rows arrive
+ *  already speaking BTCUSDT; only a coin-margined BTCUSD needs the quote spelled out. */
+export const assetOf = (symbol: string) => symbol.replace(/USD$/, 'USDT')
+
+/** The venue a position row came from, as a person spells it. An id the desk has never heard of
+ *  reads back as itself rather than as some venue it isn't — which is what a default did when
+ *  Kraken was one, and what made a stale row silently claim the wrong exchange. */
+export const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 
 export const fmtPrice = (n: number, ref = n) => {
   const d = priceDigits(ref)

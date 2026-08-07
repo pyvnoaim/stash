@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react'
 import {
-  ArrowLeft, Bold, Code, Eye, Heading, Italic, Link2, Pencil, Quote, Strikethrough, Underline,
+  ArrowLeft, Bold, Code, Eye, Heading, Image, Italic, Link2, Pencil, Quote, Strikethrough, Underline,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import { toggleBox } from '@/lib/markdown'
 import { patch, type Item } from '@/lib/store'
+import { uploadImage } from '@/lib/sync'
 
 /**
  * The whole main area handed to one item — a note too long for the 300px inspector column. Same
@@ -69,6 +71,44 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
   const heading = () => line((p) => (p.startsWith('###') ? '' : p.startsWith('#') ? '#'.repeat(p.trim().length + 1) + ' ' : '# '))
   const quote = () => line((p) => (p.startsWith('>') ? '' : '> '))
 
+  /** Drop text in where the cursor is, leaving it after what was written. */
+  const insert = (text: string) => {
+    const ta = taRef.current
+    if (!ta) return
+    const { selectionStart: a, selectionEnd: b, value } = ta
+    patch(it.id, { note: value.slice(0, a) + text + value.slice(b) })
+    const at = a + text.length
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(at, at) }, 0)
+  }
+
+  /**
+   * Pictures land by paste, by drop, or off the button in the header — the three ways one actually
+   * arrives, the last of them because a phone has neither of the first two.
+   *
+   * All of them upload together and are written in as one edit: inserting each as it lands would
+   * read the textarea's value between renders, and the second picture would be placed against the
+   * text as it stood before the first. One insert is also one step for undo.
+   */
+  const [busy, setBusy] = useState(false)
+  const addPictures = async (files: File[]) => {
+    const pics = files.filter((f) => f.type.startsWith('image/'))
+    // one batch at a time: the button is disabled while it runs, but a paste is not, and two
+    // inserts racing would each write over the note as it stood before the other
+    if (!pics.length || busy) return
+    setBusy(true)
+    const done = await Promise.allSettled(pics.map(uploadImage))
+    setBusy(false)
+    // the alt text is the file's name with the characters that would close the ![]() taken out
+    const md = done.flatMap((r, i) =>
+      r.status === 'fulfilled' ? [`![${pics[i].name.replace(/[[\]()]/g, '')}](${r.value})`] : [])
+    if (md.length) insert(`\n${md.join('\n')}\n`)
+    // one toast for the lot: five failures are one reason, and five toasts are a wall
+    const failed = done.find((r) => r.status === 'rejected')
+    if (failed) toast(String((failed as PromiseRejectedResult).reason?.message ?? 'that did not upload'))
+  }
+
+  const pickFile = useRef<HTMLInputElement>(null)
+
   const TOOLS = [
     { icon: Heading, label: 'Heading', run: heading },
     { icon: Quote, label: 'Quote', run: quote },
@@ -87,11 +127,38 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
           <ArrowLeft />
         </Button>
         <span className="text-muted-foreground font-heading text-sm tracking-wide uppercase">Page</span>
+        {/* the only way in on a phone, where there is no drag and a paste is a fight */}
+        {editing && (
+          <Hint label={busy ? 'Adding…' : 'Add a picture'}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto"
+              disabled={busy}
+              onClick={() => pickFile.current?.click()}
+              aria-label="Add a picture"
+            >
+              <Image />
+            </Button>
+          </Hint>
+        )}
+        <input
+          ref={pickFile}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          hidden
+          onChange={(e) => {
+            void addPictures([...(e.currentTarget.files ?? [])])
+            // cleared, or picking the same file twice in a row fires no change the second time
+            e.currentTarget.value = ''
+          }}
+        />
         <Hint label={editing ? 'Preview' : 'Edit'}>
           <Button
             variant="ghost"
             size="icon-sm"
-            className="ml-auto"
+            className={editing ? undefined : 'ml-auto'}
             onClick={() => setEditing((e) => !e)}
             aria-label={editing ? 'Preview' : 'Edit'}
           >
@@ -118,6 +185,23 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
               onChange={(e) => patch(it.id, { note: e.target.value })}
               onMouseUp={onSelect}
               onScroll={() => setBar(null)}
+              /* A pasted or dropped picture is the one paste that is not text. Everything else
+                 falls through to the browser's own handling, so pasting a screenshot works and
+                 pasting a paragraph is untouched. */
+              onPaste={(e) => {
+                const files = [...e.clipboardData.files]
+                if (!files.some((f) => f.type.startsWith('image/'))) return
+                e.preventDefault()
+                void addPictures(files)
+              }}
+              // only files: dragging a row out of the list still means what it always did
+              onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+              onDrop={(e) => {
+                const files = [...e.dataTransfer.files]
+                if (!files.some((f) => f.type.startsWith('image/'))) return
+                e.preventDefault()
+                void addPictures(files)
+              }}
               placeholder="Write… markdown supported"
               aria-label="Note"
               // text-base until md, like every other field: under 16px iOS zooms the page in on

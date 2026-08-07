@@ -23,7 +23,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', watches: [], alarms: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
+  subView: 'expense', calView: 'month', watches: [], alarms: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
   marketHorizon: 'short', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
@@ -157,13 +157,14 @@ assert.deepEqual(alarmAlerts([alarm], {}), [])
 
 // a position with no stop resting is the alert; one with a stop is not a word
 const naked = nakedAlerts([
-  { symbol: 'PF_XBTUSD', side: 'long', entry: 100, stop: null, venue: 'kraken' },
+  { symbol: 'BTCUSDT', side: 'long', entry: 100, stop: null, venue: 'mexc' },
   { symbol: 'ETHUSDT', side: 'short', entry: 200, stop: 210, venue: 'bitget' },
 ])
 assert.equal(naked.length, 1)
-assert.equal(naked[0].id, 'naked-kraken-PF_XBTUSD')
-assert.equal(naked[0].asset, 'BTCUSDT') // Kraken's name, mapped back to the chart the click opens
-assert.ok(naked[0].title.includes('XBTUSD has no stop'))
+assert.equal(naked[0].id, 'naked-mexc-BTCUSDT')
+assert.equal(naked[0].asset, 'BTCUSDT') // the chart the click opens
+assert.ok(naked[0].title.includes('BTCUSDT has no stop'))
+assert.ok(naked[0].detail.startsWith('MEXC long')) // the venue is named, not defaulted
 
 /* ---------- what actually happened: the window opening, and the trade ending ---------- */
 
@@ -341,7 +342,7 @@ console.log('movers ok')
    short stopping above both cost what the distance says. A €2,000 loss against $10,000 of equity
    is the fifth of it that the sum exists to say out loud. */
 const rows = [
-  { symbol: 'PF_XBTUSD', entry: 60_000, stop: 58_000, size: 0.5 },   // long: 2000 × 0.5 = 1000
+  { symbol: 'BTCUSDT', entry: 60_000, stop: 58_000, size: 0.5 },   // long: 2000 × 0.5 = 1000
   { symbol: 'ETHUSDT', entry: 3_000, stop: 3_200, size: 5 },         // short: 200 × 5 = 1000
 ]
 const r = openRisk(rows, [], 10_000)
@@ -369,7 +370,7 @@ assert.equal(withMine.exch, 2_000) // untouched by the euros
 // a watched plan is not money on the table, so it is not risk
 assert.equal(openRisk([], [{ asset: 'BTCUSDT', entry: 100, stop: 95 }], null).mine, 0)
 
-/* The crowd. PF_XBTUSD and ETHUSDT both resolve through assetOf into Crypto, and gold is its own
+/* The crowd. BTCUSDT and ETHUSDT both resolve through assetOf into Crypto, and gold is its own
    group — so two of three is the sentence worth saying. */
 const gold3 = { symbol: 'XAUTUSDT', entry: 4_000, stop: 3_900, size: 1 }
 assert.deepEqual(openRisk([...rows, gold3], [], null).crowd, { group: 'Crypto', n: 2, of: 3 })

@@ -54,10 +54,14 @@ function Links({ it }: { it: Item }) {
 }
 
 /**
- * Tags to hand someone rather than make them remember. What the project's family already uses
- * comes first (see `tagsFor`), so the row a sub-project offers is what its siblings are tagged
- * with — and typing narrows it to what starts with the word being typed. Empty field, no typing:
- * the six this project reaches for most, which is the whole point of showing it unprompted.
+ * Tags to hand someone rather than make them remember, once they have started typing one. What the
+ * project's family already uses comes first (see `tagsFor`), so the row a sub-project offers is
+ * what its siblings are tagged with, narrowed to what starts with the word in the box.
+ *
+ * Nothing typed offers nothing. It used to answer an empty field with the six this project reaches
+ * for most, which is a menu that appears the moment the panel opens, pushes the row's own tags
+ * down the column, and answers a question nobody asked — the field is for adding a tag you have in
+ * mind, and the help is for finishing it.
  */
 function TagSuggest({ pid, has, q, onPick }: {
   pid: string | null
@@ -69,7 +73,9 @@ function TagSuggest({ pid, has, q, onPick }: {
 }) {
   const s = useStash()
   const typed = q.split(/[\s,#]+/).pop()?.toLowerCase() ?? ''
-  const hits = tagsFor(s, pid, has).filter((t) => t.startsWith(typed) && t !== typed).slice(0, 6)
+  const hits = typed
+    ? tagsFor(s, pid, has).filter((t) => t.startsWith(typed) && t !== typed).slice(0, 6)
+    : []
   if (!hits.length) return null
 
   return (

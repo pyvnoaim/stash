@@ -26,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the picture sniffer and the sweep that spares what is still referenced, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -122,10 +122,12 @@ tag field only ever adds, since a shared list would wipe whatever each row had o
 count in the header is the list; the one in the window title is what is due, since the dock icon
 carries no badge of its own.
 
-Tags in the panel are chips: type and press `return` to add, `×` on a chip to take one off. Under
-the field are tags the stash already has, the ones this project's own family uses first and by how
-often it uses them — so a sub-project offers what its siblings are tagged with rather than an
-alphabet of everything ever typed. Typing narrows them; clicking one files it. A row
+Tags in the panel are chips: type and press `return` to add, `×` on a chip to take one off. Start
+typing one and the tags the stash already has turn up under the field, the ones this project's own
+family uses first and by how often it uses them — so a sub-project offers what its siblings are
+tagged with rather than an alphabet of everything ever typed. Each letter narrows them; clicking
+one files it. An empty field offers nothing: the box is for a tag you have in mind, and the help is
+for finishing it rather than for browsing a menu that appears the moment the panel opens. A row
 carrying a note shows its first line under the title, with `+4` for the rest — the whole note
 flattened onto one line is a wall of half-sentences, not a preview. The panel's footer says when
 an item was added and, once anything has actually been changed, when it was last edited. A bulk
@@ -152,6 +154,39 @@ HTML, so there is no escaping to get wrong and no dependency to pull. Markdown h
 
 `- [ ]` and `- [x]` render as real checkboxes in the preview, and ticking one rewrites that line
 in the note. A checklist is therefore just text, with nothing to keep in step with it.
+
+### Pictures
+
+Paste a screenshot into the editor, drop a file on it, or use the picture button in the header —
+the last of them because a phone has neither of the first two. Several at once upload together and
+are written in as one edit, so one `⌘Z` takes the lot back out. What lands in the note is ordinary
+markdown, `![name](/api/blob/…)`, which means a note with a picture in it is still just text.
+
+The bytes are the one thing in Stash that does **not** ride the synced document, and that is the
+whole design: the document is pushed whole on every edit and kept fifty versions deep, so a single
+screenshot inlined as base64 would travel on every push and be stored fifty times over. Instead it
+goes to its own table on the server, and the note holds a 128-bit id pointing at it. Which makes
+this the one feature that needs an account — with no server there is nowhere for the bytes to be,
+and the editor says so rather than dropping the paste quietly.
+
+png, jpeg, gif or webp, under 5 MB, and *what it is* is read off the first bytes rather than
+believed from what the browser called it. No SVG: it comes back out of this app's own origin, and
+an SVG is a document that can carry script. It is served `nosniff`, never framed, and refused to
+any other site even by somebody holding the id.
+
+An image is held to a tighter rule than a link when it renders, too. A link waits to be clicked; an
+image fetches itself the moment the note is drawn — so an `http://` one in a note somebody shared
+with you would report your address to their server before you had read a word. Only this app's own
+paths load, and anything else shows its alt text rather than a broken frame.
+
+The service worker keeps them, so a note reads the same offline as on. It is the only CacheFirst
+route in the app and the only one that may be: the id is random and its bytes never change, so a
+cached copy cannot be a stale answer to anything.
+
+A picture nobody points at any more is collected — the sweep runs when the next one is uploaded,
+spares anything less than a day old so an upload is never collected before the note naming it is
+saved, and checks against every stored version rather than only the newest, so restoring an old one
+does not come back with its pictures missing.
 
 ## Sidebar and settings
 
@@ -260,6 +295,24 @@ opens the Subscriptions tool rather than trying to select it.
 Only the weeks the month needs, five or six, so there is never a dead row. Days outside the month
 are tinted back, today's number is filled in, and the grid is ruled by its own gaps rather than by
 a border on every cell.
+
+### The week, which is the one that can show *when*
+
+**Month** and **Week** in the header, and the choice sticks the way Subscriptions' does. A month
+cell can say an item is due on the 14th and cannot say it is due at six — so `18:00` sits in a cell
+with everything else, in the order it was typed. The week is where that hour finally means
+something: an hour column down the left, seven days across, and each item in the row for the hour
+it named.
+
+Above the grid is **All day**, for everything that named a day and no time — the untimed items, the
+subscription charges, and any event the subscribed calendar gave no hour. Dragging works in both
+directions: drop a row on an hour cell and it is due that day at that hour, drop it on the all-day
+strip and it gives the hour back up. That is the same drag the month has, saying one more thing.
+
+The hours drawn are 07:00 to 21:00 whatever the week holds, so the axis does not shift about
+between weeks — and anything outside pulls it open rather than falling off it, so a 06:30 stand-up
+or a 23:00 deploy is on the grid. Both views share one anchor: switching to Week lands on the week
+you were looking at, which is the whole point of switching.
 
 ### Somebody else's calendar
 
@@ -391,23 +444,56 @@ timeframe gets said out loud too.
 price against them: it tells you when price reaches the entry, when it runs through the stop (the
 setup is dead), and when it hits the target.
 
-### What Kraken says you hold
+### What the exchange says you hold
 
-The desk's one row of fact among the readings: give your account a **read-only** Kraken Futures
-key — **Settings → Markets → Kraken Futures key**, each account its own — and a card above the
-verdicts lists what the exchange actually has open: symbol, side, size, entry against the current
-mark, and the move from entry signed by the side. The key is typed in the browser but kept on the
-server, because it signs requests — the opposite arrangement from the Twelve Data key above it,
-which only reads public prices and therefore never leaves the machine. It never comes back out
-either: the server will only say whether one is set, and saving again replaces it. The server
-signs the requests and joins in the mark prices; the exchange is asked at most every thirty
-seconds per key however many tabs poll; and the card renders nothing at all when you are flat or
-have no key saved. The percentage is price move, not return on margin: leverage is not in a
-read-only feed's scope, and a made-up ROE would be worse than none. Create the key read-only on
-Kraken's side too, with withdrawal set to no access — this code could not place an order even if
-it wanted to, and the key should not be able to either. Stored as given rather than hashed, since
-signing needs it back — which is exactly why read-only matters: a copied database leaks a viewer,
-not a wallet.
+The desk's one row of fact among the readings: give your account a **read-only** futures key —
+**Settings → Markets → Exchange key**, each account its own — and a card above the verdicts lists
+what the exchange actually has open: symbol, side, size, entry against the current mark, the move
+from entry signed by the side, and the stop and target resting against it where the venue's feed
+carries them.
+
+Two venues, **Bitget** and **MEXC**, picked one at a time from the top of that section — `· set`
+marks the ones already carrying a key, and a key on each means one list with the venue named on
+every row. Bitget cuts its credential in three parts (the passphrase is the one you chose making it) and
+MEXC in two; either way every part arrives together or not at all, since a fraction of a credential
+is a config that fails at three in the morning. Kraken Futures was the first venue here and is
+gone: its column is dropped on the next start, so the credential it held leaves the database rather
+than sitting in the file unread.
+
+The key is typed in the browser but kept on the server, because it signs requests — the opposite
+arrangement from the Twelve Data key above it, which only reads public prices and therefore never
+leaves the machine. It never comes back out either: the server will only say whether one is set,
+and saving again replaces it. The server signs the requests and joins in the mark prices; each
+exchange is asked at most every thirty seconds per key however many tabs poll; and the card renders
+nothing at all when you are flat or have no key saved. Every venue answers or none of them do: one
+feed failing while the other answered would read as its positions having closed.
+
+The percentage is price move, not return on margin: leverage is not in a read-only feed's scope,
+and a made-up ROE would be worse than none. Where a feed vouches for a liquidation price — Bitget's
+does — the card leads with the nearest one as a distance, which is the worst number on the desk
+said first; an estimate has no place next to real money, so a venue that doesn't say goes without.
+Create the key read-only on the exchange's side too, with withdrawal set to no access — this code
+could not place an order even if it wanted to, and the key should not be able to either. Stored as
+given rather than hashed, since signing needs it back — which is exactly why read-only matters: a
+copied database leaks a viewer, not a wallet.
+
+A position that was there last look and is gone this one has closed, and files itself into the
+record like any other trade — the same Result a hand-entered position writes, so the bell announces
+it and **How they went** counts it, with no second code path. The last look is kept in
+localStorage, which is what catches a close that happened while the app was shut and writes it down
+at the next open. Only an answered request moves anything: a failed fetch keeps the last state
+rather than reading as everything having closed at once.
+
+It is priced at the last mark seen rather than at the fill. Neither venue left here answers an
+exact-fill endpoint this code has a key for, and that is one more authed route for a number usually
+the same one — so the shortcut is written down rather than implied, and it is the R beside the row
+that is approximate, never the fact that the trade ended.
+
+Dropping Kraken renamed that last look, deliberately, from `stash-kraken-open` to
+`stash-exchange-open`. Reusing the old key would have made the first poll after the upgrade see
+every Kraken position vanish — because the venue did, not because the trade ended — and file the
+lot into the record as closes at their last mark. A fresh key means the first look files nothing,
+which is the honest answer to a question it cannot know.
 
 ### How they went
 
@@ -599,7 +685,9 @@ is still in the file and still copies out.
 - `server/index.ts` — accounts, sessions and one versioned document per user, plus the calendar feed; Node + SQLite, no dependencies
 - `server/push.ts` — VAPID, the minute loop, and the rule that decides whether a phone is worth waking
 - `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
-- `server/kraken.ts` — Kraken Futures read-only: the signing, the mark-price join, and the thirty-second cache
+- `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
+- `server/bitget.ts` — Bitget Futures read-only: the signing, the shape every venue answers in, and the thirty-second cache
+- `server/mexc.ts` — MEXC Futures read-only: contracts turned into coins, held to that same shape
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
@@ -828,7 +916,7 @@ docker compose exec stash node server/index.ts invite   # the first code; the re
 ```
 
 One optional variable on the container: `STASH_TD_KEY` lets the hosted MCP route read the stocks
-— absent, they answer with what is missing, and everything else runs the same. The Kraken keys
+— absent, they answer with what is missing, and everything else runs the same. The exchange keys
 are not the container's: each account sets its own in Settings → Markets.
 
 Data sits in one named volume; backing it up is copying one SQLite file. The push keypair is a row

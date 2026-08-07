@@ -407,8 +407,6 @@ function MarketsPanel() {
 
 /** The venues an account key can come from, and how each cuts one. */
 const VENUES = [
-  { id: 'kraken', name: 'Kraken', route: '/api/kraken', passphrase: false,
-    hint: 'Read-only, from Kraken → Settings → API → Futures: General API read only, Withdrawal no access.' },
   { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
     hint: 'Read-only, from Bitget → API Management: Read permission only. Bitget cuts a key in three parts — the passphrase is the one you chose making it.' },
   { id: 'mexc', name: 'MEXC', route: '/api/mexc', passphrase: false,
@@ -421,12 +419,15 @@ const VENUES = [
  * typed here and kept on the server, each account its own. It never comes back — the server will
  * only say whether one is set — so the fields always read empty, and saving again replaces it.
  *
- * One venue at a time, picked at the top: three stacked key forms was a wall of fields, and
- * nobody sets more than one in a sitting. A ✓ in the picker marks the venues already set.
+ * One venue at a time, picked at the top: stacked key forms was a wall of fields, and nobody sets
+ * more than one in a sitting. The picker is the first thing in the section because it
+ * decides what every field under it means — it sat in the section's footer before, under the Save
+ * button, which reads as one more setting rather than as the thing the form is about. `· set`
+ * marks the venues already carrying a key, rather than a ✓ that landed beside the list's own.
  */
 function ExchangeSection() {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
-  const [venue, setVenue] = useState<(typeof VENUES)[number]['id']>('kraken')
+  const [venue, setVenue] = useState<(typeof VENUES)[number]['id']>('bitget')
   const [have, setHave] = useState<Record<string, boolean>>({})
   const [key, setKey] = useState('')
   const [secret, setSecret] = useState('')
@@ -469,23 +470,29 @@ function ExchangeSection() {
         on this machine, and it is never shown back — the market page grows a card of what you
         actually hold, across every venue with a key here. Nothing here can trade.`}
       action={
-        <Select value={venue} onValueChange={(id) => pick(id as typeof venue)}>
-          <SelectTrigger size="sm" aria-label="Exchange"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {VENUES.map((x) => (
-              <SelectItem key={x.id} value={x.id}>{x.name}{have[x.id] ? ' ✓' : ''}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Button size="sm" disabled={busy || !whole} onClick={() => save(key.trim(), secret.trim(), pass.trim())}>
+          Save
+        </Button>
       }
     >
+      <Select value={venue} onValueChange={(id) => pick(id as typeof venue)}>
+        <SelectTrigger size="sm" aria-label="Exchange"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {VENUES.map((x) => (
+            <SelectItem key={x.id} value={x.id}>
+              {x.name}
+              {have[x.id] && <span className="text-muted-foreground">· set</span>}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {have[v.id] && (
-        <div className="flex items-center justify-between">
-          <p className="text-muted-foreground text-sm">A {v.name} key is on this account. Saving replaces it.</p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-muted-foreground text-xs">A {v.name} key is on this account. Saving replaces it.</p>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '', '')}>Remove</Button>
         </div>
       )}
-      <PasswordInput placeholder="API key" autoComplete="off" value={key}
+      <PasswordInput placeholder={`${v.name} API key`} autoComplete="off" value={key}
         onChange={(e) => setKey(e.target.value)} />
       <PasswordInput placeholder="API secret" autoComplete="off" value={secret}
         onChange={(e) => setSecret(e.target.value)} />
@@ -493,9 +500,6 @@ function ExchangeSection() {
         <PasswordInput placeholder="Passphrase" autoComplete="off" value={pass}
           onChange={(e) => setPass(e.target.value)} />
       )}
-      <Button size="sm" disabled={busy || !whole} onClick={() => save(key.trim(), secret.trim(), pass.trim())}>
-        Save
-      </Button>
     </Section>
   )
 }

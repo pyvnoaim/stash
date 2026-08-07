@@ -1,6 +1,6 @@
 // npm test
 import assert from 'node:assert/strict'
-import { nextAfter, nextDue, parseCapture, parseList } from './parse.ts'
+import { hourOf, hourWindow, mondayOf, nextAfter, nextDue, parseCapture, parseList } from './parse.ts'
 
 const projects = [{ id: 'k', name: 'Kova' }, { id: 'a', name: 'aimlib' }]
 const FRI = '2026-07-31' // a Friday
@@ -128,5 +128,34 @@ assert.equal(nextAfter('2026-07-20', 'day', '2026-07-27'), '2026-07-28')
 assert.equal(nextAfter('2026-08-03', 'monday', '2026-08-19'), '2026-08-24') // both Mondays
 // finished early (due still ahead): just the next occurrence after the anchor
 assert.equal(nextAfter('2026-08-01', 'month', '2026-07-30'), '2026-09-01')
+
+/* ---------- what the calendar's week grid stands on ---------- */
+
+// the Monday on or before: a Monday is its own, a Sunday reaches back six days, not forward one
+assert.equal(mondayOf(new Date('2026-08-03T13:00')).toLocaleDateString('sv'), '2026-08-03') // Mon
+assert.equal(mondayOf(new Date('2026-08-09T13:00')).toLocaleDateString('sv'), '2026-08-03') // Sun
+assert.equal(mondayOf(new Date('2026-08-06T13:00')).toLocaleDateString('sv'), '2026-08-03') // Thu
+// and it lands on midnight, so the seven days counted off it never drift over a DST boundary
+assert.equal(mondayOf(new Date('2026-08-06T23:30')).getHours(), 0)
+
+// an hour is 'HH:MM' and nothing else: no bare number, no 24, no empty string
+assert.equal(hourOf('18:00'), 18)
+assert.equal(hourOf('06:30'), 6)
+assert.equal(hourOf('00:00'), 0)
+assert.equal(hourOf(null), null)
+assert.equal(hourOf(''), null)
+assert.equal(hourOf('18'), null)
+assert.equal(hourOf('24:00'), null)   // not an hour of any day
+assert.equal(hourOf('tomorrow'), null)
+
+// an empty week still draws the standing window, so the axis does not move about
+assert.deepEqual(hourWindow([]), [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+assert.deepEqual(hourWindow(['09:00', '17:30']), hourWindow([]))   // both already inside it
+// anything outside pulls the grid open rather than falling off the end of it
+assert.equal(hourWindow(['06:30'])[0], 6)
+assert.equal(hourWindow(['23:00']).at(-1), 23)
+assert.deepEqual(hourWindow(['00:00', '23:00']).length, 24)
+// a time it cannot read widens nothing
+assert.deepEqual(hourWindow(['nope', null, '18']), hourWindow([]))
 
 console.log('parse: ok')

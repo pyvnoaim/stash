@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { nextCharge, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
-import { ASSETS, assetOf, DIALS, fmtPrice, moverMove, type Dials, type Trend } from './market.ts'
+import { ASSETS, assetOf, DIALS, fmtPrice, moverMove, venueName, type Dials, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -127,11 +127,10 @@ type NakedRow = { symbol: string; side: 'long' | 'short'; entry: number; stop: n
  */
 export function nakedAlerts(rows: NakedRow[]): Alert[] {
   return rows.filter((p) => p.stop == null).map((p) => {
-    const venue = { bitget: 'Bitget', mexc: 'MEXC' }[p.venue ?? ''] ?? 'Kraken'
     return {
-      id: `naked-${p.venue ?? 'kraken'}-${p.symbol}`,
-      title: `${p.symbol.replace(/^(PF|PI|FI)_/, '')} has no stop`,
-      detail: `${venue} ${p.side} from ${price(p.entry)} — nothing resting to end it`,
+      id: `naked-${p.venue ?? 'exchange'}-${p.symbol}`,
+      title: `${p.symbol} has no stop`,
+      detail: `${venueName(p.venue)} ${p.side} from ${price(p.entry)} — nothing resting to end it`,
       tone: 'warn' as const,
       target: MARKET,
       asset: assetOf(p.symbol),
