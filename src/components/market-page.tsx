@@ -49,11 +49,17 @@ const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a 
 const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
-/** The page's three sittings. `chart` is where you land — it is the asset you asked for. */
+/**
+ * The page's three sittings. `chart` is where you land — it is the asset you asked for.
+ *
+ * Record only appears once there is a record: it is the one tab whose cards both return null when
+ * empty, so before the first setup closed it was a tab you could open onto nothing. A tab that is
+ * usually empty teaches you not to open it, which is the same as not having built it.
+ */
 const TABS = [
-  { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart and the readings behind the call' },
-  { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, and what is trending on-chain' },
-  { id: 'record', label: 'Record', hint: 'How the saved setups actually went, this rule backtested, and everyone else\'s desk' },
+  { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart, the readings behind the call, and what the rule did on these bars' },
+  { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, what is trending on-chain, and what the other desks hold' },
+  { id: 'record', label: 'Record', hint: 'How your saved setups actually went — hit rate and expectancy, by horizon' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -105,7 +111,7 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
 }
 
 export default function MarketPage() {
-  const { chart, apiKey, watches, dials, marketAsset: asset, marketHorizon: horizon } = useStash()
+  const { chart, apiKey, watches, dials, results, marketAsset: asset, marketHorizon: horizon } = useStash()
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload
   const setAsset = setMarketAsset
@@ -560,9 +566,12 @@ export default function MarketPage() {
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
   const up = change >= 0
-  const [tab, setTab] = useState<(typeof TABS)[number]['id']>('chart')
+  const [at, setTab] = useState<(typeof TABS)[number]['id']>('chart')
   // which tabs have ever been opened — see the note by the Scan below
   const [seen, setSeen] = useState<Partial<Record<(typeof TABS)[number]['id'], boolean>>>({ chart: true })
+  const tabs = TABS.filter((t) => t.id !== 'record' || results.length > 0)
+  // clearing the record while standing on it takes the tab away underneath you
+  const tab = tabs.some((t) => t.id === at) ? at : 'chart'
 
   // date under the crosshair; intraday intervals want the time too
   const stamp = (ms: number) => new Date(ms).toLocaleString(undefined, {
@@ -689,7 +698,7 @@ export default function MarketPage() {
           over every other asset, and the record of how the saved ones went are separate sittings,
           and stacking them meant the answer to the one you came for was somewhere in the middle. */}
       <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-1">
-        {TABS.map(({ id, label, hint }) => (
+        {tabs.map(({ id, label, hint }) => (
           <Hint key={id} label={hint}>
             <Button
               size="sm" variant={tab === id ? 'default' : 'ghost'} className="h-7"
@@ -1319,6 +1328,9 @@ export default function MarketPage() {
           </CardContent>
         </Card>
       )}
+      {/* the backtest of the rule on the bars above it — the chart's own question, and it was a
+          tab away from the chart it is asking about */}
+      <Measure candles={candles} cfg={cfg} interval={interval} asset={asset} />
       </>
       )}
       </div>
@@ -1335,14 +1347,15 @@ export default function MarketPage() {
               or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
           <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
           <Trending />
+          {/* what other people hold is the same question as what is moving — neither is your own
+              record, which is the only thing the Record tab is for */}
+          <Desk />
         </div>
       )}
 
       {seen.record && (
         <div className={cn('flex flex-col gap-4', tab !== 'record' && 'hidden')}>
-          <Measure candles={candles} cfg={cfg} interval={interval} asset={asset} />
           <Record />
-          <Desk />
         </div>
       )}
 
@@ -2213,6 +2226,11 @@ async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Inte
   return { a, by, agree, cascade: topDown(bars, cfg, fee), dir, bulls, bears, plan, tier, say }
 }
 
+/** One grid for the header, the row and the row's second line, so all three line up by
+ *  construction. They were three sets of hand-matched widths, and the cascade line was indented by
+ *  a number that had to be re-guessed every time a column moved. */
+const SCAN_GRID = 'grid grid-cols-[1.5rem_minmax(4rem,7rem)_3.25rem_auto_minmax(0,1fr)_2.75rem] items-baseline gap-x-2'
+
 // how actionable the row's phrase is, by tier — the same palette the verdict card speaks in
 const TIER_CLS = [
   'text-muted-foreground',
@@ -2287,16 +2305,17 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
         {/* the strip's heading, once — five arrows a row with no scale on them is a puzzle. The
             desk's own timeframe is marked, since that is the one the phrase and the plan belong to */}
         {!!rows?.length && (
-          <div className="text-muted-foreground mb-1 flex items-baseline gap-2 px-1.5 text-[10px]">
-            <span className="w-28 shrink-0" />
-            <span className="w-12 shrink-0" />
-            <span className="flex shrink-0 gap-1">
+          <div className={cn(SCAN_GRID, 'text-muted-foreground mb-1 px-1.5 text-[10px]')}>
+            <span /><span /><span />
+            <span className="flex gap-1">
               {INTERVALS.map((iv) => (
                 <span key={iv} className={cn('w-8 text-center tabular-nums', iv === interval && 'text-foreground')}>
                   {iv}
                 </span>
               ))}
             </span>
+            <span />
+            <span className="text-right">net</span>
           </div>
         )}
         {rows?.map((r) => (
@@ -2306,19 +2325,18 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
               // the desk is at the top of a page you are at the bottom of — go to the answer
               e.currentTarget.closest('.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' })
             }}
-            className="hover:bg-accent -mx-1.5 grid w-[calc(100%+0.75rem)] rounded-md px-1.5 py-1 text-left text-sm">
-            <span className="flex items-baseline gap-2">
-            <span className="flex w-28 shrink-0 items-center gap-2 truncate font-medium">
-              <AssetLogo src={r.a.logo} />{r.a.label}
-            </span>
-            <span className={cn('w-12 shrink-0 text-xs font-medium',
+            className={cn(SCAN_GRID,
+              'hover:bg-accent border-border/40 -mx-1.5 w-[calc(100%+0.75rem)] rounded-md border-b px-1.5 py-1.5 text-left text-sm last:border-0')}>
+            <AssetLogo src={r.a.logo} />
+            <span className="truncate font-medium">{r.a.label}</span>
+            <span className={cn('text-xs font-medium',
               r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400'
               : r.dir === 'short' ? 'text-destructive' : 'text-muted-foreground')}>
               {r.dir === 'long' ? 'Long' : r.dir === 'short' ? 'Short' : 'Flat'}
             </span>
             {/* every timeframe at once. A dash is a feed that gave that interval nothing, which is
                 not the same as no side and must not read like one */}
-            <span className="flex shrink-0 gap-1">
+            <span className="flex gap-1">
               {INTERVALS.map((iv) => {
                 const l = r.by[iv]
                 return (
@@ -2336,30 +2354,32 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
                 )
               })}
             </span>
-            <span className={cn('min-w-0 flex-1 truncate text-xs', TIER_CLS[r.tier])}>{r.say}</span>
-            {r.plan && (
-              <span className={cn('shrink-0 font-mono text-xs tabular-nums',
-                r.plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}>
-                {r.plan.net.toFixed(1)}×
-              </span>
-            )}
+            <span className={cn('truncate text-xs', TIER_CLS[r.tier])}>{r.say}</span>
+            <span className={cn('text-right font-mono text-xs tabular-nums',
+              !r.plan ? 'text-muted-foreground/40'
+              : r.plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}>
+              {r.plan ? `${r.plan.net.toFixed(1)}×` : '—'}
             </span>
             {/* the cascade, but only once it has something to say: a stage 0 or 1 is "the case
-                never got started", which the strip above already shows in five arrows */}
+                never got started", which the strip above already shows in five arrows.
+                Under the phrase, in the phrase's own column — it is the same question asked of
+                three charts instead of one, and the ↳ is what says so without a second heading. */}
             {r.cascade.stage >= 2 && (
-              <span className={cn('truncate pl-[7.5rem] text-xs',
+              <span className={cn('col-start-5 col-end-7 truncate text-xs',
                 r.cascade.stage === 3 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
-                {r.cascade.say}
+                <span className="opacity-50">↳ </span>{r.cascade.say}
               </span>
             )}
           </button>
         ))}
-        <p className="text-muted-foreground mt-2 text-xs">
+        {/* capped rather than run to the card's width: at this width a paragraph is a line the eye
+            loses its place in, and this one is a legend nobody reads twice */}
+        <p className="text-muted-foreground mt-3 max-w-prose text-xs">
           ▲▼ is each timeframe's own lean, the desk's marked. A side every chart agrees on is the
-          one worth taking; one only the fastest sees is a trade against the tide. The second line,
-          where there is one, is the top-down cascade: the 4h sets the direction, the 15m has to
-          break structure with it, the 5m is the trigger — green means all three landed. Stocks need
-          their key and their own rate limit, so they sit this one out — open them from the picker.
+          one worth taking; one only the fastest sees is a trade against the tide. ↳ is the
+          top-down cascade: the 4h sets the direction, the 15m has to break structure with it, the
+          5m is the trigger — green means all three landed. Stocks need their key and their own
+          rate limit, so they sit this one out — open them from the picker.
         </p>
       </CardContent>
     </Card>

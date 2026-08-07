@@ -40,6 +40,11 @@ const MAX_BODY = 8 * 1024 * 1024
 const KEEP = 50
 const IDLE_DAYS = 30
 const MAX_DAYS = 180
+/** What server/mcp.ts calls itself, and what the sessions list calls it back. One string on each
+ *  side of a fetch, so they are named here together — the last time they were not, one of them
+ *  went unread for as long as the feature existed. */
+const MCP_DEVICE_UA = 'stash-mcp'
+const MCP_DEVICE = 'Claude, over MCP'
 /** Failed logins allowed per user-and-address before a cool-off. */
 const TRIES = 10
 const COOL_OFF = 15 * 60_000
@@ -419,6 +424,7 @@ export function start({
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
+    dropDevice: db.prepare('delete from sessions where user = ? and device = ?'),
     sessions: db.prepare(`select hash, created, seen, device from sessions
       where user = ? order by seen desc`),
     touchSession: db.prepare('update sessions set seen = ? where hash = ?'),
@@ -521,6 +527,10 @@ export function start({
   const deviceOf = (req: IncomingMessage) => {
     const ua = String(req.headers['user-agent'] ?? '')
     if (!ua) return null
+    /* server/mcp.ts has always sent this, under a comment saying it is what names the client in
+       this list — the branch that reads it was never written, so every MCP context signed in as
+       "A browser". Three devices and twenty-three rows, most of them this. */
+    if (ua === MCP_DEVICE_UA) return MCP_DEVICE
     const app = /Edg\//.test(ua) ? 'Edge'
       : /OPR\/|Opera/.test(ua) ? 'Opera'
         : /Firefox\//.test(ua) ? 'Firefox'
@@ -535,6 +545,12 @@ export function start({
   }
 
   const newSession = (user: number, device: string | null = null) => {
+    /* One row for the tool, replaced rather than added to. It signs in again on every process
+       start — so on every deploy — and on every eviction from the context cache, and each of those
+       was leaving a row behind to idle out over a fortnight. A browser gets a row per device
+       because that is the question the list answers; this is one client that keeps coming back,
+       and the old cookie is no loss: mcp.ts logs in again on the 401. */
+    if (device === MCP_DEVICE) q.dropDevice.run(user, MCP_DEVICE)
     const t = randomBytes(32).toString('hex')
     q.addSession.run(hashToken(t), user, Date.now(), Date.now(), device)
     return t
@@ -1363,7 +1379,16 @@ export function start({
         if (have !== (now?.v ?? 0)) {
           return send(res, 409, { version: now?.v ?? 0, state: now ? JSON.parse(now.json) : null })
         }
-        const w = q.insert.run(user.id, Date.now(), String(body.device ?? ''), JSON.stringify(body.state))
+        /* A save that changes nothing is not a version. The client pushes on a debounce rather
+           than on a diff, so a poll, a re-render or a second device echoing back what it just
+           received all arrived here as a PUT carrying the document it already had — seven rows
+           inside one minute, every one of them the same 37 KB. Fifty are kept, so a quiet hour of
+           those is the whole history gone, and the one version worth coming back to with it.
+           Byte equality on the string that would have been stored: it can only ever miss a change,
+           never invent one, and the client's own serialiser is what produced both sides. */
+        const json = JSON.stringify(body.state)
+        if (now && now.json === json) return send(res, 200, { version: now.v })
+        const w = q.insert.run(user.id, Date.now(), String(body.device ?? ''), json)
         q.prune.run(user.id, user.id, KEEP)
         return send(res, 200, { version: Number(w.lastInsertRowid) })
       }
