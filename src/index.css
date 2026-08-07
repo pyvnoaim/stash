@@ -231,7 +231,11 @@
 }
 @keyframes stash-out { to { opacity: 0; } }
 
-.splash { animation: stash-out 200ms 560ms both; }
+/* On `.splash-lit`, which lands with the wordmark, rather than on `.splash`, which is up before
+   there is one. The sheet mounts while the face is still being fetched; a fade timed from the
+   mount spent its 560ms of hold on an empty grid and started going the moment the squares
+   arrived. */
+.splash-lit { animation: stash-out 200ms 560ms both; }
 .splash-matrix i {
   position: absolute;
   background: var(--foreground);
