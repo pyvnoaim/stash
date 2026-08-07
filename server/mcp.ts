@@ -327,7 +327,12 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
       ])
       if (!candles.length) throw new Error('the feed returned no bars')
       const view = market.signals(candles, cfg)
-      const list: Signal[] = [...(higher ? [higher] : []), ...view.signals]
+      /* The same list the page counts, assembled by the same function — this used to build its own
+         and left the VWAP card out, so a 1h read here counted one fewer vote than the screen and
+         could answer with a side, an entry and a stop the desk would not have given. No range: that
+         card belongs to the opening-range preset and this tool has no preset. */
+      const vwap = market.sessionVwap(candles)
+      const list: Signal[] = market.deskSignals(higher, null, vwap, view.signals)
       const { bulls, bears, dir } = market.tally(list)
       const price = candles.at(-1)!.c
       const entry = view.smaFast.at(-1)
