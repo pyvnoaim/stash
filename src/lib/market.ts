@@ -755,6 +755,43 @@ export function standingSwings(c: Candle[], k = 2): { high: Swing | null; low: S
   return { high, low }
 }
 
+/** One three-bar imbalance. `i` is the middle bar — the one that did the travelling — and the box
+ *  runs from `bottom` to `top`, the prices nobody actually traded on the way past. */
+export type Gap = { i: number; top: number; bottom: number; dir: 'up' | 'down'; filled: boolean }
+
+/**
+ * Fair value gaps: the window price jumped over without trading in it. Three bars, and the middle
+ * one ran so hard that the first bar's high never met the third bar's low — so between those two
+ * prices there is a stretch the book never cleared. The SMC crowd draws it as a box and expects
+ * price to come back and trade the part it skipped; that is the whole claim, and it is a tendency
+ * rather than a rule.
+ *
+ * `filled` is whether any later bar has traded back into the box at all — mitigated, in the jargon.
+ * Kept rather than dropped, because the two say different things: an unfilled gap is unfinished
+ * business ahead of price, and a filled one often explains where a move already turned around.
+ *
+ * Deliberately no minimum size. A floor would have to be in ATRs to mean anything across assets,
+ * and the honest filter is the one the chart applies anyway — unfilled gaps only, nearest first.
+ * ponytail: raise a size floor here if a quiet 15m chart ever turns into a wall of boxes.
+ */
+export function fvg(c: Candle[]): Gap[] {
+  const out: Gap[] = []
+  for (let i = 1; i < c.length - 1; i++) {
+    const before = c[i - 1], after = c[i + 1]
+    // strict: bars that merely touch left no gap between them, and a zero-height box is not a level
+    const up = before.h < after.l
+    const down = before.l > after.h
+    if (!up && !down) continue
+    const [bottom, top] = up ? [before.h, after.l] : [after.h, before.l]
+    /* Filled by any later bar whose range meets the box — a plain interval intersection, which is
+       the same test either way round and saves the two mirrored ones. The third bar itself is the
+       gap's own edge and cannot fill it, so the scan starts past it. */
+    const filled = c.slice(i + 2).some((b) => b.l <= top && b.h >= bottom)
+    out.push({ i, top, bottom, dir: up ? 'up' : 'down', filled })
+  }
+  return out
+}
+
 /* ---------- demo data for the guides ----------
    Each guide opens with a small chart of the thing it describes. The bars below are synthetic, but
    nothing about the picture is: the demo chart runs the same sma/rsi/macd/orb code the live one
@@ -926,6 +963,16 @@ export const DEMOS: Record<GuideKey, Demo> = {
     ]),
     mark: [7, 13], // the swing high, and the close back through it
   },
+  /* One bar runs so far that the bars either side of it never meet: the first tops out at 100, the
+     third bottoms at 104, and nothing at all traded in between. The bars after it drift back down
+     towards the box without reaching it, which is the state the reading is about — still unfilled. */
+  fvg: {
+    candles: ohlc([
+      [97, 100, 96, 98], [98, 106, 97.5, 105], [105, 108, 104, 107],
+      [107, 108, 105, 105.5], [105.5, 106, 104.5, 105],
+    ]),
+    mark: [0, 2], // the three bars that make the gap
+  },
 }
 
 /** The same fixture upside down, mirrored through the middle of its own range: a rally becomes a
@@ -940,7 +987,10 @@ export const mirrorDemo = (d: Demo): Demo => {
 /** Which concept a signal belongs to — the key its guide is written against. */
 export type GuideKey =
   | 'ma-cross' | 'trend' | 'rsi' | 'sr' | 'divergence' | 'macd'
-  | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap' | 'structure'
+  | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap' | 'structure' | 'fvg'
+
+/** How far price stands from a gap's box, and 0 when it is inside it. */
+export const gapAway = (g: Gap, p: number) => (p > g.top ? p - g.top : p < g.bottom ? g.bottom - p : 0)
 
 /** How many bars a moving-average cross keeps its vote. See the note where it is used. */
 export const FRESH_CROSS = 20
@@ -1016,6 +1066,7 @@ export const GUIDES: Record<GuideKey, string> = {
   structure:
     'Market structure is the sequence of swing highs and swing lows — a swing being a bar whose high or low stands past its neighbours on both sides, which means it only exists in hindsight, a couple of bars after it happened. An uptrend is higher highs and higher lows; when price closes through the last swing low, that sequence has broken. A break against the standing direction is called a change of character (CHoCH) — the earliest structural sign of a turn. A break that extends the standing direction is a break of structure (BOS) — plain continuation, and deliberately quieter news. Two honest caveats: swings confirm bars after the fact, so this label always arrives late by construction; and a move in the trend\'s own direction, however violent, prints no character change at all — a huge drop inside a downtrend is the trend working, not the trend turning.',
   htf: 'The trend on the timeframe one step above the one you are looking at. A cross on the hourly means something different depending on whether the daily is climbing or falling, and trades taken against the bigger timeframe need to be right about timing as well as direction. It is the oldest filter there is and the one most often skipped.',
+  fvg: 'A fair value gap is a stretch of prices the market jumped over without trading in. Take three bars: if the first one\'s high never reaches the third one\'s low, the middle bar ran so hard that everything between those two prices went unsold — an imbalance, in the jargon. The claim is that the book has unfinished business there and price tends to come back and trade it, which makes an unfilled gap a level worth knowing about and a filled one a decent explanation of where a move already turned around. Two honest caveats, and they matter. The first is that the same box gets read in opposite directions: this desk treats it as a magnet, because "nobody traded here, so someone will" is the part that follows from the mechanics, while the SMC crowd more often treats an unfilled bullish gap under price as demand to buy the retrace into — and those two readings disagree about which way it pulls. The second is that gaps are common. A thousand bars will hold a couple of hundred of them and almost all get filled quickly, so the only ones drawn here are the ones still open, and the only one that votes is the nearest, and only when it is within one ATR — a gap eight percent away is a fact about the chart rather than a reason to do anything today.',
 }
 
 /**
@@ -1187,6 +1238,29 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
   if (vol != null && vol >= 1.8)
     out.push({ label: `Volume ${vol.toFixed(1)}× average`, tone: 'flat', kind: 'volume' as const,
       detail: 'the last closed bar brought real participation — breaks on thin volume are the ones that fail' })
+
+  /* The imbalance price has not come back to. Only the nearest unfilled gap speaks, and only when
+     it is within an ATR — a gap 8% away is a fact about the chart, not a reason to do anything
+     today, and there are usually a dozen of them further out.
+     Read as a magnet, which is the mechanical half of the idea: the book never cleared that
+     stretch, so price tends to come back and clear it. That makes a gap *below* a pull downwards
+     and one above a pull up, whichever way the bar that made it was travelling. Worth knowing that
+     the SMC crowd also reads the same box the opposite way — an unfilled bullish gap under price
+     as the demand you buy the retrace into — and the two disagree. This takes the reading that can
+     be stated without a story: a stretch of prices nobody traded, and price coming back for it. */
+  const openGaps = fvg(closed).filter((g) => !g.filled)
+  if (openGaps.length && atrValue) {
+    const near = openGaps.reduce((best, g) => (gapAway(g, price) < gapAway(best, price) ? g : best))
+    const away = gapAway(near, price)
+    const size = `${fmtPrice(near.bottom, price)}–${fmtPrice(near.top, price)}`
+    if (away === 0) out.push({
+      label: 'Filling a gap', tone: 'flat', kind: 'fvg' as const,
+      detail: `price is inside the ${size} imbalance now — the stretch the book skipped is being traded back`,
+    })
+    else if (away <= atrValue) out.push(price > near.top
+      ? { label: 'Gap below', tone: 'bear', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits under price, inside one ATR — the nearest thing price has left to come back for` }
+      : { label: 'Gap above', tone: 'bull', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits over price, inside one ATR — the nearest thing price has left to come back for` })
+  }
 
   return {
     smaFast, smaSlow, rsiSeries, support, resistance,
