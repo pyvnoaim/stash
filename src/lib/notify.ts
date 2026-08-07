@@ -209,16 +209,36 @@ export function openRisk(rows: RiskRow[], positions: Pick<Watch, 'asset' | 'entr
   // |entry − stop| × size, whichever side it is on: a long stops below and a short above, and the
   // distance is the loss either way. abs() on size too — a feed that signs its shorts is not worth
   // a second code path, and a negative risk would quietly cancel out a real one in the sum.
-  const exch = rows.reduce((n, p) => n + (p.stop != null ? Math.abs(p.entry - p.stop) * Math.abs(p.size) : 0), 0)
-  const stopless = rows.filter((p) => p.stop == null).length
-  const mine = positions.filter(isPosition).reduce((n, w) => n + stakeOf(w), 0)
+  /* Every arithmetic result is checked before it joins the sum. The venue adapters build these
+     with a bare Number() on someone else's JSON, so one unparseable size turns the total into NaN —
+     and NaN fails `> 0`, which silently dropped the whole figure out of a card whose entire point
+     is refusing to report an incomplete one, while still passing `!= null` and rendering the share
+     of equity as the literal text "NaN%". A row that cannot be priced counts as unpriced. */
+  const num = (v: unknown): number | null => {
+    const n = Number(v)
+    return isFinite(n) ? n : null
+  }
+  let exch = 0, unpriced = 0
+  for (const p of rows) {
+    if (p.stop == null) continue
+    const entry = num(p.entry), stop = num(p.stop), size = num(p.size)
+    if (entry == null || stop == null || size == null) { unpriced++; continue }
+    exch += Math.abs(entry - stop) * Math.abs(size)
+  }
+  // a row with no stop and a row we could not price are both "the total is not the whole of it"
+  const stopless = rows.filter((p) => p.stop == null).length + unpriced
+  const mine = positions.filter(isPosition).reduce((n, w) => n + (num(stakeOf(w)) ?? 0), 0)
 
+  /* The denominator is every open position, not just the ones the asset list recognises. Counting
+     only recognised ids made the sentence a tautology — three Crypto rows beside two unlisted ones
+     read "3 of 3 are Crypto, closer to one bet than 3", which says nothing at all. */
   const groups = new Map<string, number>()
-  for (const id of [...rows.map((p) => assetOf(p.symbol)), ...positions.map((w) => w.asset)]) {
+  const ids = [...rows.map((p) => assetOf(p.symbol)), ...positions.map((w) => w.asset)]
+  for (const id of ids) {
     const g = ASSETS.find((a) => a.id === id)?.group
     if (g) groups.set(g, (groups.get(g) ?? 0) + 1)
   }
-  const of = [...groups.values()].reduce((a, b) => a + b, 0)
+  const of = ids.length
   const [top] = [...groups].sort((a, b) => b[1] - a[1])
   return {
     exch,
@@ -226,9 +246,10 @@ export function openRisk(rows: RiskRow[], positions: Pick<Watch, 'asset' | 'entr
     ofEquity: equity != null && equity > 0 ? exch / equity : null,
     stopless,
     mine,
-    // one position is not a crowd, and neither is a spread across groups: the sentence only earns
-    // its place when most of the desk is leaning on the same thing
-    crowd: top && top[1] >= 2 && of >= 2 ? { group: top[0], n: top[1], of } : null,
+    /* One position is not a crowd, and neither is a spread across groups: the sentence only earns
+       its place when most of the desk is leaning on the same thing — and "n of n" earns nothing
+       either, so a group that is simply everything open says nothing. */
+    crowd: top && top[1] >= 2 && of >= 2 && top[1] < of ? { group: top[0], n: top[1], of } : null,
   }
 }
 

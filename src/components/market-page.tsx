@@ -1244,7 +1244,7 @@ export default function MarketPage() {
           or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
       <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
 
-      <Measure candles={candles} cfg={cfg} interval={interval} />
+      <Measure candles={candles} cfg={cfg} interval={interval} asset={asset} />
 
       <Record />
 
@@ -1266,12 +1266,16 @@ export default function MarketPage() {
  * is most of a second on a 5000-bar stock, and a chart that hitched every time you changed asset
  * would be a worse tool than one that stays quiet until asked.
  */
-function Measure({ candles, cfg, interval }: { candles: Candle[]; cfg: typeof HORIZONS[Horizon]; interval: Interval }) {
+function Measure({ candles, cfg, interval, asset }: { candles: Candle[]; cfg: typeof HORIZONS[Horizon]; interval: Interval; asset: string }) {
   const [result, setResult] = useState<Backtest | null>(null)
   const [busy, setBusy] = useState(false)
-  // a new asset or timeframe invalidates the answer — leaving it up would attach one chart's
-  // numbers to another chart's name, which is the one way this card could actively mislead
-  useEffect(() => { setResult(null) }, [candles, cfg])
+  /* A new asset, timeframe or horizon invalidates the answer — leaving it up would attach one
+     chart's numbers to another chart's name, which is the one way this card could actively mislead.
+     Keyed on those three and deliberately *not* on `candles`: the live poll hands back a fresh
+     array every five seconds, so depending on it cleared the result before it could be read and
+     made the card unusable without turning Live off first. A repriced forming bar cannot change a
+     measurement of what already happened, which is the whole reason this is safe. */
+  useEffect(() => { setResult(null) }, [asset, interval, cfg])
 
   const run = () => {
     setBusy(true)
@@ -1290,17 +1294,25 @@ function Measure({ candles, cfg, interval }: { candles: Candle[]; cfg: typeof HO
         <div className="flex flex-wrap items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">What this rule did here</span>
           <span className="text-muted-foreground text-xs">
-            the {cfg.label.toLowerCase()} read, walked forward over the last {Math.min(600, candles.length)} {interval} bars
+            the {cfg.label.toLowerCase()} read, walked forward over {result ? result.bars : Math.max(0, Math.min(600, candles.length - cfg.slow - 2))} {interval} bars
           </span>
           <Button size="sm" variant="outline" className="ml-auto h-7" onClick={run} disabled={busy}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {busy ? 'Measuring…' : result ? 'Run again' : 'Measure'}
           </Button>
         </div>
-        {result && (result.trades.length === 0 ? (
+        {/* "Nothing to take" and "nothing was ever looked at" are different answers, and the second
+            one used to wear the first one's words. The slow MA has to warm up before the walk can
+            start, so a short history can leave no bars to evaluate at all. */}
+        {result && (result.bars === 0 ? (
           <p className="text-muted-foreground mt-3 text-sm">
-            The rule never fired on this window — no setup ever reached its entry. That is an answer:
-            on this chart there was nothing to take.
+            Not enough history to measure. The {cfg.slow}-MA needs {cfg.slow + 2} bars before the walk
+            can start, and this feed returned {candles.length}.
+          </p>
+        ) : result.trades.length === 0 ? (
+          <p className="text-muted-foreground mt-3 text-sm">
+            The rule never fired over these {result.bars} bars — no setup ever reached its entry.
+            That is an answer: on this chart there was nothing to take.
           </p>
         ) : (
           <>
@@ -1325,6 +1337,11 @@ function Measure({ candles, cfg, interval }: { candles: Candle[]; cfg: typeof HO
                 ? 'Positive here — but read the caveats before you believe it. '
                 : 'Negative here: over this window the rule cost more than it made. '}
               {result.missed > 0 && `${result.missed} more setup${result.missed === 1 ? '' : 's'} never reached the entry and ${result.missed === 1 ? 'is' : 'are'} not counted — a trade nobody was in is not a trade that lost. `}
+              {result.unresolved > 0 && `${result.unresolved} was still running when the bars ran out, so it has no result to score. `}
+              {/* the higher-timeframe card is the one vote the desk counts that this walk cannot:
+                  it needs candles from a second interval, which this only has one of */}
+              The {HIGHER[interval] ?? 'higher-timeframe'} trend filter the desk applies is not
+              applied here — this measures the rest of the rule.{' '}
               No fee, no funding, no slippage, and every fill exactly on its level, so a bar that gapped
               through a stop really paid worse than this says. It is measured on the same window you are
               looking at, one position at a time, and a bar that touched the stop and the target both is

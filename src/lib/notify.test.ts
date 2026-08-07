@@ -369,13 +369,30 @@ assert.equal(withMine.exch, 2_000) // untouched by the euros
 // a watched plan is not money on the table, so it is not risk
 assert.equal(openRisk([], [{ asset: 'BTCUSDT', entry: 100, stop: 95 }], null).mine, 0)
 
-/* The crowd: PF_XBTUSD and ETHUSDT both resolve through assetOf into Crypto, so two of two are
-   one bet twice. One position is not a crowd, and gold sits in its own group. */
-assert.deepEqual(r.crowd, { group: 'Crypto', n: 2, of: 2 })
-assert.equal(openRisk([rows[0]], [], null).crowd, null)
-const mixed = openRisk([rows[0], { symbol: 'XAUTUSDT', entry: 4_000, stop: 3_900, size: 1 }], [], null)
-assert.equal(mixed.crowd, null) // one Crypto, one Metals — nothing to warn about
-// an id the asset list has never heard of is not counted into any group
+/* The crowd. PF_XBTUSD and ETHUSDT both resolve through assetOf into Crypto, and gold is its own
+   group — so two of three is the sentence worth saying. */
+const gold3 = { symbol: 'XAUTUSDT', entry: 4_000, stop: 3_900, size: 1 }
+assert.deepEqual(openRisk([...rows, gold3], [], null).crowd, { group: 'Crypto', n: 2, of: 3 })
+/* "2 of 2 are Crypto, closer to one bet than 2" is a sentence that tells you nothing you did not
+   already know from the row count, so a group that is simply everything open stays quiet. */
+assert.equal(r.crowd, null)
+assert.equal(openRisk([rows[0]], [], null).crowd, null) // one position is not a crowd
+assert.equal(openRisk([rows[0], gold3], [], null).crowd, null) // one each, nothing leaning
+
+/* An id the asset list has never heard of — any symbol off a venue beyond the 22 listed — has no
+   group, but it is still a position you hold, so it belongs in the denominator. Counting only
+   recognised ids made every sentence an "n of n" tautology. */
+const exotic = openRisk([...rows, { symbol: 'WHOKNOWS', entry: 1, stop: 0.5, size: 1 }], [], null)
+assert.deepEqual(exotic.crowd, { group: 'Crypto', n: 2, of: 3 })
 assert.equal(openRisk([{ symbol: 'WHOKNOWS', entry: 1, stop: 0.5, size: 1 }], [], null).crowd, null)
+
+/* A feed row that will not parse must not poison the total. Number(undefined) is NaN, which fails
+   `> 0` — so the figure vanished from a card whose whole point is refusing to report an incomplete
+   one — while still passing `!= null`, which rendered the share of equity as the text "NaN%". */
+const bad = openRisk([rows[0], { symbol: 'ETHUSDT', entry: 3_000, stop: 3_200, size: NaN }], [], 10_000)
+assert.equal(bad.exch, 1_000)      // the good row still counts
+assert.equal(bad.ofEquity, 0.1)
+assert.equal(bad.stopless, 1)      // and the unpriceable one is named, like a missing stop
+assert.ok(isFinite(openRisk([{ symbol: 'BTCUSDT', entry: 1, stop: null, size: 1 }], [], 10).exch))
 
 console.log('open risk ok')
