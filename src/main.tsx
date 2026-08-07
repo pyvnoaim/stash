@@ -7,6 +7,7 @@ import App from './App.tsx'
 import { Toaster } from './components/ui/sonner.tsx'
 import { LoginGate } from './components/login-gate.tsx'
 import { LinkPage } from './components/link-page.tsx'
+import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 import { addShared, select } from './lib/store.ts'
 import { refreshPush } from './lib/push.ts'
@@ -118,6 +119,9 @@ function Root() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Toaster position="bottom-right" />
+    {/* over everything, including the blank the gate holds while the server answers: opening the
+        app should look like the app opening rather than like nothing having happened yet */}
+    <Splash />
     <Root />
   </StrictMode>,
 )
