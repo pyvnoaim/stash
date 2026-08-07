@@ -2219,7 +2219,9 @@ function Trending() {
             ))}
           </span>
         </div>
-        {err && <p className="text-muted-foreground py-4 text-sm">Could not reach the pool feed.</p>}
+        {/* only when there is nothing to show: a rate-limited tick with last minute's list still on
+            screen is not a feed you could not reach, and the next tick usually has it */}
+        {err && !rows && <p className="text-muted-foreground py-4 text-sm">Could not reach the pool feed.</p>}
         {!err && !rows && <p className="text-muted-foreground py-4 text-sm">Loading pools…</p>}
         {shown?.length === 0 && (
           <p className="text-muted-foreground py-4 text-sm">
