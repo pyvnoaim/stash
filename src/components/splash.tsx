@@ -118,7 +118,7 @@ export function Splash() {
     <div
       aria-hidden="true"
       className={cn(
-        'splash bg-background pointer-events-none fixed inset-0 z-[100] grid place-content-center',
+        'splash bg-background pointer-events-none fixed inset-0 z-100 grid place-content-center',
         lit && 'splash-lit',
       )}
     >
