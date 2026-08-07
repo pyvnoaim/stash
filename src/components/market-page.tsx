@@ -16,10 +16,10 @@ import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
-  ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, swings, tally, tradePlan, trendFilter,
   TREND_NETWORK, usMarketOpen,
-  type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
+  type Asset, type Backtest, type Candle, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -1144,12 +1144,96 @@ export default function MarketPage() {
           or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
       <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
 
+      <Measure candles={candles} cfg={cfg} interval={interval} />
+
       <Record />
 
       <Trending />
 
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
+  )
+}
+
+/**
+ * What this rule did on these bars. Every threshold on this page came out of backtests run by hand,
+ * once, on Bitcoin, whose code no longer exists — the numbers survive only as prose in the comments
+ * in market.ts. The Record below measures real expectancy but only over setups you saved yourself
+ * and that finished, which is a handful of trades and forward-only. This is the same question asked
+ * of whatever chart you are actually looking at.
+ *
+ * On a button rather than on load: it re-reads the whole signal stack once per evaluated bar, which
+ * is most of a second on a 5000-bar stock, and a chart that hitched every time you changed asset
+ * would be a worse tool than one that stays quiet until asked.
+ */
+function Measure({ candles, cfg, interval }: { candles: Candle[]; cfg: typeof HORIZONS[Horizon]; interval: Interval }) {
+  const [result, setResult] = useState<Backtest | null>(null)
+  const [busy, setBusy] = useState(false)
+  // a new asset or timeframe invalidates the answer — leaving it up would attach one chart's
+  // numbers to another chart's name, which is the one way this card could actively mislead
+  useEffect(() => { setResult(null) }, [candles, cfg])
+
+  const run = () => {
+    setBusy(true)
+    // let the spinner paint before the main thread goes away for a second
+    setTimeout(() => {
+      setResult(backtest(candles, cfg, { window: 600 }))
+      setBusy(false)
+    }, 20)
+  }
+
+  if (!candles.length) return null
+  const pays = result && result.expectancy > 0
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span className="font-heading text-sm tracking-wide uppercase">What this rule did here</span>
+          <span className="text-muted-foreground text-xs">
+            the {cfg.label.toLowerCase()} read, walked forward over the last {Math.min(600, candles.length)} {interval} bars
+          </span>
+          <Button size="sm" variant="outline" className="ml-auto h-7" onClick={run} disabled={busy}>
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {busy ? 'Measuring…' : result ? 'Run again' : 'Measure'}
+          </Button>
+        </div>
+        {result && (result.trades.length === 0 ? (
+          <p className="text-muted-foreground mt-3 text-sm">
+            The rule never fired on this window — no setup ever reached its entry. That is an answer:
+            on this chart there was nothing to take.
+          </p>
+        ) : (
+          <>
+            <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+              {([
+                ['Trades', String(result.trades.length), ''],
+                ['R per trade', `${result.expectancy >= 0 ? '+' : ''}${result.expectancy.toFixed(2)}R`,
+                  pays ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'],
+                ['Median', `${result.median >= 0 ? '+' : ''}${result.median.toFixed(2)}R`, ''],
+                ['Reached target', `${(result.hit * 100).toFixed(0)}%`, ''],
+              ] as const).map(([k, v, cls]) => (
+                <div key={k}>
+                  <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
+                  <p className={cn('font-medium tabular-nums', cls)}>{v}</p>
+                </div>
+              ))}
+            </div>
+            {/* The caveats are the point, not the small print. A number this easy to produce is
+                also easy to believe, and every one of these pushes the real result downwards. */}
+            <p className="text-muted-foreground mt-3 text-xs">
+              {pays
+                ? 'Positive here — but read the caveats before you believe it. '
+                : 'Negative here: over this window the rule cost more than it made. '}
+              {result.missed > 0 && `${result.missed} more setup${result.missed === 1 ? '' : 's'} never reached the entry and ${result.missed === 1 ? 'is' : 'are'} not counted — a trade nobody was in is not a trade that lost. `}
+              No fee, no funding, no slippage, and every fill exactly on its level, so a bar that gapped
+              through a stop really paid worse than this says. It is measured on the same window you are
+              looking at, one position at a time, and a bar that touched the stop and the target both is
+              counted as a stop. Read it as the floor under “does this do anything here”, not as a forecast.
+            </p>
+          </>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 
