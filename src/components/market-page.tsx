@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, swings, tally, tradePlan, trendFilter,
+  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, swings, tally, tradePlan, trendFilter,
   TREND_NETWORK, usMarketOpen,
   type Asset, type Backtest, type Candle, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -118,6 +118,11 @@ export default function MarketPage() {
      because this chart already carries MAs, sessions, a plan and a live position, and there are days
      you want the candles back. */
   const [structure, setStructure] = useState(true)
+  /* The second panel under the price. Every one of these was already computed and voting on the
+     verdict while being impossible to see: the guides draw RSI, MACD and volume as pictures and
+     then the live chart handed you "RSI 47" as text. Off by default — the price chart is the
+     subject, and a panel steals a third of its height. */
+  const [panel, setPanel] = useState<'none' | 'volume' | 'rsi' | 'macd'>('none')
   const online = useOnline()
   /* navigator.onLine only knows whether there is *a* network — a captive wifi or a dead uplink
      still reads as online, and the service worker would answer those from cache without a word.
@@ -524,6 +529,12 @@ export default function MarketPage() {
      all — a gap entirely above or below what is drawn would clamp to a hairline at the edge and
      read as a level rather than as the hole it is. Clamped rather than dropped when it only partly
      fits, so a gap price is sitting at the edge of still shows the part you can see. */
+  /* The level the structure card names out loud — and by construction the one level standingSwings
+     can never draw, since a swing that has been closed through is no longer standing. So the chart
+     was silently missing the exact number the sentence under it was about. Drawn spent: it is
+     history that explains where the last break happened, not a level to act on. */
+  const broke = useMemo(() => (structure && closed.length ? structureBreak(closed) : null), [structure, closed])
+  const brokeAt = broke ? closed.length - 1 - broke.ago : -1
   const visGaps = gaps
     .filter((g) => g.i < stop && g.top >= lo && g.bottom <= hi)
     .map((g) => ({
@@ -596,6 +607,15 @@ export default function MarketPage() {
               <Button key={p.id} size="sm" variant={preset === p.id ? 'secondary' : 'ghost'}
                 className={cn('h-7', preset !== p.id && 'text-muted-foreground')} onClick={() => setPreset(p.id)}>
                 {p.label}
+              </Button>
+            ))}
+          </div>
+          {/* the panel under the price — the readings that were voting while invisible */}
+          <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+            {([['none', 'None'], ['volume', 'Vol'], ['rsi', 'RSI'], ['macd', 'MACD']] as const).map(([id, label]) => (
+              <Button key={id} size="sm" variant={panel === id ? 'secondary' : 'ghost'}
+                className={cn('h-7', panel !== id && 'text-muted-foreground')} onClick={() => setPanel(id)}>
+                {label}
               </Button>
             ))}
           </div>
@@ -966,6 +986,22 @@ export default function MarketPage() {
                         className="stroke-foreground/45" strokeWidth={3} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
                     )
                   })}
+                  {/* The swing the last break went through, at the price the card names. Faint and
+                      finely dashed — it is the level that stopped mattering, drawn so the sentence
+                      under the chart has something to point at. */}
+                  {broke && broke.level >= lo && broke.level <= hi && brokeAt < stop && (
+                    <line x1={Math.min(100, Math.max(0, xAt(brokeAt - start)))} x2="100"
+                      y1={y(broke.level)} y2={y(broke.level)}
+                      className="stroke-foreground/30" strokeWidth={1} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
+                  )}
+                  {/* The session's volume-weighted average price. It has been voting on the verdict
+                      since the day it was added and was never once drawn — the one line on this
+                      chart that large size actually leans against. */}
+                  {vwap && vwap.vwap >= lo && vwap.vwap <= hi && (
+                    <line x1="0" x2="100" y1={y(vwap.vwap)} y2={y(vwap.vwap)}
+                      className="stroke-cyan-500" strokeWidth={1.25} strokeOpacity={0.75}
+                      strokeDasharray="7 3" vectorEffect="non-scaling-stroke" />
+                  )}
                   {/* where the last drawn bar closed, so the tag on the axis has something to sit on */}
                   {price != null && (
                     <line x1="0" x2="100" y1={y(price)} y2={y(price)} stroke={up ? '#10b981' : '#ef4444'}
@@ -1020,6 +1056,61 @@ export default function MarketPage() {
               </>
             )}
           </div>
+          {/* The second panel. Same x domain as the price above — the same xSpan, so a bar here sits
+              directly under its own candle — and its own y scale, since none of these three share
+              units with a price. Its own SVG rather than a squeezed corner of the one above: RSI
+              lives in 0..100 and MACD straddles zero, and neither survives being drawn on a price
+              axis. */}
+          {view && panel !== 'none' && n > 1 && (() => {
+            const vol = vis.map((c) => c.v ?? 0)
+            const rsiV = view.rsiSeries.slice(start, stop)
+            const mLine = view.macd.line.slice(start, stop)
+            const mSig = view.macd.signal.slice(start, stop)
+            const finiteOf = (a: (number | null)[]) => a.filter((x): x is number => x != null)
+            // MACD is symmetric around zero or it lies about which side momentum is on
+            const mAll = [...finiteOf(mLine), ...finiteOf(mSig)]
+            const mMax = Math.max(...mAll.map(Math.abs), 1e-9)
+            const pLo = panel === 'rsi' ? 0 : panel === 'macd' ? -mMax : 0
+            const pHi = panel === 'rsi' ? 100 : panel === 'macd' ? mMax : Math.max(...vol, 1)
+            const py = (v: number) => ((pHi - v) / (pHi - pLo || 1)) * 100
+            return (
+              <div className="relative mt-1 h-20 border-t pt-1">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-hidden">
+                  {/* the lines each reading is actually read against: overbought/oversold, or zero */}
+                  {panel === 'rsi' && [30, 70].map((lvl) => (
+                    <line key={lvl} x1="0" x2="100" y1={py(lvl)} y2={py(lvl)}
+                      className="stroke-muted-foreground/40" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+                  ))}
+                  {panel === 'macd' && (
+                    <line x1="0" x2="100" y1={py(0)} y2={py(0)} className="stroke-muted-foreground/40" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                  )}
+                  {panel === 'volume' && vis.map((c, i) => (
+                    <rect key={i} x={xAt(i) - barW / 2} y={py(c.v ?? 0)} width={barW}
+                      height={Math.max(100 - py(c.v ?? 0), 0)} stroke="none"
+                      className={c.c >= c.o ? 'fill-emerald-500/55' : 'fill-red-500/55'} />
+                  ))}
+                  {panel === 'rsi' && (
+                    <path d={pathOf(rsiV, pLo, pHi, xSpan)} className="stroke-violet-500 fill-none"
+                      strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
+                  )}
+                  {panel === 'macd' && (
+                    <>
+                      <path d={pathOf(mLine, pLo, pHi, xSpan)} className="stroke-sky-500 fill-none"
+                        strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
+                      <path d={pathOf(mSig, pLo, pHi, xSpan)} className="stroke-amber-500 fill-none"
+                        strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
+                    </>
+                  )}
+                </svg>
+                {/* what the panel is and where it stands now, so the box is not an unlabelled squiggle */}
+                <span className="text-muted-foreground pointer-events-none absolute top-0 left-0 text-[10px] tabular-nums">
+                  {panel === 'rsi' && `RSI ${rsiV.at(-1)?.toFixed(0) ?? '—'}`}
+                  {panel === 'macd' && 'MACD 12/26/9'}
+                  {panel === 'volume' && `volume · ${vol.at(-1) ? fmtPrice(vol.at(-1)!, 1) : '—'}`}
+                </span>
+              </div>
+            )
+          })()}
           {/* time axis — evenly spaced over the whole x domain, so the last stamps land in the future
               strip and read as dates still to come (projected off the last bar's spacing) */}
           {view && n > 1 && (
@@ -1051,6 +1142,15 @@ export default function MarketPage() {
                 </span>
               ))}
               {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 translate-y-[-3px] align-middle" /> opening range</span>}
+              {/* the line that had been voting invisibly since the day it was added */}
+              {vwap && (
+                <span className={cn(!(vwap.vwap >= lo && vwap.vwap <= hi) && 'opacity-60')}>
+                  <svg width="16" height="3" className="mr-0.5 inline-block translate-y-[-2px] align-middle">
+                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-cyan-500" strokeWidth={1.5} strokeDasharray="7 3" />
+                  </svg> VWAP <span className="tabular-nums">{fmt(vwap.vwap)}</span>
+                  {!(vwap.vwap >= lo && vwap.vwap <= hi) && <span className="ml-1">off frame {vwap.vwap > hi ? '↑' : '↓'}</span>}
+                </span>
+              )}
               {/* the two new marks named in the terms the chart draws them: a dot on the bar that
                   made the pivot, a dashed line for the range it sits inside */}
               {structure && !!visPivots.length && (
