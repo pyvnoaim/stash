@@ -576,12 +576,19 @@ export function atr(c: Candle[], p = 14): number | null {
 export function squeeze(close: number[], p = 20, look = 100): { width: number; rank: number } | null {
   if (close.length < p + 1) return null
   const widths: number[] = []
-  for (let i = p - 1; i < close.length; i++) {
-    const w = close.slice(i - p + 1, i + 1)
-    const mean = w.reduce((a, b) => a + b, 0) / p
+  /* Only the last `look` widths are ever read — the newest is the width, and the rest are the range
+     it is ranked in — so the older ones were computed and thrown away. On a 5000-bar stock that was
+     4,900 windowed standard deviations per call to answer a question about 100 of them, and
+     signals() is called once per bar the backtest evaluates. Sums in place rather than
+     slice().reduce() twice for the same reason. */
+  for (let i = Math.max(p - 1, close.length - look); i < close.length; i++) {
+    let sum = 0
+    for (let j = i - p + 1; j <= i; j++) sum += close[j]
+    const mean = sum / p
     if (!mean) continue
-    const sd = Math.sqrt(w.reduce((a, b) => a + (b - mean) ** 2, 0) / p)
-    widths.push((4 * sd) / mean) // upper − lower, as a share of the middle band
+    let sq = 0
+    for (let j = i - p + 1; j <= i; j++) sq += (close[j] - mean) ** 2
+    widths.push((4 * Math.sqrt(sq / p)) / mean) // upper − lower, as a share of the middle band
   }
   if (!widths.length) return null
   const width = widths.at(-1)!
@@ -726,10 +733,17 @@ export type Swing = { i: number; price: number; kind: 'high' | 'low' }
  */
 export function swings(c: Candle[], k = 2): Swing[] {
   const out: Swing[] = []
+  // index loops rather than slice().every(): this ran four slices per bar, and it is called twice
+  // per live tick and again for every bar the backtest evaluates
   for (let p = k; p < c.length - k; p++) {
-    const around = (f: (b: Candle) => boolean) => c.slice(p - k, p).every(f) && c.slice(p + 1, p + k + 1).every(f)
-    if (around((b) => b.h <= c[p].h)) out.push({ i: p, price: c[p].h, kind: 'high' })
-    if (around((b) => b.l >= c[p].l)) out.push({ i: p, price: c[p].l, kind: 'low' })
+    let hi = true, lo = true
+    for (let j = p - k; j <= p + k && (hi || lo); j++) {
+      if (j === p) continue
+      if (c[j].h > c[p].h) hi = false
+      if (c[j].l < c[p].l) lo = false
+    }
+    if (hi) out.push({ i: p, price: c[p].h, kind: 'high' })
+    if (lo) out.push({ i: p, price: c[p].l, kind: 'low' })
   }
   return out
 }
@@ -747,10 +761,16 @@ export function standingSwings(c: Candle[], k = 2): { high: Swing | null; low: S
   let high: Swing | null = null, low: Swing | null = null
   // newest first, and only the closes from the bar that confirmed the pivot onwards count: a close
   // through a level nobody could see yet did not break anything
+  const intact = (s: Swing) => {
+    for (let j = s.i + k; j < c.length; j++) {
+      if (s.kind === 'high' ? c[j].c > s.price : c[j].c < s.price) return false
+    }
+    return true
+  }
   for (let j = all.length - 1; j >= 0 && !(high && low); j--) {
-    const s = all[j], since = c.slice(s.i + k)
-    if (!high && s.kind === 'high' && since.every((b) => b.c <= s.price)) high = s
-    if (!low && s.kind === 'low' && since.every((b) => b.c >= s.price)) low = s
+    const s = all[j]
+    if (!high && s.kind === 'high' && intact(s)) high = s
+    if (!low && s.kind === 'low' && intact(s)) low = s
   }
   return { high, low }
 }
@@ -776,6 +796,22 @@ export type Gap = { i: number; top: number; bottom: number; dir: 'up' | 'down'; 
  */
 export function fvg(c: Candle[]): Gap[] {
   const out: Gap[] = []
+  /* Suffix extremes, built once. They cannot prove a gap filled — two different bars straddling a
+     box is not one bar inside it — but either of them proves it *unfilled* outright: if no later
+     bar's low ever reaches the top of the box, nothing came down into it, and the mirror holds
+     above. That turns the case that actually hurts into O(1).
+     Without this the fill scan runs to the end of the array for every gap that never fills, which
+     is quadratic, and a run of bars that never overlap makes every bar a gap that never fills.
+     A feed answering with 5000 such bars — its own outputsize — took fvg to 26ms a call, and
+     backtest() calls signals(), and so this, once per evaluated bar: 13.4 seconds of dead tab off
+     one button. Ordinary data never noticed, which is exactly why it needed measuring. */
+  const maxH = new Array<number>(c.length)
+  const minL = new Array<number>(c.length)
+  let mh = -Infinity, ml = Infinity
+  for (let j = c.length - 1; j >= 0; j--) {
+    mh = Math.max(mh, c[j].h); maxH[j] = mh
+    ml = Math.min(ml, c[j].l); minL[j] = ml
+  }
   for (let i = 1; i < c.length - 1; i++) {
     const before = c[i - 1], after = c[i + 1]
     // strict: bars that merely touch left no gap between them, and a zero-height box is not a level
@@ -785,8 +821,19 @@ export function fvg(c: Candle[]): Gap[] {
     const [bottom, top] = up ? [before.h, after.l] : [after.h, before.l]
     /* Filled by any later bar whose range meets the box — a plain interval intersection, which is
        the same test either way round and saves the two mirrored ones. The third bar itself is the
-       gap's own edge and cannot fill it, so the scan starts past it. */
-    const filled = c.slice(i + 2).some((b) => b.l <= top && b.h >= bottom)
+       gap's own edge and cannot fill it, so the scan starts past it.
+       An index loop rather than slice().some(): 5000 bars hold ~3800 gap candidates, and a slice
+       each allocated ~9M elements of copying before a single comparison ran. That cost nothing
+       visible on the chart and 2.4s of the backtest, which calls signals() — and so this — once
+       per evaluated bar. */
+    let filled = false
+    // the two cheap proofs of "nothing ever came back for it" first; the scan only runs when they
+    // are inconclusive, which on real data is the handful of gaps that do get traded back
+    if (i + 2 < c.length && minL[i + 2] <= top && maxH[i + 2] >= bottom) {
+      for (let j = i + 2; j < c.length; j++) {
+        if (c[j].l <= top && c[j].h >= bottom) { filled = true; break }
+      }
+    }
     out.push({ i, top, bottom, dir: up ? 'up' : 'down', filled })
   }
   return out
@@ -1128,6 +1175,9 @@ export type Backtest = {
   /** Plans that were made but whose entry never came round inside `expiry`. Not losses: a trade
    *  nobody was ever in is not a trade that lost, which is the same rule the live record keeps. */
   missed: number
+  /** Entered and still running when the bars ran out. No result to score, so it is named rather
+   *  than dropped: a backtest that quietly deletes its open trades is reporting a filtered sample. */
+  unresolved: number
   /** Median R, and the mean. The median is the honest headline — one runaway winner drags a mean
    *  somewhere no individual trade ever went. */
   median: number
@@ -1168,15 +1218,17 @@ export function backtest(
   { window = 400, expiry = 20, drop = [] }: { window?: number; expiry?: number; drop?: GuideKey[] } = {},
 ): Backtest {
   const trades: Trade[] = []
-  let missed = 0
+  let missed = 0, unresolved = 0
   // the slow MA has to have warmed up, or the first reads are taken off a line that does not exist
   const from = Math.max(cfg.slow + 2, c.length - window)
   let i = from
   while (i < c.length - 1) {
-    const view = signals(c.slice(0, i + 1), cfg)
+    // one slice for both reads: this was copying the whole prefix twice per evaluated bar
+    const prefix = c.slice(0, i + 1)
+    const view = signals(prefix, cfg)
     const entry = view.smaFast.at(-1)
     if (entry == null) { i++; continue }
-    const vwap = sessionVwap(c.slice(0, i + 1))
+    const vwap = sessionVwap(prefix)
     const cards = deskSignals(null, null, vwap, view.signals).filter((s) => !drop.includes(s.kind))
     const { dir } = tally(cards)
     const plan = tradePlan(dir, c[i].c, entry, view.levels, view.atr)
@@ -1184,30 +1236,41 @@ export function backtest(
     if (!plan || dir === 'flat') { i++; continue }
 
     const long = dir === 'long'
-    // wait for the pull-back to reach the entry, then follow that same bar through to an exit
+    /* `expiry` bounds the wait for the entry and nothing else. A plan whose pull-back never comes
+       round is not a loss — it is a trade nobody was ever in, the same rule the live record keeps. */
+    const waitEnd = Math.min(c.length - 1, i + expiry)
     let open = -1
-    let j = i + 1
-    for (; j < c.length && j <= i + expiry; j++) {
-      if (open < 0) {
-        if (long ? c[j].l <= plan.entry : c[j].h >= plan.entry) open = j
-        else continue
-      }
+    for (let j = i + 1; j <= waitEnd; j++) {
+      if (long ? c[j].l <= plan.entry : c[j].h >= plan.entry) { open = j; break }
+    }
+    if (open < 0) {
+      // only a real miss if it got its whole window; one cut short by the end of the data was
+      // never given its chance, and counting it either way would be scoring an unplayed hand
+      if (waitEnd === i + expiry) missed++
+      i = waitEnd + 1
+      continue
+    }
+    /* Then held to a stop or a target however long that takes. Bounding the hold by `expiry` as
+       well — which this did at first — deleted every trade still running at the deadline, silently
+       and with a bias that flattered nothing: the stop sits at the near swing and the target three
+       windows past it, so the slow ones are disproportionately the winners. On the test fixture it
+       reported 2 trades out of 11 entered and called the rule a loser on the strength of it. */
+    let end = -1
+    let exit: 'target' | 'stop' = 'stop'
+    for (let j = open; j < c.length; j++) {
       const stopped = long ? c[j].l <= plan.stop : c[j].h >= plan.stop
       const won = long ? c[j].h >= plan.target : c[j].l <= plan.target
       // stop first: which came first inside the bar is not in the data, and guessing the kind one
       // is how a backtest talks itself into an edge it never had
-      if (stopped || won) {
-        trades.push({
-          at: i, openedAt: open, closedAt: j, dir, entry: plan.entry, stop: plan.stop,
-          target: plan.target, exit: stopped ? 'stop' : 'target', r: stopped ? -1 : plan.rr,
-        })
-        break
-      }
+      if (stopped || won) { end = j; exit = stopped ? 'stop' : 'target'; break }
     }
-    if (open < 0) missed++
-    // resume after whatever happened: an entry that never came round frees the desk at its expiry,
-    // and a trade that ran holds it until the bar it ended on
-    i = (open < 0 ? i + expiry : j) + 1
+    // still open when the bars ran out: there is no result to score, and it is said rather than dropped
+    if (end < 0) { unresolved++; break }
+    trades.push({
+      at: i, openedAt: open, closedAt: end, dir, entry: plan.entry, stop: plan.stop,
+      target: plan.target, exit, r: exit === 'stop' ? -1 : plan.rr,
+    })
+    i = end + 1
   }
 
   const rs = trades.map((t) => t.r).sort((a, b) => a - b)
@@ -1216,6 +1279,7 @@ export function backtest(
     trades,
     bars: Math.max(0, c.length - 1 - from),
     missed,
+    unresolved,
     median,
     expectancy: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : 0,
     hit: rs.length ? trades.filter((t) => t.exit === 'target').length / rs.length : 0,
@@ -1366,10 +1430,14 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     const size = `${fmtPrice(near.bottom, price)}–${fmtPrice(near.top, price)}`
     /* Flat, all three of them — this card describes and does not vote, and that is a measurement
        rather than caution. Backtested over 9 assets and a 600-bar window with the card's vote on
-       and off, the whole rule's expectancy moved −0.013R per trade on the 1h, +0.068R on the 4h and
-       −0.241R on the daily: inconsistent in sign, tiny beside the spread, and on most assets it did
-       not change a single trade. A card that cannot pick a direction across timeframes has not
-       earned one. Same standing as the Frankfurt opening range above, and for the same reason.
+       and off, the whole rule's expectancy moved −0.033R per trade on the 1h, +0.023R on the 4h and
+       −0.094R on the daily: inconsistent in sign and negative on two of the three. A card that
+       cannot pick a direction across timeframes has not earned one. Same standing as the Frankfurt
+       opening range above, and for the same reason.
+       The first run of this read −0.013/+0.068/−0.241 and was taken on a backtest that silently
+       dropped every trade still open at its expiry. The conclusion survived the correction; the
+       numbers did not. Both are written down, because a threshold is worth exactly as much as the
+       run behind it and that run is worth checking.
        Re-run it with `drop: ['fvg']` if the market ever makes this worth revisiting. */
     if (away === 0) out.push({
       label: 'Filling a gap', tone: 'flat', kind: 'fvg' as const,

@@ -381,6 +381,45 @@ for (const t of base.trades) {
 // one position at a time: no trade may start before the one before it has finished
 for (let k = 1; k < base.trades.length; k++) assert.ok(base.trades[k].at > base.trades[k - 1].closedAt)
 
+/* Nothing may be silently deleted. `expiry` bounds the wait for the entry and nothing else — when
+   it bounded the hold too, a trade still running at the deadline vanished from both `trades` and
+   `missed`, and it vanished with a bias: the stop sits at the near swing and the target three
+   windows out, so the slow ones are disproportionately the winners. On this fixture that reported
+   2 trades out of 11 entered. Every plan now lands in exactly one of the three buckets. */
+{
+  const plans = (() => {
+    let n = 0
+    let i = Math.max(cfgShort.slow + 2, btBars.length - 300)
+    while (i < btBars.length - 1) {
+      const prefix = btBars.slice(0, i + 1)
+      const view = signals(prefix, cfgShort)
+      const entry = view.smaFast.at(-1)
+      if (entry == null) { i++; continue }
+      const { dir } = tally(deskSignals(null, null, sessionVwap(prefix), view.signals))
+      const plan = tradePlan(dir, btBars[i].c, entry, view.levels, view.atr)
+      if (!plan || dir === 'flat') { i++; continue }
+      n++
+      const long = dir === 'long'
+      const waitEnd = Math.min(btBars.length - 1, i + 20)
+      let open = -1
+      for (let j = i + 1; j <= waitEnd; j++) {
+        if (long ? btBars[j].l <= plan.entry : btBars[j].h >= plan.entry) { open = j; break }
+      }
+      if (open < 0) { i = waitEnd + 1; continue }
+      let end = -1
+      for (let j = open; j < btBars.length; j++) {
+        if ((long ? btBars[j].l <= plan.stop : btBars[j].h >= plan.stop)
+          || (long ? btBars[j].h >= plan.target : btBars[j].l <= plan.target)) { end = j; break }
+      }
+      if (end < 0) break
+      i = end + 1
+    }
+    return n
+  })()
+  assert.ok(plans > 4, 'the fixture needs enough plans for this to mean anything')
+  assert.equal(base.trades.length + base.missed + base.unresolved, plans)
+}
+
 // the summary is arithmetic on the trades, not a second opinion about them
 assert.equal(base.hit, base.trades.filter((t) => t.exit === 'target').length / base.trades.length)
 const mean = base.trades.reduce((a, t) => a + t.r, 0) / base.trades.length
