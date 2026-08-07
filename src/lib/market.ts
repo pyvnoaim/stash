@@ -687,20 +687,68 @@ export function divergence(c: Candle[], rsiSeries: (number | null)[], w = 30): '
  * new: the character never changed.
  */
 export function structureBreak(c: Candle[], k = 2): { dir: 'up' | 'down'; choch: boolean; level: number; ago: number } | null {
+  // pivots keyed by the bar that confirmed them, so the walk below sees each one at exactly the
+  // moment it could first have been known — a pivot read any earlier is hindsight, not a signal
+  const confirmed = new Map<number, Swing[]>()
+  for (const s of swings(c, k)) {
+    const at = s.i + k
+    const held = confirmed.get(at)
+    if (held) held.push(s)
+    else confirmed.set(at, [s])
+  }
   let hi: number | null = null, lo: number | null = null
   let prev: 'up' | 'down' | null = null
   let out: { dir: 'up' | 'down'; choch: boolean; level: number; ago: number } | null = null
   for (let j = k * 2; j < c.length; j++) {
-    // the bar whose pivot status the k bars since have now confirmed
-    const p = j - k
-    const around = (f: (b: Candle) => boolean) => c.slice(p - k, p).every(f) && c.slice(p + 1, p + k + 1).every(f)
-    if (around((b) => b.h <= c[p].h)) hi = c[p].h
-    if (around((b) => b.l >= c[p].l)) lo = c[p].l
+    for (const s of confirmed.get(j) ?? []) { if (s.kind === 'high') hi = s.price; else lo = s.price }
     const cl = c[j].c
     if (hi != null && cl > hi) { out = { dir: 'up', choch: prev === 'down', level: hi, ago: c.length - 1 - j }; prev = 'up'; hi = null }
     else if (lo != null && cl < lo) { out = { dir: 'down', choch: prev === 'up', level: lo, ago: c.length - 1 - j }; prev = 'down'; lo = null }
   }
   return out
+}
+
+/** One confirmed pivot: which bar made it, the extreme it made, and which side of the bar that was. */
+export type Swing = { i: number; price: number; kind: 'high' | 'low' }
+
+/**
+ * Every confirmed swing pivot — a bar whose high (or low) stands past its `k` neighbours on both
+ * sides. The definition structureBreak has always used, lifted out so the chart can draw the same
+ * pivots the structure reading is talking about; one definition, or the picture and the sentence
+ * under it drift apart.
+ *
+ * A pivot cannot exist until `k` bars have printed after it, so the last `k` bars never hold one.
+ * That is the honest late-by-construction of all structure reads, not a gap in the scan.
+ */
+export function swings(c: Candle[], k = 2): Swing[] {
+  const out: Swing[] = []
+  for (let p = k; p < c.length - k; p++) {
+    const around = (f: (b: Candle) => boolean) => c.slice(p - k, p).every(f) && c.slice(p + 1, p + k + 1).every(f)
+    if (around((b) => b.h <= c[p].h)) out.push({ i: p, price: c[p].h, kind: 'high' })
+    if (around((b) => b.l >= c[p].l)) out.push({ i: p, price: c[p].l, kind: 'low' })
+  }
+  return out
+}
+
+/**
+ * The two swing levels price has not closed through yet — the only ones still worth drawing a line
+ * at, because they are the ones a break would be news about. Everything older has already been
+ * traded through and is history the candles themselves show.
+ *
+ * Null on a side means price has closed past every pivot there: a run that never paused, which is
+ * exactly the case where there is no level to mark and drawing one would invent it.
+ */
+export function standingSwings(c: Candle[], k = 2): { high: Swing | null; low: Swing | null } {
+  const all = swings(c, k)
+  let high: Swing | null = null, low: Swing | null = null
+  // newest first, and only the closes from the bar that confirmed the pivot onwards count: a close
+  // through a level nobody could see yet did not break anything
+  for (let j = all.length - 1; j >= 0 && !(high && low); j--) {
+    const s = all[j], since = c.slice(s.i + k)
+    if (!high && s.kind === 'high' && since.every((b) => b.c <= s.price)) high = s
+    if (!low && s.kind === 'low' && since.every((b) => b.c >= s.price)) low = s
+  }
+  return { high, low }
 }
 
 /* ---------- demo data for the guides ----------
