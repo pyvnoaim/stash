@@ -106,11 +106,14 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
     if (add.length) patch(it.id, { tags: [...new Set([...it.tags, ...add])] })
   }
 
-  /** A suggestion taken whole — the word it was narrowed down with goes with it. */
+  /* A suggestion taken whole. Only the word it was being narrowed down with is replaced — that
+     fragment was the search, but anything typed before it was meant, and clearing the box would
+     have quietly thrown it away. Then through addTags, so one place decides what a tag is. */
   const pickTag = (t: string) => {
-    if (box.current) box.current.value = ''
-    setTagq('')
-    patch(it.id, { tags: [...new Set([...it.tags, t])] })
+    const el = box.current
+    if (!el) { patch(it.id, { tags: [...new Set([...it.tags, t])] }); return }
+    el.value = el.value.replace(/[^\s,#]*$/, t)
+    addTags(el)
   }
 
   return (
@@ -336,10 +339,12 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
     if (add.length) picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, ...add])] }))
   }
 
+  /** As in the single-row panel: the fragment it was found with is replaced, the rest stands. */
   const pickTag = (t: string) => {
-    if (box.current) box.current.value = ''
-    setTagq('')
-    picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, t])] }))
+    const el = box.current
+    if (!el) { picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, t])] })); return }
+    el.value = el.value.replace(/[^\s,#]*$/, t)
+    addTags(el)
   }
 
   return (

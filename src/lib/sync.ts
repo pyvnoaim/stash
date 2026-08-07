@@ -391,7 +391,6 @@ export const roster = (): Promise<Face[]> =>
  */
 export interface DeskRow {
   name: string
-  avatar: string | null
   results: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
     level: 'target' | 'stop', r: number, closedAt: number,
