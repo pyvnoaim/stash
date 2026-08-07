@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, deskSignals, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -341,6 +341,38 @@ assert.deepEqual(deskSignals(null, null, null, own), own)
 assert.equal(tally(deskSignals(htf, null, null, [sig('a', 'bear')])).dir, 'flat')
 assert.equal(tally(deskSignals(htf, null, { signal: sig('vwap', 'bear') }, [sig('a', 'bear')])).dir, 'short')
 
+/* ---------- fair value gaps ---------- */
+
+const g = (o: number, h: number, l: number, c: number, t = 0) => ({ t, o, h, l, c, v: 10 })
+/* Three bars where the middle one runs: bar 0's high is 10 and bar 2's low is 12, so nothing
+   traded between them and the box is 10..12, anchored on the bar that did the travelling. */
+const upGap = [g(9, 10, 8, 10), g(10, 13, 10, 13), g(13, 14, 12, 13.5)]
+assert.deepEqual(fvg(upGap), [{ i: 1, top: 12, bottom: 10, dir: 'up', filled: false }])
+// mirrored, a bar that drops away from the one before it leaves the same box facing the other way
+const downGap = [g(13, 14, 12, 12.5), g(12, 12, 9, 9), g(9, 10, 8, 8.5)]
+assert.deepEqual(fvg(downGap), [{ i: 1, top: 12, bottom: 10, dir: 'down', filled: false }])
+
+// bars that merely touch left nothing behind: 10 to 10 is not a stretch of prices
+assert.deepEqual(fvg([g(9, 10, 8, 10), g(10, 13, 10, 13), g(13, 14, 10, 13.5)]), [])
+assert.deepEqual(fvg(upGap.slice(0, 2)), []) // two bars cannot make a three-bar pattern
+assert.deepEqual(fvg([]), [])
+
+/* Filled the moment any later bar trades back into the box — and only a *later* one: the third
+   bar is the gap's own top edge, so letting it count would fill every gap the instant it formed. */
+const revisited = [...upGap, g(13.5, 14, 11, 11.5)] // wicks down to 11, inside 10..12
+assert.equal(fvg(revisited)[0].filled, true)
+const nearMiss = [...upGap, g(13.5, 14, 12.5, 13)] // stops at 12.5, above the box
+assert.equal(fvg(nearMiss)[0].filled, false)
+// touching the very edge counts as trading it: 12 is in the box
+assert.equal(fvg([...upGap, g(13.5, 14, 12, 13)])[0].filled, true)
+
+/* The unfilled set is what the chart draws, and it has to stay a handful rather than a wall —
+   measured on real feeds, 1000 bars produce a couple of hundred gaps and under twenty survive. */
+const many = Array.from({ length: 200 }, (_, i) => g(100 + i, 101 + i, 99 + i, 100.5 + i, i * 9e5))
+assert.ok(fvg(many).filter((x) => !x.filled).length <= fvg(many).length)
+// a straight ramp gaps every bar and fills none of them, since price never comes back
+assert.ok(fvg(many).every((x) => x.dir === 'up'))
+
 // the opening-range demo is drawn as a band and a break, so it has to break
 const orbDemo = DEMOS.orb.candles
 assert.ok(orbDemo.at(-1)!.c > Math.max(...orbDemo.slice(0, 4).map((b) => b.h)))
@@ -378,6 +410,14 @@ for (const key of Object.keys(DEMOS) as (keyof typeof DEMOS)[]) {
   const green = cs.filter((b) => b.c >= b.o).length
   assert.ok(green > 0 && green < cs.length, `${key}: every bar the same colour`)
 }
+
+/* The fvg fixture has to actually hold an unfilled gap, or the guide illustrates nothing — the
+   same rule every other demo here is held to. The marked bars are the three that make it. */
+const demoGap = fvg(DEMOS.fvg.candles)
+assert.equal(demoGap.length, 1)
+assert.equal(demoGap[0].filled, false)
+assert.deepEqual([demoGap[0].bottom, demoGap[0].top], [100, 104])
+assert.equal(demoGap[0].i, DEMOS.fvg.mark![0] + 1) // anchored on the bar that did the travelling
 
 // every guide key has both a written guide and a demo — a new signal kind can't ship half-documented
 for (const key of Object.keys(GUIDES) as (keyof typeof GUIDES)[]) {

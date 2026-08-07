@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, swings, tally, tradePlan, trendFilter,
+  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, swings, tally, tradePlan, trendFilter,
   TREND_NETWORK, usMarketOpen,
   type Asset, type Candle, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -362,6 +362,14 @@ export default function MarketPage() {
     () => (structure && closed.length ? standingSwings(closed) : { high: null, low: null }),
     [structure, closed],
   )
+  /* Only the gaps still open. A thousand bars hold a couple of hundred, and nearly all of them get
+     traded back within a few bars — drawing those would be a wall of boxes about business already
+     finished. Measured on the live feeds: 178–360 gaps per 1000 bars collapse to under twenty
+     unfilled, and a handful inside the drawn window, which is what makes this readable at all. */
+  const gaps = useMemo(
+    () => (structure && closed.length ? fvg(closed).filter((g) => !g.filled) : []),
+    [structure, closed],
+  )
   // the higher-timeframe lean leads: it's the filter the others get read through
   const shownSignals = deskSignals(higher, range, vwap, view?.signals ?? [])
 
@@ -512,6 +520,18 @@ export default function MarketPage() {
   const visPivots = structure
     ? pivots.filter((p) => p.i >= start && p.i < stop && p.price >= lo && p.price <= hi)
     : []
+  /* The gaps worth a box here: made by a bar the window has reached, and overlapping the frame at
+     all — a gap entirely above or below what is drawn would clamp to a hairline at the edge and
+     read as a level rather than as the hole it is. Clamped rather than dropped when it only partly
+     fits, so a gap price is sitting at the edge of still shows the part you can see. */
+  const visGaps = gaps
+    .filter((g) => g.i < stop && g.top >= lo && g.bottom <= hi)
+    .map((g) => ({
+      ...g,
+      x: Math.min(100, Math.max(0, xAt(g.i - start))),
+      y0: Math.max(0, y(g.top)),
+      y1: Math.min(100, y(g.bottom)),
+    }))
   // the range wash, cut to the frame — see the note where it is drawn
   const bandTop = view ? Math.max(0, y(view.resistance)) : 0
   const bandBottom = view ? Math.min(100, y(view.support)) : 0
@@ -580,7 +600,7 @@ export default function MarketPage() {
             ))}
           </div>
           {/* swings and the range they span — off is for reading the candles on their own */}
-          <Hint label={structure ? 'Swing highs and lows, and the range they span' : 'Structure overlay off'}>
+          <Hint label={structure ? 'Swing highs and lows, the range they span, and the gaps price has not come back for' : 'Structure overlay off'}>
             <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', !structure && 'text-muted-foreground')}
               onClick={() => setStructure((v) => !v)}>
               <Waypoints className="size-4" />
@@ -853,6 +873,17 @@ export default function MarketPage() {
                     <line key={i} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
                       className={l.cls} strokeWidth={l.w} strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
                   ))}
+                  {/* Fair value gaps still open: the stretches price jumped over without trading.
+                      Drawn from the bar that made the gap to the right edge, because that is how
+                      long the business stays unfinished — a box that stopped at its own three bars
+                      would say the level expired when it didn't. Tinted the way the bar that made
+                      it was travelling, at a wash rather than a fill: these sit behind the candles,
+                      which is where a thing price has yet to return to belongs. */}
+                  {visGaps.map((g) => (
+                    <rect key={`g-${g.i}`} x={g.x} y={g.y0} width={Math.max(100 - g.x, 0)}
+                      height={Math.max(g.y1 - g.y0, 0.3)} stroke="none"
+                      className={g.dir === 'up' ? 'fill-emerald-500/12' : 'fill-rose-500/12'} />
+                  ))}
                   {/* The swing levels nobody has closed through yet — the ones a break would be news
                       about, and the exact levels the structure reading under the chart is talking
                       about. Drawn from the pivot that made them rather than edge to edge: a level
@@ -1037,6 +1068,14 @@ export default function MarketPage() {
                   <svg width="16" height="3" className="mr-0.5 inline-block translate-y-[-2px] align-middle">
                     <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-muted-foreground/70" strokeWidth={1} strokeDasharray="4 3" />
                   </svg> range · <span className="tabular-nums">{fmt(view.support)}–{fmt(view.resistance)}</span>
+                </span>
+              )}
+              {/* the boxes, named for what they are — and only when some are on screen, since an
+                  entry for a mark nobody can see is the legend describing a different chart */}
+              {structure && !!visGaps.length && (
+                <span className="opacity-80">
+                  <span className="bg-emerald-500/40 mr-0.5 inline-block h-2 w-3 translate-y-[1px] align-middle" />
+                  {visGaps.length} unfilled {visGaps.length === 1 ? 'gap' : 'gaps'}
                 </span>
               )}
               {/* the position's levels, chip drawn with the very dash the chart uses — and the
