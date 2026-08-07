@@ -9,7 +9,8 @@ import { LoginGate } from './components/login-gate.tsx'
 import { LinkPage } from './components/link-page.tsx'
 import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
-import { addShared, select } from './lib/store.ts'
+import { addShared, getState, select } from './lib/store.ts'
+import { applyTheme } from './lib/utils.ts'
 import { refreshPush } from './lib/push.ts'
 import { holdRegistration } from './lib/update.ts'
 
@@ -74,6 +75,12 @@ async function hardReload() {
 if (import.meta.env.PROD) {
   void navigator.storage?.persisted?.().then((p) => p || navigator.storage.persist())
 }
+/* The theme, before anything is drawn. It used to go on in App's effect, and App does not mount
+   until the server has said who you are — so the splash, which opens over that blank, played its
+   whole beat in light and the app snapped dark underneath it. Read straight off the store, which
+   loads from localStorage at import. App still watches for a cross-window change or the system
+   flipping under `auto`; this is only the first frame. */
+applyTheme(getState().theme)
 startSync()
 // the timezone the daily digest fires against, and a re-register after the server forgot us
 void refreshPush()

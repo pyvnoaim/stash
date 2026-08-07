@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Bell, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck,
   FileText, Flag, Inbox, Layers, Lightbulb, ListTodo, Monitor, PanelLeft, Plus, Search, StickyNote,
@@ -8,9 +8,7 @@ import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { getState } from '@/lib/store'
 import { login, signup } from '@/lib/sync'
-import { applyTheme } from '@/lib/utils'
 
 /**
  * The whole screen while the server says "not signed in". Only an explicit 401 lands here —
@@ -22,9 +20,6 @@ import { applyTheme } from '@/lib/utils'
  * describes. Anyone arriving with an invite can see what they are signing into before they do.
  */
 export function LoginGate() {
-  // App normally owns the theme; it is not mounted yet, and the gate should not flash light
-  useEffect(() => { applyTheme(getState().theme) }, [])
-
   return (
     <div className="bg-background min-h-svh md:grid md:grid-cols-2">
       <style>{`
@@ -60,7 +55,7 @@ export function LoginGate() {
 
       {/* the flat side of the gate lifts a little at the top, so the card sits in something rather
           than on nothing — the same muted the panel opposite is tinted with, faded out by halfway */}
-      <div className="from-muted/30 to-background flex min-h-svh flex-col bg-gradient-to-b to-50% md:min-h-0">
+      <div className="from-muted/30 to-background flex min-h-svh flex-col bg-linear-to-b to-50% md:min-h-0">
         <div className="p-6 md:hidden"><Wordmark /></div>
         <div className="flex flex-1 items-start justify-center p-6 pt-10 md:items-center md:pt-6">
           <div className="w-full max-w-sm md:rounded-xl md:border md:p-6">
@@ -146,7 +141,7 @@ function Teaser() {
       <div className="bg-sidebar flex flex-col border-r">
         {/* STASH shares a baseline with the page title, the way the real header does */}
         <div className="flex h-9 items-center gap-1.5 border-b px-3">
-          <div className="bg-foreground h-3 w-[2px] rounded-full" />
+          <div className="bg-foreground h-3 w-0.5 rounded-full" />
           <span className="font-heading text-[10px] tracking-[0.18em] uppercase">Stash</span>
         </div>
 
@@ -158,7 +153,7 @@ function Teaser() {
           {PROJECTS.map((p) => (
             <div key={p.name} className="text-muted-foreground flex items-center gap-2 rounded-md px-2 py-1 text-[11px]">
               {/* a project's mark is a rail, not a dot — the same bar its rows carry */}
-              <span className="h-3 w-[2px] shrink-0 rounded-full" style={{ background: p.color }} />
+              <span className="h-3 w-0.5 shrink-0 rounded-full" style={{ background: p.color }} />
               <span className="truncate">{p.name}</span>
               <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{p.count}</span>
             </div>
@@ -204,7 +199,7 @@ function Teaser() {
           </div>
         </div>
 
-        <div className="min-h-[248px] space-y-1 p-2.5">
+        <div className="min-h-62 space-y-1 p-2.5">
           {/* the capture bar: the three kinds, then the line typing itself into the field */}
           <div className="mb-2 flex items-center gap-2 rounded-lg border px-2 py-1.5">
             {[
@@ -258,8 +253,8 @@ function Row({ text, rail, tag, due, flag, done, note, extra, className = '' }: 
 }) {
   return (
     <div className={`relative flex items-start gap-2 rounded-md py-1 pl-2.5 text-[11px] ${className}`}>
-      {rail && <span className="absolute inset-y-1 left-0 w-[2px] rounded-full" style={{ background: rail }} />}
-      <span className={`mt-[3px] size-2.5 shrink-0 rounded-[3px] border ${
+      {rail && <span className="absolute inset-y-1 left-0 w-0.5 rounded-full" style={{ background: rail }} />}
+      <span className={`mt-0.75 size-2.5 shrink-0 rounded-[3px] border ${
         done ? 'bg-muted-foreground/40 border-transparent' : 'border-muted-foreground/50'
       }`} />
       <div className="min-w-0 flex-1">

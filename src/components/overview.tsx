@@ -369,7 +369,7 @@ function Spend({ items, total, onOpen }: {
                   hover cue is a scale + an inset ring in the surface colour, which reads in both themes */}
               <span className={cn('bg-foreground text-background ring-background relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
                 {/* a faint diagonal sheen off the top-left corner, so a flat fill reads as a surface */}
-                <span aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-br from-background/15 via-transparent to-transparent transition-opacity duration-150 group-hover:from-background/22" />
+                <span aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-br from-background/15 via-transparent to-transparent transition-opacity duration-150 group-hover:from-background/22" />
                 {mid && (
                   <>
                     {big && <span className={cn('relative max-w-full truncate font-medium leading-tight', huge ? 'text-base' : 'text-xs')}>{item.name}</span>}

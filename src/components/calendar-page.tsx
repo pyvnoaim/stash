@@ -223,7 +223,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                     >
                       {/* an outlined bar rather than a filled one: the same shape as an item's,
                           hollow, which is how a thing you cannot tick reads at a glance */}
-                      <span className="border-muted-foreground/60 h-3 w-[2px] shrink-0 rounded-full border" />
+                      <span className="border-muted-foreground/60 h-3 w-0.5 shrink-0 rounded-full border" />
                       {e.at && <span className="shrink-0 font-mono tabular-nums">{e.at}</span>}
                       <span className="truncate">{e.summary}</span>
                     </div>
@@ -250,7 +250,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                         <span
                           style={filed?.color ? { backgroundColor: filed.color } : undefined}
                           className={cn(
-                            'bg-muted-foreground h-3 w-[2px] shrink-0 rounded-full',
+                            'bg-muted-foreground h-3 w-0.5 shrink-0 rounded-full',
                             it.done && 'opacity-40',
                           )}
                         />
