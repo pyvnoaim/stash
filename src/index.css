@@ -221,6 +221,33 @@
   animation: stash-shimmer 1.5s ease-in-out infinite;
 }
 
+/* How the app opens (see splash.tsx). Two beats and out: every square of the wordmark snaps in
+   from off its own column, sweeping left to right, and then the capture bar types the same word
+   back. Four steps rather than a smooth ease — a pixel face arriving by sub-pixel interpolation
+   would be the one thing on the page not on the grid.
+   Timings are the whole design here: 500ms for the word, 280 for the typing, gone at 1.1s. */
+@keyframes stash-snap {
+  from { opacity: 0; transform: translate(var(--dx), var(--dy)); }
+  60% { opacity: 1; }
+}
+@keyframes stash-lift { to { opacity: 0; transform: translateY(-4px); } }
+@keyframes stash-in { from { opacity: 0; } }
+@keyframes stash-out { to { opacity: 0; } }
+@keyframes stash-type { from { width: 0; } to { width: 5ch; } }
+@keyframes stash-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+.splash { animation: stash-out 200ms 880ms both; }
+.splash-matrix { animation: stash-lift 160ms 520ms forwards; }
+.splash-matrix i {
+  position: absolute;
+  background: var(--foreground);
+  animation: stash-snap 240ms steps(4) backwards;
+  animation-delay: var(--d);
+}
+.splash-bar { animation: stash-in 140ms 520ms both; }
+.splash-type { animation: stash-type 280ms steps(5) 560ms backwards; }
+.splash-caret { animation: stash-blink 320ms steps(1) 560ms 2 backwards; }
+
 /* The transparent text pdf.js lays over the rendered page so it can be selected and copied.
    Vendored rather than importing pdfjs-dist/web/pdf_viewer.css: that file is the whole Firefox
    viewer, and its `:root { color-scheme: light dark }` would take our theme switch away. Only the
