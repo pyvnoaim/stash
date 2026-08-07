@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Bell, BellOff, CandlestickChart, ChartLine, Copy, Database, Download, Eraser, History, Info,
-  Keyboard, Link2, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
+  Keyboard, Link2, Lock, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
@@ -26,8 +26,8 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  clearDone, hotkey, resetDials, resetHotkeys, setApiKey, setChart, setDial, setHotkey, setStake,
-  useStash, type ChartStyle,
+  clearDone, hotkey, resetDials, resetHotkeys, setApiKey, setChart, setDesk, setDial, setHotkey,
+  setStake, useStash, type ChartStyle,
 } from '@/lib/store'
 import type { Dials as DialSet } from '@/lib/market'
 import {
@@ -330,6 +330,27 @@ function MarketsPanel() {
           defaultValue={s.stake || ''}
           onChange={(e) => setStake(parseFloat(e.target.value.replace(',', '.')))}
         />
+      </Section>
+
+      <Section
+        title="The others"
+        hint="Puts your finished setups and the ones you are in on everyone else's Markets page,
+          the way theirs land on yours. In R only — what you had on a trade never leaves this
+          device."
+      >
+        <div className="grid grid-cols-2 gap-1.5">
+          {([[false, 'Private', Lock], [true, 'On the desk', Users]] as const).map(([on, label, Icon]) => (
+            <Button
+              key={label}
+              size="sm"
+              variant={s.desk === on ? 'default' : 'outline'}
+              onClick={() => setDesk(on)}
+            >
+              <Icon className="size-3.5" />
+              {label}
+            </Button>
+          ))}
+        </div>
       </Section>
 
       <Section

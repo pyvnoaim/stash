@@ -136,6 +136,21 @@ assert.equal((await get('/api/users')).status, 401)
 assert.deepEqual(await (await get('/api/users', leon)).json(), { users: ['kim', 'mia'] })
 assert.deepEqual(await (await get('/api/users', mia)).json(), { users: ['kim', 'leon'] })
 
+/* the Desk: only accounts that switched it on, and only what a trade is — never what it cost or
+   paid anyone. Leon leaves his off, so mia's desk stays empty while his reads hers. */
+await put(mia, (await (await get('/state', mia)).json()).version, {
+  desk: true,
+  results: [{ id: 'r1', label: 'Bitcoin', horizon: 'Trading', dir: 'long', level: 'target', r: 2, closedAt: 5 }],
+  watches: [{ id: 'w1', label: 'Ether', horizon: 'Trading', dir: 'short', entry: 3, stop: 4, target: 1, size: 500, lev: 10 }],
+})
+assert.equal((await get('/api/desk')).status, 401)
+const seen = (await (await get('/api/desk', leon)).json()).desk
+assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that opted in')
+assert.equal(seen[0].results[0].r, 2)
+assert.equal(seen[0].open[0].live, true, 'a real position says it is one')
+assert.ok(!JSON.stringify(seen).includes('500'), "someone else's size left the server")
+assert.deepEqual((await (await get('/api/desk', mia)).json()).desk, [], 'a desk that is off is not read')
+
 /* where you are signed in: yours only, the one asking marked, and never the hash that proves it —
    a list that handed those out would be a list of working cookies. */
 assert.equal((await get('/api/sessions')).status, 401)

@@ -16,7 +16,7 @@ import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
-import { getSync, subscribeSync } from '@/lib/sync'
+import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, swings, tally, tradePlan, trendFilter,
@@ -1302,6 +1302,8 @@ export default function MarketPage() {
 
       <Record />
 
+      <Desk />
+
       <Trending />
 
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
@@ -2004,6 +2006,80 @@ function Record() {
                  fee is counted — it is the plan's own arithmetic, not a broker's.`
               : `Set what a setup is worth in Settings → Markets and these read in euros as well as
                  in R.`}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Everyone else on this server who has switched their desk on: how their setups went, and what
+ * they are in right now. In R and never in euros — the server does not send their size, so this
+ * cannot say what anyone is up in money, which is the point. A dot marks the ones with real money
+ * on them.
+ *
+ * Nothing here when nobody has turned it on, which is also what it looks like offline and on a
+ * stash with no account at all.
+ */
+function Desk() {
+  const [rows, setRows] = useState<DeskRow[]>([])
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+
+  useEffect(() => { void deskRows().then(setRows) }, [user?.name])
+
+  const people = rows.filter((p) => p.results.length || p.open.length)
+  if (!people.length) return null
+
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-heading text-sm tracking-wide uppercase">The others</span>
+          <span className="text-muted-foreground text-xs">
+            {people.length === 1 ? 'one desk' : `${people.length} desks`}
+          </span>
+        </div>
+        <div className="grid gap-2">
+          {people.map((p) => {
+            const total = p.results.reduce((n, r) => n + r.r, 0)
+            const won = p.results.filter((r) => r.level === 'target').length
+            return (
+              <div key={p.name} className="rounded-md border px-2.5 py-2">
+                <div className="flex items-baseline gap-2">
+                  <span className="truncate text-sm font-medium">{p.name}</span>
+                  {!!p.results.length && (
+                    <span className="text-muted-foreground text-xs tabular-nums">
+                      {p.results.length} finished · {Math.round((won / p.results.length) * 100)}% hit
+                    </span>
+                  )}
+                  {!!p.results.length && (
+                    <span className={cn('ml-auto font-mono text-sm tabular-nums',
+                      total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                      {rLabel(total)}
+                    </span>
+                  )}
+                </div>
+                {p.open.map((w) => (
+                  <div key={w.id} className="flex items-baseline gap-2 pt-1 text-xs">
+                    {/* a filled dot is real money on it, a hollow one a plan being watched */}
+                    <span className={cn('size-1.5 shrink-0 rounded-full',
+                      w.live ? 'bg-foreground' : 'border-muted-foreground border')} />
+                    <span className="w-28 shrink-0 truncate">{w.label}</span>
+                    <span className="text-muted-foreground truncate">
+                      {w.dir === 'long' ? 'Long' : 'Short'}{w.horizon ? ` · ${w.horizon}` : ''}
+                    </span>
+                    <span className="text-muted-foreground ml-auto shrink-0 font-mono tabular-nums">
+                      {w.entryAt ? 'in' : 'waiting'} @ {fmtPrice(w.entry)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+        </div>
+        <p className="text-muted-foreground mt-2 px-1.5 text-xs">
+          In R, because it is not your stake — what anyone had on a trade stays on their own
+          device. Settings → Markets puts your own record here.
         </p>
       </CardContent>
     </Card>

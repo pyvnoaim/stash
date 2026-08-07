@@ -385,6 +385,27 @@ export const joinLink = (t: string): Promise<string | null> =>
 export const roster = (): Promise<Face[]> =>
   call('/api/roster').then((j) => j.roster as Face[]).catch(() => [])
 
+/**
+ * One person on the Desk: how their setups went, and what they are in now. No euros — the server
+ * strips the size and leverage, so `live` is the whole of what their money is allowed to say.
+ */
+export interface DeskRow {
+  name: string
+  avatar: string | null
+  results: {
+    id: string, label: string, horizon: string, dir: 'long' | 'short',
+    level: 'target' | 'stop', r: number, closedAt: number,
+  }[]
+  open: {
+    id: string, label: string, horizon: string, dir: 'long' | 'short',
+    entry: number, stop: number, target: number, entryAt: number | null, live: boolean,
+  }[]
+}
+
+/** Everyone who has switched the Desk on. Empty offline, and empty when nobody has — same answer. */
+export const desk = (): Promise<DeskRow[]> =>
+  call('/api/desk').then((j) => j.desk as DeskRow[]).catch(() => [])
+
 /** Everyone else with an account here, for a share field to complete against. Empty when offline. */
 export const people = (): Promise<string[]> =>
   call('/api/users').then((j) => j.users as string[]).catch(() => [])
