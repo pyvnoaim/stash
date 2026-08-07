@@ -122,7 +122,10 @@ tag field only ever adds, since a shared list would wipe whatever each row had o
 count in the header is the list; the one in the window title is what is due, since the dock icon
 carries no badge of its own.
 
-Tags in the panel are chips: type and press `return` to add, `×` on a chip to take one off. A row
+Tags in the panel are chips: type and press `return` to add, `×` on a chip to take one off. Under
+the field are tags the stash already has, the ones this project's own family uses first and by how
+often it uses them — so a sub-project offers what its siblings are tagged with rather than an
+alphabet of everything ever typed. Typing narrows them; clicking one files it. A row
 carrying a note shows its first line under the title, with `+4` for the rest — the whole note
 flattened onto one line is a wall of half-sentences, not a preview. The panel's footer says when
 an item was added and, once anything has actually been changed, when it was last edited. A bulk
@@ -433,6 +436,19 @@ coin are two different trades off two different charts, so saving one leaves the
 alert names which is firing. Saving again replaces that one, and the button toggles it off.
 Prices are re-checked every minute **while the app is open** — nothing runs in the background and
 nothing is pushed to your phone.
+
+### The others
+
+Under your own record sits everyone else's, if they want it there. **Settings → Markets → The
+others** switches your desk on: your finished setups and the ones you are in now become readable
+by everyone with an account on this server, and theirs by you. Off until you say so, and off is
+what a document that has never heard of the setting means.
+
+What travels is the trade — the asset, the side, the horizon, whether the entry has been reached,
+and how the finished ones scored in R. What does not is the money: the size and leverage a position
+was taken with never leave the device they were typed on, so the page can say someone is up 3.2R
+across eleven setups and cannot say what that was worth to them. A filled dot marks a row with real
+money on it, a hollow one a plan being watched.
 
 The **Opening range** preset pins 15m bars and marks the high and low of the first hour of the New
 York session — 09:30 local, daylight saving included — which is the window the breakout play watches.

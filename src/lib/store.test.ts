@@ -12,7 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
-  openWatch, closeWatch, clearResults, dismissAlerts, snoozeAlerts, snoozeUntil,
+  openWatch, closeWatch, clearResults, dismissAlerts, snoozeAlerts, snoozeUntil, tagsFor,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -835,4 +835,30 @@ console.log('store: ok')
   undo()
   assert.notEqual(getState().items, withIt, 'the item came back, not the dismissal')
   assert.equal(getState().dismissed.swiped, now + day)
+}
+
+/* ---------- tags to offer: the project's own family before the rest of the stash ---------- */
+{
+  const st = load({
+    projects: [
+      { id: 'p', name: 'Kova', parent: null },
+      { id: 'sub', name: 'Audio', parent: 'p' },
+      { id: 'far', name: 'Site', parent: null },
+    ],
+    items: [
+      item({ id: '1', pid: 'p', tags: ['bug'] }),
+      item({ id: '2', pid: 'sub', tags: ['audio', 'bug'] }),
+      item({ id: '3', pid: 'sub', tags: ['audio'] }),
+      item({ id: '4', pid: 'far', tags: ['website', 'bug'] }),
+    ],
+  })
+  // a sub-project reads its whole family, most-used first — then whatever is used elsewhere
+  assert.deepEqual(tagsFor(st, 'sub'), ['audio', 'bug', 'website'])
+  assert.deepEqual(tagsFor(st, 'p'), ['audio', 'bug', 'website'])
+  // from the other end of the stash the same tags come back in the other order
+  assert.deepEqual(tagsFor(st, 'far'), ['bug', 'website', 'audio'])
+  // unfiled has no family, so it is the whole stash by count
+  assert.deepEqual(tagsFor(st, null), ['bug', 'audio', 'website'])
+  // and what the row already carries is not offered back to it
+  assert.deepEqual(tagsFor(st, 'sub', ['bug', 'audio']), ['website'])
 }

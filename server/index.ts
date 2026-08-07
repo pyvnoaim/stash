@@ -379,6 +379,11 @@ export function start({
     /* everyone but you, for the share fields to complete against. Names only, and a name here is
        already public to anyone you might share with — it is what they type to reach you. */
     people: db.prepare('select name from users where id <> ? order by name'),
+    /* Everyone else's latest document, for the Desk. The one query that reads across accounts —
+       what it may hand out is decided row by row in the route, off what each document itself says. */
+    everyone: db.prepare(`select u.name, u.avatar,
+      (select json from docs d where d.user = u.id order by d.v desc limit 1) as json
+      from users u where u.id <> ? order by u.name`),
     invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
@@ -1067,6 +1072,45 @@ export function start({
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       return send(res, 200, { users: (q.people.all(user.id) as { name: string }[]).map((u) => u.name) })
+    }
+
+    /* The Desk: how everyone else's setups went, and what they are in now. Opt-in per account —
+       a document that has not set `desk` is not read past that field — and money-free by
+       construction: the size and leverage a position was taken with never leave the document, so
+       this says what the trade is, never what it is worth to them. Read-only, and everyone here
+       is someone an admin let in. */
+    if (path === '/api/desk' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const rows = q.everyone.all(user.id) as { name: string, avatar: string | null, json: string | null }[]
+      const desk = []
+      for (const row of rows) {
+        let s: any
+        try { s = JSON.parse(row.json ?? '{}') } catch { continue }
+        if (s?.desk !== true) continue
+        // another person's document is untrusted input to my page: numbers are numbers or the row goes
+        const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
+        const arr = (a: unknown) => (Array.isArray(a) ? a : [])
+        desk.push({
+          name: row.name,
+          avatar: row.avatar,
+          results: arr(s.results).map((r: any) => ({
+            id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
+            dir: r?.dir === 'short' ? 'short' : 'long',
+            level: r?.level === 'target' ? 'target' : 'stop',
+            r: num(r?.r), closedAt: num(r?.closedAt) ?? 0,
+          })).filter((r: any) => r.r !== null),
+          open: arr(s.watches).map((w: any) => ({
+            id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),
+            dir: w?.dir === 'short' ? 'short' : 'long',
+            entry: num(w?.entry), stop: num(w?.stop), target: num(w?.target),
+            entryAt: num(w?.entryAt),
+            /** Whether real money is on it, which is the only thing their size is allowed to say. */
+            live: !!(w?.size && w?.lev),
+          })).filter((w: any) => w.entry !== null && w.stop !== null && w.target !== null),
+        })
+      }
+      return send(res, 200, { desk })
     }
 
     if (path === '/api/shares' && req.method === 'GET') {

@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { ExternalLink, Flag, Maximize2, Trash2, X } from 'lucide-react'
 import { DueField } from '@/components/due-field'
 import { useMembers } from '@/components/faces'
@@ -13,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { isRepeat, REPEATS, repeatLabel, today } from '@/lib/parse'
-import { patch, useStash, type Item, type ItemType } from '@/lib/store'
+import { patch, tagsFor, useStash, type Item, type ItemType } from '@/lib/store'
 
 const TYPES: ItemType[] = ['task', 'idea', 'note']
 const QUICK = '__inbox__'   // Select can't hold "" as a value
@@ -52,17 +53,64 @@ function Links({ it }: { it: Item }) {
   )
 }
 
+/**
+ * Tags to hand someone rather than make them remember. What the project's family already uses
+ * comes first (see `tagsFor`), so the row a sub-project offers is what its siblings are tagged
+ * with — and typing narrows it to what starts with the word being typed. Empty field, no typing:
+ * the six this project reaches for most, which is the whole point of showing it unprompted.
+ */
+function TagSuggest({ pid, has, q, onPick }: {
+  pid: string | null
+  /** already on the row, so it is not offered back */
+  has: string[]
+  /** whatever is in the box — only the last word of it is a tag being typed */
+  q: string
+  onPick: (tag: string) => void
+}) {
+  const s = useStash()
+  const typed = q.split(/[\s,#]+/).pop()?.toLowerCase() ?? ''
+  const hits = tagsFor(s, pid, has).filter((t) => t.startsWith(typed) && t !== typed).slice(0, 6)
+  if (!hits.length) return null
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {hits.map((t) => (
+        <button
+          key={t}
+          type="button"
+          // mousedown, or the field's own blur files the half-typed word before the click lands
+          onMouseDown={(e) => { e.preventDefault(); onPick(t) }}
+          className="text-muted-foreground hover:text-foreground hover:bg-accent rounded-md border px-1.5 py-0.5 font-mono text-xs"
+        >
+          #{t}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () => void; onExpand: () => void }) {
   const s = useStash()
   /* Who it is for. Only where there is somebody else to pick: in a stash of your own every row is
      yours, and a field whose only answer is "you" is not a field. */
   const members = useMembers(s.projects.find((p) => p.id === it.pid))
 
+  const box = useRef<HTMLInputElement>(null)
+  const [tagq, setTagq] = useState('')
+
   /** Whatever is in the box joins the tags it already has, and the box empties for the next one. */
   const addTags = (el: HTMLInputElement) => {
     const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
     el.value = ''
+    setTagq('')
     if (add.length) patch(it.id, { tags: [...new Set([...it.tags, ...add])] })
+  }
+
+  /** A suggestion taken whole — the word it was narrowed down with goes with it. */
+  const pickTag = (t: string) => {
+    if (box.current) box.current.value = ''
+    setTagq('')
+    patch(it.id, { tags: [...new Set([...it.tags, t])] })
   }
 
   return (
@@ -210,11 +258,14 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
         <Input
           id="i-tags"
           key={it.id}
+          ref={box}
           placeholder="audio bug"
+          onChange={(e) => setTagq(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
           // typed, then clicked away: the words were meant, so they land rather than evaporate
           onBlur={(e) => addTags(e.currentTarget)}
         />
+        <TagSuggest pid={it.pid} has={it.tags} q={tagq} onPick={pickTag} />
         {it.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {it.tags.map((t) => (
@@ -265,6 +316,8 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
  */
 export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => void }) {
   const s = useStash()
+  const box = useRef<HTMLInputElement>(null)
+  const [tagq, setTagq] = useState('')
   const picked = s.items.filter((i) => ids.includes(i.id))
   if (!picked.length) return null
 
@@ -279,7 +332,14 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
   const addTags = (el: HTMLInputElement) => {
     const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
     el.value = ''
+    setTagq('')
     if (add.length) picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, ...add])] }))
+  }
+
+  const pickTag = (t: string) => {
+    if (box.current) box.current.value = ''
+    setTagq('')
+    picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, t])] }))
   }
 
   return (
@@ -346,10 +406,14 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
         <Input
           id="s-tags"
           key={ids.join(' ')}
+          ref={box}
           placeholder="Add to all"
+          onChange={(e) => setTagq(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
           onBlur={(e) => addTags(e.currentTarget)}
         />
+        {/* the first row's project stands for the selection: they are picked out of one list */}
+        <TagSuggest pid={picked[0].pid} has={common} q={tagq} onPick={pickTag} />
         {/* only the ones every row carries: a chip that meant "some of these" would lie */}
         {common.length > 0 && (
           <div className="flex flex-wrap gap-1">

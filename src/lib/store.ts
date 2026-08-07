@@ -289,6 +289,13 @@ export interface State {
    * you really traded. Zero means say it in R and leave the money out of it.
    */
   stake: number
+  /**
+   * Whether everyone else with an account on this server may read how your setups went and what
+   * you are in now — the Desk. Off until you turn it on: a record is yours before it is a
+   * scoreboard. What leaves is the trade and never the money — the size and leverage a position
+   * was taken with stay in this document.
+   */
+  desk: boolean
   /** Which asset the Markets desk is on. Lives here so a mover tile or an alert can open the desk
    *  already showing the right thing — and so it survives a reload. Validated by the page, which
    *  owns the asset table and falls back to Bitcoin for an id it doesn't recognise. */
@@ -386,7 +393,8 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense',
-  watches: [], alarms: [], results: [], stake: 0, marketAsset: 'BTCUSDT', marketHorizon: 'short',
+  watches: [], alarms: [], results: [], stake: 0, desk: false,
+  marketAsset: 'BTCUSDT', marketHorizon: 'short',
   dials: { ...DIALS }, dismissed: {},
 })
 
@@ -544,6 +552,8 @@ export function load(data: unknown): State {
 
   // a stake is money at risk: a real number, never negative. Zero is the answer "say it in R"
   st.stake = typeof st.stake === 'number' && isFinite(st.stake) && st.stake > 0 ? st.stake : 0
+  // publishing is a decision, so only the word yes counts as one — anything else is private
+  st.desk = st.desk === true
 
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
@@ -859,6 +869,29 @@ export const rootProjects = (s: State) => sortProjects(s, s.projects.filter((p) 
 export const childProjects = (s: State, id: string) =>
   sortProjects(s, s.projects.filter((p) => p.parent === id))
 
+/**
+ * Every tag already in the stash, in the order worth offering someone filing into `pid`: the ones
+ * this project's own family uses, most-used first, then everything else the same way. A project's
+ * family is its root and everything under it — the tree is two deep, so a tag all over the
+ * sub-projects is one this row probably wants, and a tag from the other end of the stash is still
+ * offered, just last. Tags in `has` are left out: they are already on the row.
+ */
+export function tagsFor(s: State, pid: string | null, has: string[] = []): string[] {
+  const root = pid ? (s.projects.find((p) => p.id === pid)?.parent ?? pid) : null
+  const family = new Set(root ? [root, ...s.projects.filter((p) => p.parent === root).map((p) => p.id)] : [])
+  const near = new Map<string, number>(), far = new Map<string, number>()
+  for (const i of s.items) {
+    const m = i.pid && family.has(i.pid) ? near : far
+    for (const t of i.tags) m.set(t, (m.get(t) ?? 0) + 1)
+  }
+  // by count, ties alphabetically, so the list is the same list twice in a row
+  const rank = (m: Map<string, number>) =>
+    [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t)
+  const skip = new Set(has)
+  // a tag used both in the family and outside it keeps the place the family gave it
+  return [...rank(near), ...rank(far)].filter((t, i, all) => !skip.has(t) && all.indexOf(t) === i)
+}
+
 /** The sidebar's order read straight down, parents each followed by their own. */
 export const flatProjects = (s: State): Project[] =>
   rootProjects(s).flatMap((p) => [p, ...childProjects(s, p.id)])
@@ -1046,6 +1079,7 @@ export function clearResults() {
 /** Euros at risk on one setup, or 0 for "say it in R and leave the money out of it". */
 export const setStake = (stake: number) =>
   set((s) => ({ ...s, stake: isFinite(stake) && stake > 0 ? stake : 0 }))
+export const setDesk = (desk: boolean) => set((s) => ({ ...s, desk }))
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
