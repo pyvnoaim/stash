@@ -1,29 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 
-/** Once a launch. A dock icon clicked at nine and again at four is two launches; a tab reloaded
- *  mid-sentence is not, and neither is the sync gate deciding to re-render. */
-const SEEN = 'stash.opened'
-
 /** The face, in the size it is sampled at — one string, so the canvas and the load request can
  *  never drift into asking for two different fonts. */
 const SIZE = 13
 const FACE = `${SIZE}px "Geist Pixel Square"`
 
 /** How long the face has to arrive before this stops being an opener. Past it the sheet leaves
- *  having drawn nothing — and, crucially, without spending the launch, so the next one plays it
- *  properly off a warm cache instead of opening on nothing forever. */
+ *  having drawn nothing, and the next load plays it properly off a warm cache. */
 const LATE = 1200
 
 /** Sheet gone, measured from the paint rather than from the mount. The squares are together by
  *  ~410ms, the fade starts at 560 (see `.splash-lit`) and is over by 760. */
 const BEAT = 800
 
-const skip = () => {
-  try {
-    return matchMedia('(prefers-reduced-motion: reduce)').matches || !!sessionStorage.getItem(SEEN)
-  } catch { return true }   // no sessionStorage is no way to say "already seen" — so never open with it
-}
+/** Every load. A reload mid-sentence plays it again — that is what opening the app looks like. */
+const skip = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /**
  * The wordmark read out of the typeface rather than drawn: `stash` is rendered small onto a canvas
@@ -112,11 +104,6 @@ export function Splash() {
         if (!live) return
         clearTimeout(late)
         if (!grid.current || !paint(grid.current)) { setGone(true); return }
-        /* Spent here, on a wordmark that is on the screen. Set on mount it was spent by launches
-           that drew nothing, and sessionStorage outlives a reload — so one cold fetch on the first
-           load in a tab took that tab's single showing with it, and every reload after opened on
-           nothing with no way back short of a new tab. */
-        try { sessionStorage.setItem(SEEN, '1') } catch { /* private mode: it plays again, once */ }
         setLit(true)
         beat = setTimeout(() => setGone(true), BEAT)
       })
