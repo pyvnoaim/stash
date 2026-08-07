@@ -1028,17 +1028,6 @@ export default function MarketPage() {
                       <path d={pathOf(vis.map((c) => c.c), lo, hi, xSpan)}
                         className="stroke-foreground fill-none" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
                     )}
-                  {/* Each confirmed pivot, marked on the bar that made it — over the candles, because
-                      the whole claim is which bar this was. A zero-length round-capped stroke rather
-                      than a circle: this viewBox scales x and y independently, and a circle in it is
-                      an ellipse whose squash changes with the zoom. */}
-                  {visPivots.map((p) => {
-                    const py = y(p.price) + (p.kind === 'high' ? -1.8 : 1.8)
-                    return (
-                      <line key={`${p.kind}-${p.i}`} x1={xAt(p.i - start)} x2={xAt(p.i - start)} y1={py} y2={py}
-                        className="stroke-foreground/45" strokeWidth={3} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-                    )
-                  })}
                   {/* The swing the last break went through, at the price the card names. Faint and
                       finely dashed — it is the level that stopped mattering, drawn so the sentence
                       under the chart has something to point at. */}
@@ -1061,6 +1050,18 @@ export default function MarketPage() {
                       strokeWidth={1} strokeOpacity={0.45} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
                   )}
                 </svg>
+
+                {/* Each confirmed pivot, marked on the bar that made it — over the candles, because
+                    the whole claim is which bar this was. HTML, not an SVG shape: preserveAspectRatio
+                    =none scales x and y independently, so a circle in there is an ellipse. It used to
+                    be a zero-length round-capped stroke held round by non-scaling-stroke, which WebKit
+                    gets wrong — a zero-length segment has no direction to hold, so the Dock app drew
+                    the squash the trick was meant to escape. */}
+                {visPivots.map((p) => (
+                  <div key={`${p.kind}-${p.i}`}
+                    className="bg-foreground/45 pointer-events-none absolute size-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                    style={{ left: `${xAt(p.i - start)}%`, top: `${y(p.price) + (p.kind === 'high' ? -1.8 : 1.8)}%` }} />
+                ))}
 
                 {/* which session each upcoming line is, named where it sits — the reason for the gap */}
                 {/* the name of the desk and the time on your clock, at the head of its own line —
