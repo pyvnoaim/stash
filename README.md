@@ -317,8 +317,8 @@ Deleting gives the same undo toast every other delete in the app does.
 ## Markets
 
 A read-only desk over other people's price feeds. Crypto and gold ride Binance's public API — no
-key, no signup; gold is PAXG, a token pegged to a troy ounce, and there is no liquid silver token
-so silver sits it out. The stocks and the three big index ETFs — S&P 500, Nasdaq 100 and Dow
+key, no signup; gold is XAUT, a token pegged to a troy ounce and the most liquid one Binance
+lists (there is no XAUUSDT at all), and there is no liquid silver token so silver sits it out. The stocks and the three big index ETFs — S&P 500, Nasdaq 100 and Dow
 Jones, a group of their own in the picker — ride Twelve Data, which needs a free key: paste it
 into Settings or into the prompt the page shows, and it stays on this machine and never travels in
 a backup. The ETFs deliberately sit out the movers sweep: that batch call pays one credit per

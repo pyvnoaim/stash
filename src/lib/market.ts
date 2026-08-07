@@ -1,8 +1,12 @@
 // Live candles from Binance's public API (no key, no signup) + the handful of signals every TA
 // guide repeats: moving-average crosses, RSI extremes, horizontal support/resistance, and which
 // way the trend leans. No chart-shape recognition (head-and-shoulders and friends) — that's
-// guesswork dressed as maths. Gold rides PAXG, a token pegged 1:1 to a troy ounce; Binance lists
-// no liquid silver token, so silver sits this one out.
+// guesswork dressed as maths. Gold rides XAUT (Tether Gold), a token pegged 1:1 to a troy ounce —
+// the closest thing to spot on a keyless feed, since Binance lists no XAUUSDT at all. It replaced
+// PAXG, the other gold token, on liquidity: about twice the 24h volume and twice the trades, which
+// is what decides how honest the wicks are. True spot XAU/USD would mean Twelve Data, a key, the
+// daily credit budget, and a session gate that knows gold trades 23/5 rather than US equity hours.
+// Binance lists no liquid silver token, so silver sits this one out.
 
 /** `v` is volume — optional, since not every feed sends it and every signal that uses it can sit out. */
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v?: number }
@@ -19,7 +23,7 @@ const logo = (name: string) => `/logos/${name}.png`
 
 // Crypto + gold ride Binance (keyless, 24/7). Stocks ride Twelve Data (needs a free key).
 export const ASSETS: Asset[] = [
-  { id: 'PAXGUSDT', label: 'Gold', source: 'binance', group: 'Metals', logo: logo('paxg') },
+  { id: 'XAUTUSDT', label: 'Gold', source: 'binance', group: 'Metals', logo: logo('xaut') },
   { id: 'BTCUSDT', label: 'Bitcoin', source: 'binance', group: 'Crypto', logo: logo('btc') },
   { id: 'ETHUSDT', label: 'Ethereum', source: 'binance', group: 'Crypto', logo: logo('eth') },
   { id: 'SOLUSDT', label: 'Solana', source: 'binance', group: 'Crypto', logo: logo('sol') },
