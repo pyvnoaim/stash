@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, nakedAlerts, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, nakedAlerts, openRisk, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
 
@@ -334,3 +334,48 @@ assert.match(both[0].title, /in an hour/)
 assert.equal(both[0].id, 'mkt-BTCUSDT-up')
 
 console.log('movers ok')
+
+/* ---------- what is already on, priced at being wrong about all of it ---------- */
+
+/* Risk is |entry − stop| × size whichever way the trade faces, so a long stopping below and a
+   short stopping above both cost what the distance says. A €2,000 loss against $10,000 of equity
+   is the fifth of it that the sum exists to say out loud. */
+const rows = [
+  { symbol: 'PF_XBTUSD', entry: 60_000, stop: 58_000, size: 0.5 },   // long: 2000 × 0.5 = 1000
+  { symbol: 'ETHUSDT', entry: 3_000, stop: 3_200, size: 5 },         // short: 200 × 5 = 1000
+]
+const r = openRisk(rows, [], 10_000)
+assert.equal(r.exch, 2_000)
+assert.equal(r.ofEquity, 0.2)
+assert.equal(r.stopless, 0)
+
+// a row with nothing resting is named, never summed as zero — a total that quietly drops the
+// dangerous half would read as complete when it is the opposite
+const unstopped = openRisk([...rows, { symbol: 'SOLUSDT', entry: 200, stop: null, size: 100 }], [], 10_000)
+assert.equal(unstopped.exch, 2_000)
+assert.equal(unstopped.stopless, 1)
+
+// no equity from the feed is no share of it, rather than a division by nothing
+assert.equal(openRisk(rows, [], null).ofEquity, null)
+assert.equal(openRisk(rows, [], 0).ofEquity, null)
+assert.deepEqual(openRisk([], [], 1_000), { exch: 0, ofEquity: 0, stopless: 0, mine: 0, crowd: null })
+
+/* Hand-entered positions price themselves off size × leverage and stay in their own currency:
+   €100 at 10× with the stop 5% away is €50 on the line, and it must not join a dollar total. */
+const mine = [{ asset: 'BTCUSDT', entry: 100, stop: 95, size: 100, lev: 10 }]
+const withMine = openRisk(rows, mine, 10_000)
+assert.equal(withMine.mine, 50)
+assert.equal(withMine.exch, 2_000) // untouched by the euros
+// a watched plan is not money on the table, so it is not risk
+assert.equal(openRisk([], [{ asset: 'BTCUSDT', entry: 100, stop: 95 }], null).mine, 0)
+
+/* The crowd: PF_XBTUSD and ETHUSDT both resolve through assetOf into Crypto, so two of two are
+   one bet twice. One position is not a crowd, and gold sits in its own group. */
+assert.deepEqual(r.crowd, { group: 'Crypto', n: 2, of: 2 })
+assert.equal(openRisk([rows[0]], [], null).crowd, null)
+const mixed = openRisk([rows[0], { symbol: 'XAUTUSDT', entry: 4_000, stop: 3_900, size: 1 }], [], null)
+assert.equal(mixed.crowd, null) // one Crypto, one Metals — nothing to warn about
+// an id the asset list has never heard of is not counted into any group
+assert.equal(openRisk([{ symbol: 'WHOKNOWS', entry: 1, stop: 0.5, size: 1 }], [], null).crowd, null)
+
+console.log('open risk ok')
