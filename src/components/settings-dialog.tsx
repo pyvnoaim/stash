@@ -159,10 +159,13 @@ export function SettingsDialog({ open, onOpenChange }: {
   )
 }
 
-/** Bytes as a person reads them — a stash is kilobytes until a PDF or two makes it megabytes. */
+/** Bytes as a person reads them — a stash is kilobytes until a PDF or two makes it megabytes, and
+ *  the room a browser offers is gigabytes, which "78643.2 MB" is a poor way of saying. */
 const size = (n: number) => (n < 1024 * 1024
   ? `${Math.max(1, Math.round(n / 1024))} KB`
-  : `${(n / 1024 / 1024).toFixed(1)} MB`)
+  : n < 1024 * 1024 * 1024
+    ? `${(n / 1024 / 1024).toFixed(1)} MB`
+    : `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`)
 
 /**
  * The data itself: out, in, and what the browser is keeping. The export and the import were only
@@ -258,6 +261,24 @@ function DataPanel({ onDone }: { onDone: () => void }) {
             ? <>{size(room.used)} used{room.quota ? <span className="text-muted-foreground"> of {size(room.quota)} allowed here</span> : null}</>
             : <span className="text-muted-foreground">This browser does not say.</span>}
         </p>
+        {/* A tenth of a percent of the quota is still a bar you can see: at these proportions a
+            true-to-scale fill is one invisible pixel, and a bar nobody can see is not a bar. What
+            it is honestly saying is "nowhere near the ceiling", which is the answer. */}
+        {!!room?.quota && (
+          <div
+            className="bg-muted h-1.5 overflow-hidden rounded-full"
+            role="progressbar"
+            aria-label="Storage used"
+            aria-valuenow={Math.round((room.used / room.quota) * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className="bg-foreground/60 h-full rounded-full"
+              style={{ width: `${Math.min(100, Math.max(0.5, (room.used / room.quota) * 100))}%` }}
+            />
+          </div>
+        )}
       </Section>
 
       {/* the server's copies of the same data, which had a page of the list to itself for one card */}
