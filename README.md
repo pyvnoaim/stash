@@ -123,11 +123,15 @@ count in the header is the list; the one in the window title is what is due, sin
 carries no badge of its own.
 
 Tags in the panel are chips: type and press `return` to add, `×` on a chip to take one off. Start
-typing one and the tags the stash already has turn up under the field, the ones this project's own
-family uses first and by how often it uses them — so a sub-project offers what its siblings are
-tagged with rather than an alphabet of everything ever typed. Each letter narrows them; clicking
-one files it. An empty field offers nothing: the box is for a tag you have in mind, and the help is
-for finishing it rather than for browsing a menu that appears the moment the panel opens. A row
+typing one and the tags the stash already has drop under the field — the same drop the header's
+search uses for `#` and `@` — the ones this project's own family uses first and by how often it
+uses them, so a sub-project offers what its siblings are tagged with rather than an alphabet of
+everything ever typed. Each letter narrows them; clicking one files it. An empty field offers
+nothing: the box is for a tag you have in mind, and the help is for finishing it rather than for
+browsing a menu that opens with the panel. It hangs over the fields below rather than pushing them
+down, since a list that changes length on every keystroke would otherwise walk the whole panel
+about. The same field and the same drop work on a multiple selection, in every list a selection can
+be made in. A row
 carrying a note shows its first line under the title, with `+4` for the rest — the whole note
 flattened onto one line is a wall of half-sentences, not a preview. The panel's footer says when
 an item was added and, once anything has actually been changed, when it was last edited. A bulk
