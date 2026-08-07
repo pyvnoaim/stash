@@ -1,7 +1,7 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
-  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
+  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
   ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
@@ -639,3 +639,17 @@ assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 15, 0)), true)  // Wed 15:00 UTC 
 assert.equal(usMarketOpen(Date.UTC(2026, 7, 8, 15, 0)), false) // Saturday
 assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 3, 0)), false)  // overnight
 assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 21, 30)), true) // the wide edge still counts
+
+/* GeckoTerminal answers a rate-limit with no CORS header on it, so the browser reports a failed
+   request rather than a 429 and the trending panel announced a feed that was up as unreachable.
+   One retry, and an error body must never parse into "nothing is trending" and get cached as one. */
+let pool429 = 0
+globalThis.fetch = (() => {
+  pool429++
+  return Promise.resolve(pool429 === 1
+    ? { ok: false, status: 429, json: () => Promise.resolve({ status: { error_code: 429 } }) }
+    : { ok: true, json: () => Promise.resolve({ data: [{ attributes: { name: 'CATE / SOL', address: 'Pool1', base_token_price_usd: '0.5' } }] }) })
+}) as unknown as typeof fetch
+const retried = await fetchTrending()
+assert.equal(pool429, 2, 'a rate-limited trending call must be retried, not surfaced as an error')
+assert.equal(retried[0]?.symbol, 'CATE')

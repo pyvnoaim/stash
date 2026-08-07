@@ -263,14 +263,24 @@ export function parseTrending(json: unknown, now = Date.now()): Trend[] {
 const cache = new Map<string, { at: number; rows: Trend[] }>()
 const flights = new Map<string, Promise<Trend[]>>()
 const TREND_TTL = 50_000   // under the 60s both callers poll at, so a real tick always refetches
+/* The keyless tier rate-limits in bursts, and its 429 comes back with no access-control-allow-origin
+   on it at all — so the browser never sees a status, it sees the request fail, and the panel said
+   the pool feed could not be reached while the feed was perfectly up. It clears in a second or two,
+   and the alternative is a blank panel until the next poll a minute out. */
+const TREND_RETRY = 1200
 
 function fetchPools(path: string): Promise<Trend[]> {
   const held = cache.get(path)
   if (held && Date.now() - held.at < TREND_TTL) return Promise.resolve(held.rows)
   const going = flights.get(path)
   if (going) return going
-  const p = fetch(`https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}/${path}`)
-    .then((r) => r.json())
+  const url = `https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}/${path}`
+  // a rate-limit that does arrive with its headers must not be parsed either: the error body reads
+  // as an empty list, and cached as an answer that is the panel saying nothing is trending
+  const get = (): Promise<unknown> =>
+    fetch(url).then((r) => r.ok ? r.json() : Promise.reject(new Error(`pools ${r.status}`)))
+  const p = get()
+    .catch(() => new Promise((go) => setTimeout(go, TREND_RETRY)).then(get))
     .then((j) => {
       const rows = parseTrending(j)
       cache.set(path, { at: Date.now(), rows })
