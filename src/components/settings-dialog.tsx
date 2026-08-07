@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  Bell, BellOff, CandlestickChart, ChartLine, Copy, Database, Download, Eraser, History, Info,
-  Keyboard, Link2, Lock, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Users,
+  Bell, BellOff, CalendarDays, CandlestickChart, ChartLine, Copy, Database, Download, Eraser,
+  History, Info, Keyboard, Link2, Lock, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen,
+  Users,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
@@ -75,18 +76,21 @@ export function SettingsDialog({ open, onOpenChange }: {
   useEffect(() => { if (open) setAt('account') }, [open])
 
   /* signed out — offline, most likely — there is no account to show and no server to ask about
-     one, so those sections are simply not there rather than there and broken. */
+     one, so those sections are simply not there rather than there and broken.
+     Alerts and Data stay: the thresholds and the backup are this machine's, and work with nobody
+     signed in at all. */
   const SECTIONS = [
+    ...(user ? [{ id: 'account', label: 'Account', icon: UserPen }] : []),
+    { id: 'alerts', label: 'Alerts', icon: Bell },
     ...(user
       ? [
-          { id: 'account', label: 'Account', icon: UserPen },
-          { id: 'history', label: 'History', icon: History },
-          { id: 'links', label: 'Links', icon: Link2 },
+          { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+          { id: 'links', label: 'Sharing', icon: Link2 },
           ...(user.admin ? [{ id: 'people', label: 'People', icon: Users }] : []),
         ]
       : []),
-    { id: 'data', label: 'Data', icon: Database },
     { id: 'markets', label: 'Markets', icon: CandlestickChart },
+    { id: 'data', label: 'Data', icon: Database },
     { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
   ]
@@ -137,10 +141,13 @@ export function SettingsDialog({ open, onOpenChange }: {
             <div className="grid w-full max-w-lg gap-4">
               <h2 className="font-heading text-lg tracking-wide">{title}</h2>
               {here === 'account' && user && <AccountPanel name={user.name} avatar={user.avatar} />}
-              {here === 'history' && <HistoryPanel onDone={() => onOpenChange(false)} />}
+              {/* the bell and the numbers behind it, which used to sit a page apart: the push
+                  switch under Account, the thresholds it fires on at the foot of Markets */}
+              {here === 'alerts' && <>{user && <NotificationsPanel />}<Dials /></>}
+              {here === 'calendar' && <><CalendarFeed /><CalendarSub /></>}
               {here === 'links' && <><LinksPanel /><McpSection /></>}
               {here === 'people' && user && <PeoplePanel me={user.name} />}
-              {here === 'data' && <DataPanel />}
+              {here === 'data' && <DataPanel onDone={() => onOpenChange(false)} />}
               {here === 'markets' && <MarketsPanel />}
               {here === 'hotkeys' && <HotkeysPanel />}
               {here === 'about' && <AboutPanel />}
@@ -162,8 +169,9 @@ const size = (n: number) => (n < 1024 * 1024
  * ever in ⌘K, which is not where anyone goes looking for their own data — least of all from the
  * card above that offers to delete the account and calls the local copy yours to export.
  */
-function DataPanel() {
+function DataPanel({ onDone }: { onDone: () => void }) {
   const s = useStash()
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
   const file = useRef<HTMLInputElement>(null)
   const [room, setRoom] = useState<{ used: number, quota: number, kept: boolean } | null>(null)
   const done = s.items.filter((i) => i.done).length
@@ -251,6 +259,9 @@ function DataPanel() {
             : <span className="text-muted-foreground">This browser does not say.</span>}
         </p>
       </Section>
+
+      {/* the server's copies of the same data, which had a page of the list to itself for one card */}
+      {user && <HistoryPanel onDone={onDone} />}
     </>
   )
 }
@@ -263,7 +274,8 @@ function AboutPanel() {
     <Section
       title="This build"
       hint="A new one downloads in the background and waits, and says so rather than swapping
-        itself in under an open tab. Checked hourly and whenever you come back to the window."
+        itself in under an open tab. Checked every quarter hour and whenever you come back to the
+        window."
       action={(
         <Button
           variant="outline"
@@ -368,8 +380,6 @@ function MarketsPanel() {
       </Section>
 
       <ExchangeSection />
-
-      <Dials />
     </>
   )
 }
@@ -716,12 +726,6 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
       </Section>
 
       <PasswordForm />
-
-      <NotificationsPanel />
-
-      <CalendarFeed />
-
-      <CalendarSub />
 
       <Devices />
 

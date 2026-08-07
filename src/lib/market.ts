@@ -49,11 +49,11 @@ export const ASSETS: Asset[] = [
   { id: 'DIA', label: 'Dow Jones', source: 'twelvedata', group: 'ETFs', logo: logo('dia') },
 ]
 
-export const INTERVALS = ['15m', '1h', '4h', '1d', '1w'] as const
+export const INTERVALS = ['5m', '15m', '1h', '4h', '1d', '1w'] as const
 export type Interval = (typeof INTERVALS)[number]
 
 // Twelve Data spells the intervals differently from Binance
-const TD_INTERVAL: Record<Interval, string> = { '15m': '15min', '1h': '1h', '4h': '4h', '1d': '1day', '1w': '1week' }
+const TD_INTERVAL: Record<Interval, string> = { '5m': '5min', '15m': '15min', '1h': '1h', '4h': '4h', '1d': '1day', '1w': '1week' }
 
 /** Routes to the right feed. Both return candles oldest → newest. Stocks need the key. */
 export function fetchCandles(asset: Asset, interval: Interval, apiKey: string): Promise<Candle[]> {
@@ -624,8 +624,10 @@ export function volumeSurge(c: Candle[], p = 20): number | null {
   return avg > 0 ? c.at(-1)!.v! / avg : null
 }
 
-/** The interval one step up, for the trend filter. 1w has nothing above it and sits the check out. */
-export const HIGHER: Partial<Record<Interval, Interval>> = { '15m': '4h', '1h': '1d', '4h': '1w', '1d': '1w' }
+/** The interval one step up, for the trend filter. 1w has nothing above it and sits the check out.
+ *  Read downwards it is the top-down cascade a desk actually works: the 4h sets the day's
+ *  direction, the 15m confirms the shift, the 5m is where the trigger candle prints. */
+export const HIGHER: Partial<Record<Interval, Interval>> = { '5m': '15m', '15m': '4h', '1h': '1d', '4h': '1w', '1d': '1w' }
 
 /**
  * The tide, whatever chart you happen to be on: the daily, or the weekly once the daily is the chart.
@@ -642,11 +644,78 @@ export const HIGHER: Partial<Record<Interval, Interval>> = { '15m': '4h', '1h': 
  * information: you get told what you are taking, and you decide.
  *
  * Never below HIGHER — a "bigger picture" smaller than the filter already applied is nonsense, and a
- * test asserts it. That leaves 15m as the only interval where the two differ, which is the whole
+ * test asserts it. That leaves 5m and 15m as the intervals where the two differ, which is the whole
  * point: 1h, 4h and 1d already have the daily or better above them, so there the anchor is the same
  * fetch under a second name and the note below can't fire on top of a warning that already did.
  */
-export const ANCHOR: Partial<Record<Interval, Interval>> = { '15m': '1d', '1h': '1d', '4h': '1w', '1d': '1w' }
+export const ANCHOR: Partial<Record<Interval, Interval>> = { '5m': '1d', '15m': '1d', '1h': '1d', '4h': '1w', '1d': '1w' }
+
+/** How far back on the 15m a break of structure still counts as this move's — six hours. Past
+ *  that the 4h has usually printed another bar and the direction is being asked again anyway. */
+const SHIFT_WINDOW = 24
+
+/** The cascade's answer: how far down the three steps this asset got, and the sentence for it. */
+export type Cascade = {
+  /** 0 the 4h has no direction, 1 direction only, 2 the 15m confirmed it, 3 the 5m trigger is here. */
+  stage: 0 | 1 | 2 | 3
+  dir: 'long' | 'short' | 'flat'
+  say: string
+}
+
+/**
+ * Top-down, the way a desk actually works it: the 4h says which way the day leans and where the
+ * zones are, the 15m has to confirm that lean by breaking structure, and the 5m is where the
+ * trigger prints. Three charts, one question, asked in an order — which is the whole reason it is
+ * more accurate than any of the three alone. A 5m long is noise; a 5m long under a 15m shift under
+ * a 4h uptrend is the same candle with three timeframes behind it.
+ *
+ * Every step is a reading that already existed here — `trend` for the lean, `structureBreak` for
+ * the shift, the desk's own tally and `tradePlan` for the trigger. Nothing new is being measured;
+ * what is new is that they are asked in sequence and the answer stops at the first step that fails,
+ * rather than being averaged into one number that hides which one it was.
+ *
+ * Deliberately no veto and no invention: it never says take it, it says how far the case got. The
+ * caller decides what to do with a 2.
+ */
+export function topDown(
+  bars: Partial<Record<Interval, Candle[]>>,
+  cfg: { fast: number; slow: number; srWindow: number },
+  fee = 0,
+): Cascade {
+  const macro = bars['4h']?.length ? trend(bars['4h'], cfg.slow) : null
+  if (!macro) return { stage: 0, dir: 'flat', say: 'the 4h has no direction yet — nothing to work down from' }
+  const dir = macro === 'up' ? 'long' as const : 'short' as const
+  const lean = `4h ${macro}`
+
+  // step two: the 15m has to break structure the same way, and recently enough to be this move's
+  const mid = bars['15m']
+  const sb = mid?.length ? structureBreak(mid) : null
+  const shifted = !!sb && sb.dir === macro && sb.ago <= SHIFT_WINDOW
+  if (!shifted) {
+    return { stage: 1, dir, say: `${lean}, but the 15m has not broken structure with it — no shift to trade` }
+  }
+  const shift = `${lean} · 15m ${sb.choch ? 'flipped' : 'broke'} ${fmtPrice(sb.level, mid!.at(-1)!.c)}`
+
+  // step three: the trigger, which is the desk's own read on the 5m agreeing and price at the entry
+  const fine = bars['5m']
+  if (!fine?.length) return { stage: 2, dir, say: `${shift} — no 5m bars to time it with` }
+  const view = signals(fine, cfg)
+  const { dir: fineDir } = tally(deskSignals(
+    trendFilter(mid!, cfg.slow, '15m'), null, sessionVwap(fine), view.signals,
+  ))
+  const price = fine.at(-1)!.c
+  const entryMA = view.smaFast.at(-1)
+  const plan = fineDir === dir && entryMA != null
+    ? tradePlan(dir, price, entryMA, view.levels, view.atr, fee)
+    : null
+  // the same quarter-ATR test the verdict card uses for "now" — a trigger a whole bar away is a
+  // level to wait at, not a candle to act on
+  const here = !!plan && Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25
+  if (!plan) return { stage: 2, dir, say: `${shift} — waiting on the 5m to agree` }
+  return here
+    ? { stage: 3, dir, say: `${shift} · 5m trigger — ${dir === 'long' ? 'buy' : 'sell'} at ${fmtPrice(plan.entry, price)}` }
+    : { stage: 2, dir, say: `${shift} · 5m ${dir === 'long' ? 'buys' : 'sells'} at ${fmtPrice(plan.entry, price)} — not there yet` }
+}
 
 /** Which way a timeframe leans: price against its slow MA. Deliberately blunt — this is a filter,
  *  not a signal, and the rule it serves ("don't fight the bigger picture") needs nothing finer. */

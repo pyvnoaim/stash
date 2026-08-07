@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -653,3 +653,37 @@ globalThis.fetch = (() => {
 const retried = await fetchTrending()
 assert.equal(pool429, 2, 'a rate-limited trending call must be retried, not surfaced as an error')
 assert.equal(retried[0]?.symbol, 'CATE')
+
+/* topDown is the 4h → 15m → 5m cascade, and its whole value is that it stops at the first step
+   that fails instead of averaging three charts into one number. So what is asserted is the order:
+   which stage each shortfall comes out at, and that a failed step never reports a later one. */
+const tdBar = (t: number, c: number, h = c + 0.5, l = c - 0.5) => ({ t: t * 9e5, o: c, h, l, c, v: 10 })
+const ramp = (from: number, to: number) => {
+  const step = from <= to ? 1 : -1
+  const out: number[] = []
+  for (let v = from; step > 0 ? v <= to : v >= to; v += step) out.push(v)
+  return out
+}
+const tdCfg = HORIZONS.short   // 9/21, so the fixtures stay short enough to read
+
+// no 4h at all: there is no direction to work down from, and it says so rather than guessing one
+assert.equal(topDown({}, tdCfg).stage, 0)
+
+// 4h up, but the 15m is a straight ramp — no confirmed pivot, so nothing has broken structure
+const up4h = ramp(1, 40).map((v, i) => tdBar(i, v))
+const one = topDown({ '4h': up4h, '15m': up4h }, tdCfg)
+assert.equal(one.stage, 1)
+assert.equal(one.dir, 'long')
+assert.match(one.say, /has not broken structure/)
+
+// ...and with the pull-back that makes a pivot, then a close through it: the shift confirms, and
+// with no 5m bars it stops at two rather than claiming a trigger it never looked for
+const shift15 = [...ramp(1, 30), ...ramp(29, 24), ...ramp(25, 34)].map((v, i) => tdBar(i, v))
+const two = topDown({ '4h': up4h, '15m': shift15 }, tdCfg)
+assert.equal(two.stage, 2, 'a 15m close through a confirmed swing high is the shift')
+assert.match(two.say, /no 5m bars/)
+
+// a 4h downtrend under the same 15m: the steps disagree, so it never leaves stage 1
+const down4h = ramp(40, 1).map((v, i) => tdBar(i, v))
+assert.equal(topDown({ '4h': down4h, '15m': shift15 }, tdCfg).stage, 1)
+assert.equal(topDown({ '4h': down4h, '15m': shift15 }, tdCfg).dir, 'short')
