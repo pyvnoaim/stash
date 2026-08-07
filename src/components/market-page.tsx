@@ -2059,7 +2059,9 @@ function Desk() {
                     </span>
                   )}
                 </div>
-                {p.open.map((w) => (
+                {/* someone watching thirty setups is a list nobody reads, and it would push every
+                    other desk off the page — the count below says what was left out */}
+                {p.open.slice(0, 6).map((w) => (
                   <div key={w.id} className="flex items-baseline gap-2 pt-1 text-xs">
                     {/* a filled dot is real money on it, a hollow one a plan being watched */}
                     <span className={cn('size-1.5 shrink-0 rounded-full',
@@ -2073,6 +2075,11 @@ function Desk() {
                     </span>
                   </div>
                 ))}
+                {p.open.length > 6 && (
+                  <p className="text-muted-foreground pt-1 text-xs">
+                    and {p.open.length - 6} more
+                  </p>
+                )}
               </div>
             )
           })}

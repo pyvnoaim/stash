@@ -380,10 +380,16 @@ export function start({
        already public to anyone you might share with — it is what they type to reach you. */
     people: db.prepare('select name from users where id <> ? order by name'),
     /* Everyone else's latest document, for the Desk. The one query that reads across accounts —
-       what it may hand out is decided row by row in the route, off what each document itself says. */
-    everyone: db.prepare(`select u.name, u.avatar,
-      (select json from docs d where d.user = u.id order by d.v desc limit 1) as json
-      from users u where u.id <> ? order by u.name`),
+       what it may hand out is decided row by row in the route, off what each document itself says.
+       The `like` is a pre-filter and not the decision: a document is a few hundred KB, and parsing
+       every one of them to find the two that opted in is the whole cost of this route. It matches
+       the exact shape JSON.stringify writes, and a note that happens to contain the same string
+       only buys itself a parse that then turns it down. */
+    everyone: db.prepare(`select * from (
+        select u.name,
+          (select json from docs d where d.user = u.id order by d.v desc limit 1) as json
+        from users u where u.id <> ?
+      ) where json like '%"desk":true%' order by name`),
     invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
@@ -1082,18 +1088,19 @@ export function start({
     if (path === '/api/desk' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const rows = q.everyone.all(user.id) as { name: string, avatar: string | null, json: string | null }[]
+      const rows = q.everyone.all(user.id) as { name: string, json: string | null }[]
+      // another person's document is untrusted input to my page: numbers are numbers or the row goes
+      const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
+      const arr = (a: unknown) => (Array.isArray(a) ? a : [])
       const desk = []
       for (const row of rows) {
         let s: any
         try { s = JSON.parse(row.json ?? '{}') } catch { continue }
         if (s?.desk !== true) continue
-        // another person's document is untrusted input to my page: numbers are numbers or the row goes
-        const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
-        const arr = (a: unknown) => (Array.isArray(a) ? a : [])
         desk.push({
+          /* The name and nothing else of who they are: an avatar is up to 128 KB of data URI and
+             the page draws none of them, so ten desks would have been a megabyte of picture. */
           name: row.name,
-          avatar: row.avatar,
           results: arr(s.results).map((r: any) => ({
             id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
             dir: r?.dir === 'short' ? 'short' : 'long',
