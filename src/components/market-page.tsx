@@ -8,8 +8,9 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
-import { euro, isPosition, liqOf, netOf, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { euro, isPosition, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Hint } from '@/components/ui/tooltip'
 import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
 import { cn } from '@/lib/utils'
@@ -579,23 +580,27 @@ export default function MarketPage() {
             ))}
           </div>
           {/* swings and the range they span — off is for reading the candles on their own */}
-          <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', !structure && 'text-muted-foreground')}
-            onClick={() => setStructure((v) => !v)}
-            title={structure ? 'Swing highs and lows, and the range they span' : 'Structure overlay off'}>
-            <Waypoints className="size-4" />
-            Structure
-          </Button>
+          <Hint label={structure ? 'Swing highs and lows, and the range they span' : 'Structure overlay off'}>
+            <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', !structure && 'text-muted-foreground')}
+              onClick={() => setStructure((v) => !v)}>
+              <Waypoints className="size-4" />
+              Structure
+            </Button>
+          </Hint>
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
-          <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', (!live || stale) && 'text-muted-foreground')}
-            onClick={() => setLive((v) => !v)}
-            title={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
-              : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
-            <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
-            Live
-          </Button>
-          <Button size="icon" variant="ghost" className="size-8" onClick={() => setNonce((n) => n + 1)} title="Refresh">
-            <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
-          </Button>
+          <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
+            : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
+            <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', (!live || stale) && 'text-muted-foreground')}
+              onClick={() => setLive((v) => !v)}>
+              <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
+              Live
+            </Button>
+          </Hint>
+          <Hint label="Refresh">
+            <Button size="icon" variant="ghost" aria-label="Refresh" className="size-8" onClick={() => setNonce((n) => n + 1)}>
+              <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+            </Button>
+          </Hint>
         </div>
       </div>
 
@@ -1285,11 +1290,20 @@ function useExchangePositions() {
  */
 export function ExchangePositions() {
   const { rows, equity } = useExchangePositions()
+  // the hand-entered positions join the sum below — they are money on the table too, and the desk
+  // had no single place that read them together with what the exchanges hold
+  const { watches } = useStash()
   // how far price stands from a level, from where it is now — signed as the move itself would be
   const away = (lvl: number, mark: number) => {
     const d = (lvl / mark - 1) * 100
     return `(${d >= 0 ? '+' : ''}${d.toFixed(1)}%)`
   }
+  const risk = openRisk(rows, watches.filter(isPosition), equity)
+  /* Two currencies, never one total: the exchanges answer in their dollars and a hand-entered
+     position is what you typed in euros. Joined with a + rather than added, because the sum of
+     the two is a number no rate ever produced. */
+  const usd = (n: number) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const atRisk = [risk.exch > 0 && usd(risk.exch), risk.mine > 0 && euro(risk.mine)].filter(Boolean)
   if (!rows.length) return null
   /* The strip that answers "am I fine?" without opening a single row: how many are open, and the
      nearest liquidation as a distance — the worst number on the desk, said first. Only where a
@@ -1313,6 +1327,21 @@ export function ExchangePositions() {
             </span>
           )}
         </div>
+        {/* The one thing the desk never said. It answers "should I buy this" all day, and nearest
+            liquidation answers the worst single row — this is the question that only makes sense
+            with every row read at once, and the one that decides whether the next setup is
+            affordable at all. The qualifiers are not decoration: a total that silently omits the
+            stopless rows would read as complete when it is the opposite of it, and a total that
+            counts ten alt longs as ten bets is flattering you about the one bet you actually
+            have on. */}
+        {!!atRisk.length && (
+          <p className="text-muted-foreground text-xs">
+            If every stop hits: <span className="text-foreground tabular-nums">{atRisk.join(' + ')}</span>
+            {risk.ofEquity != null && <> · <span className="tabular-nums">{(risk.ofEquity * 100).toFixed(1)}% of equity</span></>}
+            {risk.stopless > 0 && ` · ${risk.stopless} with no stop, so that is not the whole of it`}
+            {risk.crowd && ` · ${risk.crowd.n} of ${risk.crowd.of} are ${risk.crowd.group}, closer to one bet than ${risk.crowd.of}`}
+          </p>
+        )}
         {rows.map((p) => {
           // running R off the resting stop: the one number that says how the trade is going in
           // its own risk unit. Absent without a stop — risk nobody defined can't be counted in.
@@ -1749,10 +1778,12 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
           <span className="text-muted-foreground text-xs">
             every keyless chart, the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read, best first
           </span>
-          <Button size="icon" variant="ghost" className="ml-auto size-6" title="Refresh"
-            onClick={() => setNonce((n) => n + 1)}>
-            <RefreshCw className={cn('size-3.5', rows === null && 'animate-spin')} />
-          </Button>
+          <Hint label="Refresh">
+            <Button size="icon" variant="ghost" aria-label="Refresh" className="ml-auto size-6"
+              onClick={() => setNonce((n) => n + 1)}>
+              <RefreshCw className={cn('size-3.5', rows === null && 'animate-spin')} />
+            </Button>
+          </Hint>
         </div>
         {rows === null && <p className="text-muted-foreground py-4 text-sm">Reading every chart…</p>}
         {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">The feed is not answering.</p>}

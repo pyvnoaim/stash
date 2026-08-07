@@ -1080,6 +1080,10 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
   levels: Levels
   /** In price. The setup's stop buffer and the volatility card both read this. */
   atr: number | null
+  /** The two MACD lines, index-aligned like the MAs. Returned rather than kept local because the
+   *  chart could not draw what it was voting on: "MACD turned up 3 bars ago" was a sentence about
+   *  a shape nobody could see, and the guide's demo chart was the only place it was ever plotted. */
+  macd: { line: (number | null)[]; signal: (number | null)[] }
   signals: Signal[]
 } {
   const { fast, slow: slowP, srWindow } = cfg
@@ -1186,7 +1190,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
 
   return {
     smaFast, smaSlow, rsiSeries, support, resistance,
-    levels: { support, resistance, farLow, farHigh }, atr: atrValue, signals: out,
+    levels: { support, resistance, farLow, farHigh }, atr: atrValue, macd: m, signals: out,
   }
 }
 

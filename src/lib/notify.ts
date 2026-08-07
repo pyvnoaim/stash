@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { nextCharge, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
-import { assetOf, DIALS, fmtPrice, moverMove, type Dials, type Trend } from './market.ts'
+import { ASSETS, assetOf, DIALS, fmtPrice, moverMove, type Dials, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -171,6 +171,66 @@ export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake
 
 /** Whether this row is money you actually have on the table, which is a different sentence. */
 export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
+
+/** One open position, reduced to what a risk sum needs: where it got in, where it gets out, and
+ *  how much of the thing it holds. The exchange feed's shape, minus everything else it carries. */
+export type RiskRow = { symbol: string; entry: number; stop: number | null; size: number }
+
+export type OpenRisk = {
+  /** What every resting stop costs if they all hit, in the exchange's own dollars. */
+  exch: number
+  /** …as a share of equity, when the feed gave one. This is the number the whole thing is for:
+   *  a sum of dollars means nothing without the pile it comes out of. */
+  ofEquity: number | null
+  /** Rows with no stop resting. Their loss is bounded by a liquidation price, not by a decision,
+   *  so they are counted and named rather than folded into a total that would then read as
+   *  complete. A number that quietly omits the dangerous half is worse than no number. */
+  stopless: number
+  /** Hand-entered positions, in euros. Deliberately *not* added to `exch`: that one is the
+   *  exchange's dollars and this is what you typed in euros, and a single total across the two
+   *  would be a figure no rate ever produced. */
+  mine: number
+  /** The biggest group the open positions share, when they share one. Ten alt longs are one bet
+   *  taken ten times, and every sum above reads them as ten independent ones. */
+  crowd: { group: string; n: number; of: number } | null
+}
+
+/**
+ * Everything open, priced at what it costs to be wrong about all of it at once.
+ *
+ * The desk answers "should I buy this" all day and had nothing at all to say about what is already
+ * on. Nearest-liquidation is the worst *single* number; this is the one that needs every row read
+ * together, and it is the one that decides whether the next setup is affordable.
+ *
+ * Kept out of the components because three of them want it — the strip on the Markets page, the
+ * same card on the Overview, and anything that later wants to refuse a setup that does not fit.
+ */
+export function openRisk(rows: RiskRow[], positions: Pick<Watch, 'asset' | 'entry' | 'stop' | 'size' | 'lev'>[], equity: number | null): OpenRisk {
+  // |entry − stop| × size, whichever side it is on: a long stops below and a short above, and the
+  // distance is the loss either way. abs() on size too — a feed that signs its shorts is not worth
+  // a second code path, and a negative risk would quietly cancel out a real one in the sum.
+  const exch = rows.reduce((n, p) => n + (p.stop != null ? Math.abs(p.entry - p.stop) * Math.abs(p.size) : 0), 0)
+  const stopless = rows.filter((p) => p.stop == null).length
+  const mine = positions.filter(isPosition).reduce((n, w) => n + stakeOf(w), 0)
+
+  const groups = new Map<string, number>()
+  for (const id of [...rows.map((p) => assetOf(p.symbol)), ...positions.map((w) => w.asset)]) {
+    const g = ASSETS.find((a) => a.id === id)?.group
+    if (g) groups.set(g, (groups.get(g) ?? 0) + 1)
+  }
+  const of = [...groups.values()].reduce((a, b) => a + b, 0)
+  const [top] = [...groups].sort((a, b) => b[1] - a[1])
+  return {
+    exch,
+    // equity of 0 is a feed that answered with nothing useful, not an account of nothing
+    ofEquity: equity != null && equity > 0 ? exch / equity : null,
+    stopless,
+    mine,
+    // one position is not a crowd, and neither is a spread across groups: the sentence only earns
+    // its place when most of the desk is leaning on the same thing
+    crowd: top && top[1] >= 2 && of >= 2 ? { group: top[0], n: top[1], of } : null,
+  }
+}
 
 /**
  * What holding the position has quietly cost so far: notional × the funding dial, per 8 hours
