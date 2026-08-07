@@ -40,3 +40,38 @@ test('a feed with no mark still makes a card, saying nothing it cannot', () => {
 test('a symbol carrying markup cannot break out of the svg', () => {
   assert.match(cardSvg({ ...P, symbol: 'A<B&C' }), /A&lt;B&amp;C/)
 })
+
+const PIC = 'data:image/png;base64,iVBORw0KGgo='
+
+test('the card is signed, with the picture where there is one', () => {
+  const withPic = cardSvg(P, 1.84, { name: 'sam', avatar: PIC })
+  assert.match(withPic, />sam</)
+  assert.match(withPic, /<image href="data:image\/png;base64,iVBORw0KGgo="/)
+  assert.match(withPic, /clip-path="url\(#pfp\)"/)
+
+  // a name with no picture still signs it, and slides right into the space the picture had
+  const bare = cardSvg(P, 1.84, { name: 'sam', avatar: null })
+  assert.match(bare, />sam</)
+  assert.doesNotMatch(bare, /<image/)
+  assert.match(bare, /x="1120" y="132"/)
+
+  // signed out is the card as it always was — no byline, nothing where one would go
+  const anon = cardSvg(P, 1.84)
+  assert.doesNotMatch(anon, /<image|<clipPath/)
+  assert.doesNotMatch(anon, /y="132"/)
+})
+
+test('an avatar that is not a small self-contained picture is dropped, not drawn', () => {
+  // the attribute break: a quote would end href= and everything after it becomes markup
+  const quoted = cardSvg(P, null, { name: 'sam', avatar: 'data:image/png;base64,AA" onload="alert(1)' })
+  assert.doesNotMatch(quoted, /onload/)
+  assert.doesNotMatch(quoted, /<image/)
+  for (const bad of [
+    'https://example.com/me.png',            // remote: an <img>-rendered svg would draw a hole
+    'data:image/svg+xml;base64,PHN2Zz4=',    // svg inside svg: markup wearing a picture's name
+    'javascript:alert(1)',
+    '',
+  ]) assert.doesNotMatch(cardSvg(P, null, { name: 'sam', avatar: bad }), /<image/)
+  // …and the name survives every one of them, because that is the part that makes it yours
+  assert.match(cardSvg(P, null, { name: 'sam', avatar: 'https://example.com/me.png' }), />sam</)
+})

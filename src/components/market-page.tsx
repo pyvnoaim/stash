@@ -16,6 +16,7 @@ import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
+import { getSync, subscribeSync } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, swings, tally, tradePlan, trendFilter,
@@ -96,7 +97,7 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
 }
 
 export default function MarketPage() {
-  const { chart, apiKey, watches, marketAsset: asset, marketHorizon: horizon } = useStash()
+  const { chart, apiKey, watches, dials, marketAsset: asset, marketHorizon: horizon } = useStash()
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload
   const setAsset = setMarketAsset
@@ -393,7 +394,7 @@ export default function MarketPage() {
   const entryMA = view?.smaFast.at(-1) ?? null
   const last = candles.at(-1)?.c
   const plan = view && entryMA != null && last != null
-    ? tradePlan(dir, last, entryMA, view.levels, view.atr) : null
+    ? tradePlan(dir, last, entryMA, view.levels, view.atr, dials.fee) : null
   // taking a long while the timeframe above leans down is the trade guides tell you to skip
   const fights = (s: Signal | null) => !!s && ((dir === 'long' && s.tone === 'bear') || (dir === 'short' && s.tone === 'bull'))
   const against = !!plan && fights(higher)
@@ -426,17 +427,17 @@ export default function MarketPage() {
       ? {
           text: 'Nothing to do here', tone: 'wait' as const,
           why: plan.thin
-            ? `you'd put ${fmt(risk)} at risk to make ${fmt(reward)} — it pays less than it costs when wrong`
+            ? `you'd put ${fmt(risk)} at risk to make ${fmt(reward)}, and the fee comes off both ends — more than half of these would have to win just to break even`
             : `the ${HIGHER[interval]} chart is going the other way, and that is the bigger tide`,
         }
     : Math.abs(plan.entry - last) <= (view?.atr ?? 0) * 0.25
       ? {
           text: dir === 'long' ? 'Buy now' : 'Sell now', tone: 'go' as const,
-          why: `price is at the entry — get out at ${fmt(plan.stop)} if wrong (${fmt(risk)}), take ${fmt(reward)} at ${fmt(plan.target)}`,
+          why: `price is at the entry — get out at ${fmt(plan.stop)} if wrong (${fmt(risk)}), take ${fmt(reward)} at ${fmt(plan.target)} · needs ${(plan.breakEven * 100).toFixed(0)}% winners`,
         }
       : {
           text: `Wait — ${dir === 'long' ? 'buy' : 'sell'} at ${fmt(plan.entry)}`, tone: 'hold' as const,
-          why: `${Math.abs(((plan.entry - last) / last) * 100).toFixed(2)}% ${plan.entry > last ? 'above' : 'below'} the price now · risk ${fmt(risk)} to make ${fmt(reward)}`,
+          why: `${Math.abs(((plan.entry - last) / last) * 100).toFixed(2)}% ${plan.entry > last ? 'above' : 'below'} the price now · risk ${fmt(risk)} to make ${fmt(reward)} · needs ${(plan.breakEven * 100).toFixed(0)}% winners`,
         }
   const VERDICT = {
     go: 'text-emerald-600 dark:text-emerald-400',
@@ -767,11 +768,17 @@ export default function MarketPage() {
                 `Just past the near swing, with a quarter of the ATR as buffer so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} from the entry. Broken, the idea was wrong.`],
               ['Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400', away(plan.target, plan.entry),
                 `The far swing — a level someone is actually trading, never a projection off the entry. ${away(plan.target, plan.entry)} from the entry.`],
+              /* Net first, gross in brackets behind it. The gross ratio is the one every guide and
+                 every other chart tool quotes, so dropping it would look like a different number
+                 for the same trade — but it is not the one that decides anything, and shown alone
+                 it flatters: the fee comes off the winner and is added to the loser, so a 1.15×
+                 that reads as "win 47% and you're ahead" really needs 50%. */
               ['Risk to reward', `${fmt(risk)} → ${fmt(reward)}`,
-                plan.thin ? 'text-amber-600 dark:text-amber-500' : '', `${plan.rr.toFixed(2)}×`,
+                plan.thin ? 'text-amber-600 dark:text-amber-500' : '',
+                `${plan.net.toFixed(2)}× net${dials.fee > 0 ? ` (${plan.rr.toFixed(2)}× gross)` : ''}`,
                 plan.thin
-                  ? 'Reward under 1R: right idea, maths that does not pay. Guides pass on these.'
-                  : 'Entry-to-stop against entry-to-target, per unit. Both in price, so the ratio is what you are paid for being right.'],
+                  ? `More than half of these have to win just to break even — ${(plan.breakEven * 100).toFixed(0)}%, with the ${dials.fee}%-a-side fee on the way in and the way out. Right idea, maths that does not pay. Guides pass on these.`
+                  : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`],
             ] as const).map(([k, v, cls, sub, hint]) => (
               <Hint key={k} label={hint}>
                 <div>
@@ -1581,6 +1588,9 @@ function useExchangePositions() {
  */
 export function ExchangePositions() {
   const { rows, equity } = useExchangePositions()
+  // whose card it is — signed out this is null and the card goes out unsigned, which is what it
+  // did before there were accounts and is still a card worth having
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
@@ -1664,7 +1674,7 @@ export function ExchangePositions() {
                 <Hint label="A card of this position — asset, side and profit — to the share sheet, or saved as a picture">
                   <Button variant="ghost" size="icon-xs" aria-label={`Share ${p.symbol} card`}
                     className={cn('text-muted-foreground hover:text-foreground', p.pct == null && 'ml-auto')}
-                    onClick={() => void shareCard(p, r).then((how) => {
+                    onClick={() => void shareCard(p, r, user).then((how) => {
                       if (how === 'saved') toast('Card saved', { description: 'No share sheet here, so it went to your downloads.' })
                     }).catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
                     <Share2 className="size-3.5" />
@@ -2014,7 +2024,7 @@ type ScanRow = {
 /** The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — run
  *  over one asset without rendering it. Same calls, same order, so a row here never disagrees with
  *  what opening the asset shows. */
-async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Interval, orbMode: boolean): Promise<ScanRow | null> {
+async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Interval, orbMode: boolean, fee: number): Promise<ScanRow | null> {
   // the interval is the desk's own, passed in — reading the horizon's default here while the desk
   // sat on 15m bars is how a row said Long while the card the click lands on said Short
   const up = HIGHER[interval]
@@ -2030,14 +2040,14 @@ async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Inte
   const { bulls, bears, dir } = tally(deskSignals(higher, range, vwap, view.signals))
   const price = candles.at(-1)!.c
   const entryMA = view.smaFast.at(-1)
-  const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr) : null
+  const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr, fee) : null
   const against = !!plan && !!higher
     && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
   // the verdict ladder from the card above, compressed to a phrase — same branches, same order
   const [tier, say]: [ScanRow['tier'], string] =
     dir === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
     : !plan ? [0, 'no clean setup — price already ran']
-    : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks']
+    : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
     : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']
     : [2, `${dir === 'long' ? 'buy' : 'sell'} the ${cfg.fast}-MA at ${fmtPrice(plan.entry, price)}`]
   return { a, dir, bulls, bears, plan, tier, say }
@@ -2061,7 +2071,8 @@ const TIER_CLS = [
  * the bar (an hour, a day), not by the tick.
  */
 function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
-  const { marketHorizon: horizon } = useStash()
+  const { marketHorizon: horizon, dials } = useStash()
+  const fee = dials.fee
   const cfg = HORIZONS[horizon]
   const [rows, setRows] = useState<ScanRow[] | null>(null)
   const [nonce, setNonce] = useState(0)
@@ -2072,14 +2083,16 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg, interval, orbMode).catch(() => null)),
+      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg, interval, orbMode, fee).catch(() => null)),
     ).then((r) => {
       if (!on) return
+      // ranked on the net R:R, not the gross one — the whole point of the column is which of these
+      // to look at first, and the fee is exactly what reorders the close ones
       setRows(r.filter((x): x is ScanRow => !!x)
-        .sort((x, y) => y.tier - x.tier || (y.plan?.rr ?? 0) - (x.plan?.rr ?? 0)))
+        .sort((x, y) => y.tier - x.tier || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
     })
     return () => { on = false }
-  }, [cfg, nonce, orbMode, interval])
+  }, [cfg, nonce, orbMode, interval, fee])
 
   return (
     <Card className="py-3">
@@ -2124,7 +2137,7 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
             {r.plan && (
               <span className={cn('shrink-0 font-mono text-xs tabular-nums',
                 r.plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}>
-                {r.plan.rr.toFixed(1)}×
+                {r.plan.net.toFixed(1)}×
               </span>
             )}
           </button>
