@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -168,6 +168,33 @@ assert.equal(tradePlan('flat', 102, 100, band), null)
 assert.equal(tradePlan('long', 102, 100, { ...band, support: 105 }), null) // stop above entry → no risk
 assert.equal(tradePlan('long', 102, 100, { ...band, farHigh: 99 }), null) // target below entry → nothing to aim at
 
+/* Costs. With no fee the net read is the gross one and a 2R trade needs a third of its trades to
+   win; with one it never is, and both ends of the arithmetic move — the winner pays the fee out of
+   its reward and the loser pays it *on top of* the 1R, which is the half a bare ratio hides. */
+assert.equal(long?.net, 2)
+assert.equal(long?.loss, 1)
+assert.equal(long?.breakEven, 1 / 3)
+const fee1 = tradePlan('long', 102, 100, band, null, 1)! // 1% a side, risk 5, reward 10
+assert.equal(fee1.rr, 2)                       // gross is untouched — it is the guides' number
+assert.equal(fee1.net, (10 - 2.1) / 5)         // 1% of the 100 entry and the 110 target
+assert.equal(fee1.loss, (5 + 1.95) / 5)        // …and of the 95 stop, added to the risk
+assert.ok(fee1.breakEven > 1 / 3 && fee1.breakEven < 0.5)
+// the fee is what flips a trade that looked like it paid: 1.15× gross, over half must win once the
+// spread is crossed twice — the setup from the screenshot, rounded to the level it was quoted at
+const marginal = tradePlan('long', 1915.81, 1915.59, { support: 1894.35, resistance: 2000, farLow: 1800, farHigh: 1943.02 }, 10.08, 0.05)!
+assert.equal(marginal.stop.toFixed(2), '1891.83') // support less the quarter-ATR buffer
+assert.ok(marginal.rr > 1.15 && marginal.rr < 1.16)   // 1.15× gross: the card used to stop here
+assert.ok(marginal.net > 1.07 && marginal.net < 1.08)  // and still pays, just less
+assert.ok(marginal.loss > 1.08 && marginal.loss < 1.09) // while a stop costs more than the 1R quoted
+// which together put break-even the wrong side of a coin flip, so the desk declines it outright
+assert.ok(marginal.breakEven > 0.5 && marginal.breakEven < 0.51)
+assert.equal(marginal.thin, true)
+assert.equal(tradePlan('long', 1915.81, 1915.59, { support: 1894.35, resistance: 2000, farLow: 1800, farHigh: 1943.02 }, 10.08, 0)!.thin, false)
+// a fee bigger than the whole reward: no win rate breaks even, and the ratio must not go negative
+const eaten = tradePlan('long', 102, 100, band, null, 20)!
+assert.equal(eaten.breakEven, 1)
+assert.equal(eaten.thin, true)
+
 // ema: seeded on the first window's mean, then weighted to the newest bar
 const e = ema([1, 2, 3, 4, 5], 3)
 assert.equal(e[1], null)
@@ -189,6 +216,12 @@ assert.equal(lastCross(macd(turn).line, macd(turn).signal)?.dir, 'up')
 const flat2 = Array.from({ length: 40 }, (_, i) => ({ t: i, o: 100, h: 101, l: 99, c: 100 }))
 assert.equal(atr(flat2), 2)
 assert.equal(atr(flat2.slice(0, 5)), null) // not enough history
+/* …and the desk's ATR never sees the bar still forming. A seconds-old bar has almost no range, so
+   including it drags the risk unit down — the stop buffer and the "price is at the entry" band
+   both come off this number, and both would tighten at the top of the bar and relax at the end. */
+const halfBar = [...flat2, { t: 40, o: 100, h: 100.02, l: 100, c: 100.01 }]
+assert.ok(atr(halfBar)! < 2)
+assert.equal(signals(halfBar, HORIZONS.short).atr, 2)
 
 // squeeze: a dead-flat stretch after a wild one ranks at the bottom of its own range
 const wild = Array.from({ length: 100 }, (_, i) => 100 + (i % 2 ? 12 : -12))

@@ -336,7 +336,9 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
       const { bulls, bears, dir } = market.tally(list)
       const price = candles.at(-1)!.c
       const entry = view.smaFast.at(-1)
-      const plan = entry != null ? market.tradePlan(dir, price, entry, view.levels, view.atr) : null
+      // the fee dial, for the same reason deskSignals exists: an answer here that disagreed with
+      // the screen would be worse than no answer, and "does this pay" is the part it disagrees on
+      const plan = entry != null ? market.tradePlan(dir, price, entry, view.levels, view.atr, s.dials.fee) : null
       const fights = higher && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
 
       return {
@@ -351,7 +353,7 @@ const tools: Record<string, { description: string, schema: any, run: (a: any) =>
           // a list, because a setup can be both thin and against the tide, and dropping either one
           // of those on the floor is dropping the half of the answer that says don't
           warnings: [
-            ...(plan.thin ? ['the reward is under 1R — it pays less than it costs when wrong'] : []),
+            ...(plan.thin ? [`more than half of these have to win just to break even (${(plan.breakEven * 100).toFixed(0)}%, net of the ${s.dials.fee}%-a-side fee) — it pays less than it costs when wrong`] : []),
             ...(fights ? [`the ${up} chart is going the other way, and that is the bigger tide`] : []),
           ],
         },

@@ -469,6 +469,10 @@ export type Dials = {
   /** Perp funding, percent of notional per 8 hours — what holding a position quietly costs.
    *  One flat rate for every asset; 0 turns the estimate off. */
   funding: number
+  /** Taker fee, percent of notional per side — what a setup costs to get into and back out of.
+   *  Unlike funding this is knowable before the trade, which is why it is the one cost the plan
+   *  quotes: you pay it twice at prices the plan already names. 0 turns the estimate off. */
+  fee: number
 }
 
 export const DIALS: Dials = {
@@ -478,6 +482,8 @@ export const DIALS: Dials = {
   openIn: 0,
   // the perpetual-swap baseline rate; what most venues charge in a calm market
   funding: 0.01,
+  // the standard taker fee across the major perp venues — the price of crossing the spread
+  fee: 0.05,
 }
 
 /** What each dial may be set to. A bite of zero is every tick of every day, and there is no
@@ -489,6 +495,8 @@ const RANGE: Record<keyof Dials, [number, number]> = {
   openIn: [0, 60],
   // 1%/8h is a memecoin squeeze; anything past that is a number to disbelieve, not to set
   funding: [0, 1],
+  // a quarter of a percent a side is the worst retail tier there is; past that, check the venue
+  fee: [0, 0.25],
 }
 
 /** The dials off a document — a user's, or a hand-edited backup's. Anything missing, unreadable or
@@ -1128,8 +1136,21 @@ export type Plan = {
   entry: number
   stop: number
   target: number
+  /** Gross R:R — the price distances alone, which is the number every guide and every other chart
+   *  tool quotes. Kept so the card can show what the geometry says beside what it pays. */
   rr: number
-  /** Reward under 1R. The trade is real, the maths just doesn't pay — guides pass on these. */
+  /** R:R after the taker fee at both ends. */
+  net: number
+  /** What a stop really costs, in R. Worse than 1, because the fee is paid on the way out of a
+   *  loser too — the half of the arithmetic that quoting R:R alone hides. */
+  loss: number
+  /** Share of these trades that has to reach the target to break even, net. This is the only
+   *  number that answers "does this pay", and it is the one a bare 1.15:1 quietly flatters. */
+  breakEven: number
+  /** More than half have to win. The trade is real, the maths just doesn't pay — guides pass on
+   *  these. Measured net, which is the old "reward under 1R" said in the unit that survives a fee.
+   *  The one place the two differ with the fee at 0 is the exact 1:1, which used to pass: it needs
+   *  precisely half its trades to win, and a coin flip is not an edge. */
   thin: boolean
 }
 
@@ -1145,6 +1166,10 @@ export type Plan = {
 export function tradePlan(
   dir: 'long' | 'short' | 'flat', price: number, entry: number,
   levels: Levels, atrValue: number | null = null,
+  /** Taker fee, percent of notional per side — the `fee` dial. 0 is the gross read, which is what
+   *  the backtest and the tests take: its own doc names the costs it does not model, and quietly
+   *  netting one of them here would make that note a lie in the other direction. */
+  fee = 0,
 ): Plan | null {
   if (dir === 'flat') return null
   const long = dir === 'long'
@@ -1155,7 +1180,22 @@ export function tradePlan(
   const risk = long ? entry - stop : stop - entry
   const reward = long ? target - entry : entry - target
   if (risk <= 0 || reward <= 0) return null
-  return { entry, stop, target, rr: reward / risk, thin: reward < risk }
+  /* Paid twice, on the notional each side is worth: once at the entry and once at whichever exit
+     arrives. So a winner and a loser cost different amounts, and the loser costs *more than 1R* —
+     which is the half a bare R:R never shows. Leverage cancels out and is deliberately absent:
+     size multiplies the fee and the P&L by the same number, so R is the one unit that doesn't
+     care how big you went. */
+  const rate = fee / 100
+  const win = (reward - (entry + target) * rate) / risk
+  const lose = (risk + (entry + stop) * rate) / risk
+  return {
+    entry, stop, target,
+    rr: reward / risk, net: win, loss: lose,
+    // a losing trade that costs more than it can pay is not a trade; the ratio is undefined and
+    // the honest reading of it is "never breaks even", not a number
+    breakEven: win > 0 ? lose / (lose + win) : 1,
+    thin: win <= 0 || lose / (lose + win) >= 0.5,
+  }
 }
 
 /** One simulated trade: the bar the plan was made on, the bar its entry was actually reached, and
@@ -1205,9 +1245,13 @@ export type Backtest = {
  * OHLC, and the pessimistic read is the only one that cannot flatter the result.
  *
  * What it does not model, and these are not small: no fees, no funding, no slippage, and every fill
- * exactly at its level — a bar that gaps clean through a stop really fills worse than this says. It
- * is also in-sample by construction, measured on the same window you are looking at. Read it as the
- * floor under "does this rule do anything at all here", not as a forecast.
+ * exactly at its level. The fee dial deliberately does not reach in here — every threshold quoted
+ * in this file was measured gross, so netting the walk would leave a page of numbers that no longer
+ * describe the run behind them. The setup card nets, this does not, and the caveat below says so.
+ * ponytail: pass the fee through and re-run every measurement in this file if that gap matters
+ * more than the comparability does — and a bar that gaps clean through a stop really fills worse
+ * than any of this says. It is also in-sample by construction, measured on the same window you are
+ * looking at. Read it as the floor under "does this rule do anything at all here", not a forecast.
  */
 export function backtest(
   c: Candle[],
@@ -1399,7 +1443,15 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
 
   // The three below describe conditions rather than direction, so they carry a flat tone and stay
   // out of the bull/bear tally — a volatility reading isn't a vote for either side.
-  const atrValue = atr(c)
+  /* Off the closed bars, like the volume read below and for the same reason. ATR is the only
+     indicator here that measures a bar's *range*, and a bar two minutes old has barely any — its
+     true range enters Wilder's average as a near-zero and drags the whole reading down by up to a
+     fourteenth, then relaxes as the bar fills out. The close-based readings above have no such
+     problem: a live close is a real traded price, so SMA, RSI, MACD and the bands are right to read
+     it. This one is not a line on the chart, it is the risk unit — the stop's buffer and the
+     quarter-ATR band that decides "price is at the entry" both come off it, so a stop was quietly
+     tightest at the top of the hour and widest at the end of it. */
+  const atrValue = atr(closed)
   if (atrValue != null && price > 0)
     out.push({ label: `ATR ${((atrValue / price) * 100).toFixed(1)}%`, tone: 'flat', kind: 'atr' as const,
       detail: `a normal bar covers about ${fmtPrice(atrValue, price)} — a stop tighter than that is noise, not risk` })
@@ -1571,7 +1623,7 @@ export function orb(c: Candle[]): Range | null {
 
   // the two tests that can be read off this chart. A range narrower than normal bar movement is
   // noise dressed as structure, and a break nobody traded is the one that gets given back.
-  const a = atr(c)
+  const a = atr(c.slice(0, -1)) // closed bars only — see signals(); a forming bar has no range yet
   const wide = a != null && high - low >= a * 1.5
   // ponytail: this reads the latest *closed* bar, not whichever bar broke the range — right when
   // the break is fresh, and the wording says "trading thin" rather than "the break came on thin
@@ -1707,7 +1759,7 @@ export function sessionVwap(c: Candle[]): { vwap: number; where: string; signal:
   // the bar actually spent its time
   const vwap = bars.reduce((s, b) => s + ((b.h + b.l + b.c) / 3) * b.v!, 0) / vol
   const price = c.at(-1)!.c
-  const a = atr(c)
+  const a = atr(c.slice(0, -1)) // closed bars only — see signals(); a forming bar has no range yet
   // inside a quarter of a normal bar's travel is not "above" anything, it is the same price
   const clear = a != null ? a * 0.25 : vwap * 0.001
   const gap = ((price - vwap) / vwap) * 100

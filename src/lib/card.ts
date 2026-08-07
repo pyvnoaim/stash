@@ -5,7 +5,13 @@
  *
  * SVG rather than a screenshot of the row: the row is theme-coloured, sized to whatever window it
  * is in, and surrounded by the rest of the desk. This is a fixed 1200×630 — the size every chat
- * app previews unclipped — and it says only what a stranger can read without an account.
+ * app previews unclipped — and it says only what a stranger can read without an account: the
+ * asset, the side, the move, and whose it is. Never the balance, the stake or the other positions.
+ *
+ * The name and picture ride along because a card with no author is a screenshot of a number, and
+ * the picture has to travel *inside* the image: an <img> pointed at an SVG loads nothing external,
+ * so a linked avatar would render as a hole. A base64 data URI is not external, which is why the
+ * account's own encoding drops straight in and the canvas it is drawn onto stays untainted.
  *
  * ponytail: the card's own palette, not the app's tokens. It leaves the app and lands on someone
  * else's dark or light background, so it brings its own. And no Geist: an <img> renders none of
@@ -28,12 +34,24 @@ export type CardPosition = {
 }
 
 const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)
+
+/** Whose card it is. Both come off the signed-in account; `avatar` is null until one is chosen. */
+export type CardWho = { name: string; avatar: string | null }
+
+/**
+ * The same shape the server accepts on the way in (see /api/account), tested again on the way out.
+ * Not belt-and-braces: this string is about to land inside an SVG *attribute*, which the server's
+ * check was never about, and the document it lands in is handed to an <img> that will happily load
+ * whatever it is told to. Anything that is not a small self-contained picture — a remote URL, an
+ * SVG carrying its own markup — is dropped and the card goes out with the name alone.
+ */
+const AVATAR = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/
 const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? 'Kraken'
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
 const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 /** The card, as SVG. Pure string in, pure string out — which is what makes it testable. */
-export function cardSvg(p: CardPosition, r: number | null = null): string {
+export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null): string {
   const name = p.symbol.replace(/^(PF|PI|FI)_/, '')
   const up = (p.pct ?? 0) >= 0
   // grey, not green, when the feed gave no mark: an unknown that wears the winning colour is a lie
@@ -48,10 +66,24 @@ export function cardSvg(p: CardPosition, r: number | null = null): string {
   ].filter(Boolean).join('   ·   ')
   const t = (x: number, y: number, size: number, fill: string, weight: number, text: string, extra = '') =>
     `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-weight="${weight}"${extra}>${esc(text)}</text>`
+  /* Whose trade it is, top right — across from the asset, above the wordmark, so the two things a
+     stranger reads first (what it is, who did it) sit on the same line and the brand stays out of
+     the way at the bottom. Signed out, the row simply isn't there; the card has always worked
+     without an account and still does.
+     The picture is optional and the name is not: a name is the part that makes it yours, and an
+     account with no picture chosen should not get a placeholder letter next to a word that is
+     already spelled out. Rounded square rather than a circle, the same shape the Avatar in the app
+     wears, scaled up. */
+  const pic = who?.avatar && AVATAR.test(who.avatar) ? who.avatar : null
+  const byline = !who ? '' : `${pic ? `
+<clipPath id="pfp"><rect x="1048" y="84" width="72" height="72" rx="14"/></clipPath>
+<image href="${pic}" x="1048" y="84" width="72" height="72" preserveAspectRatio="xMidYMid slice" clip-path="url(#pfp)"/>
+<rect x="1048" y="84" width="72" height="72" rx="14" fill="none" stroke="#27272a" stroke-width="2"/>` : ''}
+${t(pic ? 1028 : 1120, 132, 30, '#a1a1aa', 500, who.name, ' text-anchor="end"')}`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
 <rect width="1200" height="630" fill="#09090b"/>
 <rect x="0" y="0" width="1200" height="6" fill="${ink}"/>
-${t(80, 140, 68, '#fafafa', 600, name)}
+${t(80, 140, 68, '#fafafa', 600, name)}${byline}
 ${t(80, 190, 28, '#a1a1aa', 400, `${p.side === 'long' ? 'Long' : 'Short'}   ·   ${num(p.size)}   ·   ${venueName(p.venue)}`)}
 ${t(80, 400, 156, ink, 700, pct)}
 ${t(80, 462, 34, '#fafafa', 500, p.pnl == null ? 'unrealised' : `${money(p.pnl)} unrealised`)}
@@ -71,8 +103,8 @@ ${t(1120, 560, 28, '#52525b', 600, 'stash', ' text-anchor="end"')}
  *
  * Returns what happened, so the caller can say "saved" when nothing visibly went anywhere.
  */
-export async function shareCard(p: CardPosition, r: number | null = null): Promise<'shared' | 'saved'> {
-  const svg = cardSvg(p, r)
+export async function shareCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<'shared' | 'saved'> {
+  const svg = cardSvg(p, r, who)
   const img = new Image()
   // data:, not a blob: URL — the page is served under `img-src 'self' data:`
   img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
