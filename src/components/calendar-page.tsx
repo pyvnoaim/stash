@@ -248,8 +248,22 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     },
   })
 
+  /* Where you are in the day. Only while the week is on screen — a timer ticking behind the month
+     would be redrawing a line that view does not have. A minute is the resolution the line is read
+     at; anything finer is a repaint nobody can see. */
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    if (view !== 'week') return
+    setNow(new Date())
+    const h = window.setInterval(() => setNow(new Date()), 60_000)
+    return () => window.clearInterval(h)
+  }, [view])
+
   // the hours the week draws — parse.ts owns the rule, so npm test covers it
   const days = weeks[0]
+  /* The hour the now line belongs in, or null when there is nowhere for it: today is not one of
+     the seven on screen, or the hour it falls in is outside the drawn window. */
+  const nowAt = days.some((d) => stamp(d) === stamp(now)) ? now.getHours() : null
   const hours = useMemo(() => {
     if (view !== 'week') return []
     return hourWindow(days.flatMap((d) => {
@@ -411,10 +425,30 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
 
           <div className="grid auto-rows-min gap-px overflow-y-auto">
             {hours.map((h) => (
-              <div key={h} className="grid grid-cols-[3.25rem_repeat(7,1fr)] gap-px">
+              // relative for the now line, which sits inside the hour it falls in
+              <div key={h} className="relative grid grid-cols-[3.25rem_repeat(7,1fr)] gap-px">
                 <div className="bg-background text-muted-foreground flex items-start justify-end px-1.5 py-1 font-mono text-[10px] tabular-nums sm:text-xs">
                   {hhmm(h)}
                 </div>
+                {/* Where the day has got to. Drawn inside its own hour rather than as a fraction of
+                    the whole grid, because these rows are auto-height — a busy hour is taller than
+                    an empty one, so a percentage down the column would point at the wrong time.
+                    Only when today is one of the seven on screen, and only when the hour it falls
+                    in is drawn: at 03:00 the standing window starts at 07:00 and there is honestly
+                    nowhere to put it, which beats widening the axis and moving every other week. */}
+                {nowAt === h && (
+                  <div
+                    // decoration: it says what the system clock already says, and pointer-events-none
+                    // keeps it from stealing the drop on the cell it crosses
+                    aria-hidden="true"
+                    style={{ top: `${(now.getMinutes() / 60) * 100}%` }}
+                    // left-13 is 3.25rem, the hour column's width — the line starts where the days do
+                    className="pointer-events-none absolute right-0 left-13 z-10 flex items-center"
+                  >
+                    <span className="bg-primary -ml-1 size-2 shrink-0 rounded-full" />
+                    <span className="bg-primary h-px w-full" />
+                  </div>
+                )}
                 {days.map((d) => {
                   const key = stamp(d)
                   const dropKey = `${key}-${h}`
