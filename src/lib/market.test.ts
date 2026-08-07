@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, structureBreak, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, INTERVALS, tally, openDesks, openPlay, structureBreak, swings, standingSwings, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -293,6 +293,37 @@ const bos = structureBreak(DEMOS.structure.candles.slice(0, 11))
 assert.equal(bos?.dir, 'down')
 assert.equal(bos?.choch, false)
 assert.equal(structureBreak(DEMOS.structure.candles.slice(0, 4)), null) // too few bars for a confirmed swing
+
+/* swings is the pivot definition structureBreak reads, now drawn on the chart too — so the level
+   the sentence names has to be one of the pivots the picture marks, or the two are describing
+   different charts. The marked bar is the swing high the character change was measured against. */
+const piv = swings(DEMOS.structure.candles)
+assert.ok(piv.some((p) => p.kind === 'high' && p.i === DEMOS.structure.mark![0] && p.price === sb!.level))
+// a pivot needs k bars either side, so none can sit in the first or last k
+assert.ok(piv.every((p) => p.i >= 2 && p.i <= DEMOS.structure.candles.length - 3))
+assert.deepEqual(swings(DEMOS.structure.candles.slice(0, 4)), []) // too few bars to confirm any
+// every high really does stand over its neighbours, and every low under theirs
+for (const p of piv) {
+  const near = DEMOS.structure.candles.slice(p.i - 2, p.i + 3)
+  assert.ok(p.kind === 'high' ? near.every((b) => b.h <= p.price) : near.every((b) => b.l >= p.price))
+}
+
+/* The standing levels are the unbroken ones. The structure fixture ends by closing back above its
+   swing high, so that pivot is spent and cannot still be standing — the whole point of the reading. */
+const stand = standingSwings(DEMOS.structure.candles)
+assert.notEqual(stand.high?.price, sb!.level)
+const closes = DEMOS.structure.candles.map((b) => b.c)
+if (stand.high) assert.ok(closes.slice(stand.high.i + 2).every((c) => c <= stand.high!.price))
+if (stand.low) assert.ok(closes.slice(stand.low.i + 2).every((c) => c >= stand.low!.price))
+/* A staircase up: each step's high is closed through by the step above, so no high is left
+   standing, while the last dip has never been revisited and so the low still is. Both halves
+   matter — a null on one side has to mean "price went through everything here", not "the scan
+   found nothing". */
+const stair = [10, 11, 12, 10.5, 10.2, 10.4, 13, 14, 15, 13.5, 13.2, 13.4, 16, 17, 18, 19, 20]
+  .map((c, i, a) => ({ t: i * 9e5, o: i ? a[i - 1] : c, h: c + 0.1, l: c - 0.1, c }))
+assert.equal(standingSwings(stair).high, null)
+assert.equal(standingSwings(stair).low?.price, 13.1)
+
 // the opening-range demo is drawn as a band and a break, so it has to break
 const orbDemo = DEMOS.orb.candles
 assert.ok(orbDemo.at(-1)!.c > Math.max(...orbDemo.slice(0, 4).map((b) => b.h)))
