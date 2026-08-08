@@ -312,7 +312,11 @@ export default function MarketPage() {
       let prev = localClock(ts[0], s.tz)
       for (let i = 1; i < ts.length; i++) {
         const cur = localClock(ts[i], s.tz)
-        if (cur.min >= s.min && cur.min < s.min + barMin && (cur.day !== prev.day || prev.min < s.min))
+        // …and only on a day that desk actually opens. Bitcoin prints a bar at 09:30 New York on a
+        // Saturday and nobody whatsoever opened for business — openDesks owns the weekend rule, so
+        // the line and the overlap band below it can't disagree about whether anyone is there.
+        if (cur.min >= s.min && cur.min < s.min + barMin && (cur.day !== prev.day || prev.min < s.min)
+          && openDesks(ts[i]).some((d) => d.label === s.label))
           marks.push({ x: at(i), color: s.color, label: s.label, t: ts[i], future: i >= m })
         prev = cur
       }
