@@ -276,9 +276,10 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <div className="flex items-center gap-2">
         <h2 className="font-heading mr-auto text-sm tracking-wide uppercase">{label}</h2>
+        {/* Every control on this row is h-8: the button's default and its icon size both are, and
+            so is the toggle's default. `sm` is h-7 on both scales and was the odd one out here. */}
         <ToggleGroup
           type="single"
-          size="sm"
           variant="outline"
           value={view}
           // the group refuses to go empty: clicking the active one is not a third state
@@ -288,15 +289,15 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
           <ToggleGroupItem value="month">Month</ToggleGroupItem>
           <ToggleGroupItem value="week">Week</ToggleGroupItem>
         </ToggleGroup>
-        {/* default size, not sm — sm is h-7 and would sit shorter than the h-8 icon buttons beside it */}
         <Button variant="outline" onClick={() => setAnchor(new Date())}>
           Today
         </Button>
-        <Button variant="outline" size="icon" className="size-8"
+        {/* size="icon" is already size-8; the class that used to say so again is gone */}
+        <Button variant="outline" size="icon"
           aria-label={view === 'week' ? 'Previous week' : 'Previous month'} onClick={() => shift(-1)}>
           <ChevronLeft />
         </Button>
-        <Button variant="outline" size="icon" className="size-8"
+        <Button variant="outline" size="icon"
           aria-label={view === 'week' ? 'Next week' : 'Next month'} onClick={() => shift(1)}>
           <ChevronRight />
         </Button>
