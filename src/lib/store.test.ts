@@ -586,6 +586,20 @@ assert.equal(load({}).marketAsset, 'BTCUSDT')
 
 // a backup written before horizons existed loads with an empty one rather than being thrown away
 assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 2, stop: 1, target: 3 }] }).watches[0].horizon, '')
+/* The rule that produced a setup survives the load, and its absence survives it too. The sanitiser
+   rebuilds these rows key by key, so a field nobody lists there is silently dropped — which for
+   this one would look like every saved setup coming back unattributed. And absent must stay absent:
+   a row saved before the two horizons got their own strategies came off the old shared swing rule,
+   and defaulting it to a rule name would file a retired rule's trades under a live one's record. */
+assert.equal(
+  load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110, rule: 'VWAP pull-back' }] }).watches[0].rule,
+  'VWAP pull-back',
+)
+assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110 }] }).watches[0].rule, undefined)
+assert.equal(
+  load({ results: [{ id: 'r', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110, entryAt: 1, closedAt: 2, exit: 110, r: 2, rule: 'Trend accumulation' }] }).results[0].rule,
+  'Trend accumulation',
+)
 // a level that isn't a number can't be compared against a price, so the row goes
 assert.deepEqual(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 'soon', stop: 2, target: 3 }] }).watches, [])
 // nor can levels that are the wrong way round for their side: a long stopped above its own entry

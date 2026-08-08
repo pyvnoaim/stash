@@ -1,6 +1,6 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
-const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, divergence, parseStockHours, moverMove,
+const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
   ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
@@ -167,6 +167,13 @@ assert.equal(tradePlan('short', 102, 100, band), null)
 assert.equal(tradePlan('flat', 102, 100, band), null)
 assert.equal(tradePlan('long', 102, 100, { ...band, support: 105 }), null) // stop above entry → no risk
 assert.equal(tradePlan('long', 102, 100, { ...band, farHigh: 99 }), null) // target below entry → nothing to aim at
+/* Both at once, which is the case that catches a priced() that infers its side instead of being
+   told it. Stop above the entry and target below it is a long that does not work; read as a short
+   it is a perfectly good trade, and the function would hand back the reverse of what was asked for
+   — priced and thin-flagged, so it looks considered. Unreachable off signals(), where support ≤
+   farHigh always holds, and reachable by anything else that builds its own Levels. */
+assert.equal(tradePlan('long', 102, 100, { support: 105, resistance: 120, farLow: 90, farHigh: 99 }), null)
+assert.equal(tradePlan('short', 98, 100, { support: 90, resistance: 95, farLow: 101, farHigh: 110 }), null)
 
 /* Costs. With no fee the net read is the gross one and a 2R trade needs a third of its trades to
    win; with one it never is, and both ends of the arithmetic move — the winner pays the fee out of
@@ -194,6 +201,68 @@ assert.equal(tradePlan('long', 1915.81, 1915.59, { support: 1894.35, resistance:
 const eaten = tradePlan('long', 102, 100, band, null, 20)!
 assert.equal(eaten.breakEven, 1)
 assert.equal(eaten.thin, true)
+
+/* The two strategies the horizon toggle switches between. The point of these is that they are not
+   the same rule at two speeds — so the cases worth pinning are the ones where they disagree about
+   the identical chart, which is exactly where the old shared rule was wrong on one of the two. */
+
+// TRADING — fixed 2R off the ATR, gated on the session VWAP.
+// long: entry on the 9-MA at 100, ATR 5 → stop 95, target 110, and the geometry is 2R by construction
+const day = dayPlan('long', 102, 100, 5, 99)
+assert.equal(day.plan?.stop, 95)
+assert.equal(day.plan?.target, 110)
+assert.equal(day.plan?.rr, 2)
+assert.equal(day.plan?.thin, false) // the whole reason for the fixed target: thin can never decide
+assert.equal(day.block, null)
+// the gate, and it is a gate — a bullish tally below the session average is declined outright, which
+// is the branch that replaced "the swings happened to land badly" as the reason for a no
+assert.deepEqual(dayPlan('long', 102, 100, 5, 105), { plan: null, block: 'vwap' })
+assert.deepEqual(dayPlan('short', 98, 100, 5, 95), { plan: null, block: 'vwap' })
+// mirrored for shorts: below the VWAP is where a short is allowed
+assert.equal(dayPlan('short', 98, 100, 5, 105).plan?.target, 90)
+assert.equal(dayPlan('short', 98, 100, 5, 105).plan?.stop, 105)
+// no VWAP at all (a daily bar, or a feed with no volume) is no gate to fail, not a refusal
+assert.equal(dayPlan('long', 102, 100, 5, null).plan?.rr, 2)
+// the checks that survive from the old rule, each naming which one said no
+assert.deepEqual(dayPlan('flat', 102, 100, 5, 99), { plan: null, block: 'flat' })
+assert.deepEqual(dayPlan('long', 98, 100, 5, 97), { plan: null, block: 'chase' })
+assert.deepEqual(dayPlan('long', 102, 100, null, 99), { plan: null, block: 'quiet' })
+// 2R survives a fee as the gross number, and the net still clears a coin flip — a fixed target is
+// not a claim that costs don't exist, only that geometry isn't what declines the trade
+const dayFee = dayPlan('long', 102, 100, 5, 99, 1).plan!
+assert.equal(dayFee.rr, 2)
+assert.ok(dayFee.breakEven < 0.5 && dayFee.thin === false)
+
+// INVESTING — accumulate above the 200-MA, out below it, and the regime line is the stop.
+// price 120 above both MAs: hold, and the add sits back at the 50-MA
+const hold = holdPlan(120, 100, 80, band)
+assert.equal(hold.plan?.entry, 100) // the 50-MA
+assert.equal(hold.plan?.stop, 80)   // the 200-MA — the position ends with the trend, not on a wick
+assert.equal(hold.plan?.target, 110) // the wide high, a trim
+/* The case the two rules genuinely disagree on, and the reason this could not stay a retune. Price
+   has come *under* the 50-MA while still holding the 200: tradePlan calls that a chase and declines
+   it, so under the old shared rule the single best moment to add to a long-term position rendered as
+   "no clean setup". Here it is the add, at the price itself. */
+assert.equal(tradePlan('long', 98, 100, band), null)
+assert.equal(holdPlan(98, 100, 80, band).plan?.entry, 98)
+// below the regime there is nothing to own, however oversold — an answer, not a missing setup
+assert.deepEqual(holdPlan(75, 100, 80, band), { plan: null, block: 'below' })
+// above the 200 but the 50 hasn't crossed back over it: unconfirmed, and an add here would put its
+// stop above its entry, which priced() would refuse anyway
+assert.deepEqual(holdPlan(85, 78, 80, band), { plan: null, block: 'unconfirmed' })
+// not enough bars for the slow MA to exist yet
+assert.deepEqual(holdPlan(120, 100, null, band), { plan: null, block: 'quiet' })
+// thin is computed and never enforced here — a wide regime stop against a near trim reads as thin,
+// and the card shows it as context rather than declining the position on it
+assert.equal(holdPlan(120, 100, 80, { ...band, farHigh: 105 }).plan?.thin, true)
+// long-only: a bearish tally cannot turn accumulation into a short, because dir never reaches it
+assert.equal(strategyPlan('long', { dir: 'short', price: 120, fast: 100, slow: 80, levels: band, atr: 5, vwap: null }).plan?.stop, 80)
+
+// the switch itself: the same chart, one horizon apart, answering differently — Trading declines the
+// dip under the fast MA as a chase while Investing calls it the add
+const sameChart = { dir: 'long' as const, price: 98, fast: 100, slow: 80, levels: band, atr: 5, vwap: 97 }
+assert.equal(strategyPlan('short', sameChart).block, 'chase')
+assert.equal(strategyPlan('long', sameChart).plan?.entry, 98)
 
 // ema: seeded on the first window's mean, then weighted to the newest bar
 const e = ema([1, 2, 3, 4, 5], 3)
@@ -385,14 +454,17 @@ const btBars = Array.from({ length: 420 }, (_, i) => {
   const o = p - Math.sin(i / 5) * 1.5
   return { t: i * 36e5, o, h: Math.max(o, p) + 1.2, l: Math.min(o, p) - 1.2, c: p, v: 10 + (i % 7) }
 })
-const cfgShort = { fast: 9, slow: 21, srWindow: 20 }
-const base = backtest(btBars, cfgShort, { window: 300 })
+// walked on the Trading strategy — the VWAP pull-back at a fixed 2R, which is what this fixture's
+// hourly bars are. backtest takes the horizon now, so the walk and the card can no longer disagree
+// about which rule was measured.
+const cfgShort = HORIZONS.short
+const base = backtest(btBars, 'short', { window: 300 })
 assert.ok(base.trades.length > 0, 'the fixture has to actually produce trades or this proves nothing')
 const lastTouched = Math.max(...base.trades.map((t) => t.closedAt))
 const tampered = btBars.map((b, i) => (i > lastTouched
   ? { ...b, o: b.o * 3, h: b.h * 3.5, l: b.l * 0.4, c: b.c * 3 } // a different market entirely
   : b))
-const rerun = backtest(tampered, cfgShort, { window: 300 })
+const rerun = backtest(tampered, 'short', { window: 300 })
 /* Only the trades that were finished before the tampering starts. The walk carries on past them
    into the rewritten bars and finds its own trades there, which it is supposed to do — the claim
    is that nothing already settled can be reached back into and changed. */
@@ -426,13 +498,15 @@ for (let k = 1; k < base.trades.length; k++) assert.ok(base.trades[k].at > base.
     while (i < btBars.length - 1) {
       const prefix = btBars.slice(0, i + 1)
       const view = signals(prefix, cfgShort)
-      const entry = view.smaFast.at(-1)
-      if (entry == null) { i++; continue }
-      const { dir } = tally(deskSignals(null, null, sessionVwap(prefix), view.signals))
-      const plan = tradePlan(dir, btBars[i].c, entry, view.levels, view.atr)
-      if (!plan || dir === 'flat') { i++; continue }
+      const vwap = sessionVwap(prefix)
+      const { dir } = tally(deskSignals(null, null, vwap, view.signals))
+      const { plan } = strategyPlan('short', {
+        dir, price: btBars[i].c, fast: view.smaFast.at(-1) ?? null, slow: view.smaSlow.at(-1) ?? null,
+        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
+      })
+      if (!plan) { i++; continue }
       n++
-      const long = dir === 'long'
+      const long = plan.stop < plan.entry
       const waitEnd = Math.min(btBars.length - 1, i + 20)
       let open = -1
       for (let j = i + 1; j <= waitEnd; j++) {
@@ -458,9 +532,9 @@ assert.equal(base.hit, base.trades.filter((t) => t.exit === 'target').length / b
 const mean = base.trades.reduce((a, t) => a + t.r, 0) / base.trades.length
 assert.ok(Math.abs(base.expectancy - mean) < 1e-9)
 // too few bars to warm the slow MA is no trades rather than a divide by zero
-const tiny = backtest(btBars.slice(0, 10), cfgShort)
+const tiny = backtest(btBars.slice(0, 10), 'short')
 assert.deepEqual([tiny.trades.length, tiny.median, tiny.expectancy, tiny.hit], [0, 0, 0, 0])
-assert.deepEqual(backtest([], cfgShort).trades, [])
+assert.deepEqual(backtest([], 'short').trades, [])
 
 /* ---------- fair value gaps ---------- */
 

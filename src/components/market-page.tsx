@@ -19,7 +19,7 @@ import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch,
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, swings, tally, tradePlan, trendFilter,
+  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
   TREND_NETWORK, usMarketOpen, venueName,
   topDown,
   type Asset, type Backtest, type Candle, type Cascade, type Horizon, type Interval, type Plan, type Signal, type Swing, type Trend,
@@ -403,18 +403,35 @@ export default function MarketPage() {
       ? { label: 'Short', cls: 'bg-destructive/10 text-destructive', Icon: TrendingDown }
       : { label: 'Flat', cls: 'bg-muted text-muted-foreground', Icon: Minus }
 
-  // the exact setup: the fast MA is the entry, the swing band gives the stop and the target, and the
-  // ATR widens the stop past the swing so ordinary noise doesn't take it out
+  /* The setup, from whichever strategy the horizon is on — Trading takes the VWAP pull-back at a
+     fixed 2R, Investing accumulates the trend and exits on the regime. Both hand back a Plan, so
+     everything below this line (the levels card, the alert, the chart lines, the position) does not
+     care which rule made it; only the verdict language does. */
   const entryMA = view?.smaFast.at(-1) ?? null
+  const slowMA = view?.smaSlow.at(-1) ?? null
   const last = candles.at(-1)?.c
-  const plan = view && entryMA != null && last != null
-    ? tradePlan(dir, last, entryMA, view.levels, view.atr, dials.fee) : null
+  const { plan, block } = view && last != null
+    ? strategyPlan(horizon, {
+        dir, price: last, fast: entryMA, slow: slowMA,
+        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee: dials.fee,
+      })
+    : { plan: null, block: null }
+  const holding = horizon === 'long' // the accumulation rule, which answers in positions not trades
+  // in the accumulation band: price has already come under the 50-MA, so the add is here rather
+  // than lower. The trading rule calls that same shape a chase and declines it — see holdPlan.
+  const inBand = holding && !!plan && entryMA != null && last != null && last <= entryMA
+  /* The side the plan is actually on. Accumulation is long by construction whatever the cards lean
+     — see holdPlan — and this is the side the alert and the record get saved under, so a bearish
+     tally on the daily can no longer file a long-only position as a short. */
+  const side = holding ? ('long' as const) : dir
   // taking a long while the timeframe above leans down is the trade guides tell you to skip
   const fights = (s: Signal | null) => !!s && ((dir === 'long' && s.tone === 'bear') || (dir === 'short' && s.tone === 'bull'))
-  const against = !!plan && fights(higher)
+  // neither applies to accumulation: the 200-MA regime filter is already the trend gate, and a
+  // weekly that disagrees with a multi-month holding is the ordinary weather, not a warning
+  const against = !holding && !!plan && fights(higher)
   // the tide disagrees but the step up doesn't — not a reason to skip the trade, just the thing you
   // want said out loud before you take a scalp against the chart the rest of the app defaults to
-  const counter = !!plan && !against && fights(anchor)
+  const counter = !holding && !!plan && !against && fights(anchor)
 
   /* The whole card in one line, because "when do I buy" shouldn't need three cards cross-referenced.
      Within a quarter-ATR of the entry counts as "here" — asking for the exact number is asking for a
@@ -423,14 +440,54 @@ export default function MarketPage() {
   // in money, not in R: "the reward is under 1R" is only clear if you already know what R is
   const risk = plan ? Math.abs(plan.entry - plan.stop) : 0
   const reward = plan ? Math.abs(plan.target - plan.entry) : 0
+  /* Two ladders, because the two strategies answer different questions. Trading asks "is there a
+     trade", and no is a normal answer to that. Investing asks "should I own this", and no is still
+     an answer — Out is a position — so this side never renders the "nothing found" shape. */
   const verdict = !view || last == null ? null
-    // A split tally has no side to trade, and a bias whose geometry doesn't work has no trade
-    // either. Both used to render as an empty space where the answer goes, which reads as the tool
-    // being broken rather than as it having looked and found nothing.
-    : dir === 'flat'
+    : holding
+    // INVESTING — accumulate / hold / out. No thin check: a holding with no deadline is not judged
+    // on R:R, and no higher-timeframe gate either, since the 200-MA already is the trend filter.
+    ? block === 'below'
+      ? {
+          text: 'Out', tone: 'wait' as const,
+          why: `price is under the ${cfg.slow}-MA${slowMA != null ? ` at ${fmt(slowMA)}` : ''} — below that line the dips keep getting cheaper, and there is nothing here to hold`,
+        }
+    : block === 'unconfirmed'
+      ? {
+          text: 'Out', tone: 'wait' as const,
+          why: `back above the ${cfg.slow}-MA, but the ${cfg.fast} has not crossed over it yet — the recovery has not confirmed, and buying it early is the trade this rule exists to skip`,
+        }
+    : !plan
+      ? {
+          text: 'Not enough history', tone: 'wait' as const,
+          why: `the ${cfg.slow}-MA needs ${cfg.slow} bars before it means anything — this feed has not given that many yet`,
+        }
+    : inBand
+      ? {
+          text: 'Accumulate', tone: 'go' as const,
+          why: `price is in the band between the ${cfg.fast}- and ${cfg.slow}-MA — buy here, add on each further dip, and out if it closes under ${fmt(plan.stop)}${plan.target > last ? ` · trim into ${fmt(plan.target)}` : ''}`,
+        }
+      : {
+          text: 'Hold', tone: 'hold' as const,
+          why: `the trend is intact — hold what you have and add at the ${cfg.fast}-MA, ${fmt(plan.entry)} (${Math.abs(((plan.entry - last) / last) * 100).toFixed(1)}% below) · out on a close under ${fmt(plan.stop)}`,
+        }
+    // TRADING — a split tally has no side to trade, and a bias on the wrong side of the session
+    // average has no trade either. Both used to render as an empty space where the answer goes,
+    // which reads as the tool being broken rather than as it having looked and found nothing.
+    : block === 'flat'
       ? {
           text: 'No side to take', tone: 'wait' as const,
           why: `the readings are split ${bulls} to ${bears} — when they disagree this evenly, the honest answer is that there is no trade here`,
+        }
+    : block === 'vwap'
+      ? {
+          text: 'Wrong side of the VWAP', tone: 'wait' as const,
+          why: `the tally leans ${dir}, but price is ${dir === 'long' ? 'below' : 'above'} the average paid since the open${vwap ? ` (${fmt(vwap.vwap)})` : ''} — this rule only takes ${dir}s from ${dir === 'long' ? 'above' : 'below'} that line, and it is the one filter it will not let a card outvote`,
+        }
+    : block === 'quiet'
+      ? {
+          text: 'No stop to size', tone: 'wait' as const,
+          why: 'there is no ATR off these bars yet — without a normal bar\'s travel to measure, the stop would be a guess',
         }
     : !plan
       ? {
@@ -460,7 +517,7 @@ export default function MarketPage() {
   } as const
   // an existing alert for this asset, side and horizon — the button toggles that one, and an alert
   // saved on the other horizon is left alone rather than being silently replaced
-  const watched = watches.find((w) => w.asset === current.id && w.dir === dir && w.horizon === cfg.label)
+  const watched = watches.find((w) => w.asset === current.id && w.dir === side && w.horizon === cfg.label)
   /* Money already on this asset. The alert button is hidden while there is: saving a plan on the
      same asset, side and horizon replaces the row it finds, and the row it would find is the
      position — a real trade quietly overwritten by a hypothetical one. The position is watched at
@@ -600,11 +657,13 @@ export default function MarketPage() {
             ))}
           </SelectContent>
         </Select>
-        {/* trade horizon — swaps the MA pair (50/200 vs 9/21) AND the bar size, so the whole read moves
-            to that timescale. Opening range pins 15m, so there the interval is left alone. */}
+        {/* trade horizon — swaps the strategy, not just the speed. The MA pair (50/200 vs 9/21) and
+            the bar size move with it, but so does the rule those numbers feed: accumulation on one
+            side, a fixed-2R day trade on the other. Opening range pins 15m, so there the interval is
+            left alone. */}
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
           {(Object.keys(HORIZONS) as Horizon[]).map((h) => (
-            <Hint key={h} label={`${HORIZONS[h].fast}/${HORIZONS[h].slow}-MA on ${HORIZONS[h].interval} bars — every verdict, level and alert below is read at this scale`}>
+            <Hint key={h} label={`${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule.`}>
               <Button size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
                 className={cn('h-7', horizon !== h && 'text-muted-foreground')}
                 onClick={() => { setHorizon(h); if (preset === 'standard') setInterval(HORIZONS[h].interval) }}>
@@ -772,9 +831,11 @@ export default function MarketPage() {
         <CardContent className={cn('border-t px-3 pt-3 text-sm', verdict?.tone === 'wait' && 'opacity-60')}>
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">
-              {dir === 'long' ? 'Long' : 'Short'} setup
+              {holding ? 'Position' : side === 'long' ? 'Long setup' : 'Short setup'}
               <span className="text-muted-foreground font-normal">
-                {' · '}{dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the {cfg.fast}-MA
+                {' · '}{holding
+                  ? `add on dips into the ${cfg.fast}-MA while price holds the ${cfg.slow}`
+                  : `${side === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, ${side === 'long' ? 'above' : 'below'} the session VWAP`}
               </span>
             </span>
             {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
@@ -783,8 +844,9 @@ export default function MarketPage() {
             <Button size="sm" variant={watched ? 'secondary' : 'outline'} className="ml-auto"
               onClick={() => (watched
                 ? removeWatch(watched.id)
-                : dir !== 'flat' && addWatch({
-                    id: uid(), asset: current.id, label: current.label, horizon: cfg.label, dir,
+                : side !== 'flat' && addWatch({
+                    id: uid(), asset: current.id, label: current.label, horizon: cfg.label,
+                    rule: cfg.strategy, dir: side,
                     entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
                   }))}>
               {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
@@ -801,21 +863,32 @@ export default function MarketPage() {
                 target's are from the entry, which is what they are risk and reward against. Two
                 reference points, so each tooltip names its own. */}
             {([
-              ['Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400', price != null ? away(plan.entry, price) : null,
-                `The ${cfg.fast}-MA: wait for price to come back ${dir === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`],
-              ['Stop', fmt(plan.stop), 'text-destructive', away(plan.stop, plan.entry),
-                `Just past the near swing, with a quarter of the ATR as buffer so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} from the entry. Broken, the idea was wrong.`],
-              ['Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400', away(plan.target, plan.entry),
-                `The far swing — a level someone is actually trading, never a projection off the entry. ${away(plan.target, plan.entry)} from the entry.`],
+              [holding ? 'Add at' : 'Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400', price != null ? away(plan.entry, price) : null,
+                holding
+                  ? `The ${cfg.fast}-MA, or the price itself once it has come under it — a dip inside the band is where you add, not somewhere to wait out. ${inBand ? 'Price is in the band now.' : `${price != null ? away(plan.entry, price) : ''} from here.`}`
+                  : `The ${cfg.fast}-MA: wait for price to come back ${side === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`],
+              [holding ? 'Out under' : 'Stop', fmt(plan.stop), 'text-destructive', away(plan.stop, plan.entry),
+                holding
+                  ? `The ${cfg.slow}-MA — the line the whole thesis rests on. A daily close back under it ends the position; anything above it is weather. Deliberately far (${away(plan.stop, plan.entry)} from the add), because a holding stopped out by an ugly week was never a holding.`
+                  : `One ATR past the entry — a normal bar's travel, so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} away. Broken, the idea was wrong.`],
+              [holding ? 'Trim into' : 'Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400', away(plan.target, plan.entry),
+                holding
+                  ? `The wide high, ${away(plan.target, plan.entry)} from the add. A trim, not a deadline — the position ends on the regime, not here, and taking something off into the highs is optional.`
+                  : `Two ATR — a fixed 2R off the stop, so the payoff is the same shape every time instead of wherever the last swing happened to land. ${away(plan.target, plan.entry)} from the entry.`],
               /* Net first, gross in brackets behind it. The gross ratio is the one every guide and
                  every other chart tool quotes, so dropping it would look like a different number
                  for the same trade — but it is not the one that decides anything, and shown alone
                  it flatters: the fee comes off the winner and is added to the loser, so a 1.15×
                  that reads as "win 47% and you're ahead" really needs 50%. */
               ['Risk to reward', `${fmt(risk)} → ${fmt(reward)}`,
-                plan.thin ? 'text-amber-600 dark:text-amber-500' : '',
+                plan.thin && !holding ? 'text-amber-600 dark:text-amber-500' : '',
                 `${plan.net.toFixed(2)}× net${dials.fee > 0 ? ` (${plan.rr.toFixed(2)}× gross)` : ''}`,
-                plan.thin
+                holding
+                  // shown, not enforced: see holdPlan. A ratio measured to a trim level is not what
+                  // decides whether to own something, and dressing it up as a pass/fail would be
+                  // the trading rule's question asked about a position that has no deadline.
+                  ? `From the add down to the ${cfg.slow}-MA against the add up to the wide high. Context only — this side does not decline a position on its ratio, because the trim is not where the holding ends and the regime line is not a stop you get taken out at on a bad Tuesday.`
+                  : plan.thin
                   ? `More than half of these have to win just to break even — ${(plan.breakEven * 100).toFixed(0)}%, with the ${dials.fee}%-a-side fee on the way in and the way out. Right idea, maths that does not pay. Guides pass on these.`
                   : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`],
             ] as const).map(([k, v, cls, sub, hint]) => (
@@ -857,7 +930,7 @@ export default function MarketPage() {
         {/* what you are actually in on this asset, if anything — the card's last word, because the
             plan is what the tool thinks and this is what you did, and they are not always the same */}
         <Position asset={current.id} label={current.label} horizon={cfg.label}
-          price={last ?? null} plan={plan} dir={dir} />
+          rule={cfg.strategy} price={last ?? null} plan={plan} dir={side} />
       </Card>
 
       {/* the open, when there is something to act on — in the opening-range preset, always: there
@@ -1330,7 +1403,7 @@ export default function MarketPage() {
       )}
       {/* the backtest of the rule on the bars above it — the chart's own question, and it was a
           tab away from the chart it is asking about */}
-      <Measure candles={candles} cfg={cfg} interval={interval} asset={asset} />
+      <Measure candles={candles} horizon={horizon} interval={interval} asset={asset} />
       </>
       )}
       </div>
@@ -1375,7 +1448,10 @@ export default function MarketPage() {
  * is most of a second on a 5000-bar stock, and a chart that hitched every time you changed asset
  * would be a worse tool than one that stays quiet until asked.
  */
-function Measure({ candles, cfg, interval, asset }: { candles: Candle[]; cfg: typeof HORIZONS[Horizon]; interval: Interval; asset: string }) {
+// the horizon rather than its config, for the same reason scanOne takes one: which strategy is on
+// now decides what gets walked, not just how fast the averages are
+function Measure({ candles, horizon, interval, asset }: { candles: Candle[]; horizon: Horizon; interval: Interval; asset: string }) {
+  const cfg = HORIZONS[horizon]
   const [result, setResult] = useState<Backtest | null>(null)
   const [busy, setBusy] = useState(false)
   /* A new asset, timeframe or horizon invalidates the answer — leaving it up would attach one
@@ -1384,13 +1460,13 @@ function Measure({ candles, cfg, interval, asset }: { candles: Candle[]; cfg: ty
      array every five seconds, so depending on it cleared the result before it could be read and
      made the card unusable without turning Live off first. A repriced forming bar cannot change a
      measurement of what already happened, which is the whole reason this is safe. */
-  useEffect(() => { setResult(null) }, [asset, interval, cfg])
+  useEffect(() => { setResult(null) }, [asset, interval, horizon])
 
   const run = () => {
     setBusy(true)
     // let the spinner paint before the main thread goes away for a second
     setTimeout(() => {
-      setResult(backtest(candles, cfg, { window: 600 }))
+      setResult(backtest(candles, horizon, { window: 600 }))
       setBusy(false)
     }, 20)
   }
@@ -1402,8 +1478,11 @@ function Measure({ candles, cfg, interval, asset }: { candles: Candle[]; cfg: ty
       <CardContent className="px-3">
         <div className="flex flex-wrap items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">What this rule did here</span>
+          {/* names the strategy, not just the horizon — the two run different rules now, and a card
+              headed "the investing read" over a walk of a day-trading rule was the exact confusion
+              backtest taking a Horizon was meant to make impossible */}
           <span className="text-muted-foreground text-xs">
-            the {cfg.label.toLowerCase()} read, walked forward over {result ? result.bars : Math.max(0, Math.min(600, candles.length - cfg.slow - 2))} {interval} bars
+            {cfg.strategy.toLowerCase()}, walked forward over {result ? result.bars : Math.max(0, Math.min(600, candles.length - cfg.slow - 2))} {interval} bars
           </span>
           <Button size="sm" variant="outline" className="ml-auto h-7" onClick={run} disabled={busy}>
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
@@ -1448,9 +1527,10 @@ function Measure({ candles, cfg, interval, asset }: { candles: Candle[]; cfg: ty
               {result.missed > 0 && `${result.missed} more setup${result.missed === 1 ? '' : 's'} never reached the entry and ${result.missed === 1 ? 'is' : 'are'} not counted — a trade nobody was in is not a trade that lost. `}
               {result.unresolved > 0 && `${result.unresolved} was still running when the bars ran out, so it has no result to score. `}
               {/* the higher-timeframe card is the one vote the desk counts that this walk cannot:
-                  it needs candles from a second interval, which this only has one of */}
-              The {HIGHER[interval] ?? 'higher-timeframe'} trend filter the desk applies is not
-              applied here — this measures the rest of the rule.{' '}
+                  it needs candles from a second interval, which this only has one of. Accumulation
+                  does not apply that filter live either, so on that side there is nothing missing */}
+              {horizon !== 'long' && <>The {HIGHER[interval] ?? 'higher-timeframe'} trend filter the desk
+              applies is not applied here — this measures the rest of the rule.{' '}</>}
               No fee, no funding, no slippage, and every fill exactly on its level, so a bar that gapped
               through a stop really paid worse than this says. It is measured on the same window you are
               looking at, one position at a time, and a bar that touched the stop and the target both is
@@ -1822,10 +1902,12 @@ function AlarmButton({ asset, label, price }: { asset: string; label: string; pr
  * are here — they want an exit price on the row and a partial-fill model, which is a bigger thing
  * than a number and a multiplier. "Not in it any more" drops the row without filing a result.
  */
-function Position({ asset, label, horizon, price, plan, dir }: {
+function Position({ asset, label, horizon, rule, price, plan, dir }: {
   asset: string
   label: string
   horizon: string
+  /** The strategy that produced the levels this was prefilled from — see Watch.rule. */
+  rule: string
   price: number | null
   plan: { entry: number; stop: number; target: number } | null
   dir: 'long' | 'short' | 'flat'
@@ -1857,7 +1939,7 @@ function Position({ asset, label, horizon, price, plan, dir }: {
 
   const save = () => {
     addWatch({
-      id: uid(), asset, label, horizon, dir: f.side === 'short' ? 'short' : 'long',
+      id: uid(), asset, label, horizon, rule, dir: f.side === 'short' ? 'short' : 'long',
       entry, stop, target, ts: Date.now(),
       // you are in it already: the window opened now, not whenever price next comes back to the entry
       entryAt: Date.now(),
@@ -1969,10 +2051,14 @@ function Record() {
      watched off the stake in Settings. Null only when not a single row has a figure at all.
      Net of funding to the close, the same subtraction the bell's result alert makes. */
   const cashOf = (r: typeof results[number]) => netOf(r, r.r, stake, dials.funding, r.closedAt)
-  /* Which of your selves trades well: the same trades, cut by the horizon that made them. The
-     R-per-trade is the expectancy — the one number that says whether a lane pays to keep driving. */
+  /* Which of your selves trades well: the same trades, cut by the rule that made them. The
+     R-per-trade is the expectancy — the one number that says whether a lane pays to keep driving.
+     Cut by rule and not by horizon, because the horizon stopped identifying a rule the day the two
+     got their own strategies: everything saved before that came off the old shared swing rule, and
+     folding it in under the same lane name would let a retired rule's record vouch for a live one.
+     Those rows have no `rule` and keep their horizon as their lane, which is all they ever knew. */
   const lanes = [...results.reduce((m, r) => {
-    const k = r.horizon || '—'
+    const k = r.rule || r.horizon || '—'
     return m.set(k, [...(m.get(k) ?? []), r])
   }, new Map<string, typeof results>())]
     .map(([name, rs]) => ({
@@ -2181,7 +2267,10 @@ type ScanRow = {
  * Five calls an asset, not ten: HIGHER maps every interval to another one already in the set, so
  * the trend filter each read applies is read off bars already fetched.
  */
-async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Interval, orbMode: boolean, fee: number): Promise<ScanRow | null> {
+// takes the horizon rather than its config now: the row's phrase depends on which strategy is on,
+// not only on the four numbers that used to be the whole difference between the two
+async function scanOne(a: Asset, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number): Promise<ScanRow | null> {
+  const cfg = HORIZONS[horizon]
   const pairs = await Promise.all(INTERVALS.map(async (iv) =>
     [iv, await fetchCandles(a, iv, '').catch(() => [] as Candle[])] as const))
   const bars = Object.fromEntries(pairs) as Record<Interval, Candle[]>
@@ -2199,7 +2288,10 @@ async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Inte
     const view = signals(candles, cfg)
     // the opening range is a 15m reading — asking a weekly bar for one is asking for a date
     const range = orbMode && iv === '15m' ? orb(candles) : null
-    return { candles, view, higher, up, ...tally(deskSignals(higher, range, sessionVwap(candles), view.signals)) }
+    // kept rather than recomputed: the trading strategy gates on this exact number below, and a
+    // second sessionVwap() over the same bars is a second pass for an answer already in hand
+    const vwap = sessionVwap(candles)
+    return { candles, view, higher, up, vwap, ...tally(deskSignals(higher, range, vwap, view.signals)) }
   }
 
   const by: Partial<Record<Interval, Lean>> = {}
@@ -2209,15 +2301,28 @@ async function scanOne(a: Asset, cfg: (typeof HORIZONS)[Horizon], interval: Inte
   }
 
   const here = read(interval)!
-  const { bulls, bears, dir, view, higher, up, candles } = here
+  const { bulls, bears, dir, view, higher, up, candles, vwap } = here
   const price = candles.at(-1)!.c
   const entryMA = view.smaFast.at(-1)
-  const plan = entryMA != null ? tradePlan(dir, price, entryMA, view.levels, view.atr, fee) : null
-  const against = !!plan && !!higher
+  const slowMA = view.smaSlow.at(-1)
+  const { plan, block } = strategyPlan(horizon, {
+    dir, price, fast: entryMA ?? null, slow: slowMA ?? null,
+    levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee,
+  })
+  const holding = horizon === 'long'
+  const against = !holding && !!plan && !!higher
     && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
-  // the verdict ladder from the card above, compressed to a phrase — same branches, same order
-  const [tier, say]: [ScanRow['tier'], string] =
-    dir === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
+  // the verdict ladder from the card above, compressed to a phrase — same branches, same order, and
+  // the same split by strategy, or a row would grade an asset by a rule the card it opens doesn't use
+  const [tier, say]: [ScanRow['tier'], string] = holding
+    ? block === 'below' ? [0, `under the ${cfg.slow}-MA — out`]
+      : block === 'unconfirmed' ? [0, 'recovery not confirmed']
+      : !plan ? [0, 'not enough history']
+      : entryMA != null && price <= entryMA ? [3, 'Accumulate']
+      : [2, `hold — add at ${fmtPrice(plan.entry, price)}`]
+    : block === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
+    : block === 'vwap' ? [0, `wrong side of the VWAP for a ${dir}`]
+    : block === 'quiet' ? [0, 'no ATR yet — no stop to size']
     : !plan ? [0, 'no clean setup — price already ran']
     : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
     : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']
@@ -2264,7 +2369,7 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, cfg, interval, orbMode, fee).catch(() => null)),
+      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, horizon, interval, orbMode, fee).catch(() => null)),
     ).then((r) => {
       if (!on) return
       // ranked on the net R:R, not the gross one — the whole point of the column is which of these
@@ -2278,7 +2383,7 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
           || y.tier - x.tier || y.agree - x.agree || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
     })
     return () => { on = false }
-  }, [cfg, nonce, orbMode, interval, fee])
+  }, [horizon, nonce, orbMode, interval, fee])
 
   return (
     <Card className="py-3">

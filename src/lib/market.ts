@@ -680,6 +680,15 @@ export type Cascade = {
  *
  * Deliberately no veto and no invention: it never says take it, it says how far the case got. The
  * caller decides what to do with a 2.
+ *
+ * And deliberately still on `tradePlan` — the swing rule — rather than on whichever strategy the
+ * horizon selector is holding. This is its own play: its levels come from the 5m chart under a 15m
+ * shift under a 4h lean, three timeframes the horizon's rule never looks at, so pointing it at a
+ * fixed-2R day trade or an accumulation model would be answering a question it did not ask. That
+ * makes it the third rule in the app, and the Scan shows its grade beside row phrases from the
+ * other two, which is worth knowing when they disagree — they are not meant to agree.
+ * ponytail: if the cascade should instead time the *live* strategy's entry, it wants the horizon
+ * passed down and strategyPlan at step three; that is a different play from this one, not a fix.
  */
 export function topDown(
   bars: Partial<Record<Interval, Candle[]>>,
@@ -1260,6 +1269,30 @@ export function tradePlan(
   const buffer = (atrValue ?? 0) * 0.25
   const stop = long ? levels.support - buffer : levels.resistance + buffer
   const target = long ? levels.farHigh : levels.farLow
+  return priced(long, entry, stop, target, fee)
+}
+
+/**
+ * Three levels and a fee, costed. Split out of tradePlan because it is the only part every strategy
+ * below shares — the arithmetic that turns entry/stop/target into what the trade actually pays is
+ * the same whether the levels came from a swing, an ATR multiple or a 200-MA. Which levels to use is
+ * the strategy; what they cost is not.
+ *
+ * Null when the geometry is not a trade at all: the stop on the wrong side of the entry, or nothing
+ * above it to aim at.
+ *
+ * The side is passed rather than read off the levels, and that is not a style choice. Inferring it
+ * from `stop < entry` silently reinterprets a broken long as a working short: a long whose stop
+ * landed above its entry used to be declined for having no risk, and instead came back as a plan
+ * with the stop above and the target below — the trade backwards, priced and labelled thin. It
+ * cannot happen off signals(), where support ≤ farHigh always holds, but tradePlan is exported and
+ * takes whatever Levels it is handed, and "declined" turning into "backwards" is not a failure mode
+ * a money path gets to have.
+ *
+ * A non-null plan still satisfies `long === stop < entry`, since risk > 0 forces it — which is what
+ * lets backtest read the side back off the geometry rather than being told it twice.
+ */
+export function priced(long: boolean, entry: number, stop: number, target: number, fee = 0): Plan | null {
   const risk = long ? entry - stop : stop - entry
   const reward = long ? target - entry : entry - target
   if (risk <= 0 || reward <= 0) return null
@@ -1279,6 +1312,120 @@ export function tradePlan(
     breakEven: win > 0 ? lose / (lose + win) : 1,
     thin: win <= 0 || lose / (lose + win) >= 0.5,
   }
+}
+
+/**
+ * Why there is nothing to do, when there isn't — a code rather than a sentence, because the sentence
+ * wants prices in it and only the card knows how many decimals this asset prints to. Null means the
+ * strategy produced a plan.
+ */
+export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'below' | 'unconfirmed' | 'geometry'
+export type Setup = { plan: Plan | null; block: Block | null }
+
+/**
+ * TRADING — the VWAP pull-back, at a fixed 2R.
+ *
+ * Bias from the 9/21 tally, entry at the pull-back to the 9-MA, stop one ATR beyond it and the
+ * target two — so the reward is 2R by construction. That is the whole point of the change: under the
+ * swing-band rule the target landed wherever the last three windows of chart happened to put it, and
+ * `thin` then declined roughly half the setups on geometry that had nothing to do with whether the
+ * read was right. A rule whose payoff is decided by chart shape is a lottery with a strategy's
+ * paperwork. Here the geometry always pays, and the thing that says no is a filter you can name.
+ *
+ * That filter is the session VWAP, and it is a gate rather than a vote: longs only above the average
+ * paid since the open, shorts only below. It is the number the size in the market is measured
+ * against, so it is the one line a day trade should not be on the wrong side of — and unlike the
+ * tally, one card cannot outvote it.
+ *
+ * Deliberately absent: no trailing stop and no partial off at 1R. Both need a bar-by-bar walk that a
+ * card rendered once from the latest bar cannot do.
+ * ponytail: the 1-ATR stop and 2× target are the conventional pair, not a measured one — the
+ * backtest below still walks the swing rule, so run it against this before believing the number.
+ * Fixed-R also means the stop ignores where the swing actually is; in a tight range the ATR stop can
+ * sit inside the noise band the swing rule was respecting.
+ */
+export function dayPlan(
+  dir: 'long' | 'short' | 'flat', price: number, entry: number,
+  atrValue: number | null, vwap: number | null, fee = 0,
+): Setup {
+  if (dir === 'flat') return { plan: null, block: 'flat' }
+  const long = dir === 'long'
+  if (long ? entry > price : entry < price) return { plan: null, block: 'chase' }
+  // no ATR is no stop distance, and a day trade sized off a guess is the one this rule refuses
+  if (!atrValue) return { plan: null, block: 'quiet' }
+  // the gate. Null vwap is a feed without volume or a daily bar — no gate to fail, so it passes
+  if (vwap != null && (long ? price < vwap : price > vwap)) return { plan: null, block: 'vwap' }
+  const stop = long ? entry - atrValue : entry + atrValue
+  const target = long ? entry + atrValue * 2 : entry - atrValue * 2
+  const plan = priced(long, entry, stop, target, fee)
+  return { plan, block: plan ? null : 'geometry' }
+}
+
+/**
+ * INVESTING — trend accumulation, exited on the regime and not on a wiggle.
+ *
+ * Long only, and that is a claim about the instrument rather than a simplification: buying dips in
+ * an uptrend and shorting rallies are different trades with different holding periods, and the
+ * second one is not investing. The regime is the 200-MA. Above it there is a position to hold and
+ * dips are where you add; below it there is nothing to own, which is an answer, not a missing setup.
+ *
+ * The 50-MA is the add level, and price already under it is the add happening now rather than a
+ * chase — the opposite of the trading rule, and the reason this could not stay a retune of it.
+ * tradePlan declines exactly this case, so under the old shared rule the single best moment to buy a
+ * long-term position read as "no clean setup".
+ *
+ * The stop is the 200-MA itself: the position ends when the trend does, not when the week is ugly.
+ * The target is the wide high, and it is a trim rather than an exit — a position that pays does not
+ * need somewhere to be sold, which is why `thin` is computed here but not enforced. R:R is the wrong
+ * question about a holding whose whole thesis is that it has no deadline.
+ * ponytail: no fundamentals, no valuation and no position sizing — this reads price only. The exit
+ * is a close through the line with no buffer, so a wick under the 200-MA and back reads as a regime
+ * break for one bar; if that whipsaws in practice, a close-based confirmation over 2–3 bars is the
+ * upgrade, and it belongs here rather than in the caller.
+ */
+export function holdPlan(
+  price: number, fast: number | null, slow: number | null,
+  levels: Levels, fee = 0,
+): Setup {
+  if (fast == null || slow == null) return { plan: null, block: 'quiet' }
+  // out of the regime: below the line there is no position, and no amount of oversold changes that
+  if (price < slow) return { plan: null, block: 'below' }
+  // above the 200 but the 50 has not caught up — the recovery has not confirmed, and an add here
+  // would have its stop above its entry, which is not a position, it is a hope with a price on it
+  if (fast <= slow) return { plan: null, block: 'unconfirmed' }
+  // already under the 50-MA and still over the 200 is the accumulation band — buy here, not lower
+  const entry = Math.min(fast, price)
+  const plan = priced(true, entry, slow, levels.farHigh, fee)
+  return { plan, block: plan ? null : 'geometry' }
+}
+
+/**
+ * The strategy the horizon selector switches to. Two different rules, not one rule at two speeds —
+ * which is what the toggle used to be, and why both sides went quiet on the same days for the same
+ * geometric reason rather than for any reason about the market.
+ *
+ * Everything downstream still gets a Plan, so the chart lines, the alert, the position card and the
+ * record all keep working on both sides. An accumulation really does have an entry, a level that
+ * ends it and a level to trim into; it is only the language and where those levels come from that
+ * differ, and the card says which.
+ */
+export function strategyPlan(h: Horizon, i: {
+  dir: 'long' | 'short' | 'flat'
+  price: number
+  /** The fast and slow MAs at the latest bar — signals().smaFast/smaSlow. */
+  fast: number | null
+  slow: number | null
+  levels: Levels
+  atr: number | null
+  /** The session VWAP, where the feed and the bar size allow one. Only the trading rule gates on it. */
+  vwap: number | null
+  fee?: number
+}): Setup {
+  return h === 'long'
+    ? holdPlan(i.price, i.fast, i.slow, i.levels, i.fee)
+    : i.fast == null
+      ? { plan: null, block: 'quiet' }
+      : dayPlan(i.dir, i.price, i.fast, i.atr, i.vwap, i.fee)
 }
 
 /** One simulated trade: the bar the plan was made on, the bar its entry was actually reached, and
@@ -1338,12 +1485,17 @@ export type Backtest = {
  */
 export function backtest(
   c: Candle[],
-  cfg: { fast: number; slow: number; srWindow: number } = HORIZONS.long,
+  /** Which strategy to walk — the horizon, not its numbers. It used to take the four MA settings and
+   *  always walk the swing rule, which was fine while both horizons ran that same rule and became a
+   *  quiet lie the moment they stopped: the card would report the accumulation rule's numbers under
+   *  a walk of a day-trading one. See strategyPlan. */
+  horizon: Horizon = 'long',
   /** `drop` silences those cards in the tally. The point of owning a backtest at all is being able
    *  to ask whether a reading earns its vote, and that question is unanswerable from outside — the
    *  tally is assembled in here. Empty is the rule as it ships. */
   { window = 400, expiry = 20, drop = [] }: { window?: number; expiry?: number; drop?: GuideKey[] } = {},
 ): Backtest {
+  const cfg = HORIZONS[horizon]
   const trades: Trade[] = []
   let missed = 0, unresolved = 0
   // the slow MA has to have warmed up, or the first reads are taken off a line that does not exist
@@ -1353,16 +1505,20 @@ export function backtest(
     // one slice for both reads: this was copying the whole prefix twice per evaluated bar
     const prefix = c.slice(0, i + 1)
     const view = signals(prefix, cfg)
-    const entry = view.smaFast.at(-1)
-    if (entry == null) { i++; continue }
     const vwap = sessionVwap(prefix)
     const cards = deskSignals(null, null, vwap, view.signals).filter((s) => !drop.includes(s.kind))
     const { dir } = tally(cards)
-    const plan = tradePlan(dir, c[i].c, entry, view.levels, view.atr)
-    // tradePlan already declines a flat tally; naming it again is what lets the side be a side
-    if (!plan || dir === 'flat') { i++; continue }
+    const { plan } = strategyPlan(horizon, {
+      dir, price: c[i].c, fast: view.smaFast.at(-1) ?? null, slow: view.smaSlow.at(-1) ?? null,
+      levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
+    })
+    if (!plan) { i++; continue }
 
-    const long = dir === 'long'
+    /* The side off the geometry rather than off `dir`. The accumulation rule is long whatever the
+       cards lean — it never reads `dir` at all — so taking the side from the tally would have walked
+       its trades backwards on every bearish bar. A stop below the entry is what long means here, and
+       it is the one definition both strategies agree on. */
+    const long = plan.stop < plan.entry
     /* `expiry` bounds the wait for the entry and nothing else. A plan whose pull-back never comes
        round is not a loss — it is a trade nobody was ever in, the same rule the live record keeps. */
     const waitEnd = Math.min(c.length - 1, i + expiry)
@@ -1394,8 +1550,8 @@ export function backtest(
     // still open when the bars ran out: there is no result to score, and it is said rather than dropped
     if (end < 0) { unresolved++; break }
     trades.push({
-      at: i, openedAt: open, closedAt: end, dir, entry: plan.entry, stop: plan.stop,
-      target: plan.target, exit, r: exit === 'stop' ? -1 : plan.rr,
+      at: i, openedAt: open, closedAt: end, dir: long ? 'long' : 'short', entry: plan.entry,
+      stop: plan.stop, target: plan.target, exit, r: exit === 'stop' ? -1 : plan.rr,
     })
     i = end + 1
   }
@@ -1416,11 +1572,22 @@ export function backtest(
 /** Trade horizon tunes how twitchy the read is: investing rides the slow classic 50/200 pair, a wide
  *  support band and daily bars; trading uses fast 9/21 MAs, a tight band and hourly bars, so it flips
  *  far sooner. Labelled Investing/Trading, not Long/Short-term, so it can't be read as the long/short
- *  direction of the setup below it. `interval` is the bar size each horizon switches to. */
+ *  direction of the setup below it. `interval` is the bar size each horizon switches to.
+ *
+ *  `strategy` and `rule` name what the toggle now actually switches. It used to swap only the four
+ *  numbers above, which made the two sides the same rule read at two speeds — see strategyPlan. */
 export const HORIZONS = {
-  long: { label: 'Investing', fast: 50, slow: 200, srWindow: 60, interval: '1d' },
-  short: { label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h' },
-} as const satisfies Record<string, { label: string; fast: number; slow: number; srWindow: number; interval: Interval }>
+  long: {
+    label: 'Investing', fast: 50, slow: 200, srWindow: 60, interval: '1d',
+    strategy: 'Trend accumulation',
+    rule: 'Long only, above the 200-MA. Add on dips to the 50-MA, out on a daily close back under the 200. The wide high is a trim, not a deadline.',
+  },
+  short: {
+    label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
+    strategy: 'VWAP pull-back',
+    rule: 'Both sides, but only on your side of the session VWAP. Entry at the 9-MA, stop one ATR past it, target two — a fixed 2R. Flat by the session end.',
+  },
+} as const satisfies Record<string, { label: string; fast: number; slow: number; srWindow: number; interval: Interval; strategy: string; rule: string }>
 export type Horizon = keyof typeof HORIZONS
 
 export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow: number } = HORIZONS.long): {

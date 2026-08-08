@@ -427,10 +427,11 @@ a level the market never reached is worse than no alert. So when the feed goes q
 so next to the price — *Offline — as of …* — the pulse beside **Live** goes out, and the figure you
 are looking at is dated rather than dressed up as current.
 
-Pick an asset, an interval — `15m` to `1w` — and a horizon. **Investing** rides the classic 50/200
-moving averages, a wide support band and daily bars; **Trading** uses 9/21, a tight band and hourly
-bars, so it flips far sooner. Picking a horizon switches the interval with it; the interval row still
-overrides it afterwards. The chart draws price as a line or as candles (Settings picks which), both
+Pick an asset, an interval — `15m` to `1w` — and a horizon. The horizon picks the **strategy**, not
+just the speed. **Investing** is trend accumulation on the classic 50/200 moving averages, a wide
+support band and daily bars; **Trading** is a VWAP pull-back at a fixed 2R on 9/21, a tight band and
+hourly bars, so it flips far sooner. The two rules are described under the verdict card below.
+Picking a horizon switches the interval with it; the interval row still overrides it afterwards. The chart draws price as a line or as candles (Settings picks which), both
 moving averages, the support/resistance band, and the Asia, Europe and US session opens that have
 not happened yet, each in its own timezone so daylight saving handles itself — the ones already gone
 are not drawn, since a session you can no longer trade is not worth a line across the candles. The
@@ -464,20 +465,33 @@ depending on which way the daily leans. No head-and-shoulders and no chart-shape
 guesswork dressed as maths. Direction-carrying cards vote in the Long/Short tally; the ones that
 describe conditions rather than a side — volatility, volume — deliberately do not.
 
-The card under the chart always answers, even when the answer is no. A tally split evenly between
-the two sides says **No side to take** and shows the count; a bias whose geometry doesn't work — price
-already past the level the setup would aim at — says **No clean setup**. Both used to render as an
-empty space where the answer goes, which reads as the tool being broken rather than as it having
-looked and found nothing.
+The card under the chart always answers, even when the answer is no — and what it answers with
+depends on which of the two strategies the horizon is holding. They are genuinely different rules,
+not one rule at two speeds, which is what the toggle used to be.
 
-When there is a trade, the card spells the setup out. The entry is the fast MA, and the card says
-which trade that actually is: a **pull-back** or **bounce** when the MA is the side of price you'd
-wait for, a **reclaim** or **break** when it isn't. The stop sits past the near swing by a quarter of
-an ATR, so ordinary noise doesn't clip it. The target is a real level — the structural high or low
-over three times the swing window — and the R:R is whatever that works out to, `thin` in amber when
-the reward is under 1R. Nothing is projected to make the number look good, which means roughly half
-of all setups now say they don't pay, and that is the honest answer. Taking one against the higher
-timeframe gets said out loud too.
+**Trading — the VWAP pull-back.** The bias comes from the 9/21 tally, the entry is the pull-back to
+the 9-MA, the stop sits one ATR past it and the target two: **a fixed 2R by construction**. That is
+the point of the shape. When the target was the far swing instead, the R:R was decided by wherever
+the last three windows of chart happened to put a high, and roughly half of all setups were declined
+on geometry that had nothing to do with whether the read was right. Now the geometry always pays and
+the thing that says no is a filter you can name — the **session VWAP**, and it is a gate rather than
+a vote: longs only above the average paid since the open, shorts only below, and no card outvotes
+it. A split tally still says **No side to take** and shows the count; the wrong side of that line
+says **Wrong side of the VWAP**; price already past the MA says **No clean setup**, because entering
+there is chasing. Taking one against the higher timeframe gets said out loud too.
+
+**Investing — trend accumulation.** Long only, and that is a claim rather than a simplification:
+shorting rallies is a different trade with a different holding period and it is not investing. The
+200-MA is the regime. Above it there is a position — **Hold**, with the add sitting back at the
+50-MA — and price that has already come *under* the 50 while still over the 200 is the accumulation
+band, so the card says **Accumulate** rather than calling it a chase. Below the 200-MA it says
+**Out**, which is an answer and not a missing setup. The stop is the 200-MA itself: the position
+ends when the trend does, not when the week is ugly. The target is the wide high and it is a **trim**,
+not a deadline, which is why `thin` is computed on this side and never enforced — R:R is the wrong
+question about a holding that has no deadline.
+
+Nothing is projected on either side to make a number look good, and `thin` still shows in amber on
+the trading side when a setup pays less than it risks net of fees.
 
 **Alert me** on that card saves those three levels, and the bell then watches the live
 price against them: it tells you when price reaches the entry, when it runs through the stop (the

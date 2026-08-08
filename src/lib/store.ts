@@ -101,6 +101,17 @@ export interface Watch {
    * the same direction are two trades, not one, and neither may quietly overwrite the other.
    */
   horizon: string
+  /**
+   * Which strategy actually produced it — the HORIZONS `strategy` name, e.g. 'VWAP pull-back'. The
+   * horizon above only says which lane; it does not say which rule, and those stopped being the
+   * same thing when the two horizons got their own strategies (see strategyPlan in market.ts).
+   *
+   * Optional, and deliberately not backfilled: every row saved before that change was made under
+   * the old shared swing rule, and there is no honest way to relabel it as something it wasn't. The
+   * Record groups on this where it exists and on the horizon where it doesn't, so the old trades
+   * keep their own lane instead of quietly averaging into a rule that never made them.
+   */
+  rule?: string
   dir: 'long' | 'short'
   entry: number
   stop: number
@@ -493,6 +504,9 @@ export function load(data: unknown): State {
       asset: String(w.asset ?? ''),
       label: String(w.label || w.asset || 'Setup'),
       horizon: String(w.horizon ?? ''),
+      // absent stays absent — see Watch.rule. Defaulting it to '' would be harmless, but defaulting
+      // it to a rule name would relabel every pre-strategies row as something that never made it
+      ...(w.rule ? { rule: String(w.rule) } : {}),
       dir: w.dir === 'short' ? 'short' as const : 'long' as const,
       entry: Number(w.entry),
       stop: Number(w.stop),
@@ -534,6 +548,7 @@ export function load(data: unknown): State {
       asset: String(r.asset ?? ''),
       label: String(r.label || r.asset || 'Setup'),
       horizon: String(r.horizon ?? ''),
+      ...(r.rule ? { rule: String(r.rule) } : {}), // as on the watch above
       dir: r.dir === 'short' ? 'short' as const : 'long' as const,
       entry: Number(r.entry),
       stop: Number(r.stop),

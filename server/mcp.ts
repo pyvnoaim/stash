@@ -432,11 +432,28 @@ const tools: Record<string, {
       const list: Signal[] = market.deskSignals(higher, null, vwap, view.signals)
       const { bulls, bears, dir } = market.tally(list)
       const price = candles.at(-1)!.c
-      const entry = view.smaFast.at(-1)
-      // the fee dial, for the same reason deskSignals exists: an answer here that disagreed with
-      // the screen would be worse than no answer, and "does this pay" is the part it disagrees on
-      const plan = entry != null ? market.tradePlan(dir, price, entry, view.levels, view.atr, s.dials.fee) : null
-      const fights = higher && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
+      /* Through the horizon's own strategy, for the same reason deskSignals exists: an answer here
+         that disagreed with the screen would be worse than no answer. The two horizons run different
+         rules now — accumulation on long, a fixed-2R VWAP pull-back on short — so reading the plan
+         off one of them would make this tool confidently describe a setup the desk never offered.
+         The fee dial rides along because "does this pay" is the part it disagrees on. */
+      const { plan, block } = market.strategyPlan(h, {
+        dir, price, fast: view.smaFast.at(-1) ?? null, slow: view.smaSlow.at(-1) ?? null,
+        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee: s.dials.fee,
+      })
+      const holding = h === 'long'
+      // accumulation is long-only and gated on the 200-MA already, so the higher timeframe is not a
+      // second filter over it — same call the card makes
+      const fights = !holding && higher && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
+      const NOTHING: Record<string, string> = {
+        flat: 'No side to take — the readings are split',
+        chase: `No clean setup — price is already past the ${cfg.fast}-MA, and entering there is chasing`,
+        vwap: `Wrong side of the session VWAP for a ${dir} — this rule will not take one against the average paid since the open`,
+        quiet: 'No ATR off these bars yet, so there is no stop to size',
+        below: `Out — price is under the ${cfg.slow}-MA, and below that line there is nothing to hold`,
+        unconfirmed: `Out — back above the ${cfg.slow}-MA but the ${cfg.fast} has not crossed it, so the recovery is unconfirmed`,
+        geometry: 'The levels do not make a trade — the stop or the target lands the wrong side of the entry',
+      }
 
       return {
         asset: want.label, id: want.id, horizon: cfg.label, interval,
@@ -444,18 +461,23 @@ const tools: Record<string, {
         support: view.support, resistance: view.resistance, atr: view.atr,
         tally: { bulls, bears, bias: dir },
         signals: list.map((x) => ({ label: x.label, tone: x.tone, detail: x.detail })),
+        strategy: cfg.strategy, rule: cfg.rule,
         plan: plan && {
           ...plan,
-          how: `${dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA`,
+          side: holding ? 'long' : dir,
+          how: holding
+            ? `add on dips into the ${cfg.fast}-MA while price holds the ${cfg.slow}; out on a daily close under it, trim into the wide high`
+            : `${dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, stop one ATR past it and target two`,
           // a list, because a setup can be both thin and against the tide, and dropping either one
-          // of those on the floor is dropping the half of the answer that says don't
+          // of those on the floor is dropping the half of the answer that says don't. `thin` is not
+          // a warning on the accumulation side — see holdPlan; it is computed there, never enforced
           warnings: [
-            ...(plan.thin ? [`more than half of these have to win just to break even (${(plan.breakEven * 100).toFixed(0)}%, net of the ${s.dials.fee}%-a-side fee) — it pays less than it costs when wrong`] : []),
+            ...(plan.thin && !holding ? [`more than half of these have to win just to break even (${(plan.breakEven * 100).toFixed(0)}%, net of the ${s.dials.fee}%-a-side fee) — it pays less than it costs when wrong`] : []),
             ...(fights ? [`the ${up} chart is going the other way, and that is the bigger tide`] : []),
           ],
         },
-        // the honest answer is usually that there is nothing to do, so it is said rather than left blank
-        ...(plan ? {} : { verdict: dir === 'flat' ? 'No side to take — the readings are split' : `No clean setup — price is already past the ${cfg.fast}-MA, and entering there is chasing` }),
+        // the honest answer is often that there is nothing to do, so it is said rather than left blank
+        ...(plan ? {} : { verdict: (block && NOTHING[block]) ?? 'Nothing to do here' }),
       }
     },
   },
