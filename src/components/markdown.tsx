@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { safeHref, safeSrc, spanOpen } from '@/lib/markdown'
+import { safeHref, safeSrc, spanOpen, type WikiTarget } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 
 /**
@@ -12,10 +12,11 @@ import { cn } from '@/lib/utils'
 /* A whole paragraph at a time, not a line: only a code span may run past the end of its line, so
    a pasted email body between backticks is one span. The rest bar newlines from their insides, or
    a stray * halfway down a note would italicise everything back up to the last one. */
-/* The image alternative sits before the link one deliberately: alternation is ordered, and
-   `![alt](src)` would otherwise match as a link with a stray ! left in front of it. */
+/* Order matters — alternation takes the first that matches. The image sits before the link, or
+   `![alt](src)` matches as a link with a stray ! in front of it; and `[[both]]` sits before both,
+   or its inner `[…]` is read as the start of one. */
 const INLINE =
-  /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|~~[^~\n]+~~|\+\+[^+\n]+\+\+|`[^`]+`|!\[[^\]\n]*\]\([^)\n]+\)|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s)]+)/g
+  /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|~~[^~\n]+~~|\+\+[^+\n]+\+\+|`[^`]+`|\[\[[^\][\n]+\]\]|!\[[^\]\n]*\]\([^)\n]+\)|\[[^\]\n]+\]\([^)\n]+\)|https?:\/\/[^\s)]+)/g
 const link = (href: string, text: string, key: number) => (
   <a
     key={key}
@@ -28,9 +29,52 @@ const link = (href: string, text: string, key: number) => (
   </a>
 )
 
-function inline(text: string) {
+/**
+ * How a `[[link]]` finds what it names and what happens when one is clicked. Absent — on the public
+ * share page, which has no app around it and no account behind it — a link renders as the words
+ * between its brackets and nothing more: there is nothing there to open, and a dead control is
+ * worse than plain text.
+ */
+export interface WikiLinks {
+  find: (label: string) => WikiTarget | null
+  open: (target: WikiTarget) => void
+}
+
+function inline(text: string, links?: WikiLinks) {
   return text.split(INLINE).map((part, i) => {
     if (!part) return null
+    if (part.startsWith('[[') && part.endsWith(']]')) {
+      const label = part.slice(2, -2)
+      const target = links?.find(label) ?? null
+      if (!target) {
+        /* Nothing carries that title. It reads as the words it holds, dimmed and explained on
+           hover, rather than as a link that does nothing when clicked — a title is editable and
+           this is what renaming the far end looks like from this one. */
+        return (
+          <span
+            key={i}
+            title={links ? `No item called “${label}”` : undefined}
+            className={links ? 'text-muted-foreground underline decoration-dotted underline-offset-2' : undefined}
+          >
+            {label}
+          </span>
+        )
+      }
+      return (
+        <button
+          key={i}
+          type="button"
+          onClick={() => links!.open(target)}
+          title={target.done ? `${target.text} — finished` : target.text}
+          className={cn(
+            'hover:text-foreground underline underline-offset-2',
+            target.done && 'text-muted-foreground line-through',
+          )}
+        >
+          {label}
+        </button>
+      )
+    }
     if (part.startsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>
     if (part.startsWith('~~')) return <s key={i}>{part.slice(2, -2)}</s>
     if (part.startsWith('++')) return <u key={i}>{part.slice(2, -2)}</u>
@@ -71,14 +115,19 @@ function inline(text: string) {
   })
 }
 
-const softLines = (lines: string[]) => inline(lines.join('\n'))
+const softLines = (lines: string[], links?: WikiLinks) => inline(lines.join('\n'), links)
 
 /**
  * `- [ ]` and `- [x]` render as real checkboxes when the note is editable: ticking one rewrites
  * that line in the note itself, so a checklist needs no model of its own. Without `onToggle` —
  * anywhere the note is only being read — they stay as glyphs.
  */
-export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: number) => void }) {
+export function Markdown({ text, onToggle, links }: {
+  text: string
+  onToggle?: (line: number) => void
+  /** absent where a link has nowhere to go — see WikiLinks */
+  links?: WikiLinks
+}) {
   const blocks: React.ReactNode[] = []
   let list: { ordered: boolean; items: { text: string, box?: boolean, line: number }[] } | null = null
   let para: string[] = []
@@ -91,7 +140,7 @@ export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: n
     const boxes = list.items.every((it) => it.box !== undefined)
     const items = list.items.map((it, i) => (
       it.box === undefined
-        ? <li key={i}>{inline(it.text)}</li>
+        ? <li key={i}>{inline(it.text, links)}</li>
         : (
             <li key={i} className="-ml-5 flex list-none items-start gap-2">
               <input
@@ -102,7 +151,7 @@ export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: n
                 className="accent-foreground mt-[0.28em] size-3.5 shrink-0"
               />
               <span className={it.box ? 'text-muted-foreground line-through' : undefined}>
-                {inline(it.text)}
+                {inline(it.text, links)}
               </span>
             </li>
           )
@@ -114,14 +163,14 @@ export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: n
   }
   const flushPara = () => {
     if (!para.length) return
-    blocks.push(<p key={blocks.length}>{softLines(para)}</p>)
+    blocks.push(<p key={blocks.length}>{softLines(para, links)}</p>)
     para = []
   }
   const flushQuote = () => {
     if (!quote) return
     blocks.push(
       <blockquote key={blocks.length} className="text-muted-foreground border-l-2 pl-3 italic">
-        {softLines(quote)}
+        {softLines(quote, links)}
       </blockquote>,
     )
     quote = null
@@ -162,7 +211,7 @@ export function Markdown({ text, onToggle }: { text: string, onToggle?: (line: n
     if (h) {
       flush()
       const cls = h[1].length === 1 ? 'text-xl' : h[1].length === 2 ? 'text-lg' : 'text-base'
-      blocks.push(<p key={blocks.length} className={cn('mt-2 font-semibold', cls)}>{inline(h[2])}</p>)
+      blocks.push(<p key={blocks.length} className={cn('mt-2 font-semibold', cls)}>{inline(h[2], links)}</p>)
     } else if (ul || ol) {
       flushPara(); flushQuote()
       const ordered = !!ol

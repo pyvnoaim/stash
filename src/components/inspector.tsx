@@ -14,6 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { isRepeat, REPEATS, repeatLabel, today } from '@/lib/parse'
+import { wikiKey, wikiLinks } from '@/lib/markdown'
 import { patch, tagsFor, useStash, type Item, type ItemType } from '@/lib/store'
 
 const TYPES: ItemType[] = ['task', 'idea', 'note']
@@ -49,6 +50,42 @@ function Links({ it }: { it: Item }) {
           <span className="truncate">{host(u)}</span>
         </a>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Who points here. A `[[link]]` names a title, so this is every note carrying this row's — the
+ * other half of a link, and the half you cannot see from the note that was linked to.
+ *
+ * ponytail: a scan of every note on every render of the panel, which at a stash's size is nothing.
+ * Index it by key on write if a stash ever gets big enough to feel it.
+ */
+function Backlinks({ it, onOpen }: { it: Item; onOpen: (id: string) => void }) {
+  const s = useStash()
+  const key = wikiKey(it.text)
+  // an untitled row has no title to be named by, so nothing can point at it
+  const from = key ? s.items.filter((o) => o.id !== it.id && wikiLinks(o.note).includes(key)) : []
+  if (!from.length) return null
+  return (
+    <div className="grid gap-2">
+      <Label>Linked from</Label>
+      <div className="grid gap-1">
+        {from.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => onOpen(o.id)}
+            title={o.text}
+            className={cn(
+              'text-muted-foreground hover:text-foreground hover:bg-muted truncate rounded px-1 py-0.5 text-left text-xs',
+              o.done && 'line-through',
+            )}
+          >
+            {o.text}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -101,7 +138,13 @@ function TagSuggest({ pid, has, q, onPick }: {
   )
 }
 
-export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () => void; onExpand: () => void }) {
+export function Inspector({ it, onDelete, onExpand, onOpenItem }: {
+  it: Item
+  onDelete: () => void
+  onExpand: () => void
+  /** open another item's page — what a backlink does when clicked */
+  onOpenItem: (id: string) => void
+}) {
   const s = useStash()
   /* Who it is for. Only where there is somebody else to pick: in a stash of your own every row is
      yours, and a field whose only answer is "you" is not a field. */
@@ -185,6 +228,7 @@ export function Inspector({ it, onDelete, onExpand }: { it: Item; onDelete: () =
           onChange={(e) => patch(it.id, { note: e.target.value })}
         />
         <Links it={it} />
+        <Backlinks it={it} onOpen={onOpenItem} />
       </div>
 
       <div className="grid gap-2">
