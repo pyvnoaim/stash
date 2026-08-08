@@ -243,7 +243,7 @@ function Days({ data, label }: { data: { day: string; n: number }[]; label: (d: 
   const max = Math.max(...data.map((d) => d.n), 1)
   return (
     <div className="flex flex-col gap-2">
-      <div className="border-border flex h-[150px] items-end gap-[3px] border-b">
+      <div className="border-border flex h-37.5 items-end gap-0.75 border-b">
         {data.map((d) => (
           <Hint key={d.day} label={`${label(d.day)} — ${d.n}`}>
             <div className="flex h-full flex-1 flex-col justify-end">
@@ -274,7 +274,7 @@ function Trend({ data, label }: { data: { day: string; n: number }[]; label: (d:
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="border-border relative h-[150px] border-b">
+      <div className="border-border relative h-37.5 border-b">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
           <path d={`${line} L100 100 L0 100 Z`} className="fill-foreground/10" />
           <path
@@ -467,7 +467,7 @@ export default function Overview({ onTag, onNavigate }: {
   const maxTag = Math.max(...tags.map(([, n]) => n), 1)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Open" value={stats.open} sub={stats.open === 1 ? 'item' : 'items'} onOpen={() => onNavigate('all')} />
         <Stat label="Due today" value={stats.dueToday} onOpen={() => onNavigate('today')} />

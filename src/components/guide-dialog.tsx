@@ -66,7 +66,7 @@ function DemoChart({ demo }: { demo: Demo }) {
         {/* the bars the guide is actually about, lit from behind */}
         {mark && (
           <rect x={x(mark[0]) - w} y="0" width={x(mark[1]) - x(mark[0]) + w * 2} height="100"
-            className="fill-foreground/[0.07]" />
+            className="fill-foreground/7" />
         )}
         {ma && (
           <>

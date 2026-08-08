@@ -637,7 +637,7 @@ export default function MarketPage() {
   const hc = hover != null ? vis[hover] : null
 
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
       {/* asset picker — a grouped dropdown, too many now for a pill row */}
       <div className="flex flex-wrap items-center gap-2">
         <Select value={asset} onValueChange={setAsset}>
@@ -942,7 +942,7 @@ export default function MarketPage() {
         <CardContent className="px-3">
           {/* who is at their desks — context for the candles it sits directly on top of */}
           <OpenNow at={candles.at(-1)?.t} />
-          <div ref={plot} className="relative h-[300px] md:h-[380px]">
+          <div ref={plot} className="relative h-75 md:h-95">
             {error && <p className="text-destructive absolute inset-0 flex items-center justify-center text-sm">{error}</p>}
             {loading && (
               <div className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm">
@@ -1031,7 +1031,7 @@ export default function MarketPage() {
                           overflow-visible, which would paint the wash straight across the card. */}
                       {bandTop < bandBottom && (
                         <rect x="0" y={bandTop} width="100" height={bandBottom - bandTop}
-                          className="fill-muted-foreground/[0.06]" stroke="none" />
+                          className="fill-muted-foreground/6" stroke="none" />
                       )}
                       {rangeLines.filter((l) => l.lvl >= lo && l.lvl <= hi).map((l) => (
                         <line key={l.label} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
@@ -1111,7 +1111,7 @@ export default function MarketPage() {
                   {/* highlight the hovered candle's column, behind the candles so it sits lit on top */}
                   {hc && n > 1 && (
                     <rect x={xAt(hover!) - 50 / (n - 1)} y="0" width={100 / (n - 1)} height="100"
-                      className="fill-foreground/[0.07]" stroke="none" />
+                      className="fill-foreground/7" stroke="none" />
                   )}
                   {/* area fill only reads under a single price line, so it's line-mode only */}
                   {chart === 'line' && (
@@ -1171,7 +1171,7 @@ export default function MarketPage() {
                     the squash the trick was meant to escape. */}
                 {visPivots.map((p) => (
                   <div key={`${p.kind}-${p.i}`}
-                    className="bg-foreground/45 pointer-events-none absolute size-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                    className="bg-foreground/45 pointer-events-none absolute size-0.75 -translate-x-1/2 -translate-y-1/2 rounded-full"
                     style={{ left: `${xAt(p.i - start)}%`, top: `${y(p.price) + (p.kind === 'high' ? -1.8 : 1.8)}%` }} />
                 ))}
 
@@ -1297,21 +1297,21 @@ export default function MarketPage() {
                 const seen = vals.some((v) => v >= lo && v <= hi)
                 return (
                   <span key={p} className={cn(!seen && 'opacity-60')}>
-                    <span className={cn('inline-block h-0.5 w-3 translate-y-[-3px] align-middle', bg)} /> {p}-MA
+                    <span className={cn('inline-block h-0.5 w-3 -translate-y-0.75 align-middle', bg)} /> {p}-MA
                     {!seen && vals.length > 0 && <span className="ml-1">off frame {vals.at(-1)! > hi ? '↑' : '↓'}</span>}
                   </span>
                 )
               })}
               {shownSessions.map((s) => (
                 <span key={s.label} className="opacity-70">
-                  <span className="inline-block h-0.5 w-3 translate-y-[-3px] align-middle" style={{ backgroundColor: s.color }} /> {s.label} open
+                  <span className="inline-block h-0.5 w-3 -translate-y-0.75 align-middle" style={{ backgroundColor: s.color }} /> {s.label} open
                 </span>
               ))}
-              {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 translate-y-[-3px] align-middle" /> opening range</span>}
+              {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 -translate-y-0.75 align-middle" /> opening range</span>}
               {/* the line that had been voting invisibly since the day it was added */}
               {vwap && (
                 <span className={cn(!(vwap.vwap >= lo && vwap.vwap <= hi) && 'opacity-60')}>
-                  <svg width="16" height="3" className="mr-0.5 inline-block translate-y-[-2px] align-middle">
+                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
                     <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-cyan-500" strokeWidth={1.5} strokeDasharray="7 3" />
                   </svg> VWAP <span className="tabular-nums">{fmt(vwap.vwap)}</span>
                   {!(vwap.vwap >= lo && vwap.vwap <= hi) && <span className="ml-1">off frame {vwap.vwap > hi ? '↑' : '↓'}</span>}
@@ -1321,7 +1321,7 @@ export default function MarketPage() {
                   made the pivot, a dashed line for the range it sits inside */}
               {structure && !!visPivots.length && (
                 <span className="opacity-80">
-                  <span className="bg-foreground/45 mr-0.5 inline-block size-1.5 translate-y-[-1px] rounded-full align-middle" />
+                  <span className="bg-foreground/45 mr-0.5 inline-block size-1.5 -translate-y-px rounded-full align-middle" />
                   {/* only claimed when a dash is actually on screen. standingLines is filtered by
                       the frame as well as by whether the level holds, so "none drawn" also covers a
                       level that is standing but scrolled out — and saying "all broken through"
@@ -1331,7 +1331,7 @@ export default function MarketPage() {
               )}
               {structure && (
                 <span className="opacity-80">
-                  <svg width="16" height="3" className="mr-0.5 inline-block translate-y-[-2px] align-middle">
+                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
                     <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-muted-foreground/70" strokeWidth={1} strokeDasharray="4 3" />
                   </svg> range · <span className="tabular-nums">{fmt(view.support)}–{fmt(view.resistance)}</span>
                 </span>
@@ -1340,7 +1340,7 @@ export default function MarketPage() {
                   entry for a mark nobody can see is the legend describing a different chart */}
               {structure && !!visGaps.length && (
                 <span className="opacity-80">
-                  <span className="bg-emerald-500/40 mr-0.5 inline-block h-2 w-3 translate-y-[1px] align-middle" />
+                  <span className="bg-emerald-500/40 mr-0.5 inline-block h-2 w-3 translate-y-px align-middle" />
                   {visGaps.length} unfilled {visGaps.length === 1 ? 'gap' : 'gaps'}
                 </span>
               )}
@@ -1350,7 +1350,7 @@ export default function MarketPage() {
                 const seen = l.lvl >= lo && l.lvl <= hi
                 return (
                   <span key={l.label} className={cn(!seen && 'opacity-60')}>
-                    <svg width="16" height="3" className="mr-0.5 inline-block translate-y-[-2px] align-middle">
+                    <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
                       <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-fuchsia-600"
                         strokeWidth={l.w} strokeOpacity={l.op} strokeDasharray={l.dash} />
                     </svg> {l.label}
