@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { hhmm, hourOf, hourWindow, mondayOf, today } from '@/lib/parse'
 import { PROJECT_DRAG } from '@/lib/utils'
 import { chargesBetween, patch, project, select, setCalView, SUBS, useStash, type Item, type Project, type Sub } from '@/lib/store'
-import { euro, netOf, rLabel, signedEuro } from '@/lib/notify'
+import { euro, isPosition, netOf, rLabel, signedEuro } from '@/lib/notify'
 import { calendar, type CalEvent } from '@/lib/sync'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -84,12 +84,13 @@ function SubChip({ sub }: { sub: Sub }) {
   )
 }
 
-/** The day's takings out of the record, in the header beside its number. */
+/** The day's takings out of the record, in the header beside its number. Positions only — see
+ *  pnlByDay for why a watched plan's hypothetical euros have no business on a date. */
 function Pnl({ pnl }: { pnl: { cash: number | null; r: number; unpricedR: number } | undefined }) {
   if (!pnl) return null
   return (
     <span
-      title="Closed trades this day, from the market page's record"
+      title="Positions you were in that closed this day. Setups you only watched are not counted — nothing was on them."
       className={cn(
         'truncate font-mono text-[10px] tabular-nums sm:text-xs',
         (pnl.cash ?? pnl.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive',
@@ -167,16 +168,26 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     return m
   }, [s.subs, from, to])
 
-  /* Closed trades land on the day they ended, summed in the record's own money — a position you
-     were in off its size and leverage, a watched plan off the stake in Settings, net of funding:
-     the exact figure the market page's record shows per row. A day with no priced row reads in R,
-     and a day mixing both says both — cash for the money rows, R for the rest — so an unpriced
-     win never vanishes behind a priced loss. */
+  /* Closed positions land on the day they ended, in their own money — size × leverage against the
+     distance from the entry to the stop, net of funding: the exact figure the market page's record
+     shows per row.
+
+     Only the ones with real money on them. A setup you merely set an alert on has no size, and the
+     record prices it off the hypothetical stake in Settings — which is a fine thing to say on the
+     record, where the footnote calls it "what the plan would have paid", and the wrong thing
+     entirely on a day in a month, where a euro figure beside a date reads as money that left the
+     account. A day whose only closes were watched plans now says nothing, which is the truth: on
+     that day nothing was won or lost.
+
+     Passing 0 rather than `s.stake` is the second lock. stakeOf ignores it for a real position,
+     so the number is unchanged — but a row that ever slipped past the filter would price to null
+     instead of to a loss nobody took. */
   const pnlByDay = useMemo(() => {
     const m = new Map<string, { cash: number | null; r: number; unpricedR: number }>()
     for (const r of s.results) {
+      if (!isPosition(r)) continue
       const key = stamp(new Date(r.closedAt))
-      const cash = netOf(r, r.r, s.stake, s.dials.funding, r.closedAt)
+      const cash = netOf(r, r.r, 0, s.dials.funding, r.closedAt)
       const at = m.get(key) ?? { cash: null, r: 0, unpricedR: 0 }
       at.r += r.r
       if (cash !== null) at.cash = (at.cash ?? 0) + cash
@@ -184,7 +195,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
       m.set(key, at)
     }
     return m
-  }, [s.results, s.stake, s.dials.funding])
+  }, [s.results, s.dials.funding])
 
   /* What the subscribed calendar has on these days, if there is one. The server fetches and caches
      it, so paging back and forth over a month costs one request each way and nothing after that.
