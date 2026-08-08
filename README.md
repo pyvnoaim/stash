@@ -323,6 +323,14 @@ Subscriptions land on the days they bill, generated across the visible weeks onl
 green with a `+`, an expense stays quiet behind a `€`. A charge is not an item, so clicking one
 opens the Subscriptions tool rather than trying to select it.
 
+Trades land on the day they closed, summed beside the day's number in their own money — off the
+size and leverage the position was taken with, net of funding. **Only trades you were actually
+in.** The Markets record also keeps setups you watched and never took and prices them off the
+hypothetical stake in Settings, and those are deliberately not here: a day is a thing that
+happened, and a month of what untaken plans would have paid summed beside a month of what was
+really paid reads like a bank balance and is not one. That question is still asked, in the record
+under the chart where the row says which kind it was.
+
 Only the weeks the month needs, five or six, so there is never a dead row. Days outside the month
 are tinted back, today's number is filled in, and the grid is ruled by its own gaps rather than by
 a border on every cell.
@@ -579,15 +587,22 @@ nothing is pushed to your phone.
 ### The others
 
 Under your own record sits everyone else's, if they want it there. **Settings → Markets → The
-others** switches your desk on: your finished setups and the ones you are in now become readable
-by everyone with an account on this server, and theirs by you. Off until you say so, and off is
-what a document that has never heard of the setting means.
+others** switches your desk on: the trades you actually took — finished ones and the ones you are
+in now — become readable by everyone with an account on this server, and theirs by you. Off until
+you say so, and off is what a document that has never heard of the setting means.
+
+**Only trades you were really in travel.** A plan you watched and never took is not sent at all,
+which is a stronger promise than not showing it: the filter is on the server, so an untaken idea
+never leaves your document rather than arriving and being hidden. Your own record still keeps both,
+because there the distinction is drawn on the row; on somebody else's page a hit rate reads as a
+claim about how that person trades, and nobody scrolls a list of other people's results thinking
+half of these were hypothetical.
 
 What travels is the trade — the asset, the side, the horizon, whether the entry has been reached,
 and how the finished ones scored in R. What does not is the money: the size and leverage a position
 was taken with never leave the device they were typed on, so the page can say someone is up 3.2R
-across eleven setups and cannot say what that was worth to them. A filled dot marks a row with real
-money on it, a hollow one a plan being watched.
+across eleven trades and cannot say what that was worth to them. Those two numbers are read to
+decide what to send and are never part of what is sent.
 
 The **Opening range** preset pins 15m bars and marks the high and low of the first hour of the New
 York session — 09:30 local, daylight saving included — which is the window the breakout play watches.

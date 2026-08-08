@@ -412,8 +412,9 @@ export const roster = (): Promise<Face[]> =>
   call('/api/roster').then((j) => j.roster as Face[]).catch(() => [])
 
 /**
- * One person on the Desk: how their setups went, and what they are in now. No euros — the server
- * strips the size and leverage, so `live` is the whole of what their money is allowed to say.
+ * One person on the Desk: how their trades went, and what they are in now. Trades they were really
+ * in and nothing else — the server drops watched plans before sending, so every row here is money
+ * somebody put down. No euros either: it strips the size and leverage, so how much is never said.
  */
 export interface DeskRow {
   name: string
@@ -423,7 +424,7 @@ export interface DeskRow {
   }[]
   open: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
-    entry: number, stop: number, target: number, entryAt: number | null, live: boolean,
+    entry: number, stop: number, target: number, entryAt: number | null,
   }[]
 }
 

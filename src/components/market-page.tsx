@@ -2152,10 +2152,14 @@ function Record() {
 }
 
 /**
- * Everyone else on this server who has switched their desk on: how their setups went, and what
- * they are in right now. In R and never in euros — the server does not send their size, so this
- * cannot say what anyone is up in money, which is the point. A dot marks the ones with real money
- * on them.
+ * Everyone else on this server who has switched their desk on: how their trades went, and what they
+ * are in right now. In R and never in euros — the server does not send their size, so this cannot
+ * say what anyone is up in money, which is the point.
+ *
+ * Trades they were really in, and only those: the server drops watched plans before sending, so a
+ * hit rate here is a claim about how someone trades rather than about how their untaken ideas would
+ * have gone. That filter is deliberately not repeated on this side — arriving and then being hidden
+ * is not the same as never being sent, and only one of the two is a promise.
  *
  * Nothing here when nobody has turned it on, which is also what it looks like offline and on a
  * stash with no account at all.
@@ -2202,9 +2206,9 @@ function Desk() {
                     other desk off the page — the count below says what was left out */}
                 {p.open.slice(0, 6).map((w) => (
                   <div key={w.id} className="flex items-baseline gap-2 pt-1 text-xs">
-                    {/* a filled dot is real money on it, a hollow one a plan being watched */}
-                    <span className={cn('size-1.5 shrink-0 rounded-full',
-                      w.live ? 'bg-foreground' : 'border-muted-foreground border')} />
+                    {/* the dot that separated real money from a watched plan is gone with the plans
+                        themselves — every row the server sends now is money somebody put down, and a
+                        marker that is true of everything marks nothing */}
                     <span className="w-28 shrink-0 truncate">{w.label}</span>
                     <span className="text-muted-foreground truncate">
                       {w.dir === 'long' ? 'Long' : 'Short'}{w.horizon ? ` · ${w.horizon}` : ''}

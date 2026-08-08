@@ -157,18 +157,30 @@ assert.deepEqual(await (await get('/api/users', leon)).json(), { users: ['kim', 
 assert.deepEqual(await (await get('/api/users', mia)).json(), { users: ['kim', 'leon'] })
 
 /* the Desk: only accounts that switched it on, and only what a trade is — never what it cost or
-   paid anyone. Leon leaves his off, so mia's desk stays empty while his reads hers. */
+   paid anyone. Leon leaves his off, so mia's desk stays empty while his reads hers.
+   Mia's document holds one of each kind on both lists: a trade she was really in, and a plan she
+   only ever watched. Only the taken ones may leave the server — a hit rate someone else reads is a
+   claim about how she trades, and untaken ideas do not get to vouch for it. */
 await put(mia, (await (await get('/state', mia)).json()).version, {
   desk: true,
-  results: [{ id: 'r1', label: 'Bitcoin', horizon: 'Trading', dir: 'long', level: 'target', r: 2, closedAt: 5 }],
-  watches: [{ id: 'w1', label: 'Ether', horizon: 'Trading', dir: 'short', entry: 3, stop: 4, target: 1, size: 500, lev: 10 }],
+  results: [
+    { id: 'r1', label: 'Bitcoin', horizon: 'Trading', dir: 'long', level: 'target', r: 2, closedAt: 5, size: 500, lev: 10 },
+    { id: 'r2', label: 'Solana', horizon: 'Trading', dir: 'long', level: 'stop', r: -1, closedAt: 6 },
+  ],
+  watches: [
+    { id: 'w1', label: 'Ether', horizon: 'Trading', dir: 'short', entry: 3, stop: 4, target: 1, size: 500, lev: 10 },
+    { id: 'w2', label: 'Cardano', horizon: 'Investing', dir: 'long', entry: 3, stop: 1, target: 9 },
+  ],
 })
 assert.equal((await get('/api/desk')).status, 401)
 const seen = (await (await get('/api/desk', leon)).json()).desk
 assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that opted in')
+assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1'], 'a plan she never took is not her record')
 assert.equal(seen[0].results[0].r, 2)
-assert.equal(seen[0].open[0].live, true, 'a real position says it is one')
+assert.deepEqual(seen[0].open.map((w: any) => w.id), ['w1'], 'nor is a plan she is only watching')
+// the filter reads size and leverage to decide, and neither one is what it sends
 assert.ok(!JSON.stringify(seen).includes('500'), "someone else's size left the server")
+assert.ok(!JSON.stringify(seen).includes('Cardano'), 'a watched plan left the server')
 assert.deepEqual((await (await get('/api/desk', mia)).json()).desk, [], 'a desk that is off is not read')
 
 /* where you are signed in: yours only, the one asking marked, and never the hash that proves it —

@@ -1194,11 +1194,19 @@ export function start({
       return send(res, 200, { users: (q.people.all(user.id) as { name: string }[]).map((u) => u.name) })
     }
 
-    /* The Desk: how everyone else's setups went, and what they are in now. Opt-in per account —
+    /* The Desk: how everyone else's trades went, and what they are in now. Opt-in per account —
        a document that has not set `desk` is not read past that field — and money-free by
        construction: the size and leverage a position was taken with never leave the document, so
        this says what the trade is, never what it is worth to them. Read-only, and everyone here
-       is someone an admin let in. */
+       is someone an admin let in.
+
+       Real positions only, on both lists. A record keeps watched plans beside taken trades and
+       prices them off a hypothetical stake, which is fine on your own page where the distinction is
+       drawn — and is not fine here, where someone else reads a hit rate as a claim about how the
+       person trades. Nobody scrolls a leaderboard thinking "some of these were never taken". The
+       filter is here rather than on the page because this is the boundary: a plan somebody never
+       took should not leave their document at all, and filtering after it arrived would ship it and
+       then hide it. It also means `size` and `lev` are read to decide what to send, never sent. */
     if (path === '/api/desk' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
@@ -1206,6 +1214,10 @@ export function start({
       // another person's document is untrusted input to my page: numbers are numbers or the row goes
       const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
       const arr = (a: unknown) => (Array.isArray(a) ? a : [])
+      /* Real money on it, decided the same way the app's own isPosition does — but written out
+         here rather than imported, because this reads someone else's document: `size` arriving as
+         the string "500" must not count, and NaN must not either. Both fall out of the typeof. */
+      const taken = (w: any) => typeof w?.size === 'number' && w.size > 0 && typeof w?.lev === 'number' && w.lev > 0
       const desk = []
       for (const row of rows) {
         let s: any
@@ -1215,19 +1227,17 @@ export function start({
           /* The name and nothing else of who they are: an avatar is up to 128 KB of data URI and
              the page draws none of them, so ten desks would have been a megabyte of picture. */
           name: row.name,
-          results: arr(s.results).map((r: any) => ({
+          results: arr(s.results).filter(taken).map((r: any) => ({
             id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
             dir: r?.dir === 'short' ? 'short' : 'long',
             level: r?.level === 'target' ? 'target' : 'stop',
             r: num(r?.r), closedAt: num(r?.closedAt) ?? 0,
           })).filter((r: any) => r.r !== null),
-          open: arr(s.watches).map((w: any) => ({
+          open: arr(s.watches).filter(taken).map((w: any) => ({
             id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),
             dir: w?.dir === 'short' ? 'short' : 'long',
             entry: num(w?.entry), stop: num(w?.stop), target: num(w?.target),
             entryAt: num(w?.entryAt),
-            /** Whether real money is on it, which is the only thing their size is allowed to say. */
-            live: !!(w?.size && w?.lev),
           })).filter((w: any) => w.entry !== null && w.stop !== null && w.target !== null),
         })
       }
