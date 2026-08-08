@@ -460,8 +460,10 @@ export default function App() {
             </div>
           )}
 
+          {/* a [[link]] followed from a note opens that item's page: you were reading, so you keep
+              reading, rather than being put back in a list to find your place in */}
           {!page && paged && (
-            <NotePage it={paged} onBack={() => setPageItem(null)} />
+            <NotePage it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
           )}
 
           {!page && !paged && (
@@ -561,7 +563,7 @@ export default function App() {
           const open = !page && !paged && (marked.length > 1 || !!selected)
           const panel = page || paged ? null : marked.length > 1
             ? <Selection ids={marked} onDelete={() => drop(marked)} />
-            : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} /> : null
+            : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} onOpenItem={openPage} /> : null
           if (panel) panelRef.current = panel
           return (
             <>

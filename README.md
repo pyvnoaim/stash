@@ -26,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the picture sniffer and the sweep that spares what is still referenced, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown and what a [[link]] resolves to, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the picture sniffer and the sweep that spares what is still referenced, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -191,6 +191,33 @@ A picture nobody points at any more is collected — the sweep runs when the nex
 spares anything less than a day old so an upload is never collected before the note naming it is
 saved, and checks against every stored version rather than only the newest, so restoring an old one
 does not come back with its pictures missing.
+
+### Linking one item to another
+
+`[[Fix the preset loader]]` in a note points at the item with that title. Projects and tags group
+things that belong together; this is for the other relationship — *this* one explains *that* one,
+or blocks it, or is where the decision was written down.
+
+Type `[[` and a row of matching titles appears under the editor; picking one writes the whole title
+and closes the brackets. That is not a nicety — a link is matched on the **whole** title, so
+without the picker you would be typing another item's title out of memory and getting a dead link
+when you were one word off. Matching is forgiving about how it was written (case, and any amount of
+whitespace between the words) and strict about what it matches: never a part of a title, since a
+substring would quietly aim at the longest title in the stash the moment two of them overlapped.
+
+A title is not unique, and repeats are why: finishing a repeating task leaves the finished copy
+where it was and makes a fresh one with exactly the same text, so by the second week most titles
+here name several rows. An open row therefore wins over a finished one — but a title whose only row
+is finished still resolves, struck through, rather than reading as though it never existed.
+
+A link to nothing reads as the words between its brackets, dimmed, with a dotted underline and the
+reason on hover. That is what renaming the far end looks like from this one: nothing breaks, and
+nothing pretends to work either.
+
+**Linked from** in the details panel is the other half — every note pointing at the row you are
+looking at, which is the half you cannot see from the note that was linked to. On the public share
+link a `[[link]]` is just its words: there is no app around that page and nothing to open, and a
+dead control is worse than plain text.
 
 ## Sidebar and settings
 
@@ -687,7 +714,7 @@ is still in the file and still copies out.
 
 - `src/lib/parse.ts` — capture parser and date labels
 - `src/lib/store.ts` — state, validation on every load, actions, subscription cycle maths. `useSyncExternalStore`, no state library
-- `src/lib/markdown.ts` — the note renderer's DOM-free helpers, so `npm test` covers link safety
+- `src/lib/markdown.ts` — the note renderer's DOM-free helpers, so `npm test` covers link safety and what a `[[link]]` resolves to
 - `src/lib/market.ts` — the price feeds and every signal the Markets desk shows, free of React
 - `src/lib/treemap.ts` — squarified treemap, pure geometry, for Overview's spend panel
 - `src/lib/notify.ts` — the alerts the bell shows, derived from state

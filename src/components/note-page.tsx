@@ -6,8 +6,9 @@ import { toast } from 'sonner'
 import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
-import { toggleBox } from '@/lib/markdown'
-import { patch, type Item } from '@/lib/store'
+import { cn } from '@/lib/utils'
+import { resolveWiki, toggleBox, wikiKey } from '@/lib/markdown'
+import { patch, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 
 /**
@@ -16,7 +17,13 @@ import { uploadImage } from '@/lib/sync'
  * toggles between a raw markdown editor and a rendered preview; it starts in preview when there is
  * already something to read, and in edit when the note is empty and waiting to be written.
  */
-export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
+export function NotePage({ it, onBack, onOpen }: {
+  it: Item
+  onBack: () => void
+  /** following a [[link]] — see App, where it opens that item's own page */
+  onOpen: (id: string) => void
+}) {
+  const s = useStash()
   const [editing, setEditing] = useState(!it.note.trim())
   const taRef = useRef<HTMLTextAreaElement>(null)
   // the selection toolbar, placed where the drag ended (relative to the editor wrapper)
@@ -109,6 +116,47 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
 
   const pickFile = useRef<HTMLInputElement>(null)
 
+  /**
+   * `[[` opens a picker. A wiki link is matched on the whole title, so without one you would be
+   * typing another item's title out of memory and getting a dead link when you were a word off.
+   *
+   * What is watched is the text behind the caret: the last `[[` with no `]]` and no newline after
+   * it is a link still being written, and everything since is what to search on. It sits under the
+   * editor rather than at the caret — a textarea can't say where its caret is on screen without
+   * being measured against a mirror of itself, and the strip is two lines below where you are
+   * looking either way.
+   */
+  const [wikiQ, setWikiQ] = useState<string | null>(null)
+  const readCaret = (ta: HTMLTextAreaElement) => {
+    const before = ta.value.slice(0, ta.selectionStart)
+    const open = before.lastIndexOf('[[')
+    const frag = open < 0 ? null : before.slice(open + 2)
+    setWikiQ(frag === null || frag.includes(']]') || frag.includes('\n') ? null : frag)
+  }
+
+  const wikiHits = (() => {
+    if (wikiQ === null) return []
+    const q = wikiKey(wikiQ)
+    return s.items
+      .filter((o) => o.id !== it.id && o.text.trim() && (!q || wikiKey(o.text).includes(q)))
+      // what starts with the words typed before what merely contains them
+      .sort((a, b) => Number(wikiKey(b.text).startsWith(q)) - Number(wikiKey(a.text).startsWith(q)))
+      .slice(0, 6)
+  })()
+
+  /** Finish the `[[` being typed with a whole title, and put the caret past the closing brackets. */
+  const pickWiki = (target: Item) => {
+    const ta = taRef.current
+    if (!ta) return
+    const at = ta.selectionStart
+    const open = ta.value.slice(0, at).lastIndexOf('[[')
+    if (open < 0) return
+    patch(it.id, { note: `${ta.value.slice(0, open + 2)}${target.text}]]${ta.value.slice(at)}` })
+    const caret = open + 2 + target.text.length + 2
+    setWikiQ(null)
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(caret, caret) }, 0)
+  }
+
   const TOOLS = [
     { icon: Heading, label: 'Heading', run: heading },
     { icon: Quote, label: 'Quote', run: quote },
@@ -182,8 +230,10 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
               // mounts fresh on every entry to edit, so native autoFocus lands the cursor
               autoFocus
               value={it.note}
-              onChange={(e) => patch(it.id, { note: e.target.value })}
-              onMouseUp={onSelect}
+              onChange={(e) => { patch(it.id, { note: e.target.value }); readCaret(e.currentTarget) }}
+              // the caret also moves without the text changing — arrows, a click, a selection
+              onKeyUp={(e) => readCaret(e.currentTarget)}
+              onMouseUp={(e) => { onSelect(e); readCaret(e.currentTarget) }}
               onScroll={() => setBar(null)}
               /* A pasted or dropped picture is the one paste that is not text. Everything else
                  falls through to the browser's own handling, so pasting a screenshot works and
@@ -229,11 +279,39 @@ export function NotePage({ it, onBack }: { it: Item; onBack: () => void }) {
                 ))}
               </div>
             )}
+            {/* what the [[ being typed could mean. In flow under the editor rather than floating:
+                the strip is a fixed row that appears and goes, and the textarea gives up its last
+                line for it, which is steadier than a box that follows the caret about. */}
+            {wikiHits.length > 0 && (
+              <div className="bg-popover mt-1 flex shrink-0 flex-wrap gap-1 rounded-md border p-1 shadow-md">
+                {wikiHits.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    // mousedown, or the textarea blurs and the caret this reads is gone
+                    onMouseDown={(e) => { e.preventDefault(); pickWiki(o) }}
+                    title={o.text}
+                    className={cn(
+                      'hover:bg-accent max-w-full rounded-sm px-2 py-1 text-left text-xs',
+                      o.done && 'text-muted-foreground line-through',
+                    )}
+                  >
+                    <span className="block truncate">{o.text}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto">
             {it.note.trim()
-              ? <Markdown text={it.note} onToggle={(line) => patch(it.id, { note: toggleBox(it.note, line) })} />
+              ? (
+                  <Markdown
+                    text={it.note}
+                    onToggle={(line) => patch(it.id, { note: toggleBox(it.note, line) })}
+                    links={{ find: (label) => resolveWiki(s.items, label), open: (t) => onOpen(t.id) }}
+                  />
+                )
               : <p className="text-muted-foreground text-sm">Nothing written yet.</p>}
           </div>
         )}
