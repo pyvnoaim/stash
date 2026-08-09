@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, NotebookPen, RefreshCw, Share2, TrendingDown, TrendingUp, Wallet, Waypoints, X } from 'lucide-react'
+import { AlarmClock, Bell, BellRing, ChevronDown, CircleSlash2, CloudOff, KeyRound, Loader2, Minus, NotebookPen, RefreshCw, Share2, TrendingDown, TrendingUp, Wallet, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -16,7 +16,7 @@ import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
 import { Textarea } from '@/components/ui/textarea'
-import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setWatchNote, uid, useStash, type Watch } from '@/lib/store'
+import { addAlarm, addWatch, armWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setWatchNote, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -64,6 +64,10 @@ const TABS = [
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
+/* How long an armed setup gets before it is treated as never having filled. Six bars, whatever the
+   bars are: the entry is a moving average frozen at the moment it was saved, and six bars is about
+   how long that number stays the number — on the 4h chart a day, on the daily most of a week. */
+const KILL_BARS = 6
 
 
 /* The service worker keeps the last candles it fetched, so the chart still draws with no network.
@@ -297,7 +301,7 @@ export default function MarketPage() {
     // a candle must actually START at the session open (within one bar) to count — so a session that
     // falls inside a closed-market gap (Asia/Europe on a US-hours stock) is skipped, not stamped on
     // the first bar after the gap. Continuous 24/7 crypto still catches every session.
-    const barMin = { '5m': 5, '15m': 15, '1h': 60, '4h': 240 }[interval] ?? 60
+    const barMin = BAR_MS[interval] / 60_000
     const v = vis
     const m = v.length
     if (m < 2) return NO_MARKS
@@ -857,13 +861,37 @@ export default function MarketPage() {
                 ? removeWatch(watched.id)
                 : side !== 'flat' && addWatch({
                     id: uid(), asset: current.id, label: current.label, horizon: cfg.label,
-                    rule: cfg.strategy, dir: side,
+                    rule: cfg.strategy, dir: side, interval,
                     entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
                   }))}>
               {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
               {watched ? 'Alerting' : 'Alert me'}
             </Button>
             )}
+            {/* The other half, and only ever offered on a saved setup: the alert says the entry
+                came, this says what happens when it doesn't. Off unless pressed — everything the
+                sweeper is allowed to touch is decided here. */}
+            {!inIt && watched && (() => {
+              /* The bar the setup was *saved* on, which is not always the one on screen: the chart
+                 moves under a saved row, and the sweeper reads the row. Arming off the picker
+                 instead would hand a setup saved on the daily a six-hour life because the 1h
+                 button happened to be lit. */
+              const iv = (watched.interval ?? interval) as Interval
+              const entry = fmt(watched.entry)
+              return (
+              <Hint label={watched.killAt
+                ? `Armed. Unfilled by ${new Date(watched.killAt).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}, or a ${iv} close ${side === 'long' ? 'below' : 'above'} the ${cfg.slow}-MA before then, and the server cancels the order resting at ${entry} — the one at that price on that side, and only while it is untouched. Needs a Bitget key that can trade; MEXC has its cancel endpoint closed, so there you get the knock and do it by hand. Click to disarm.`
+                : `Cancel the resting order if this setup never fills. ${KILL_BARS} ${iv} bars from now, or sooner if a ${iv} bar closes ${side === 'long' ? 'below' : 'above'} the ${cfg.slow}-MA and the thesis is gone. The server cancels the one resting at ${entry} and tells you either way — it needs a Bitget key with trade rights, and it will not touch an order that has begun to fill.`}>
+                <Button size="sm" variant={watched.killAt ? 'secondary' : 'ghost'}
+                  className={cn('h-8', !watched.killAt && 'text-muted-foreground')}
+                  aria-pressed={!!watched.killAt}
+                  onClick={() => armWatch(watched.id, watched.killAt ? null : Date.now() + KILL_BARS * BAR_MS[iv])}>
+                  <CircleSlash2 className={cn(watched.killAt && 'text-amber-600 dark:text-amber-500')} />
+                  {watched.killAt ? 'Auto-cancel on' : 'Auto-cancel'}
+                </Button>
+              </Hint>
+              )
+            })()}
           </div>
           {/* the levels as an instrument row, label over number — the same read-out pattern as the
               Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"

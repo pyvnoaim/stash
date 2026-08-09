@@ -253,7 +253,12 @@ export function alertsOf(
   return out
 }
 
-export function createPush(db: DatabaseSync) {
+/**
+ * @param extra Anything another module has to say to a given user, folded in with what the
+ *   document itself produces — the sweeper's outcomes arrive this way. Same keys, same dedupe,
+ *   same quiet hours: a knock is a knock whoever decided it was one.
+ */
+export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = () => []) {
   db.exec(`
     create table if not exists meta (k text primary key, v text not null);
     create table if not exists pushes (
@@ -431,15 +436,18 @@ export function createPush(db: DatabaseSync) {
     }
   }
 
-  /** One person's list, out of their newest document and the prices last fetched. */
+  /** One person's list, out of their newest document and the prices last fetched — behind whatever
+   *  another module already decided, which stands on its own: an order that has been cancelled at
+   *  an exchange is news whether or not the document it came from still parses. */
   function alertsFor(user: number, tz: number): Alert[] {
+    const out = extra(user)
     const row = q.doc.get(user) as { json: string } | undefined
-    if (!row) return []
+    if (!row) return out
     try {
       const doc = JSON.parse(row.json)
       // their thresholds, off their own document — the same ones the bell in the tab reads
-      return alertsOf(doc, tz, prices, Date.now(), moversFor(dialsOf(doc)))
-    } catch { return [] }
+      return [...out, ...alertsOf(doc, tz, prices, Date.now(), moversFor(dialsOf(doc)))]
+    } catch { return out }
   }
 
   /** What `/api/alerts` answers: this user's list, against whichever timezone they last reported. */
@@ -460,8 +468,10 @@ export function createPush(db: DatabaseSync) {
       const fresh = alertsFor(r.user, r.tz).filter((a) => !had.has(a.key)
         // a digest at three in the morning is not news, it is a phone waking someone up. A level
         // the price has reached is exactly the thing that cannot wait for office hours — and
-        // neither is an hour someone set themselves, whatever hour they set it to.
-        && (a.key.startsWith('watch-') || a.key.startsWith('at-') || localHour(r.tz) >= QUIET_UNTIL))
+        // neither is an hour someone set themselves, whatever hour they set it to, nor an order
+        // that has just been cancelled at an exchange, or is still resting there wanting a hand.
+        && (a.key.startsWith('watch-') || a.key.startsWith('at-') || a.key.startsWith('sweep-')
+          || localHour(r.tz) >= QUIET_UNTIL))
       if (!fresh.length) continue
       // nothing is marked until the service took it, so a failed knock is tried again next minute
       if (!(await knock(r.endpoint))) continue

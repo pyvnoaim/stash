@@ -33,6 +33,7 @@ import { positions as bitgetPositions } from './bitget.ts'
 import { positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
+import { createSweep } from './sweep.ts'
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -527,9 +528,13 @@ export function start({
     q.dropPdoc.run(owner, pid)
   }
 
+  /* The one thing here that reaches back out to an exchange and changes something: armed setups
+     that died unfilled, and the orders resting for them. Built before the push it speaks through
+     — everything it decides leaves as a knock. See server/sweep.ts. */
+  const sweep = createSweep(db)
   /* The notifications that reach a closed app: its own module, its own table, and the minute
      timer that decides when anything is worth a knock. See server/push.ts. */
-  const push = createPush(db)
+  const push = createPush(db, sweep.alerts)
 
   /* ponytail: in-memory, per-process — a restart forgives everyone, which at ten users is fine.
      Keyed by address *and* name so one flooded account never locks the rest out. */
@@ -1557,8 +1562,8 @@ export function start({
   })
 
   server.listen(port)
-  server.on('close', push.stop)
-  return Object.assign(server, { invite, push })
+  server.on('close', () => { push.stop(); sweep.stop() })
+  return Object.assign(server, { invite, push, sweep })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

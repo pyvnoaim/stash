@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { HOTKEYS } from './keys.ts'
-import { DIALS, dialsOf, type Dials } from './market.ts'
+import { DIALS, dialsOf, INTERVALS, type Dials } from './market.ts'
 import { isRepeat, nextAfter, parseList, today, type Parsed, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
@@ -117,6 +117,22 @@ export interface Watch {
   stop: number
   target: number
   ts: number
+  /**
+   * Which bar it was read on — '4h', '1d'. The horizon above says which MA pair, not which candle,
+   * and the two stopped being the same thing the moment the interval picker let you move off the
+   * horizon's default. The server's sweeper needs it to ask the right chart whether the thesis
+   * still holds; absent on every row saved before it existed, and there the horizon's own interval
+   * is the fallback.
+   */
+  interval?: string
+  /**
+   * When an unfilled setup gives up, as a timestamp — set only on one armed for auto-cancel, which
+   * is off by default and always a deliberate press. Past it, the server takes the matching resting
+   * order off the exchange; before it, a closed bar the wrong side of the slow MA does the same.
+   * Either way it is only ever about a setup that never filled: `entryAt` set means the trade
+   * started and the stop owns it from there. See server/sweep.ts, which is the whole rule.
+   */
+  killAt?: number
   /**
    * When a live price was first actually seen at the entry — the window really opening. Absent
    * until it is, which is what separates a setup that ran from one that never started: a plan
@@ -550,6 +566,13 @@ export function load(data: unknown): State {
       stop: Number(w.stop),
       target: Number(w.target),
       ts: typeof w.ts === 'number' ? w.ts : Date.now(),
+      // checked against the real list: the arm button turns this into a span of bars, and an
+      // interval that isn't one gives NaN — a button that quietly does nothing when pressed
+      ...((INTERVALS as readonly string[]).includes(String(w.interval)) ? { interval: String(w.interval) } : {}),
+      /* A kill time that isn't a real timestamp is dropped, not kept: this is the one field on a
+         watch that a server acts on by cancelling something, and a NaN compared against `now` is
+         either never true or always. Absent is the safe half of that, and the default. */
+      ...(typeof w.killAt === 'number' && isFinite(w.killAt) && w.killAt > 0 ? { killAt: w.killAt } : {}),
       // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
       ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
       ...positionOf(w),
@@ -1111,6 +1134,23 @@ export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))
 export const resetDials = () => set((s) => ({ ...s, dials: { ...DIALS } }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
+
+/**
+ * Hand one setup to the server's sweeper, or take it back. `until` is the moment an unfilled setup
+ * gives up; null disarms, and disarmed is what every setup is until this is pressed.
+ *
+ * The only writer of `killAt`, and deliberately its own action rather than a field on `addWatch`:
+ * saving a setup and letting something cancel orders for it are two different decisions, and the
+ * second one should read as a press in the code as much as it does on the screen.
+ */
+export const armWatch = (id: string, until: number | null) => set((s) => ({
+  ...s,
+  watches: s.watches.map((w) => {
+    if (w.id !== id) return w
+    const { killAt: _, ...rest } = w
+    return until == null ? rest : { ...rest, killAt: until }
+  }),
+}))
 
 /**
  * The words on a setup — why it was taken while it is live, how that read once it is over. Both

@@ -407,10 +407,14 @@ function MarketsPanel() {
 
 /** The venues an account key can come from, and how each cuts one. */
 const VENUES = [
+  /* Read is still the advice, and still all the positions panel wants. Trade rights are the one
+     exception and they buy exactly one thing — the auto-cancel on a saved setup, which cannot take
+     an order off the book with a key that may only look at it. A key that can cancel can also open
+     a position, so this says what it is rather than leaving it to be discovered. */
   { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
-    hint: 'Read-only, from Bitget → API Management: Read permission only. Bitget cuts a key in three parts — the passphrase is the one you chose making it.' },
+    hint: 'From Bitget → API Management: Read permission is enough for the positions panel. Add Trade only if you want auto-cancel to take resting orders off the book itself — the same right lets a key open positions, so it is a deliberate choice. Bitget cuts a key in three parts — the passphrase is the one you chose making it.' },
   { id: 'mexc', name: 'MEXC', route: '/api/mexc', passphrase: false,
-    hint: 'Read-only, from MEXC → API Management: futures Read permission only.' },
+    hint: 'Read-only, from MEXC → API Management: futures Read permission only. Trade rights would buy nothing here — MEXC has kept its futures place-order and cancel-order endpoints closed since 2022, so auto-cancel can only tell you to do it by hand.' },
 ] as const
 
 /**
