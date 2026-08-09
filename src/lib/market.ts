@@ -480,6 +480,10 @@ export type Dials = {
   newLiq: number
   /** Minutes' warning before an exchange opens. 0 is off, which is what it ships as. */
   openIn: number
+  /** How many of the six timeframes have to lean a scanned setup's way before it is worth a knock.
+   *  The desk's own always counts itself, so 1 is every setup the scan grades as here-now and 0 is
+   *  the off switch. The one dial on an alert about something nobody saved. */
+  setupAgree: number
   /** Perp funding, percent of notional per 8 hours — what holding a position quietly costs.
    *  One flat rate for every asset; 0 turns the estimate off. */
   funding: number
@@ -494,6 +498,12 @@ export const DIALS: Dials = {
   trendMove: 25, trendFresh: 6, trendLiq: 50_000, newLiq: 15_000,
   // three knocks a day is a lot to hand someone who never asked for them
   openIn: 0,
+  /* Half the charts, near enough. A "Buy now" only the timeframe you happen to be on can see is the
+     setup most likely to be noise, and an unasked-for notification is the thing that can least
+     afford to be — one loud afternoon is how a bell gets switched off for good. Set against a
+     morning's readings this passes a couple of assets a day rather than five in an hour; lower it
+     to 1 for every setup the scan grades as here-now, which is a different appetite, not a wrong one. */
+  setupAgree: 3,
   // the perpetual-swap baseline rate; what most venues charge in a calm market
   funding: 0.01,
   // the standard taker fee across the major perp venues — the price of crossing the spread
@@ -507,6 +517,8 @@ const RANGE: Record<keyof Dials, [number, number]> = {
   trendFresh: [0.5, 72], trendLiq: [0, 5_000_000], newLiq: [0, 5_000_000],
   // an hour's warning is the most that is still news; the push tick is a minute, so under one is 0
   openIn: [0, 60],
+  // there are six intervals and the setup's own is one of them, so past six nothing can ever pass
+  setupAgree: [0, 6],
   // 1%/8h is a memecoin squeeze; anything past that is a number to disbelieve, not to set
   funding: [0, 1],
   // a quarter of a percent a side is the worst retail tier there is; past that, check the venue

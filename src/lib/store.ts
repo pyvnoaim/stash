@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { HOTKEYS } from './keys.ts'
-import { DIALS, dialsOf, INTERVALS, type Dials } from './market.ts'
+import { DIALS, dialsOf, INTERVALS, type Dials, type Interval } from './market.ts'
 import { isRepeat, nextAfter, parseList, today, type Parsed, type Repeat } from './parse.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
@@ -355,6 +355,13 @@ export interface State {
    *  the same reason as the asset: it is a standing preference, not a thing to pick again on every
    *  reload, and the two horizons give genuinely different verdicts. Trading is the default. */
   marketHorizon: 'long' | 'short'
+  /** Which bar the desk is reading, and which preset it is in. Here for a third reason on top of
+   *  the two above: the push server reads them. The scan behind a notification is the desk's own
+   *  read, and while these lived in the page it could only guess at the horizon's default — so the
+   *  phone told you about an hourly setup while the screen you had been staring at all day was the
+   *  15m one. A picker whose answer only exists in a tab is a picker a shut phone cannot honour. */
+  marketInterval: Interval
+  marketPreset: 'standard' | 'orb'
   /** What the bell counts as worth interrupting you for. In the document rather than on the device
    *  because the push server reads it too — a threshold set here has to be the one that decides
    *  whether a shut phone rings. See Dials in market.ts, which owns the defaults and the ranges. */
@@ -365,8 +372,8 @@ export interface State {
    * device and after every reload. Every entry runs out: an alert is silenced "until", never
    * "never" — an alert whose reason is still true tomorrow is worth saying again then.
    *
-   * Swiping one away is a day of quiet (DISMISS_TTL); snoozing picks a nearer hour. One map, since
-   * from the bell's side they are the same question — is this one allowed to speak yet.
+   * Swiping one away is a day of quiet (DISMISS_TTL), which is the only length there is: from the
+   * bell's side there is one question, and it is whether this one is allowed to speak yet.
    */
   dismissed: Record<string, number>
 }
@@ -447,7 +454,9 @@ const blank = (): State => ({
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense', calView: 'month',
   watches: [], alarms: [], results: [], stake: 0, desk: false,
-  marketAsset: 'BTCUSDT', marketHorizon: 'short',
+  // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
+  // not silently move everybody's chart
+  marketAsset: 'BTCUSDT', marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard',
   dials: { ...DIALS }, dismissed: {},
 })
 
@@ -638,6 +647,8 @@ export function load(data: unknown): State {
   st.calView = st.calView === 'week' ? 'week' : 'month'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
   st.marketHorizon = st.marketHorizon === 'long' ? 'long' : 'short'
+  st.marketInterval = (INTERVALS as readonly string[]).includes(st.marketInterval) ? st.marketInterval : '1d'
+  st.marketPreset = st.marketPreset === 'orb' ? 'orb' : 'standard'
   // dialsOf owns the ranges: a hand-edited backup cannot set a threshold the bell has no wording for
   st.dials = dialsOf(st)
   /* Expiry runs here as well as on write: this is what every device does with a document it takes
@@ -1110,6 +1121,8 @@ export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
 export const setMarketHorizon = (marketHorizon: State['marketHorizon']) => set((s) => ({ ...s, marketHorizon }))
+export const setMarketInterval = (marketInterval: Interval) => set((s) => ({ ...s, marketInterval }))
+export const setMarketPreset = (marketPreset: State['marketPreset']) => set((s) => ({ ...s, marketPreset }))
 /** One dial, clamped to what it may be — the same guard a loaded document goes through. */
 export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))

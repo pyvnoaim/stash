@@ -16,7 +16,7 @@ import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
 import { Textarea } from '@/components/ui/textarea'
-import { addAlarm, addWatch, armWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setWatchNote, uid, useStash, type Watch } from '@/lib/store'
+import { addAlarm, addWatch, armWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, setWatchNote, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -33,7 +33,6 @@ const PRESETS = [
   { id: 'standard', label: 'Standard' },
   { id: 'orb', label: 'Opening range' },
 ] as const
-type Preset = (typeof PRESETS)[number]['id']
 
 /** One session open on the chart: where it sits, whose it is, and when — in the reader's own clock. */
 type SessionMark = { x: number; color: string; label: string; t: number; future: boolean }
@@ -116,17 +115,21 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
 }
 
 export default function MarketPage() {
-  const { chart, apiKey, watches, dials, marketAsset: asset, marketHorizon: horizon } = useStash()
+  const {
+    chart, apiKey, watches, dials, marketAsset: asset, marketHorizon: horizon,
+    marketInterval: interval, marketPreset: preset,
+  } = useStash()
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
-  // desk already showing the right thing — and it survives a reload
+  // desk already showing the right thing — and it survives a reload. So do the picker and the
+  // preset, for the extra reason that the push server scans on whatever they say (see push.ts).
   const setAsset = setMarketAsset
-  const [interval, setInterval] = useState<Interval>('1d')
+  const setInterval = setMarketInterval
   const [candles, setCandles] = useState<Candle[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
-  const [preset, setPreset] = useState<Preset>('standard')
+  const setPreset = setMarketPreset
   const setHorizon = setMarketHorizon // standing preference, same as the asset — see the store
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it

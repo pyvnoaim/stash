@@ -99,6 +99,18 @@ const days = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)
 export const newsFirst = (list: Alert[], news: Set<string>): Alert[] =>
   [...list.filter((a) => news.has(a.key)), ...list.filter((a) => !news.has(a.key))]
 
+/** The same bars with the newest one off each interval, for reading what the scan said a bar ago.
+ *  Every interval, not just the desk's: the higher-timeframe filter and the cascade read the others,
+ *  and a "before" assembled out of half-current bars is not a moment that ever existed. */
+export const lastBarOff = (bars: Record<Interval, Candle[]>): Record<Interval, Candle[]> =>
+  Object.fromEntries(INTERVALS.map((iv) => [iv, bars[iv]?.slice(0, -1) ?? []])) as Record<Interval, Candle[]>
+
+/** Which bar the desk is reading, off a document that may predate the field or have been edited by
+ *  hand — the horizon's own default is the fallback, which is what the page falls back to too. */
+export const intervalOf = (doc: any, horizon: 'long' | 'short'): Interval =>
+  ((INTERVALS as readonly string[]).includes(doc?.marketInterval)
+    ? doc.marketInterval : HORIZONS[horizon].interval)
+
 /**
  * Everything currently worth telling someone, most urgent first, out of their document and
  * whatever prices are in hand. Pure, so the rule that decides "is this worth a phone buzzing"
@@ -464,32 +476,45 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
    * the level I chose get hit"; this answers the question that comes before it, which the app could
    * only ever answer with a tab open on the Scan card.
    *
-   * The key carries the bar the read sits on, off the desk's own interval — so a trading setup is
-   * one knock an hour at most and an investing one is one a day, and neither retells itself every
-   * minute for as long as price stays where it is. Subject to the quiet hours like anything else:
-   * an entry nobody asked to be told about is not worth a phone going off in the dark.
+   * Only where it has just arrived. "Buy now" is an event and "Accumulate" is a state — price under
+   * the 50-MA on a chart above its 200-MA can be true for a fortnight — so the same read is run a
+   * bar back and a setup that was already here says nothing. Without that the investing horizon
+   * knocked about six assets an hour for as long as a dip lasted, which is the shape of thing that
+   * gets notifications switched off altogether. The bar is also in the key, so the two guards cover
+   * each other: one stops it repeating within a bar, the other across them.
+   *
+   * Subject to the quiet hours like anything else — an entry nobody asked to be told about is not
+   * worth a phone going off in the dark.
    */
   function setupsFor(doc: any): Alert[] {
     if (!scan) return []
+    const d = dialsOf(doc)
+    // the off switch, and the reason there is one: this is the only knock about something nobody
+    // saved, so it is the only one where "stop telling me" has to be a number you can set
+    if (d.setupAgree <= 0) return []
     const horizon = doc?.marketHorizon === 'long' ? 'long' as const : 'short' as const
-    const fee = dialsOf(doc).fee
-    const memo = `${horizon}-${fee}`
+    /* The desk's own bars, not the horizon's default — the picker and the opening-range preset ride
+       the document now, so the chart the notification is about is the chart you were last reading.
+       The same two lines the Scan card is given on the page. */
+    const orbMode = doc?.marketPreset === 'orb'
+    const interval = orbMode ? '15m' as const : intervalOf(doc, horizon)
+    const memo = `${horizon}-${interval}-${orbMode}-${d.fee}-${d.setupAgree}`
     const had = scanned.get(memo)
     if (had) return had
 
-    const cfg = HORIZONS[horizon]
     const out: Alert[] = []
     for (const a of MOVERS) {
       const bars = scan.bars.get(a.id)
       if (!bars) continue
-      /* orbMode false: the opening range is a preset someone switches the desk into, and it lives
-         in the page rather than in the document — there is nothing here to read it off. The
-         horizon's own interval for the same reason: the desk's picker is not synced either, and
-         the strategy's default bar is the one its rule is written against. */
-      const row = scanRead(a, bars, horizon, cfg.interval, false, fee)
+      const row = scanRead(a, bars, horizon, interval, orbMode, d.fee)
       if (!row || row.tier !== 3 || !row.plan) continue
-      const bar = bars[cfg.interval]?.at(-1)
+      // how many of the six charts lean this way, against the floor they set
+      if (row.agree < d.setupAgree) continue
+      const bar = bars[interval]?.at(-1)
       if (!bar) continue
+      // the same read one bar back, on the same side: news is the arriving, not the standing
+      const was = scanRead(a, lastBarOff(bars), horizon, interval, orbMode, d.fee)
+      if (was?.tier === 3 && was.dir === row.dir) continue
       const p = row.plan
       out.push({
         key: `setup-${a.id}-${row.dir}-${bar.t}`,

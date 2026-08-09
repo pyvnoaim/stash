@@ -3,7 +3,7 @@
    already does (notify.ts, store.ts), which is exactly why they are asserted here: the two sides
    drifting apart is the failure nobody would notice. */
 import assert from 'node:assert/strict'
-import { alertsOf, chargeAt, newsFirst, nextCharge, type Alert } from './push.ts'
+import { alertsOf, chargeAt, intervalOf, newsFirst, nextCharge, type Alert } from './push.ts'
 
 /** Midday UTC on the day everything below is written against, so a timezone can't move the date. */
 const NOON = Date.parse('2026-08-03T12:00:00Z')
@@ -205,6 +205,19 @@ assert.equal(nextCharge('2026-01-15', 'monthly', '2026-08-03'), '2026-08-17')  /
   // a knock whose news has since stopped being true changes nothing rather than emptying the list
   assert.deepEqual(newsFirst(list, new Set(['gone'])), list)
   assert.deepEqual(newsFirst([], new Set(['x'])), [])
+}
+
+/* ---------- which bar the scan reads ---------- */
+
+/* The desk's picker rides the document so the knock is about the chart you were last on. A doc
+   from before the field existed, or one edited into nonsense, falls back to the horizon's own
+   default — the same fallback the page makes. */
+assert.equal(intervalOf({ marketInterval: '15m' }, 'short'), '15m')
+assert.equal(intervalOf({ marketInterval: '1w' }, 'long'), '1w')
+assert.equal(intervalOf({}, 'short'), '1h', 'Trading reads the hour when nothing says otherwise')
+assert.equal(intervalOf({}, 'long'), '1d', 'and Investing the day')
+for (const junk of [null, undefined, 7, '3m', '', 'toString']) {
+  assert.equal(intervalOf({ marketInterval: junk }, 'short'), '1h', `${String(junk)} is not an interval`)
 }
 
 /* ---------- junk in ---------- */

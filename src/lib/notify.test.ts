@@ -24,7 +24,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 const base: State = { v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
   subView: 'expense', calView: 'month', watches: [], alarms: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
-  marketHorizon: 'short', dials: DIALS, dismissed: {} }
+  marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
 const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({
