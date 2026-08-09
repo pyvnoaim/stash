@@ -6,6 +6,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Section } from '@/components/section'
+import { Avatar } from '@/components/settings-dialog'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import {
@@ -52,6 +53,9 @@ export function PeoplePanel({ me }: {
         <div className="grid gap-1">
           {users.map((u) => (
             <div key={u.id} className="flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm">
+              {/* the same face the sidebar and the share sheet draw — a list of names is harder to
+                  scan than a list of people, and the picture is already in the row's data */}
+              <Avatar name={u.name} avatar={u.avatar} className="size-6 text-[11px]" />
               <span className="truncate">{u.name}</span>
               {!!u.admin && <ShieldUser className="text-muted-foreground size-3.5 shrink-0" />}
               {u.name === me && <span className="text-muted-foreground text-xs">you</span>}

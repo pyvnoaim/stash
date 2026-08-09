@@ -12,7 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
-  openWatch, closeWatch, clearResults, dismissAlerts, snoozeAlerts, snoozeUntil, tagsFor,
+  openWatch, closeWatch, clearResults, dismissAlerts, tagsFor,
   readHash, setWatchNote,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
@@ -864,19 +864,6 @@ console.log('store: ok')
   assert.equal(getState().dismissed['just-swiped'], now + day)   // a swipe is a day of quiet
   assert.equal(Object.keys(getState().dismissed).length, 200)
 
-  /* Snoozing is the same decision with a nearer hour on it: three hours during the day, and after
-     five the next morning at eight — an alert put off at six in the evening is a tomorrow alert. */
-  const three = (h: number) => { const d = new Date(); d.setHours(h, 0, 0, 0); return +d }
-  assert.equal(snoozeUntil(three(9)), three(9) + 3 * 3600_000)
-  const evening = new Date(snoozeUntil(three(18)))
-  assert.deepEqual([evening.getHours(), evening.getMinutes()], [8, 0])
-  assert.ok(snoozeUntil(three(18)) > three(18), 'and it is the morning after, not the one before')
-  /* And into the same map, off the same clock — at the cap too: a snooze runs out sooner than
-     every dismissal around it, so a list that kept the furthest-off hours would throw away the
-     one thing just chosen. What falls off is the oldest decision, not the nearest hour. */
-  snoozeAlerts(['put-off'], now)
-  assert.equal(getState().dismissed['put-off'], snoozeUntil(now))
-  assert.equal(Object.keys(getState().dismissed).length, 200)
   /* Dismissing is not an edit to walk back: ⌘Z belongs to the work, not to the bell. So the undo
      after it returns the item, and leaves the dismissal exactly where it was. */
   addItem(item({ id: 'walk-back' }))

@@ -405,7 +405,10 @@ export function start({
     delUserById: db.prepare('delete from users where id = ?'),
     admins: db.prepare('select count(*) as n from users where admin = 1'),
     promote: db.prepare('update users set admin = 1 where name = ?'),
-    listUsers: db.prepare(`select u.id, u.name, u.admin, u.ts,
+    /* ponytail: the avatar is the stored data URI, up to 128 KB of it, so a server of ten accounts
+       makes this a megabyte the Accounts panel pulls each time it opens. Fine for the handful this
+       is built for; a thumbnail column written on upload is the lever if that stops being true. */
+    listUsers: db.prepare(`select u.id, u.name, u.admin, u.ts, u.avatar,
       (select count(*) from sessions s where s.user = u.id) as sessions,
       (select max(d.ts) from docs d where d.user = u.id) as synced
       from users u order by u.id`),

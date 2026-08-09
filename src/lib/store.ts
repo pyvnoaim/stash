@@ -382,9 +382,8 @@ const KEEP_DISMISSED = 200
  *  and on every write, so neither a hand-edited backup nor a long session can grow a document that
  *  gets pushed to the server whole.
  *
- *  The order is the map's own — silenceAlerts puts what was just chosen at the front, so the cap
- *  drops the oldest decision rather than the nearest hour. Sorting on the hour instead would make
- *  a snooze, which is by definition the soonest to run out, the first thing thrown away.
+ *  The order is the map's own — dismissAlerts puts what was just chosen at the front, so the cap
+ *  drops the oldest decision rather than the newest one.
  *
  *  ponytail: a document written before these were "until" times holds moments already past, so it
  *  comes back empty and the day's swipes are said once more. One reload, once, ever. */
@@ -394,20 +393,6 @@ const pruneDismissed = (d: unknown, now = Date.now()): Record<string, number> =>
       .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] > now)
       .slice(0, KEEP_DISMISSED),
   )
-
-/**
- * Where "later" lands, from the clock and nothing else: three hours on during the day, and after
- * five in the afternoon the next morning at eight — a thing put off at six in the evening is a
- * tomorrow thing, and three hours would only mean nine at night.
- * ponytail: one button, no menu of five. If picking the hour ever matters, this is where it goes.
- */
-export function snoozeUntil(now = Date.now()): number {
-  const d = new Date(now)
-  if (d.getHours() < 17) return now + 3 * 3600_000
-  d.setDate(d.getDate() + 1)
-  d.setHours(8, 0, 0, 0)
-  return +d
-}
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
@@ -1108,9 +1093,10 @@ export const addWatch = (w: Watch) =>
     ...s,
     watches: [w, ...s.watches.filter((x) => !(x.asset === w.asset && x.dir === w.dir && x.horizon === w.horizon))],
   }))
-/** Quiet until a given moment, on every device: the bell reads this out of the document the sync
- *  carries. Both buttons on an alert come through here — they differ only in the moment. */
-export const silenceAlerts = (ids: string[], until: number, at = Date.now()) => set((s) => {
+/** Swiped away: quiet for a day, on every device — the bell reads this out of the document the
+ *  sync carries. Nothing is silenced for good; an overdue task is overdue again tomorrow. */
+export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
+  const until = at + DISMISS_TTL
   /* The new ones go in first, so that when the cap bites it drops the oldest and not these:
      "Clear" writes every id on the same millisecond, and a tie has to fall the way the person
      just chose — losing it is the alert they swiped reappearing on the next load.
@@ -1120,11 +1106,6 @@ export const silenceAlerts = (ids: string[], until: number, at = Date.now()) => 
   for (const [id, when] of Object.entries(s.dismissed)) if (!(id in next)) next[id] = when
   return { ...s, dismissed: pruneDismissed(next, at) }
 })
-
-/** Swiped away: quiet for a day, which is what a dismissal has always meant. */
-export const dismissAlerts = (ids: string[], at = Date.now()) => silenceAlerts(ids, at + DISMISS_TTL, at)
-/** Put off: quiet until the hour snoozeUntil picks, and then said again. */
-export const snoozeAlerts = (ids: string[], at = Date.now()) => silenceAlerts(ids, snoozeUntil(at), at)
 
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))

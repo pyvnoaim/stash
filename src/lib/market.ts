@@ -2225,3 +2225,114 @@ export function sessionVwap(c: Candle[]): { vwap: number; where: string; signal:
       : `price is ${Math.abs(gap).toFixed(2)}% ${gap > 0 ? 'above' : 'below'} the average paid ${since} — the ${gap > 0 ? 'buyers' : 'sellers'} who turned up are in front`
   return { vwap, where: anchor.where, signal: { label: 'Session VWAP', tone, kind: 'vwap' as const, detail } }
 }
+
+/* ---------- the scan: every keyless chart at once ---------- */
+
+/** Which way one timeframe leans, and by how much — the strip is five of these. */
+export type Lean = { dir: 'long' | 'short' | 'flat'; bulls: number; bears: number }
+
+/** One asset's answer, compressed to a row. `tier` is the sort: 3 the entry is here, 2 wait for
+ *  the level, 1 a setup the desk would talk you out of, 0 nothing to do.
+ *  `by` is every timeframe's lean; the loose fields are the desk's own, which is the one the
+ *  phrase, the plan and the click all belong to. */
+export type ScanRow = {
+  a: Asset
+  by: Partial<Record<Interval, Lean>>
+  /** How many of the five lean the same way the desk's does — the row's real confidence. */
+  agree: number
+  /** The 4h → 15m → 5m cascade, off the same bars. Free here: they are all already fetched. */
+  cascade: Cascade
+  dir: 'long' | 'short' | 'flat'
+  bulls: number
+  bears: number
+  plan: Plan | null
+  tier: 0 | 1 | 2 | 3
+  say: string
+}
+
+/** Every interval's bars for one asset, which is the only part of a scan that touches a network.
+ *  Split from the reading below because the push server runs the same scan for everyone: the bars
+ *  are fetched once a pass and then read once per document, against that person's own dials. */
+export async function scanBars(a: Asset, apiKey = ''): Promise<Record<Interval, Candle[]>> {
+  const pairs = await Promise.all(INTERVALS.map(async (iv) =>
+    [iv, await fetchCandles(a, iv, apiKey).catch(() => [] as Candle[])] as const))
+  return Object.fromEntries(pairs) as Record<Interval, Candle[]>
+}
+
+/**
+ * The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — over
+ * one asset's bars without rendering it. Same calls, same order, so a row here never disagrees
+ * with what opening the asset shows.
+ *
+ * Run on every timeframe rather than only the desk's, because one interval's answer is not a view
+ * of anything: 15m said Long and 1d said Short and the row changed its mind each time the desk
+ * did, with no way to see that the two disagreed. Five leans side by side is the whole point —
+ * a Long that four timeframes agree on is a different trade from one only the fastest chart sees.
+ *
+ * Pure: every bar it reads is handed in. Which is what lets the phone hear about a setup at all —
+ * see setupsFor in server/push.ts.
+ */
+// takes the horizon rather than its config, for the same reason it takes one interval: the row's
+// phrase depends on which strategy is on, not only on the four numbers that used to be the whole
+// difference between the two
+export function scanRead(
+  a: Asset, bars: Record<Interval, Candle[]>,
+  horizon: Horizon, interval: Interval, orbMode: boolean, fee: number,
+): ScanRow | null {
+  const cfg = HORIZONS[horizon]
+  // the interval is the desk's own, passed in — reading the horizon's default here while the desk
+  // sat on 15m bars is how a row said Long while the card the click lands on said Short
+  if (!bars[interval]?.length) return null
+
+  /** One timeframe through the desk's read. Null where the feed gave that interval nothing. */
+  const read = (iv: Interval) => {
+    const candles = bars[iv]
+    if (!candles?.length) return null
+    const up = HIGHER[iv]
+    const upBars = up ? bars[up] : undefined
+    const higher = up && upBars?.length ? trendFilter(upBars, cfg.slow, up) : null
+    const view = signals(candles, cfg)
+    // the opening range is a 15m reading — asking a weekly bar for one is asking for a date
+    const range = orbMode && iv === '15m' ? orb(candles) : null
+    // kept rather than recomputed: the trading strategy gates on this exact number below, and a
+    // second sessionVwap() over the same bars is a second pass for an answer already in hand
+    const vwap = sessionVwap(candles)
+    return { candles, view, higher, up, vwap, ...tally(deskSignals(higher, range, vwap, view.signals)) }
+  }
+
+  const by: Partial<Record<Interval, Lean>> = {}
+  for (const iv of INTERVALS) {
+    const r = read(iv)
+    if (r) by[iv] = { dir: r.dir, bulls: r.bulls, bears: r.bears }
+  }
+
+  const here = read(interval)!
+  const { bulls, bears, dir, view, higher, up, candles, vwap } = here
+  const price = candles.at(-1)!.c
+  const entryMA = view.smaFast.at(-1)
+  const slowMA = view.smaSlow.at(-1)
+  const { plan, block } = strategyPlan(horizon, {
+    dir, price, fast: entryMA ?? null, slow: slowMA ?? null,
+    levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee,
+  })
+  const holding = horizon === 'long'
+  const against = !holding && !!plan && !!higher
+    && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
+  // the verdict ladder from the card above, compressed to a phrase — same branches, same order, and
+  // the same split by strategy, or a row would grade an asset by a rule the card it opens doesn't use
+  const [tier, say]: [ScanRow['tier'], string] = holding
+    ? block === 'below' ? [0, `under the ${cfg.slow}-MA — out`]
+      : block === 'unconfirmed' ? [0, 'recovery not confirmed']
+      : !plan ? [0, 'not enough history']
+      : entryMA != null && price <= entryMA ? [3, 'Accumulate']
+      : [2, `hold — add at ${fmtPrice(plan.entry, price)}`]
+    : block === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
+    : block === 'vwap' ? [0, `wrong side of the VWAP for a ${dir}`]
+    : block === 'quiet' ? [0, 'no ATR yet — no stop to size']
+    : !plan ? [0, 'no clean setup — price already ran']
+    : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
+    : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']
+    : [2, `${dir === 'long' ? 'buy' : 'sell'} the ${cfg.fast}-MA at ${fmtPrice(plan.entry, price)}`]
+  const agree = dir === 'flat' ? 0 : INTERVALS.filter((iv) => by[iv]?.dir === dir).length
+  return { a, by, agree, cascade: topDown(bars, cfg, fee), dir, bulls, bears, plan, tier, say }
+}

@@ -29,12 +29,18 @@ import type { DatabaseSync } from 'node:sqlite'
    is arithmetic over numbers — no React, no localStorage, nothing to import that isn't here — and
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
-import { ASSETS, dialsOf, fmtPrice, localClock, moverMove, opensIn, SESSIONS, type Dials } from '../src/lib/market.ts'
+import {
+  ASSETS, dialsOf, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, scanBars, scanRead,
+  SESSIONS, type Candle, type Dials, type Interval,
+} from '../src/lib/market.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
-/** How many alert keys a subscription remembers having sent. They carry dates; old ones match nothing. */
-const KEEP_KEYS = 50
+/** How many alert keys a subscription remembers having sent. They carry dates; old ones match
+ *  nothing. Deep enough that one busy hour cannot push a key off the end while the bar it names is
+ *  still the current one — that would be a second knock about news already delivered. A lively hour
+ *  is up to a dozen setups and two dozen mover readings, so fifty was not the margin it looked. */
+const KEEP_KEYS = 100
 const TICK = 60_000
 
 export interface Alert { key: string, title: string, body: string, target: string }
@@ -83,6 +89,17 @@ export function nextCharge(due: string, cycle: string, from: string): string | n
 const days = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)) / 864e5)
 
 /**
+ * The knock's own news at the front, everything else behind it, each half still in the order it
+ * arrived in. The worker shows `alerts[0]` and counts the rest, and the list it fetches is
+ * everything currently true rather than what the knock was about — a watch alert repeats for as
+ * long as price stands past the level and sorts first, so a setup parked at its entry became the
+ * headline of every notification for hours while the six o'clock reminder that actually rang hid
+ * inside "and 2 more". A partition, not a filter: the rest are still true and still worth counting.
+ */
+export const newsFirst = (list: Alert[], news: Set<string>): Alert[] =>
+  [...list.filter((a) => news.has(a.key)), ...list.filter((a) => !news.has(a.key))]
+
+/**
  * Everything currently worth telling someone, most urgent first, out of their document and
  * whatever prices are in hand. Pure, so the rule that decides "is this worth a phone buzzing"
  * is testable without a network — the same shape notify.ts has in the app, for the same reason.
@@ -91,7 +108,7 @@ const days = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)
  * never reached is worse than no alert, which is the app's rule too.
  */
 export function alertsOf(
-  s: any, tz: number, prices: Record<string, number>, at = Date.now(), movers: Alert[] = [],
+  s: any, tz: number, prices: Record<string, number>, at = Date.now(), market: Alert[] = [],
 ): Alert[] {
   const out: Alert[] = []
   const day = localDay(tz, at)
@@ -174,11 +191,11 @@ export function alertsOf(
     })
   }
 
-  /* Then whatever is moving. They are the same for everyone — nothing about a market depends on
-     whose document this is — so they are worked out once a tick and handed in. They come after the
+  /* Then the setups the scan found and whatever is moving. Neither depends on whose document this
+     is beyond the dials, so both are worked out once a pass and handed in. They come after the
      levels because a level is a number you asked to be told about, and before the digest because a
      move is over by tomorrow morning and a task is not. */
-  out.push(...movers)
+  out.push(...market)
 
   /* Then a market about to open, for anyone who has asked to be told: the minutes are a dial and
      it ships at zero, because three knocks a day is a lot to hand someone who never set them.
@@ -416,6 +433,77 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
     return [...out.values()]
   }
 
+  /* ---------- the scan, with the app closed ---------- */
+
+  /** How often the scan's bars are re-fetched. The desk's own Scan tab fetches once a visit and on
+   *  a button, because these reads move by the bar — an hour at the shortest — not by the tick.
+   *  Six intervals across the listed assets is ~66 klines calls a pass, which at Binance's weight
+   *  of 2 against 1200 a minute is a tenth of the budget four times an hour. */
+  const SCAN_EVERY = 15 * 60_000
+  let scan: { bars: Map<string, Record<Interval, Candle[]>>, at: number } | null = null
+  /* One person's scan is every person's scan until the horizon or the fee differs, and reading it
+     is 66 signals() passes — far too much to redo per document per minute. Keyed by the two things
+     that change the answer, and emptied whenever the bars underneath it move. */
+  let scanned = new Map<string, Alert[]>()
+
+  async function refreshScan(at = Date.now()) {
+    if (scan && at - scan.at < SCAN_EVERY) return
+    // scanBars swallows a failed interval into an empty array, so a bad pass degrades rather than
+    // throws — and an asset with no bars is simply one the reading below skips
+    const pairs = await Promise.all(MOVERS.map(async (a) => [a.id, await scanBars(a)] as const))
+    scan = { bars: new Map(pairs), at }
+    scanned = new Map()
+  }
+
+  /**
+   * The setups worth waking someone for: the desk's own read, run over every listed chart, kept to
+   * the rows where the entry is actually here — "Buy now", "Sell now", "Accumulate". Everything
+   * softer than that is a thing to go and look at, and the Markets page is where you look.
+   *
+   * This is the one alert about something nobody saved. The saved-setup knocks above answer "did
+   * the level I chose get hit"; this answers the question that comes before it, which the app could
+   * only ever answer with a tab open on the Scan card.
+   *
+   * The key carries the bar the read sits on, off the desk's own interval — so a trading setup is
+   * one knock an hour at most and an investing one is one a day, and neither retells itself every
+   * minute for as long as price stays where it is. Subject to the quiet hours like anything else:
+   * an entry nobody asked to be told about is not worth a phone going off in the dark.
+   */
+  function setupsFor(doc: any): Alert[] {
+    if (!scan) return []
+    const horizon = doc?.marketHorizon === 'long' ? 'long' as const : 'short' as const
+    const fee = dialsOf(doc).fee
+    const memo = `${horizon}-${fee}`
+    const had = scanned.get(memo)
+    if (had) return had
+
+    const cfg = HORIZONS[horizon]
+    const out: Alert[] = []
+    for (const a of MOVERS) {
+      const bars = scan.bars.get(a.id)
+      if (!bars) continue
+      /* orbMode false: the opening range is a preset someone switches the desk into, and it lives
+         in the page rather than in the document — there is nothing here to read it off. The
+         horizon's own interval for the same reason: the desk's picker is not synced either, and
+         the strategy's default bar is the one its rule is written against. */
+      const row = scanRead(a, bars, horizon, cfg.interval, false, fee)
+      if (!row || row.tier !== 3 || !row.plan) continue
+      const bar = bars[cfg.interval]?.at(-1)
+      if (!bar) continue
+      const p = row.plan
+      out.push({
+        key: `setup-${a.id}-${row.dir}-${bar.t}`,
+        title: `${a.label} — ${row.say}`,
+        // the three levels and what the geometry pays, which is what the card would have said
+        body: `${fmtPrice(bar.c)} — stop ${fmtPrice(p.stop)}, target ${fmtPrice(p.target)}`
+          + ` · ${p.net.toFixed(2)}R net · ${row.agree}/${INTERVALS.length} timeframes agree`,
+        target: 'market',
+      })
+    }
+    scanned.set(memo, out)
+    return out
+  }
+
   async function refreshMovers(at = Date.now()) {
     const syms = encodeURIComponent(JSON.stringify(MOVERS.map((a) => a.id)))
     const ticker = (query: string) =>
@@ -445,21 +533,43 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
     if (!row) return out
     try {
       const doc = JSON.parse(row.json)
-      // their thresholds, off their own document — the same ones the bell in the tab reads
-      return [...out, ...alertsOf(doc, tz, prices, Date.now(), moversFor(dialsOf(doc)))]
+      // their thresholds, off their own document — the same ones the bell in the tab reads. The
+      // setups lead: an entry that is here right now outranks an asset that has merely moved.
+      const market = [...setupsFor(doc), ...moversFor(dialsOf(doc))]
+      return [...out, ...alertsOf(doc, tz, prices, Date.now(), market)]
     } catch { return out }
   }
 
-  /** What `/api/alerts` answers: this user's list, against whichever timezone they last reported. */
-  const forUser = (user: number, tz?: number) =>
-    alertsFor(user, tz ?? Number((q.tzOf.get(user) as { tz: number } | undefined)?.tz ?? 0))
+  /* What the last knock was actually about, per user — the set newsFirst reorders against.
+     Not read off `seen`: that is written the moment the push service accepts, which is well before
+     the phone wakes and asks, so by then the fresh keys already look old. Kept here instead, and in
+     memory rather than in a column because it is news with a lifetime of seconds — a restart costs
+     one notification the old ordering, which is what every notification had until now. */
+  const rang = new Map<number, { keys: Set<string>, at: number }>()
+  /** How long a knock stays the reason for the list it is read against. */
+  const RANG_FOR = 5 * 60_000
+
+  /** What `/api/alerts` answers: this user's list, against whichever timezone they last reported,
+   *  with whatever the knock was about at the front. */
+  const forUser = (user: number, tz?: number) => {
+    const list = alertsFor(user, tz ?? Number((q.tzOf.get(user) as { tz: number } | undefined)?.tz ?? 0))
+    const news = rang.get(user)
+    return !news || Date.now() - news.at > RANG_FOR ? list : newsFirst(list, news.keys)
+  }
 
   /** One pass: refresh the prices, then knock once per device that has something new to hear. */
   async function tick() {
     const rows = q.all.all() as { endpoint: string, user: number, tz: number, seen: string }[]
     // nobody subscribed is nobody to tell, and no reason to be asking an exchange anything
     if (!rows.length) return
-    await Promise.all([refreshPrices([...new Set(rows.map((r) => r.user))]), refreshMovers()])
+    /* The scan rate-limits itself to a quarter of an hour inside refreshScan; catching here rather
+       than letting it reject keeps a bad klines pass from taking the prices and the movers with
+       it — Promise.all rejects on the first, and these are three separate calls to one feed. */
+    await Promise.all([
+      refreshPrices([...new Set(rows.map((r) => r.user))]),
+      refreshMovers(),
+      refreshScan().catch(() => {}),
+    ])
 
     for (const r of rows) {
       let seen: string[]
@@ -473,6 +583,14 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
         && (a.key.startsWith('watch-') || a.key.startsWith('at-') || a.key.startsWith('sweep-')
           || localHour(r.tz) >= QUIET_UNTIL))
       if (!fresh.length) continue
+      /* Before the knock, not after: the phone can be asking /api/alerts while this line is still
+         awaiting, and the whole point of the record is to be there when it does. A knock that then
+         fails costs one ordering, which is the harmless direction. Union across their devices —
+         two phones knocked in the same pass are two halves of one piece of news. */
+      const news = rang.get(r.user)
+      const keys = news && Date.now() - news.at <= RANG_FOR ? news.keys : new Set<string>()
+      for (const a of fresh) keys.add(a.key)
+      rang.set(r.user, { keys, at: Date.now() })
       // nothing is marked until the service took it, so a failed knock is tried again next minute
       if (!(await knock(r.endpoint))) continue
       q.seen.run(JSON.stringify([...seen, ...fresh.map((a) => a.key)].slice(-KEEP_KEYS)), r.endpoint)

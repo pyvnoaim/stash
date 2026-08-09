@@ -3,7 +3,7 @@
    already does (notify.ts, store.ts), which is exactly why they are asserted here: the two sides
    drifting apart is the failure nobody would notice. */
 import assert from 'node:assert/strict'
-import { alertsOf, chargeAt, nextCharge, type Alert } from './push.ts'
+import { alertsOf, chargeAt, newsFirst, nextCharge, type Alert } from './push.ts'
 
 /** Midday UTC on the day everything below is written against, so a timezone can't move the date. */
 const NOON = Date.parse('2026-08-03T12:00:00Z')
@@ -183,6 +183,29 @@ assert.equal(chargeAt('2026-08-03', 'yearly', 1), '2027-08-03')
 assert.equal(chargeAt('2026-08-08', 'monthly', 0), '2026-08-10')
 assert.equal(chargeAt('2026-08-09', 'monthly', 0), '2026-08-10')
 assert.equal(nextCharge('2026-01-15', 'monthly', '2026-08-03'), '2026-08-17')  // the 15th is a Saturday
+
+/* ---------- what the worker headlines ---------- */
+
+/* The list is everything currently true; the knock was about one thing in it. A watch alert
+   repeats while price stands past the level and sorts first, so without this the setup parked at
+   its entry is the headline of every notification for hours and the reminder that actually rang is
+   hidden inside "and 2 more". Both halves keep their own order — the rest are still true. */
+{
+  const a = (key: string): Alert => ({ key, title: key, body: '', target: 'today' })
+  const list = [a('watch-w1-entry'), a('mkt-BTCUSDT-up-x'), a('at-i7-2026-08-03'), a('due-2026-08-03')]
+  assert.deepEqual(
+    newsFirst(list, new Set(['at-i7-2026-08-03'])).map((x) => x.key),
+    ['at-i7-2026-08-03', 'watch-w1-entry', 'mkt-BTCUSDT-up-x', 'due-2026-08-03'],
+  )
+  // two pieces of news in one knock stay in the order the urgency rules put them
+  assert.deepEqual(
+    newsFirst(list, new Set(['due-2026-08-03', 'watch-w1-entry'])).map((x) => x.key),
+    ['watch-w1-entry', 'due-2026-08-03', 'mkt-BTCUSDT-up-x', 'at-i7-2026-08-03'],
+  )
+  // a knock whose news has since stopped being true changes nothing rather than emptying the list
+  assert.deepEqual(newsFirst(list, new Set(['gone'])), list)
+  assert.deepEqual(newsFirst([], new Set(['x'])), [])
+}
 
 /* ---------- junk in ---------- */
 
