@@ -337,6 +337,12 @@ export default function MarketPage() {
     marks.sort((a, b) => a.x - b.x)
     return { marks, overlaps }
   }, [vis, interval, future])
+  /* Only the last day of opens, plus any still ahead. Zoomed out to a fortnight this drew three
+     dotted verticals a day — seventeen of them standing behind the candles, each with a name on
+     top — and nobody trades an open from six days ago. Cut to a day it stays scale-aware on its
+     own: on 5m bars a window is a few hours and nothing is dropped. */
+  const dayAgo = (vis.at(-1)?.t ?? 0) - 864e5
+  const marks = sessionMarks.marks.filter((mk) => mk.future || mk.t >= dayAgo)
   /* Every mark gets its name and the time it happened on your own clock — an unlabelled dotted line
      is a line you have to go and decode in the legend, and the whole question it answers is "which
      desk, and when". Scrolled back off the live edge, the ones still ahead are history rather than
@@ -350,14 +356,14 @@ export default function MarketPage() {
      that one is the part you would act on, and it is also the one crowded hardest, since every
      future mark lands inside the narrow strip of room left on the right. */
   const labelled: SessionMark[] = []
-  for (const mk of sessionMarks.marks) {
+  for (const mk of marks) {
     const last = labelled.at(-1)
     if (!last || mk.x - last.x > 9) labelled.push(mk)
     else if (mk.future && atEdge && !last.future) labelled[labelled.length - 1] = mk
   }
 
   // only the sessions that actually landed a line get a legend entry
-  const shownSessions = SESSIONS.filter((s) => sessionMarks.marks.some((mk) => mk.label === s.label))
+  const shownSessions = SESSIONS.filter((s) => marks.some((mk) => mk.label === s.label))
 
   // opening-range levels + breakout signal, computed off the full window so the 00:00 bar is found.
   // memoised so it doesn't re-scan (and re-spread) the whole candle array on every hover re-render
@@ -898,7 +904,10 @@ export default function MarketPage() {
                   : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`],
             ] as const).map(([k, v, cls, sub, hint]) => (
               <Hint key={k} label={hint}>
-                <div>
+                {/* w-fit: the cell stretches the whole grid track, and a tooltip centres on its
+                    trigger — so the arrow was landing in the empty space to the right of the number
+                    rather than on it. The text is left-aligned either way, so nothing moves. */}
+                <div className="w-fit">
                   <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
                   <p className={cn('font-medium tabular-nums', cls)}>
                     {v}
@@ -1029,7 +1038,7 @@ export default function MarketPage() {
                   {/* Session opens — Asia / Europe / US. The ones already passed sit back so they read
                       as texture behind the candles rather than dotted verticals competing with them;
                       the ones still ahead, which are the part you'd act on, stay bright. */}
-                  {sessionMarks.marks.map((mk, i) => (
+                  {marks.map((mk, i) => (
                     <line key={`s-${i}`} x1={mk.x} x2={mk.x} y1="0" y2="100"
                       stroke={mk.color} strokeWidth={1} strokeOpacity={mk.future && atEdge ? 0.8 : 0.3}
                       strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
