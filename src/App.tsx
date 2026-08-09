@@ -612,7 +612,7 @@ export default function App() {
               />
               <div className={cn(
                 'bg-background fixed inset-x-0 bottom-0 z-50 max-h-[75svh] overflow-y-auto rounded-t-xl border-t',
-                'transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] md:hidden',
+                'transition-transform duration-300 ease-in-out md:hidden',
                 open ? 'translate-y-0' : 'translate-y-full',
               )}>
                 {/* the grab handle every sheet on a phone has, so it reads as one */}
@@ -621,8 +621,8 @@ export default function App() {
               </div>
 
               <div className={cn(
-                'hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] md:flex',
-                open ? 'w-[300px]' : 'w-0',
+                'hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out md:flex',
+                open ? 'w-75' : 'w-0',
               )}>
                 {!phone && panelRef.current}
               </div>
