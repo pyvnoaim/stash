@@ -36,6 +36,30 @@ test('a feed with no mark still makes a card, saying nothing it cannot', () => {
   assert.doesNotMatch(svg, /Opened/)
 })
 
+test('a finished trade says realised, and prints an exit rather than a mark', () => {
+  const svg = cardSvg({
+    symbol: 'DOGEUSDT', side: 'short', entry: 0.1985, mark: 0.1909, pct: 3.83, pnl: 9.2,
+    openedAt: '2026-08-09T10:00:00Z', closedAt: '2026-08-10T14:00:00Z', venue: 'VWAP pull-back',
+  }, 2)
+  assert.match(svg, />\+\$9\.20 realised</)
+  assert.doesNotMatch(svg, /unrealised/)
+  assert.match(svg, /Exit 0\.1909/)
+  assert.doesNotMatch(svg, /Now 0\.1909/)
+  assert.match(svg, /Closed 10 Aug/)
+  // no size to print, and the rule that made it stands where a venue would
+  assert.match(svg, /Short {3}· {3}VWAP pull-back</)
+})
+
+test('a running position still talks about a trade that is running', () => {
+  const svg = cardSvg({
+    symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 100, mark: 110, pct: 10, pnl: 5,
+    openedAt: null, venue: 'bitget',
+  })
+  assert.match(svg, /unrealised/)
+  assert.match(svg, /Now 110/)
+  assert.match(svg, /Long {3}· {3}0\.5 {3}· {3}Bitget</)
+})
+
 test('a symbol carrying markup cannot break out of the svg', () => {
   assert.match(cardSvg({ ...P, symbol: 'A<B&C' }), /A&lt;B&amp;C/)
 })

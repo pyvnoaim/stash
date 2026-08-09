@@ -154,6 +154,8 @@ export default function MarketPage() {
   const cfg = HORIZONS[horizon]
   // the exchange's word on what's held, for drawing the real position over whatever the plan says
   const exch = useExchangePositions()
+  // and what the server's sweeper has done with the setups armed against it
+  const { swept, cancelNow, busy } = useSweep()
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -893,6 +895,12 @@ export default function MarketPage() {
               )
             })()}
           </div>
+          {/* and what that press is actually doing, on its own line: the clock running down, or the
+              sentence saying how it ended */}
+          {!inIt && watched && (
+            <AutoCancel w={watched} iv={(watched.interval ?? interval) as Interval} slow={cfg.slow}
+              swept={swept} cancelNow={cancelNow} busy={busy} />
+          )}
           {/* the levels as an instrument row, label over number — the same read-out pattern as the
               Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
               means nothing until you see it's 1.310 for 900. */}
@@ -1740,6 +1748,127 @@ function fileClosed(next: ExchangePosition[]) {
   }
 }
 
+/** What the server's sweeper did to a setup, as the app reads it back. */
+type SweptRow = { id: string; title: string; body: string; at: number }
+
+/** "4h 20m", "12m", "now" — a countdown nobody has to subtract two clock times to read. */
+const left = (ms: number) => {
+  if (ms <= 0) return 'any moment'
+  const m = Math.round(ms / 60_000)
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+/**
+ * The armed setup, made visible: how long it has left, what became of it, and the two ways out —
+ * end it now, or call the whole thing off.
+ *
+ * Its own component for the clock. A countdown that only moved when something else happened to
+ * re-render the page is a countdown that lies most of the time, and a minute is as often as one
+ * measured in hours needs to move.
+ */
+function AutoCancel({ w, iv, slow, swept, cancelNow, busy }: {
+  w: Watch
+  iv: Interval
+  slow: number
+  swept: SweptRow[]
+  cancelNow: (id: string) => void
+  busy: string | null
+}) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const h = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(h)
+  }, [])
+  const done = swept.find((s) => s.id === w.id)
+  if (!w.killAt && !done) return null
+  /* The bar fills across the life it was given, so the read is "how much of this setup's rope is
+     left" rather than a date to compare against a clock.
+     Measured back from `killAt` across the window arming grants, *not* forward from `ts`: a setup
+     saved on Monday and armed on Thursday was not three days into a one-day life, but that is
+     exactly what the saved-at stamp would have drawn — a bar that starts nearly full. */
+  const span = KILL_BARS * BAR_MS[iv]
+  const gone = Math.min(1, Math.max(0, w.killAt ? 1 - (w.killAt - now) / span : 1))
+  return (
+    <div className="mt-2 rounded-md border px-2.5 py-2">
+      {done ? (
+        <p className="text-xs">
+          <span className="font-medium">{done.title}</span>
+          <span className="text-muted-foreground"> · {done.body}</span>
+        </p>
+      ) : (
+        <>
+          <div className="flex items-baseline gap-2 text-xs">
+            <span className="font-medium">Auto-cancel in {left(w.killAt! - now)}</span>
+            <span className="text-muted-foreground">
+              or on a {iv} close through the {slow}-MA
+            </span>
+            <span className="ml-auto flex gap-1">
+              <Hint label="End it now: the server looks for the order resting at this entry and takes it off the book, on the same rules the timer uses. Nothing to wait for.">
+                <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
+                  disabled={busy === w.id} onClick={() => cancelNow(w.id)}>
+                  {busy === w.id ? <Loader2 className="animate-spin" /> : null}
+                  Cancel now
+                </Button>
+              </Hint>
+              <Hint label="Leave the order alone and stop watching the clock — the setup stays saved and the bell still watches its levels.">
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-muted-foreground"
+                  onClick={() => armWatch(w.id, null)}>
+                  Call it off
+                </Button>
+              </Hint>
+            </span>
+          </div>
+          <div className="bg-muted mt-1.5 h-1 overflow-hidden rounded-full">
+            <div className={cn('h-full rounded-full transition-[width] duration-1000',
+              gone > 0.85 ? 'bg-amber-500' : 'bg-muted-foreground/40')}
+              style={{ width: `${gone * 100}%` }} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The sweeper's own history, and the button that ends one setup now.
+ *
+ * Polled, because the outcomes live on the server: it is the thing holding the key, and it acts
+ * with the app closed. Without this the only way to learn that an order had been cancelled was a
+ * push notification, which is a strange thing to require of someone sitting in front of the page
+ * it happened on.
+ *
+ * `cancelNow` names the setup rather than moving its clock forward: arming writes into the synced
+ * document and the sync arrives when it arrives, while a pressed button is someone waiting. The
+ * answer carries the fresh list, so the card says what happened without a second round trip.
+ */
+function useSweep() {
+  const [swept, setSwept] = useState<SweptRow[]>([])
+  const [busy, setBusy] = useState<string | null>(null)
+  const load = () => fetch('/api/sweep')
+    // signed out, offline, no server: there is nothing to show and nothing to say about it
+    .then(async (r) => { if (r.ok) setSwept((await r.json()).swept ?? []) })
+    .catch(() => {})
+  useEffect(() => {
+    void load()
+    const h = window.setInterval(() => void load(), 60_000)
+    return () => window.clearInterval(h)
+  }, [])
+  const cancelNow = async (watch: string) => {
+    setBusy(watch)
+    try {
+      const r = await fetch('/api/sweep', { method: 'POST', body: JSON.stringify({ watch }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.error ?? r.status)
+      setSwept(j.swept ?? [])
+    } catch (e) {
+      toast.error(`Could not reach the sweeper — ${String((e as Error).message)}`)
+    } finally {
+      setBusy(null)
+    }
+  }
+  return { swept, cancelNow, busy }
+}
+
 /**
  * The exchange feed, polled while something is looking. Only an answered request moves anything:
  * a failed fetch keeps the last state, and — the part that matters — never reaches fileClosed,
@@ -1778,9 +1907,6 @@ function useExchangePositions() {
  */
 export function ExchangePositions() {
   const { rows, equity } = useExchangePositions()
-  // whose card it is — signed out this is null and the card goes out unsigned, which is what it
-  // did before there were accounts and is still a card worth having
-  const { user } = useSyncExternalStore(subscribeSync, getSync)
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
@@ -1857,17 +1983,9 @@ export function ExchangePositions() {
                     {r != null && ` · ${rLabel(r)}`}
                   </span>
                 )}
-                {/* the one thing on this desk anyone shows anyone else: the asset, the side and
-                    what it is doing, as a picture that carries none of the account with it */}
-                <Hint label="A card of this position — asset, side and profit — to the share sheet, or saved as a picture">
-                  <Button variant="ghost" size="icon-xs" aria-label={`Share ${p.symbol} card`}
-                    className={cn('text-muted-foreground hover:text-foreground', p.pct == null && 'ml-auto')}
-                    onClick={() => void shareCard(p, r, user).then((how) => {
-                      if (how === 'saved') toast('Card saved', { description: 'No share sheet here, so it went to your downloads.' })
-                    }).catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
-                    <Share2 className="size-3.5" />
-                  </Button>
-                </Hint>
+                {/* ponytail: no share button here. A card of a position still running is a number
+                    that has changed by the time anyone opens it, and the trade it brags about can
+                    still end red — the Record's rows are the ones with an answer on them. */}
               </div>
               {(p.value != null || p.stop != null || p.target != null || p.openedAt != null) && (
                 <p className="text-muted-foreground text-xs">
@@ -2117,6 +2235,8 @@ function SetupNote({ w, placeholder, className }: { w: Watch, placeholder: strin
 
 function Record() {
   const { results, stake, dials } = useStash()
+  // whose card it is — the same byline the Desk signs with, and null signed out
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
   /* Which row has its note open. One at a time and only on the row you asked for: fifty always-on
      textareas is a form, and the record is meant to read as a list. */
   const [noting, setNoting] = useState<string | null>(null)
@@ -2195,12 +2315,13 @@ function Record() {
           const open = noting === r.id
           return (
             <div key={r.id}>
+              <div className="flex items-center">
               {/* a real button, so the note is reachable from the keyboard the way every other
                   control on this page is — a div with an onClick would not be */}
               <button
                 type="button"
                 onClick={() => setNoting(open ? null : r.id)}
-                className="hover:bg-muted/50 flex w-full items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-sm"
+                className="hover:bg-muted/50 flex min-w-0 flex-1 items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-sm"
               >
                 <span className="w-28 shrink-0 truncate font-medium">{r.label}</span>
                 <span className="text-muted-foreground w-24 shrink-0 truncate text-xs">
@@ -2222,6 +2343,30 @@ function Record() {
                 <NotebookPen className={cn('size-3.5 shrink-0 self-center',
                   r.note ? 'text-foreground' : 'text-muted-foreground/40')} />
               </button>
+              {/* The one thing on this desk anyone shows anyone else, and only ever from here: a
+                  finished trade is the only one with a result to show. Beside the row's button
+                  rather than inside it — a button in a button is not markup a browser accepts. */}
+                <Hint label="A card of this trade — asset, side and what it paid — to the share sheet, or saved as a picture">
+                  <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
+                    className="text-muted-foreground hover:text-foreground shrink-0"
+                    onClick={() => void shareCard({
+                      symbol: r.asset, side: r.dir, entry: r.entry, mark: r.exit,
+                      // price move signed by the side, the same way a position's is
+                      pct: r.entry > 0 ? (r.exit / r.entry - 1) * (r.dir === 'long' ? 100 : -100) : null,
+                      pnl: cash,
+                      openedAt: new Date(r.entryAt).toISOString(),
+                      closedAt: new Date(r.closedAt).toISOString(),
+                      // no size: a setup's stake is money where a position's size is coins, and the
+                      // card prints both in the same place with no unit. The rule that made it says
+                      // more about the trade than either.
+                      venue: r.rule || r.horizon || undefined,
+                    }, r.r, user).then((how) => {
+                      if (how === 'saved') toast('Card saved', { description: 'No share sheet here, so it went to your downloads.' })
+                    }).catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
+                    <Share2 className="size-3.5" />
+                  </Button>
+                </Hint>
+              </div>
               {open
                 ? <SetupNote w={r} placeholder="Why this one, and how that read" className="mt-1 mb-1.5" />
                 : r.note && (

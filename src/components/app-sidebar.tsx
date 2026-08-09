@@ -220,9 +220,12 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         <SidebarMenuItem {...projectDrop(p.id)}>
           <SidebarMenuButton
             isActive={s.sel === p.id}
-            className={cn(p.parent && 'pl-6')}
-            // a parent row toggles its fold on each click (and navigates): first opens it, next folds it
-            onClick={() => { go(p.id); if (holds) toggleCollapsed(p.id) }}
+            className={cn('select-none', p.parent && 'pl-6')}
+            /* One click goes to the project — that is what a project row is for, and folding it on
+               the way meant you could not open a parent twice without shutting it. Folding moved to
+               the double click, and to the mark on the left, which has said `>` all along. */
+            onClick={() => go(p.id)}
+            onDoubleClick={holds ? () => toggleCollapsed(p.id) : undefined}
           >
             {/* the project's mark turns into a grip on hover: same spot, same size,
                 so the row says it can be dragged without moving anything to say it.
@@ -401,36 +404,41 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
               {rootProjects(s).map((root) => {
                 const kids = childProjects(s, root.id)
                 const shut = s.collapsed.includes(root.id)
-                // the sub-project you're actually looking at rides out the fold — folding away the
-                // thing on screen leaves the sidebar with no trace of where you are
-                const pinned = shut ? kids.filter((k) => k.id === s.sel) : []
-                const folding = shut ? kids.filter((k) => k.id !== s.sel) : kids
+                // how many are actually out of sight, which is what the badge counts — the
+                // sub-project you are looking at rides out the fold, see `stay` below
+                const hidden = shut ? kids.filter((k) => k.id !== s.sel).length : 0
                 return (
                   <Fragment key={root.id}>
-                    {renderRow(root, kids.length, shut, folding.length)}
-                    {pinned.map((k) => renderRow(k, 0, false))}
-                    {/* kids stay mounted so they can animate: grid 0fr→1fr slides height:auto with
-                        no measuring and no dep. inert when shut keeps the hidden rows off the tab order */}
-                    {folding.length > 0 && (
-                      <div className={cn('grid transition-[grid-template-rows] duration-200 ease-out', shut ? 'grid-rows-[0fr] -mt-1' : 'grid-rows-[1fr]')}>
-                        <div inert={shut} className="flex min-h-0 flex-col gap-1 overflow-hidden">
-                          {folding.map((k, i) => (
+                    {renderRow(root, kids.length, shut, hidden)}
+                    {/* Every child keeps its own fold, and its own place in the list whatever the
+                        parent is doing. It used to be two lists — the selected one pinned above,
+                        the rest inside one collapsing box — and opening the parent moved it from
+                        one to the other. React unmounts and remounts a row that changes parents, so
+                        the child already on screen replayed the whole fade-in and cascade with
+                        everything else: an animation that said "loading" about something that had
+                        never gone away. One list, one mount, and the row that was already open just
+                        stays open.
+                        Kids stay mounted so they can animate: grid 0fr→1fr slides height:auto with
+                        no measuring and no dep. inert keeps a hidden row off the tab order. */}
+                    {kids.map((k, i) => {
+                      const stay = !shut || k.id === s.sel
+                      return (
+                        <div key={k.id}
+                          className={cn('grid transition-[grid-template-rows] duration-200 ease-out',
+                            stay ? 'grid-rows-[1fr]' : 'grid-rows-[0fr] -mt-1')}>
+                          <div inert={!stay} className="min-h-0 overflow-hidden">
                             <div
-                              key={k.id}
                               // each child fades in a beat after the one above, so they cascade
                               // instead of snapping in together; closing drops the delay
-                              style={{ transitionDelay: shut ? '0ms' : `${i * 45}ms` }}
-                              className={cn(
-                                'transition-opacity duration-200 ease-out',
-                                shut ? 'opacity-0' : 'opacity-100',
-                              )}
+                              style={{ transitionDelay: stay ? `${i * 45}ms` : '0ms' }}
+                              className={cn('transition-opacity duration-200 ease-out', stay ? 'opacity-100' : 'opacity-0')}
                             >
                               {renderRow(k, 0, false)}
                             </div>
-                          ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )
+                    })}
                   </Fragment>
                 )
               })}

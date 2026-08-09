@@ -52,17 +52,32 @@ const num = (v: string) => { const n = parseFloat(v.replace(',', '.')); return i
 const costStr = (n: number) =>
   n.toLocaleString(undefined, { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+/* A field on a saved row, at rest. Eleven rows of four bordered boxes is a spreadsheet, and the
+   page's actual job is reading: what leaves the account, and when. So the chrome waits to be
+   wanted — the border and the fill arrive on hover, on focus, or on a keyboard walking through the
+   row, and until then the row is a line of text. Nothing about editing changes: the same single
+   click into the same field, and the caret lands where it was clicked. */
+/* Both halves of the chrome and both themes. The base field is `bg-transparent` in light and
+   `dark:bg-input/30` in dark, so quieting it means turning off the dark fill as well as the border
+   — and putting each back exactly as the design system has it, rather than inventing a light-mode
+   fill that exists nowhere else in the app. */
+const QUIET = 'border-transparent bg-transparent dark:bg-transparent'
+  + ' hover:border-input dark:hover:bg-input/30'
+  + ' focus-visible:border-ring dark:focus-visible:bg-input/30'
+  + ' aria-expanded:border-input dark:aria-expanded:bg-input/30'
+
 // text, not number: it takes a comma and shows no spinner arrows. Validation lives in num().
-const Cost = ({ className, ...props }: React.ComponentProps<typeof Input>) => (
+const Cost = ({ className, quiet, ...props }: React.ComponentProps<typeof Input> & { quiet?: boolean }) => (
   <div className="relative w-28 shrink-0">
     <span className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm">€</span>
-    <Input type="text" inputMode="decimal" {...props} className={cn('pr-2.5 pl-6 text-right tabular-nums', className)} />
+    <Input type="text" inputMode="decimal" {...props}
+      className={cn('pr-2.5 pl-6 text-right tabular-nums', quiet && QUIET, className)} />
   </div>
 )
 
-const CyclePicker = ({ value, onChange }: { value: Cycle; onChange: (c: Cycle) => void }) => (
+const CyclePicker = ({ value, onChange, quiet }: { value: Cycle; onChange: (c: Cycle) => void; quiet?: boolean }) => (
   <Select value={value} onValueChange={(v) => onChange(v as Cycle)}>
-    <SelectTrigger className="h-8 w-32 shrink-0">
+    <SelectTrigger className={cn('h-8 w-32 shrink-0', quiet && QUIET)}>
       <SelectValue />
     </SelectTrigger>
     <SelectContent>
@@ -120,6 +135,8 @@ export default function SubsPage() {
   const active = filter !== 'all' && used.includes(filter) ? filter : 'all'
   const shown = sortSubs(active === 'all' ? list : list.filter((x) => x.cycle === active), sort, charge)
   const shownM = shown.reduce((n, x) => n + monthlyCost(x), 0)
+  // the biggest monthly drain on screen, which every row's bar is drawn against
+  const peak = shown.reduce((n, x) => Math.max(n, monthlyCost(x)), 0)
 
   const income = view === 'income'
   const add = () => {
@@ -228,21 +245,30 @@ export default function SubsPage() {
         </p>
       ) : (
         <div className="flex flex-col gap-2">
-          {shown.map((sub) => (
-            <Card key={sub.id} className="py-3">
+          {shown.map((sub) => {
+            const per = monthlyCost(sub)
+            /* Share of the biggest thing on the list, drawn along the bottom edge. Eleven rows of
+               identical boxes say nothing about where the money actually goes — €250 to Mom and
+               €10.99 to Spotify read the same. Against the peak rather than the total, because the
+               question this answers is "which of these is the big one", and shares of a total are
+               slivers nobody can compare by eye. Monthly-normalised, so a yearly bill is measured
+               the way it is actually felt. */
+            const share = peak > 0 ? per / peak : 0
+            return (
+            <Card key={sub.id} className="group relative gap-0 overflow-hidden py-3">
               <CardContent className="flex flex-wrap items-center gap-2 px-3">
                 {/* uncontrolled name/cost: keyed by id, so editing never fights the store's own value.
                     ponytail: a cross-tab edit won't refresh these fields; reopen the tab if it matters */}
                 <Input
                   defaultValue={sub.name}
                   onChange={(e) => patchSub(sub.id, { name: e.target.value })}
-                  className="min-w-40 flex-1"
+                  className={cn('min-w-40 flex-1 font-medium', QUIET)}
                 />
-                <Cost
+                <Cost quiet
                   defaultValue={costStr(sub.cost)}
                   onChange={(e) => patchSub(sub.id, { cost: num(e.target.value) })}
                 />
-                <CyclePicker value={sub.cycle} onChange={(c) => patchSub(sub.id, { cycle: c })} />
+                <CyclePicker quiet value={sub.cycle} onChange={(c) => patchSub(sub.id, { cycle: c })} />
                 {/* the app's own date picker — the next charge / payday */}
                 <div className="w-52 shrink-0">
                   <DueField
@@ -251,23 +277,36 @@ export default function SubsPage() {
                     onPick={(v) => patchSub(sub.id, { due: v })}
                   />
                 </div>
-                <span className="text-muted-foreground ml-auto w-24 shrink-0 text-right text-xs tabular-nums">
-                  {money(monthlyCost(sub))}/mo
+                {/* The number the row is actually for: every cycle in one unit, which is the only
+                    way a yearly 98,99 and a monthly 10,99 can be compared at all. It used to be the
+                    palest thing here, behind four boxes of chrome. */}
+                <span className={cn('ml-auto w-24 shrink-0 text-right text-sm tabular-nums',
+                  income ? MONEY_IN : 'text-foreground')}>
+                  {money(per)}
+                  <span className="text-muted-foreground text-xs">/mo</span>
                 </span>
+                {/* Shown on hover, and to a keyboard the moment it reaches the row — eleven standing
+                    red icons is a page that looks like it is mostly for deleting things. */}
                 <Hint label="Remove">
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label={`Remove ${sub.name}`}
-                    className="text-muted-foreground hover:text-destructive size-8 shrink-0"
+                    className="text-muted-foreground hover:text-destructive size-8 shrink-0 opacity-0
+                      transition-opacity group-focus-within:opacity-100 group-hover:opacity-100
+                      focus-visible:opacity-100"
                     onClick={() => del(sub)}
                   >
                     <Trash2 />
                   </Button>
                 </Hint>
               </CardContent>
+              <div aria-hidden className={cn('absolute inset-x-0 bottom-0 h-0.5',
+                income ? 'bg-emerald-500/50' : 'bg-foreground/25')}
+                style={{ width: `${Math.max(share * 100, 1)}%` }} />
             </Card>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

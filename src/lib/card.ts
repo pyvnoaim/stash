@@ -22,14 +22,22 @@
 export type CardPosition = {
   symbol: string
   side: 'long' | 'short'
-  size: number
+  /** How much of it, in whatever unit the source counts in. Absent where there is no honest one —
+   *  a finished setup's stake is money and a position's size is coins, and the card would print
+   *  them in the same place under the same silence. */
+  size?: number
   entry: number
+  /** Where it is now, or where it ended — see `closedAt`. */
   mark: number | null
   /** price move from entry, signed by the side */
   pct: number | null
-  /** unrealised PnL in the quote currency */
+  /** PnL in the quote currency: unrealised while it runs, realised once it is over */
   pnl: number | null
   openedAt: string | null
+  /** When it ended. Set, the card stops talking about a trade that is still going: the money is
+   *  realised and the price is an exit rather than a mark. */
+  closedAt?: string | null
+  /** Where it came from — an exchange, or the rule that made it. */
   venue?: string
 }
 
@@ -63,9 +71,10 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
   // the line under the headline: everything a reader needs to place the trade, in one sentence
   const facts = [
     `Entry ${num(p.entry)}`,
-    p.mark != null && `Now ${num(p.mark)}`,
+    p.mark != null && `${p.closedAt ? 'Exit' : 'Now'} ${num(p.mark)}`,
     r != null && `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`,
     p.openedAt && `Opened ${new Date(p.openedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+    p.closedAt && `Closed ${new Date(p.closedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
   ].filter(Boolean).join('   ·   ')
   const t = (x: number, y: number, size: number, fill: string, weight: number, text: string, extra = '') =>
     `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-weight="${weight}"${extra}>${esc(text)}</text>`
@@ -87,9 +96,9 @@ ${t(pic ? 1028 : 1120, 132, 30, '#a1a1aa', 500, who.name, ' text-anchor="end"')}
 <rect width="1200" height="630" fill="#09090b"/>
 <rect x="0" y="0" width="1200" height="6" fill="${ink}"/>
 ${t(80, 140, 68, '#fafafa', 600, name)}${byline}
-${t(80, 190, 28, '#a1a1aa', 400, `${p.side === 'long' ? 'Long' : 'Short'}   ·   ${num(p.size)}   ·   ${venueName(p.venue)}`)}
+${t(80, 190, 28, '#a1a1aa', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null].filter(Boolean).join('   ·   '))}
 ${t(80, 400, 156, ink, 700, pct)}
-${t(80, 462, 34, '#fafafa', 500, p.pnl == null ? 'unrealised' : `${money(p.pnl)} unrealised`)}
+${t(80, 462, 34, '#fafafa', 500, `${p.pnl == null ? '' : money(p.pnl) + ' '}${p.closedAt ? 'realised' : 'unrealised'}`)}
 ${t(80, 560, 26, '#71717a', 400, facts)}
 ${t(1120, 560, 28, '#52525b', 600, 'stash', ' text-anchor="end"')}
 </svg>`

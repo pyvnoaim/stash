@@ -990,6 +990,30 @@ export function start({
       return send(res, 405, { error: 'method not allowed' })
     }
 
+    /* What became of the armed setups, and the button that ends one now.
+       GET is the app showing its own history back to itself — the sweeper's outcomes used to
+       leave only as pushes, which meant anyone with notifications off never learned what had
+       happened to their order.
+       POST names one setup and settles it on the spot, rather than moving its `killAt` and waiting
+       for both the sync and the next five-minute pass: someone pressing "cancel now" is standing
+       there watching. The id is looked up in that account's own document, so it can only ever name
+       one of their own. */
+    if (path === '/api/sweep') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      if (req.method === 'GET') return send(res, 200, { swept: sweep.recent(user.id) })
+      if (req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const id = String(b?.watch ?? '').trim()
+        if (!id) return send(res, 400, { error: 'which setup' })
+        const done = await sweep.now(user.id, id).catch(() => null)
+        if (!done) return send(res, 404, { error: 'no such setup, or it has already filled' })
+        return send(res, 200, { swept: sweep.recent(user.id) })
+      }
+      return send(res, 405, { error: 'method not allowed' })
+    }
+
     /* What the service worker asks the moment a knock arrives. The notification is written from
        this rather than from the push itself, so what the phone shows is what is true when it is
        shown — the push carries no payload at all. */
