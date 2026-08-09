@@ -132,6 +132,16 @@ export interface Watch {
    */
   size?: number
   lev?: number
+  /**
+   * Why this one — the words beside the numbers, written when it is saved and read back when it is
+   * over. The record already says what a setup did; this is the only place it can say what you
+   * thought it would do, which is the half a hit rate cannot argue with afterwards.
+   *
+   * It rides into `Result` with everything else, since a setup keeps its id across the move. It is
+   * the one field on a Watch that never leaves the device pair the sync carries: `/api/desk`
+   * projects an allowlist of what a shared trade is, and this is not on it.
+   */
+  note?: string
 }
 
 /**
@@ -249,6 +259,17 @@ const cleanTime = (v: unknown): string | null =>
 const positionOf = (w: { size?: unknown, lev?: unknown }) => {
   const size = Number(w.size), lev = Number(w.lev)
   return isFinite(size) && size > 0 && isFinite(lev) && lev > 0 ? { size, lev } : {}
+}
+
+/** How long a setup's note may be. The document is pushed whole on every edit and kept fifty
+ *  versions deep, so this is a paragraph about a trade, not a place to keep an essay. */
+const NOTE_MAX = 1000
+/** Absent stays absent: an empty string on every one of fifty rows is fifty keys of nothing.
+ *  Whitespace decides that, but is never stripped — the field is edited a keystroke at a time,
+ *  and a rule that eats the space you just typed is a field you cannot type two words into. */
+const noteOf = (w: { note?: unknown }) => {
+  const note = typeof w.note === 'string' ? w.note.slice(0, NOTE_MAX) : ''
+  return note.trim() ? { note } : {}
 }
 
 const liveGeometry = (w: Pick<Watch, 'asset' | 'dir' | 'entry' | 'stop' | 'target'>) =>
@@ -400,6 +421,23 @@ export const isPage = (id: string) => PAGES.includes(id)
 export const isRoute = (s: Pick<State, 'projects'>, id: string) =>
   isPage(id) || isView(id) || s.projects.some((p) => p.id === id)
 
+/**
+ * What the URL names: the view, and the search laid over it — `#all?%23audio%20%40kova`. One
+ * string for both, so a reload, a bookmark and a link pasted to somebody all open the same list
+ * with the same search up, and a narrowing you built up a term at a time is a thing you can keep.
+ *
+ * decodeURIComponent throws on a malformed escape and this is a string anyone can paste, so a
+ * broken one reads as no search rather than as a blank page with an exception behind it.
+ */
+export function readHash(hash = location.hash): { sel: string, query: string } {
+  const dec = (t: string) => { try { return decodeURIComponent(t) } catch { return '' } }
+  const raw = hash.replace(/^#/, '')
+  const cut = raw.indexOf('?')
+  return cut < 0
+    ? { sel: dec(raw), query: '' }
+    : { sel: dec(raw.slice(0, cut)), query: dec(raw.slice(cut + 1)) }
+}
+
 export const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
@@ -515,6 +553,7 @@ export function load(data: unknown): State {
       // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
       ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
       ...positionOf(w),
+      ...noteOf(w),
     }))
     // levels the wrong way round for their side are not a trade, they are an alarm that fires on
     // every tick forever: a long whose stop sits above its entry is already "stopped out" the
@@ -560,6 +599,7 @@ export function load(data: unknown): State {
       exit: Number(r.exit),
       r: Number(r.r),
       ...positionOf(r),
+      ...noteOf(r),
     }))
     /* `> 0` rather than isFinite for the three that cannot be zero: Number(null) and Number('')
        are both 0, which is finite — a row with no closing time would otherwise load as one that
@@ -605,8 +645,12 @@ const read = (raw: string | null): State => {
 }
 
 let state: State = read(localStorage.getItem(KEY))
-// always open on the Overview dashboard, whatever view was last active (App rewrites the hash on mount)
-state = { ...state, sel: OVERVIEW }
+/* Open on the Overview dashboard rather than on whatever view was last active — unless the URL
+   names somewhere, which is what a reload, a bookmark and a pasted link all are. Without this the
+   hash was write-only on a cold start: App wrote it on mount and every link into the app landed on
+   Overview instead of where it pointed. The search that rides the hash is App's half. */
+const booted = readHash().sel
+state = { ...state, sel: isRoute(state, booted) ? booted : OVERVIEW }
 
 const listeners = new Set<() => void>()
 
@@ -817,8 +861,8 @@ addEventListener('storage', (e) => {
 
 // back, forward and a pasted link all name a view. App writes the hash whenever `sel` changes.
 addEventListener('hashchange', () => {
-  const id = decodeURIComponent(location.hash.slice(1))
-  if (id !== state.sel && isRoute(state, id)) select(id)
+  const { sel } = readHash()
+  if (sel !== state.sel && isRoute(state, sel)) select(sel)
 })
 
 export const useStash = () => useSyncExternalStore(subscribe, getState)
@@ -1067,6 +1111,21 @@ export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))
 export const resetDials = () => set((s) => ({ ...s, dials: { ...DIALS } }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
+
+/**
+ * The words on a setup — why it was taken while it is live, how that read once it is over. Both
+ * lists, because a setup keeps its id across the move into the record and the note is the one
+ * thing you want to add *after* the trade decided what it was worth writing.
+ *
+ * Emptied is gone rather than stored blank, which is the same rule `noteOf` holds a loaded
+ * document to. Not an undo step: `set` only stacks a change to the items, projects or subs.
+ */
+export const setWatchNote = (id: string, text: string) => set((s) => {
+  const next = text.slice(0, NOTE_MAX)
+  const note = next.trim() ? next : undefined
+  const put = <T extends Watch>(w: T): T => (w.id === id ? { ...w, note } : w)
+  return { ...s, watches: s.watches.map(put), results: s.results.map(put) }
+})
 
 export const addAlarm = (a: Alarm) => set((s) => ({ ...s, alarms: [a, ...s.alarms].slice(0, 100) }))
 export const removeAlarm = (id: string) => set((s) => ({ ...s, alarms: s.alarms.filter((a) => a.id !== id) }))

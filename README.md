@@ -81,8 +81,15 @@ projects that still match, each with what is open under it, and clicking one fin
 off and leaves you typing the next. Type past the last match and the list empties, which is the
 answer too.
 
-Each view has its own URL. The hash follows whatever you are looking at, so a reload lands where
-you left, back and forward walk the views you visited, and a link to `#flagged` opens there.
+Each view has its own URL, and so does each search over it. The hash follows whatever you are
+looking at — `#flagged`, or `#all?%23audio%20%40kova` for the same list narrowed to *audio* in
+Kova — so a reload lands where you left with the search still up, back and forward walk the views
+you visited, and a link to either opens there.
+
+Which is the whole of "saved searches": a narrowing you built up a term at a time is a URL, and
+the browser already has somewhere to keep one. Bookmark `#all?%23wartung`, put it on the bar, hand
+it to somebody on the same stash. A keystroke replaces the entry rather than pushing one, so back
+leaves a search rather than walking it a letter at a time.
 
 ## Repeats
 
@@ -584,6 +591,21 @@ alert names which is firing. Saving again replaces that one, and the button togg
 Prices are re-checked every minute **while the app is open** — nothing runs in the background and
 nothing is pushed to your phone.
 
+#### Why, beside how much
+
+Every other thing on this page is arithmetic over prices. A setup also takes a **note** — the field
+under the levels once there is a row to hang it on, and again on any row in **How they went**, which
+opens it. Write why you took it while the chart is still in front of you; write how that read once
+the trade has told you. It travels with the setup into the record, because a setup keeps its id
+across the move, and it is the one thing a hit rate cannot reconstruct afterwards.
+
+It stays on your own devices. Switching the Desk on publishes how a trade went and never why: the
+server sends an allowlist of what a shared trade is — asset, side, horizon, whether the entry was
+reached, the R — and the note is not on it, the same way the size and the leverage are not.
+
+A thousand characters, which is a paragraph about a trade rather than a place to keep an essay: the
+document is pushed whole on every edit and kept fifty versions deep.
+
 ### The others
 
 Under your own record sits everyone else's, if they want it there. **Settings → Markets → The
@@ -630,6 +652,55 @@ wider stop makes them a smaller share of the risk. Fading the break instead of t
 too, and was far worse (−1.24R). What the last row says honestly is that filtering turned a bad rule
 into a flat one — so the preset marks the levels, names which of the checks a break fails, and does
 not pretend to be a system.
+
+### AMD, walked forward
+
+*Accumulation, manipulation, distribution* — ICT's Power of Three, and the model people ask about
+most. `amdBacktest` in `src/lib/market.ts` writes it down as literally as it can be written: the
+Tokyo session's high and low are the range, the first bar after the New York open that trades past
+either side is the manipulation, a `structureBreak` back the other way is the distribution, and the
+entry is a limit at the near edge of the unfilled `fvg` that leg left behind. Stop past the
+manipulation wick, target the far side of the range, one trade a day, closed at the bell.
+
+Every knob was fixed before the run rather than fitted afterwards, and the windows are this file's
+own `SESSIONS` rather than ones invented to suit. 15m BTC and ETH pooled, 2026-01-01 → 2026-08-08,
+0.2% round-trip fees — the same charge the table above carries.
+
+| Rule | Sessions | Swept | Shifted | Left a gap | Trades | Win | Gross | Net |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| New York · FVG entry · range target | 312 | 299 | 205 | 108 | **47** | 13% | +0.30R | **−0.05R** |
+| …2R target instead | 312 | 299 | 205 | 108 | 48 | 19% | +0.15R | −0.20R |
+| …market entry at the shift | 312 | 299 | 205 | 205 | 148 | 20% | +0.01R | −0.44R |
+| …market entry, 2R target | 312 | 299 | 205 | 205 | 171 | 9% | −0.01R | −0.41R |
+| Frankfurt · FVG entry · range target | 312 | 295 | 205 | 89 | 54 | 20% | −0.06R | −0.66R |
+| Frankfurt · market entry · range target | 312 | 295 | 205 | 205 | 170 | 30% | −0.07R | −0.92R |
+
+**The manipulation phase does not identify anything.** 299 of 312 sessions took one side of the
+Tokyo range — 96%. A phase that describes what price does on all but thirteen days of eight months
+is not a signal, it is a description of a market having a session. That is the unfalsifiable part
+of the model with a number on it.
+
+**Nothing here is distinguishable from noise, gross or net.** The best gross row is +0.30R over 47
+trades with a standard error of 0.23 — t = 1.3, and it is the best of six variants that were all
+run, so it survives no correction at all. Net of fees the same row is −0.05R, t = −0.2. The rule is
+not losing money interestingly; it is failing to say anything.
+
+**The fee is the whole story, again.** The median stop sits 0.71% from the entry, so 0.2% round trip
+is **0.28R off every trade before it starts**. That is the same arithmetic that decided the opening
+range, and it is why the tighter, better-priced entry does not win: entering at the gap gets a
+better fill than entering at the shift (+0.30R against +0.01R gross) and takes a third as many
+trades with a tighter stop, and the tighter stop hands most of the better price straight back.
+
+Two more things the walk says out loud. Twenty-seven of the 47 trades ended at the bell rather than
+at either level, so the far side of the range is a target the distribution leg mostly does not reach
+inside the session. And 23 sessions priced a long whose stop sat *above* its own entry — price swept
+the range and simply kept going, and the model has no answer for that day. They are dropped and
+counted rather than scored; left in, the exit loop stops each one on its entry bar and books it as
++1R, which is a losing day counted as a winner and was worth about +0.1R a trade across the table.
+
+So: a real shape, described honestly, that does not survive costs. It is not on the desk, it does
+not vote in any tally, and there is no preset for it — but the code is here and tested, which is the
+thing the opening-range numbers above cannot say for themselves.
 
 None of it is advice, and none of it is stored — every number on the page is fetched fresh.
 

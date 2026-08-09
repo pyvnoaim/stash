@@ -1569,6 +1569,204 @@ export function backtest(
   }
 }
 
+/* ---------- AMD: accumulation, manipulation, distribution ---------- */
+
+/** Like a `Trade`, plus the exit an intraday model has that a swing rule does not: the bell. A day
+ *  that neither stopped nor targeted is closed at the session's last price and scored there, which
+ *  is the only honest thing to do with a rule whose whole claim is same-session. */
+export type AmdTrade = Omit<Trade, 'exit'> & { exit: 'target' | 'stop' | 'bell' }
+
+export type AmdOpts = {
+  /** Which desk's open times the manipulation. New York is the anchor the opening-range numbers
+   *  were run on, so it is the one the two tables can be read against each other. */
+  open?: 'New York' | 'Frankfurt'
+  /** The model's own target is the far side of the accumulation range — the opposing liquidity it
+   *  says the distribution leg is going for. 2R is here only so the row is comparable with the
+   *  opening-range table above it, not because the model asks for it. */
+  target?: 'range' | '2R'
+  /** `fvg` is the rule as taught: a limit at the near edge of the imbalance the structure shift
+   *  left behind, and no trade at all on a day that left none. `market` takes the confirmation
+   *  close instead — the control that says whether waiting for the gap earns the days it costs. */
+  entry?: 'fvg' | 'market'
+  /** Round-trip cost as a share of price — 0.002 for the 0.2% the opening-range table charged.
+   *  Taken in R off the entry-to-stop distance, which is the same subtraction. */
+  fee?: number
+}
+
+/** The walk, plus the funnel — how many days had a sweep at all, how many of those turned, and how
+ *  many of *those* left a gap to enter at. On a model that declines most days, the funnel says more
+ *  about it than the expectancy does. */
+export type AmdRun = {
+  trades: AmdTrade[]
+  days: number
+  swept: number
+  shifted: number
+  gapped: number
+  /** Priced a setup whose stop sat the wrong side of its own entry, and dropped it. */
+  crooked: number
+  /** Entered nothing: the gap was priced but price never came back for it before the bell. */
+  missed: number
+  median: number
+  expectancy: number
+  hit: number
+}
+
+const ACCUMULATION = SESSIONS[0]   // Tokyo 09:00–15:00 — the quiet window the model calls the range
+
+/**
+ * AMD, walked forward — the ICT model, as literally as it can be written down.
+ *
+ * Three phases, one trade a day, every knob fixed in advance rather than fitted:
+ *
+ *  - **Accumulation** is the Tokyo session's high and low, `SESSIONS[0]` as this file already
+ *    defines it rather than a window invented for this rule.
+ *  - **Manipulation** is the first bar after the chosen open that trades beyond either side of it —
+ *    the judas swing, and the side it takes is the side this trade will be *against*.
+ *  - **Distribution** is a `structureBreak` back the other way, read over the day's own bars and
+ *    taken on the bar that confirmed it (`ago === 0`), so nothing is acted on before it was
+ *    knowable. Entry is a limit at the near edge of the unfilled `fvg` that leg left behind, the
+ *    stop sits past the manipulation wick, and the target is the far side of the range.
+ *
+ * The declines are the point as much as the entries. No gap, no trade. A day whose first bar past
+ * the range takes both sides at once is dropped rather than guessed at — intrabar order is not in
+ * OHLC, and picking the convenient one is how a backtest invents an edge.
+ *
+ * What it does not model: slippage, funding, and a stop that gaps through filling worse than it
+ * says. Fees it does model, because at 15m on crypto they are most of the answer. In-sample by
+ * construction, like everything else measured in this file.
+ *
+ * ponytail: `structureBreak` is recomputed per bar over the day's slice — ~100 bars, so a hundred
+ * times nothing, and this never runs on a live tick. Hoist the swing scan if it ever does.
+ */
+export function amdBacktest(c: Candle[], opts: AmdOpts = {}): AmdRun {
+  const { open = 'New York', target = 'range', entry = 'fvg', fee = 0 } = opts
+  const session = SESSIONS.find((s) => s.where === open) ?? SESSIONS[2]
+  const within = (t: number, s: typeof SESSIONS[number]) => {
+    const { min } = localClock(t, s.tz)
+    return min >= s.min && min < s.end
+  }
+
+  /* Both windows land on the same UTC date — Tokyo's session is 00:00–06:00 UTC and New York's
+     opens at 13:30 — so one key groups the range with the open that follows it. Weekends go by the
+     same date: Bitcoin prints bars all Saturday and nobody opened for business, which is the rule
+     `sessionAnchor` already holds the opening range to. */
+  const byDay = new Map<string, { asia: number[]; desk: number[] }>()
+  for (let i = 0; i < c.length; i++) {
+    const d = new Date(c[i].t)
+    const wd = d.getUTCDay()
+    if (wd === 0 || wd === 6) continue
+    const asia = within(c[i].t, ACCUMULATION)
+    const desk = within(c[i].t, session)
+    if (!asia && !desk) continue
+    const key = d.toISOString().slice(0, 10)
+    const day = byDay.get(key) ?? { asia: [], desk: [] }
+    ;(asia ? day.asia : day.desk).push(i)
+    byDay.set(key, day)
+  }
+
+  const trades: AmdTrade[] = []
+  let days = 0, swept = 0, shifted = 0, gapped = 0, crooked = 0, missed = 0
+
+  for (const day of byDay.values()) {
+    // four bars of range and a session to trade it in, or there is not enough of the day here
+    if (day.asia.length < 4 || !day.desk.length) continue
+    const from = day.asia[0]
+    const last = day.desk[day.desk.length - 1]
+    const high = Math.max(...day.asia.map((i) => c[i].h))
+    const low = Math.min(...day.asia.map((i) => c[i].l))
+    if (!(high > low)) continue
+    days++
+
+    // manipulation: the first bar past either side. Both sides on one bar is unknowable from OHLC
+    let sweep = -1, up = false
+    for (const j of day.desk) {
+      const over = c[j].h > high, under = c[j].l < low
+      if (over && under) { sweep = -2; break }
+      if (over || under) { sweep = j; up = over; break }
+    }
+    if (sweep < 0) continue
+    swept++
+    const stop = up ? c[sweep].h : c[sweep].l
+    // the trade is against the sweep: it took the highs, so this is a short
+    const long = !up
+    const want: 'up' | 'down' = long ? 'up' : 'down'
+
+    // distribution: the structure shift back the other way, on the bar that confirmed it
+    let shift = -1
+    for (let j = sweep + 1; j <= last; j++) {
+      const sb = structureBreak(c.slice(from, j + 1), 2)
+      if (sb && sb.dir === want && sb.ago === 0) { shift = j; break }
+    }
+    if (shift < 0) continue
+    shifted++
+
+    const close = c[shift].c
+    let level: number
+    if (entry === 'market') level = close
+    else {
+      /* The imbalance that leg left, unfilled as of the confirming bar and behind price — a long
+         wants a box under the close to fall back into. Nearest first: the shallowest retrace is
+         the one that actually gets filled, and taking the far edge instead would be quietly
+         assuming a deeper pull-back on every trade that ever paid. */
+      const boxes = fvg(c.slice(from, shift + 1))
+        .filter((g) => !g.filled && g.dir === want && (long ? g.top <= close : g.bottom >= close))
+      if (!boxes.length) continue
+      const near = boxes.reduce((a, b) => (long ? (b.top > a.top ? b : a) : (b.bottom < a.bottom ? b : a)))
+      level = long ? near.top : near.bottom
+    }
+    gapped++
+
+    /* A long whose stop sits above its own entry is not a trade — the same geometry `store.ts`
+       refuses to keep a saved setup with. It happens here on the days price sweeps the range, keeps
+       going, and then confirms a structure break at a level still past the wick the stop was pinned
+       to. Left in, the exit loop stops it on its entry bar and the one formula below scores that
+       as +1R: a losing day counted as a winner. Dropped, and counted, because how often the rule
+       produces one is a fact about the rule. */
+    if (long ? stop >= level : stop <= level) { crooked++; continue }
+    const risk = Math.abs(level - stop)
+    if (!(risk > 0)) continue
+    const aim = target === '2R'
+      ? (long ? level + 2 * risk : level - 2 * risk)
+      : (long ? high : low)
+    // a range target the entry has already run past is not a trade, it is a fill on the wrong side
+    if (long ? aim <= level : aim >= level) continue
+
+    let opened = -1
+    for (let j = shift + 1; j <= last; j++) {
+      if (long ? c[j].l <= level : c[j].h >= level) { opened = j; break }
+    }
+    if (opened < 0) { missed++; continue }
+
+    let end = -1
+    let exit: AmdTrade['exit'] = 'bell'
+    for (let j = opened; j <= last; j++) {
+      const hitStop = long ? c[j].l <= stop : c[j].h >= stop
+      const hitAim = long ? c[j].h >= aim : c[j].l <= aim
+      // stop first: which came first inside the bar is not in the data, and guessing the kind one
+      // is how a backtest talks itself into an edge it never had — backtest() above reads the same
+      if (hitStop || hitAim) { end = j; exit = hitStop ? 'stop' : 'target'; break }
+    }
+    if (end < 0) end = last   // the bell, at whatever the last price was
+
+    const out = exit === 'target' ? aim : exit === 'stop' ? stop : c[last].c
+    // one formula for all three exits, so a stop is exactly −1 gross and nothing else has to be
+    // special-cased. The fee is a share of price and the risk is what it is charged against.
+    const r = (long ? out - level : level - out) / risk - (fee * level) / risk
+    trades.push({
+      at: shift, openedAt: opened, closedAt: end, dir: long ? 'long' : 'short',
+      entry: level, stop, target: aim, exit, r,
+    })
+  }
+
+  const rs = trades.map((t) => t.r).sort((a, b) => a - b)
+  const median = rs.length ? (rs.length % 2 ? rs[(rs.length - 1) / 2] : (rs[rs.length / 2 - 1] + rs[rs.length / 2]) / 2) : 0
+  return {
+    trades, days, swept, shifted, gapped, crooked, missed, median,
+    expectancy: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : 0,
+    hit: rs.length ? trades.filter((t) => t.exit === 'target').length / rs.length : 0,
+  }
+}
+
 /** Trade horizon tunes how twitchy the read is: investing rides the slow classic 50/200 pair, a wide
  *  support band and daily bars; trading uses fast 9/21 MAs, a tight band and hourly bars, so it flips
  *  far sooner. Labelled Investing/Trading, not Long/Short-term, so it can't be read as the long/short

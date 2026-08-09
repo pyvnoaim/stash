@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Wallet, Waypoints, X } from 'lucide-react'
+import { AlarmClock, Bell, BellRing, ChevronDown, CloudOff, KeyRound, Loader2, Minus, NotebookPen, RefreshCw, Share2, TrendingDown, TrendingUp, Wallet, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -15,7 +15,8 @@ import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
-import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, uid, useStash } from '@/lib/store'
+import { Textarea } from '@/components/ui/textarea'
+import { addAlarm, addWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setWatchNote, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -907,6 +908,16 @@ export default function MarketPage() {
               </Hint>
             ))}
           </div>
+          {/* Once there is a row to hang it on, the reason goes with the levels — written here,
+              read back in the record months later when the numbers have stopped meaning anything
+              on their own. `watched` and nothing else: it is keyed on this asset, this side and
+              this horizon, so it is the row these levels belong to — and a position taken on them
+              is that same row. Falling back to the position on the *other* side, which an earlier
+              cut did, put the long's note under the short's card and edited a trade you were not
+              looking at. */}
+          {watched && (
+            <SetupNote w={watched} placeholder="Why this one? — kept with the trade and read back in the record" />
+          )}
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
           {!inIt && !watched && (
@@ -2044,8 +2055,34 @@ function Position({ asset, label, horizon, rule, price, plan, dir }: {
   )
 }
 
+/**
+ * The words beside the numbers. Every other thing on this page is arithmetic over prices; this is
+ * the only field on the desk where the reason lives, and the reason is what the record cannot
+ * reconstruct afterwards from a hit rate.
+ *
+ * Typed straight into the store, the way the inspector's note field is — no save button, because a
+ * note you have to remember to commit is the note that goes missing with the tab. It never leaves
+ * this pair of devices: `/api/desk` sends an allowlist of what a shared trade is and `note` is not
+ * on it, so switching the Desk on publishes how a trade went and never why it was taken.
+ */
+function SetupNote({ w, placeholder, className }: { w: Watch, placeholder: string, className?: string }) {
+  return (
+    <Textarea
+      // a placeholder is not a label: it goes the moment there is anything to read out
+      aria-label={`Note on the ${w.label} ${w.dir} setup`}
+      value={w.note ?? ''}
+      placeholder={placeholder}
+      onChange={(e) => setWatchNote(w.id, e.target.value)}
+      className={cn('min-h-9 resize-none py-1.5 text-sm md:text-xs', className)}
+    />
+  )
+}
+
 function Record() {
   const { results, stake, dials } = useStash()
+  /* Which row has its note open. One at a time and only on the row you asked for: fifty always-on
+     textareas is a form, and the record is meant to read as a list. */
+  const [noting, setNoting] = useState<string | null>(null)
   if (!results.length) return null
 
   const total = results.reduce((n, r) => n + r.r, 0)
@@ -2118,24 +2155,41 @@ function Record() {
         {results.map((r) => {
           const hit = r.level === 'target'
           const cash = cashOf(r)
+          const open = noting === r.id
           return (
-            <div key={r.id} className="flex items-baseline gap-2 px-1.5 py-1 text-sm">
-              <span className="w-28 shrink-0 truncate font-medium">{r.label}</span>
-              <span className="text-muted-foreground w-24 shrink-0 truncate text-xs">
-                {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
-              </span>
-              {/* the two dates that matter: when the window opened and when it was over */}
-              <span className="text-muted-foreground hidden shrink-0 font-mono text-xs tabular-nums sm:block">
-                {when(r.entryAt)} → {when(r.closedAt)}
-              </span>
-              <span className={cn('ml-auto shrink-0 text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {hit ? 'target' : 'stopped'}
-              </span>
-              <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
-              <span className={cn('w-20 shrink-0 text-right font-mono text-xs tabular-nums',
-                r.r >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {cash === null ? '' : signedEuro(cash)}
-              </span>
+            <div key={r.id}>
+              {/* a real button, so the note is reachable from the keyboard the way every other
+                  control on this page is — a div with an onClick would not be */}
+              <button
+                type="button"
+                onClick={() => setNoting(open ? null : r.id)}
+                className="hover:bg-muted/50 flex w-full items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-sm"
+              >
+                <span className="w-28 shrink-0 truncate font-medium">{r.label}</span>
+                <span className="text-muted-foreground w-24 shrink-0 truncate text-xs">
+                  {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
+                </span>
+                {/* the two dates that matter: when the window opened and when it was over */}
+                <span className="text-muted-foreground hidden shrink-0 font-mono text-xs tabular-nums sm:block">
+                  {when(r.entryAt)} → {when(r.closedAt)}
+                </span>
+                <span className={cn('ml-auto shrink-0 text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {hit ? 'target' : 'stopped'}
+                </span>
+                <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+                <span className={cn('w-20 shrink-0 text-right font-mono text-xs tabular-nums',
+                  r.r >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {cash === null ? '' : signedEuro(cash)}
+                </span>
+                {/* the only thing on the row that says it has another half — filled once it does */}
+                <NotebookPen className={cn('size-3.5 shrink-0 self-center',
+                  r.note ? 'text-foreground' : 'text-muted-foreground/40')} />
+              </button>
+              {open
+                ? <SetupNote w={r} placeholder="Why this one, and how that read" className="mt-1 mb-1.5" />
+                : r.note && (
+                  <p className="text-muted-foreground mb-1 px-1.5 text-xs whitespace-pre-wrap">{r.note}</p>
+                )}
             </div>
           )
         })}
@@ -2149,6 +2203,10 @@ function Record() {
                  fee is counted — it is the plan's own arithmetic, not a broker's.`
               : `Set what a setup is worth in Settings → Markets and these read in euros as well as
                  in R.`}
+        </p>
+        <p className="text-muted-foreground mt-1 px-1.5 text-xs">
+          A row opens its note — why it was taken, and how that read. It stays on your own devices:
+          the Desk publishes how a trade went and never why.
         </p>
       </CardContent>
     </Card>

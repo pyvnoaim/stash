@@ -13,6 +13,7 @@ const {
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
   openWatch, closeWatch, clearResults, dismissAlerts, snoozeAlerts, snoozeUntil, tagsFor,
+  readHash, setWatchNote,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -611,6 +612,41 @@ assert.equal(geometry('long', 100, 105, 110), 0)  // stop above the entry
 assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
 assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
 assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
+
+/* The note on a setup. It is written a keystroke at a time straight into the store, so the two
+   things worth pinning are that a half-typed word keeps its trailing space — a rule that trims on
+   every change is a field you cannot type two words into — and that emptying one drops the key
+   rather than storing a blank on all fifty rows. */
+addWatch({ ...mkWatch('Trading', 50), id: 'noted' })
+setWatchNote('noted', 'daily agrees ')
+assert.equal(getState().watches.find((w) => w.id === 'noted')?.note, 'daily agrees ')
+setWatchNote('noted', '   ')
+assert.equal(getState().watches.find((w) => w.id === 'noted')?.note, undefined)
+// and it follows the setup into the record, where the id is the same row one step later
+setWatchNote('noted', 'chased it')
+const noted = getState().watches.find((w) => w.id === 'noted')!
+closeWatch({ ...noted, entryAt: 1, closedAt: 2, level: 'stop', exit: 1, r: -1 })
+assert.equal(getState().results.find((r) => r.id === 'noted')?.note, 'chased it')
+// which is also where it can be written for the first time: the post-mortem is the point
+setWatchNote('noted', 'stop was too tight')
+assert.equal(getState().results.find((r) => r.id === 'noted')?.note, 'stop was too tight')
+removeWatch('noted')
+clearResults()   // the record is shared state, and what follows counts the rows in it
+// a loaded document is held to the same rule, and to the 1000-char ceiling the whole doc rides on
+assert.equal(load({ watches: [{ id: 'w', asset: 'X', entry: 100, stop: 95, target: 110, note: '  ' }] }).watches[0].note, undefined)
+assert.equal(load({ watches: [{ id: 'w', asset: 'X', entry: 100, stop: 95, target: 110, note: 7 }] }).watches[0].note, undefined)
+assert.equal(load({ watches: [{ id: 'w', asset: 'X', entry: 100, stop: 95, target: 110, note: 'x'.repeat(2000) }] }).watches[0].note?.length, 1000)
+
+/* The hash is the view and the search over it, one string. It is what a bookmarked search is, so
+   it has to survive being pasted — including pasted broken, where a bad escape reads as no search
+   rather than as a page that throws before it draws. */
+assert.deepEqual(readHash('#flagged'), { sel: 'flagged', query: '' })
+assert.deepEqual(readHash('#all?%23audio%20%40kova'), { sel: 'all', query: '#audio @kova' })
+assert.deepEqual(readHash(''), { sel: '', query: '' })
+assert.deepEqual(readHash('#all?'), { sel: 'all', query: '' })
+// a project id is a route too, and a '?' in the search itself survives the round trip
+assert.deepEqual(readHash('#p1?' + encodeURIComponent('why?')), { sel: 'p1', query: 'why?' })
+assert.deepEqual(readHash('#all?%zz'), { sel: 'all', query: '' })
 
 // size and leverage ride the same row and load as a pair: half of one prices the trade wrong, and
 // a wrong number in euros is worse here than no number at all

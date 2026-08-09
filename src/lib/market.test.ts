@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, amdBacktest, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -535,6 +535,80 @@ assert.ok(Math.abs(base.expectancy - mean) < 1e-9)
 const tiny = backtest(btBars.slice(0, 10), 'short')
 assert.deepEqual([tiny.trades.length, tiny.median, tiny.expectancy, tiny.hit], [0, 0, 0, 0])
 assert.deepEqual(backtest([], 'short').trades, [])
+
+/* ---------- AMD: accumulation, manipulation, distribution ---------- */
+
+/* One session built to walk every phase exactly once, so the three the model names can each be
+   checked rather than inferred from a summary. 15m bars all through a Monday: Tokyo 09:00–15:00 is
+   00:00–05:45 UTC and New York 09:30 is 13:30 UTC, which is where the indices below come from. */
+const amdBar = (i: number, h: number, l: number, c: number) =>
+  ({ t: Date.parse('2026-08-10T00:00:00Z') + i * 15 * 60_000, o: (h + l) / 2, h, l, c, v: 100 })
+/** The two windows and the drift between them; `ny` is the session where the play happens. */
+const amdDay = (ny: [number, number, number][]) => {
+  const c = []
+  // accumulation: the range is 100 to 110
+  for (let i = 0; i <= 23; i++) c.push(amdBar(i, i === 5 ? 110 : 108, i === 10 ? 100 : 102, 105))
+  // the hours in between, as a monotonic drift — it contributes no swing pivot of its own, so the
+  // structure read below is only ever talking about bars from the session it is meant to
+  for (let i = 24; i <= 53; i++) c.push(amdBar(i, 106 - (i - 24) * 0.01, 104 - (i - 24) * 0.01, 105 - (i - 24) * 0.01))
+  ny.forEach(([h, l, cl], j) => c.push(amdBar(54 + j, h, l, cl)))
+  for (let i = 54 + ny.length; i <= 79; i++) c.push(amdBar(i, 110, 108, 109))
+  return c
+}
+
+const amdRun = amdDay([
+  [103.5, 102.5, 103], [102.5, 101.5, 102], [101.5, 100.5, 101],
+  [101, 99, 100.5],      // manipulation: the first bar past the range, taking the 100 low
+  [102, 99.5, 101.5],    // the swing high the distribution leg will close through
+  [101.5, 100.5, 101], [101.8, 100.8, 101.2],
+  [104, 101.2, 101.9],   // the runner — middle bar of the imbalance, and it does not close the break
+  [105, 102.5, 104.5],   // closes through 102: the shift. The gap it left is 101.8 → 102.5
+  [104.6, 102.4, 103],   // back into the gap: the limit fills at its near edge
+  [106, 103, 105.8], [110.5, 105, 110.2],  // and away to the far side of the range
+])
+const amd = amdBacktest(amdRun)
+assert.deepEqual(
+  [amd.days, amd.swept, amd.shifted, amd.gapped, amd.crooked, amd.missed],
+  [1, 1, 1, 1, 0, 0],
+)
+/* Every level is the model's own and none of them is the price of the bar that decided it: the
+   stop is the manipulation wick, the entry is the near edge of the gap rather than the close that
+   confirmed the shift, and the target is the far side of the accumulation range. */
+assert.deepEqual(amd.trades, [{
+  at: 62, openedAt: 63, closedAt: 65, dir: 'long',
+  entry: 102.5, stop: 99, target: 110, exit: 'target', r: (110 - 102.5) / 3.5,
+}])
+// the fee is charged in R off the entry-to-stop distance, which is the whole of why this rule loses
+assert.ok(Math.abs(amdBacktest(amdRun, { fee: 0.002 }).trades[0].r - ((110 - 102.5) - 0.002 * 102.5) / 3.5) < 1e-9)
+// the control: the same day entered at the confirmation close instead pays 1R rather than 2.14R
+assert.deepEqual(
+  amdBacktest(amdRun, { entry: 'market' }).trades.map((t) => [t.entry, t.r]),
+  [[104.5, 1]],
+)
+// 2R off the entry rather than the range: same fill, target 102.5 + 2 x 3.5
+assert.equal(amdBacktest(amdRun, { target: '2R' }).trades[0].target, 109.5)
+
+/* Swept the low and kept falling, so the shift back up confirms at a level still under the wick the
+   stop was pinned to: a long whose stop sits above its own entry. Left in, the exit loop stops it on
+   its entry bar and scores that +1R — a losing day counted as a winner — so it is dropped and said. */
+const crooked = amdBacktest(amdDay([
+  [103.5, 102.5, 103], [102.5, 101.5, 102], [101.5, 100.5, 101],
+  [101, 99, 99.2],      // sweep, and then away from it rather than back
+  [99.2, 95, 95.2], [95.5, 93, 93.5], [94, 92, 92.5],
+  [96, 92, 95.5],       // the pivot the shift breaks — at 96, well under the 99 stop
+  [95, 93, 93.5], [94, 92, 92.5],
+  [97, 93, 96.5],       // closes through it: a long priced under its own stop
+]), { entry: 'market' })
+assert.deepEqual([crooked.shifted, crooked.crooked, crooked.trades.length], [1, 1, 0])
+
+/* No look-ahead, the property a backtest breaks quietly: bars after a trade closed cannot change
+   it. Same tamper the swing walk above is held to. */
+const amdLater = amdRun.map((b, i) => (i > 65 ? { ...b, h: b.h * 3, l: b.l / 3, c: b.c * 2 } : b))
+assert.deepEqual(amdBacktest(amdLater).trades, amd.trades)
+
+// a weekend session is nobody at their desks, and no bars at all is not a crash
+assert.equal(amdBacktest(amdRun.map((b) => ({ ...b, t: b.t + 6 * 864e5 }))).days, 0)
+assert.deepEqual([amdBacktest([]).trades, amdBacktest([]).median], [[], 0])
 
 /* ---------- fair value gaps ---------- */
 

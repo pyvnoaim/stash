@@ -28,7 +28,7 @@ import { hit } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
   addProject, CALENDAR, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
-  openIn, redo, removeItem, restoreItem, select, tagCounts, toggleDone, undo, useStash,
+  openIn, readHash, redo, removeItem, restoreItem, select, tagCounts, toggleDone, undo, useStash,
   viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
 
@@ -56,7 +56,8 @@ const TYPE_HEADS: Record<ItemType, string> = { task: 'Tasks', idea: 'Ideas', not
 
 export default function App() {
   const s = useStash()
-  const [query, setQuery] = useState('')
+  // the search the URL arrived with, so a bookmarked one opens as itself rather than as a bare list
+  const [query, setQuery] = useState(() => readHash().query)
   const [palette, setPalette] = useState(false)
   const [newProject, setNewProject] = useState(false)
   // rows picked out alongside the focused one. The focused row is the anchor and stays in it.
@@ -112,9 +113,25 @@ export default function App() {
   const addTerm = (term: string) => setQuery((q) =>
     (q.split(/\s+/).includes(term) ? q : `${q.trim()} ${term} `.trimStart()))
 
-  /* the view is in the URL, so reload, back and a pasted link all land where it says.
-     store.ts reads it before the first render and listens for the other direction. */
-  useEffect(() => { location.hash = s.sel }, [s.sel])
+  /* the view is in the URL, and the search laid over it goes with it — `#all?%23audio` — so a
+     reload, a bookmark and a link pasted to somebody all land on the same list narrowed the same
+     way. store.ts reads both before the first render and listens for the other direction.
+
+     A keystroke replaces the entry rather than pushing one: back is for the view you came from,
+     not for walking a search back a letter at a time. Which is also the whole of "saved searches"
+     — the browser already has a place to keep a URL. */
+  useEffect(() => {
+    const h = '#' + s.sel + (query ? '?' + encodeURIComponent(query) : '')
+    if (location.hash === h) return
+    // the view changed, and that is a place you can come back to — it goes in at once
+    if (readHash().sel !== s.sel) { location.hash = h; return }
+    /* Same view, so this is a keystroke in the search field. Debounced as well as replacing:
+       Safari throws a SecurityError past about a hundred history writes in thirty seconds, which
+       a fast typist reaches inside one long search, and a URL that catches up a moment after the
+       last letter is no worse than one that keeps pace with it. */
+    const t = setTimeout(() => history.replaceState(null, '', h), 300)
+    return () => clearTimeout(t)
+  }, [s.sel, query])
 
   /* the dock icon carries no badge, so the title does — overdue and today, the same as the sidebar */
   useEffect(() => {
@@ -139,8 +156,17 @@ export default function App() {
   const paged = pageItem ? s.items.find((i) => i.id === pageItem) : undefined
 
   /* a view was picked — the sidebar, ⌘K, an Overview tile, the back button. A search overlays
-     every list and both pages, so leaving it up makes the new view look like it never took. */
-  useEffect(() => { setQuery('') }, [s.sel])
+     every list and both pages, so leaving it up makes the new view look like it never took.
+     Only when the view really changed, never on the run that mounts: the view the app opened on
+     came out of the hash and so did the search on it, so clearing there would open every
+     bookmarked search as a bare list. A ref rather than a first-run flag because StrictMode runs
+     this twice on mount, and a flag would spend itself on the first of the two. */
+  const shown = useRef(s.sel)
+  useEffect(() => {
+    if (shown.current === s.sel) return
+    shown.current = s.sel
+    setQuery('')
+  }, [s.sel])
 
   /* the disk has stopped taking writes — a full quota, or Safari's private mode. Everything
      still works and none of it is being kept, so it says so and offers the way out. */
