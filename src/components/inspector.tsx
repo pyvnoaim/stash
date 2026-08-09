@@ -194,7 +194,15 @@ export function Inspector({ it, onDelete, onExpand, onOpenItem }: {
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
+      <div
+        className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0"
+        /* A label here only names its field. `htmlFor` stays — it is what a screen reader reads
+           the box by — but the browser's other half of it, click the word and the control takes
+           the caret, is not wanted: the fields are a column of headings and boxes, and clicking a
+           heading opening the select two rows down reads as the panel acting on its own. Cancelled
+           on the way past rather than on each of the six labels. */
+        onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
+      >
       <div className="grid gap-2">
         <Label htmlFor="i-title">Title</Label>
         <Textarea
@@ -421,7 +429,11 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
+      {/* labels name their fields and no more, as in the single-row panel above */}
+      <div
+        className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0"
+        onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
+      >
       <div className="grid grid-cols-3 gap-1.5">
         {TYPES.map((t) => (
           <Button
