@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/empty-state'
 import { Faces } from '@/components/faces'
 import { ProjectHeader, ProjectProgress } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { ItemRow } from '@/components/item-row'
 import { NotePage } from '@/components/note-page'
 import CalendarPage from '@/components/calendar-page'
@@ -75,6 +76,13 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<React.ReactNode>(null)   // last open panel, kept so it slides shut with content
+  /* Which of the two shells below actually holds the panel. Both are in the DOM at all sizes and
+     only one is displayed, so rendering it into both meant two copies of every field — and two of
+     every id with them. A `<label for="i-repeat">` then found the hidden copy's control instead of
+     the one under the cursor: the title clicked put no caret in the box, and the repeat select
+     opened off a display:none trigger, which measures 0×0, so it drew itself in the top-left
+     corner of the window. One mount, one set of ids. */
+  const phone = useIsMobile()
 
   // a search pulls you back to the list from whichever page you were on
   const page = !query && isPage(s.sel) ? s.sel : null
@@ -609,14 +617,14 @@ export default function App() {
               )}>
                 {/* the grab handle every sheet on a phone has, so it reads as one */}
                 <div className="bg-muted-foreground/30 mx-auto my-2 h-1 w-10 shrink-0 rounded-full" />
-                {panelRef.current}
+                {phone && panelRef.current}
               </div>
 
               <div className={cn(
                 'hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)] md:flex',
                 open ? 'w-[300px]' : 'w-0',
               )}>
-                {panelRef.current}
+                {!phone && panelRef.current}
               </div>
             </>
           )
