@@ -53,14 +53,14 @@ const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 /**
  * The page's three sittings. `chart` is where you land — it is the asset you asked for.
  *
- * Record only appears once there is a record: it is the one tab whose cards both return null when
- * empty, so before the first setup closed it was a tab you could open onto nothing. A tab that is
- * usually empty teaches you not to open it, which is the same as not having built it.
+ * The Log stands whether or not anything has finished. It used to appear only once a setup had
+ * closed, which hid the one place the app keeps your results from exactly the person who has not
+ * got any yet — and a tab that shows up unannounced later is one you never learn to look for.
  */
 const TABS = [
   { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart, the readings behind the call, and what the rule did on these bars' },
   { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, what is trending on-chain, and what the other desks hold' },
-  { id: 'record', label: 'Record', hint: 'Every finished trade: what it paid, why you took it, and a card of it to share. Hit rate and expectancy by rule.' },
+  { id: 'record', label: 'Log', hint: 'Every finished trade: what it paid, why you took it, and a card of it to share. Hit rate and expectancy by rule.' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -155,7 +155,7 @@ export default function MarketPage() {
   // the exchange's word on what's held, for drawing the real position over whatever the plan says
   const exch = useExchangePositions()
   // and what the server's sweeper has done with the setups armed against it
-  const { swept, cancelNow, busy } = useSweep()
+  const { swept, cancelNow, busy } = useSweep(watches.some((w) => w.killAt))
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -645,9 +645,10 @@ export default function MarketPage() {
   const [seen, setSeen] = useState<Partial<Record<(typeof TABS)[number]['id'], boolean>>>({ chart: true })
   /* All three, always. The Record used to appear only once something had finished, which meant the
      one place the app keeps your results was invisible to anyone who had not got any yet — a tab
-     you cannot find until you no longer need to be told it exists. Empty, it says what lands there. */
-  const tabs = TABS
-  const tab = tabs.some((t) => t.id === at) ? at : 'chart'
+     you cannot find until you no longer need to be told it exists. Empty, it says what lands there.
+     Which also retires the fallback that stood here: nothing takes a tab away mid-session any more,
+     so `at` is always one of them. */
+  const tab = at
 
   // date under the crosshair; intraday intervals want the time too
   const stamp = (ms: number) => new Date(ms).toLocaleString(undefined, {
@@ -776,7 +777,7 @@ export default function MarketPage() {
           over every other asset, and the record of how the saved ones went are separate sittings,
           and stacking them meant the answer to the one you came for was somewhere in the middle. */}
       <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-1">
-        {tabs.map(({ id, label, hint }) => (
+        {TABS.map(({ id, label, hint }) => (
           <Hint key={id} label={hint}>
             <Button
               size="sm" variant={tab === id ? 'default' : 'ghost'} className="h-7"
@@ -963,7 +964,7 @@ export default function MarketPage() {
               cut did, put the long's note under the short's card and edited a trade you were not
               looking at. */}
           {watched && (
-            <SetupNote w={watched} placeholder="Why this one? — kept with the trade and read back in the record" />
+            <SetupNote w={watched} placeholder="Why this one? — kept with the trade and read back in the Log" />
           )}
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
@@ -1370,19 +1371,26 @@ export default function MarketPage() {
                 </span>
               ))}
               {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 -translate-y-0.75 align-middle" /> opening range</span>}
-              {/* The setup's own three lines. They were the only levels on this chart drawn without
-                  a word anywhere naming them — and they are the ones the card underneath is about,
-                  which made them the worst possible thing to leave to guesswork. One chip for the
-                  three: the entry keeps its colour because it is the line you are waiting on, and
-                  the stop and target are the greys either side of it. */}
-              {plan && [plan.entry, plan.stop, plan.target].some((l) => l >= lo && l <= hi) && (
-                <span className="opacity-80">
+              {/* The setup's own lines. They were the only levels on this chart drawn without a word
+                  anywhere naming them — and they are the ones the card underneath is about, which
+                  made them the worst possible thing to leave to guesswork.
+                  Named one at a time, off the same frame test the lines themselves are drawn
+                  through. The stop and the target sit an ATR either side of an entry the autoscale
+                  is framed on, so one or both are off frame most of the time — a chip that promised
+                  "grey dots are its stop and target" whenever the entry was visible would be the
+                  legend describing a line nobody can find, which is the exact thing the MAs' "off
+                  frame ↑" exists to prevent. */}
+              {plan && ([
+                ['setup entry', plan.entry, 'stroke-sky-500', '5 3'],
+                ['setup stop', plan.stop, 'stroke-muted-foreground/60', '2 4'],
+                ['setup target', plan.target, 'stroke-muted-foreground/60', '2 4'],
+              ] as const).filter(([, lvl]) => lvl >= lo && lvl <= hi).map(([label, , cls, dash]) => (
+                <span key={label} className="opacity-80">
                   <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-sky-500" strokeWidth={1.25} strokeDasharray="5 3" />
-                  </svg> setup entry
-                  <span className="ml-1 opacity-70">· grey dots are its stop and target</span>
+                    <line x1="0" x2="16" y1="1.5" y2="1.5" className={cls} strokeWidth={1.25} strokeDasharray={dash} />
+                  </svg> {label}
                 </span>
-              )}
+              ))}
               {/* the hours two desks are at their desks at once — a wash, not a level, and the one
                   mark on the chart that is about when rather than about how much */}
               {!!sessionMarks.overlaps.length && (
@@ -1501,10 +1509,11 @@ export default function MarketPage() {
         <div className={cn('flex flex-col gap-4', tab !== 'scan' && 'hidden')}>
           {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
               or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
-          <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval} />
+          <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
+            onPick={(id) => { setAsset(id); setTab('chart') }} />
           <Trending />
           {/* what other people hold is the same question as what is moving — neither is your own
-              record, which is the only thing the Record tab is for */}
+              record, which is the only thing the Log is for */}
           <Desk />
         </div>
       )}
@@ -1864,18 +1873,23 @@ function AutoCancel({ w, iv, slow, swept, cancelNow, busy }: {
  * document and the sync arrives when it arrives, while a pressed button is someone waiting. The
  * answer carries the fresh list, so the card says what happened without a second round trip.
  */
-function useSweep() {
+function useSweep(armed: boolean) {
   const [swept, setSwept] = useState<SweptRow[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const load = () => fetch('/api/sweep')
     // signed out, offline, no server: there is nothing to show and nothing to say about it
     .then(async (r) => { if (r.ok) setSwept((await r.json()).swept ?? []) })
     .catch(() => {})
+  /* Asked once whatever happens — an outcome from yesterday belongs on the card whether or not
+     anything is armed right now — and then kept up only while something actually is. Nothing is
+     armed by default, so for most people this was a request a minute, forever, about a table the
+     server was never going to write a row into. */
   useEffect(() => {
     void load()
+    if (!armed) return
     const h = window.setInterval(() => void load(), 60_000)
     return () => window.clearInterval(h)
-  }, [])
+  }, [armed])
   const cancelNow = async (watch: string) => {
     setBusy(watch)
     try {
@@ -2643,7 +2657,12 @@ const TIER_CLS = [
  * assets is a tenth of the budget. A shared per-(asset, interval) cache is the lever if the desk
  * ever polls this live.
  */
-function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
+function Scan({ orbMode, interval, onPick }: {
+  orbMode: boolean
+  interval: Interval
+  /** Picking a row is asking to look at that asset — the caller owns which tab that means. */
+  onPick: (asset: string) => void
+}) {
   const { marketHorizon: horizon, dials } = useStash()
   const fee = dials.fee
   const cfg = HORIZONS[horizon]
@@ -2713,8 +2732,11 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
         {rows?.map((r) => (
           <button key={r.a.id} type="button"
             onClick={(e) => {
-              setMarketAsset(r.a.id)
-              // the desk is at the top of a page you are at the bottom of — go to the answer
+              /* Setting the asset used to be the whole click, which was right when the sweep and
+                 the chart were one page. Behind a tab it changed a chart nobody could see: the row
+                 lit, the page scrolled, and the answer was one tab away with nothing saying so. */
+              onPick(r.a.id)
+              // the answer is at the top of a page you are at the bottom of — go to it
               e.currentTarget.closest('.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' })
             }}
             className={cn(SCAN_GRID,
@@ -2764,14 +2786,31 @@ function Scan({ orbMode, interval }: { orbMode: boolean; interval: Interval }) {
             )}
           </button>
         ))}
-        {/* capped rather than run to the card's width: at this width a paragraph is a line the eye
-            loses its place in, and this one is a legend nobody reads twice */}
-        <p className="text-muted-foreground mt-3 max-w-prose text-xs">
-          ▲▼ is each timeframe's own lean, the desk's marked. A side every chart agrees on is the
-          one worth taking; one only the fastest sees is a trade against the tide. ↳ is the
-          top-down cascade: the 4h sets the direction, the 15m has to break structure with it, the
-          5m is the trigger — green means all three landed. Stocks need their key and their own
-          rate limit, so they sit this one out — open them from the picker.
+        {/* Three different things used to be one paragraph in a narrow column under a very wide
+            table: what the glyphs mean, how to read a row, and why the stocks are missing. Capping
+            it kept the line length honest and made the shape wrong instead — six short lines of
+            prose hanging off the left edge of something 2000px wide.
+            Split by what each part is for. The glyphs are a legend, so they read as chips on one
+            line, the way the chart's own legend does. The sentence under them is the only trading
+            advice in here and stays a sentence. */}
+        <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 border-t pt-2 text-xs">
+          <span>
+            <span className="text-emerald-600 dark:text-emerald-400">▲</span>
+            <span className="text-destructive">▼</span>
+            {' '}each timeframe&rsquo;s own lean
+            <span className="opacity-70"> · boxed is the one the desk reads</span>
+          </span>
+          <span>
+            <span className="opacity-50">↳</span> 4h direction → 15m structure → 5m trigger
+            <span className="opacity-70"> · green once all three land</span>
+          </span>
+          <span className="opacity-70">
+            Stocks sit this out — they need your key and their own rate limit. Open one from the picker.
+          </span>
+        </div>
+        <p className="text-muted-foreground mt-1.5 text-xs">
+          A side every chart agrees on is the one worth taking; one only the fastest sees is a trade
+          against the tide.
         </p>
       </CardContent>
     </Card>
