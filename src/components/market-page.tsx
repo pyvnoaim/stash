@@ -60,7 +60,7 @@ const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 const TABS = [
   { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart, the readings behind the call, and what the rule did on these bars' },
   { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, what is trending on-chain, and what the other desks hold' },
-  { id: 'record', label: 'Record', hint: 'How your saved setups actually went — hit rate and expectancy, by horizon' },
+  { id: 'record', label: 'Record', hint: 'Every finished trade: what it paid, why you took it, and a card of it to share. Hit rate and expectancy by rule.' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -116,7 +116,7 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
 }
 
 export default function MarketPage() {
-  const { chart, apiKey, watches, dials, results, marketAsset: asset, marketHorizon: horizon } = useStash()
+  const { chart, apiKey, watches, dials, marketAsset: asset, marketHorizon: horizon } = useStash()
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload
   const setAsset = setMarketAsset
@@ -643,8 +643,10 @@ export default function MarketPage() {
   const [at, setTab] = useState<(typeof TABS)[number]['id']>('chart')
   // which tabs have ever been opened — see the note by the Scan below
   const [seen, setSeen] = useState<Partial<Record<(typeof TABS)[number]['id'], boolean>>>({ chart: true })
-  const tabs = TABS.filter((t) => t.id !== 'record' || results.length > 0)
-  // clearing the record while standing on it takes the tab away underneath you
+  /* All three, always. The Record used to appear only once something had finished, which meant the
+     one place the app keeps your results was invisible to anyone who had not got any yet — a tab
+     you cannot find until you no longer need to be told it exists. Empty, it says what lands there. */
+  const tabs = TABS
   const tab = tabs.some((t) => t.id === at) ? at : 'chart'
 
   // date under the crosshair; intraday intervals want the time too
@@ -1368,6 +1370,27 @@ export default function MarketPage() {
                 </span>
               ))}
               {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 -translate-y-0.75 align-middle" /> opening range</span>}
+              {/* The setup's own three lines. They were the only levels on this chart drawn without
+                  a word anywhere naming them — and they are the ones the card underneath is about,
+                  which made them the worst possible thing to leave to guesswork. One chip for the
+                  three: the entry keeps its colour because it is the line you are waiting on, and
+                  the stop and target are the greys either side of it. */}
+              {plan && [plan.entry, plan.stop, plan.target].some((l) => l >= lo && l <= hi) && (
+                <span className="opacity-80">
+                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
+                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-sky-500" strokeWidth={1.25} strokeDasharray="5 3" />
+                  </svg> setup entry
+                  <span className="ml-1 opacity-70">· grey dots are its stop and target</span>
+                </span>
+              )}
+              {/* the hours two desks are at their desks at once — a wash, not a level, and the one
+                  mark on the chart that is about when rather than about how much */}
+              {!!sessionMarks.overlaps.length && (
+                <span className="opacity-70">
+                  <span className="inline-block h-2 w-3 translate-y-px bg-amber-400/25 align-middle dark:bg-amber-300/25" />
+                  {' '}two desks open
+                </span>
+              )}
               {/* the line that had been voting invisibly since the day it was added */}
               {vwap && (
                 <span className={cn(!(vwap.vwap >= lo && vwap.vwap <= hi) && 'opacity-60')}>
@@ -2240,7 +2263,23 @@ function Record() {
   /* Which row has its note open. One at a time and only on the row you asked for: fifty always-on
      textareas is a form, and the record is meant to read as a list. */
   const [noting, setNoting] = useState<string | null>(null)
-  if (!results.length) return null
+  /* The tab stands whether or not anything has finished, so the empty case has to say what fills
+     it — a blank panel behind a visible tab reads as something broken rather than as something
+     not started. Nothing to offer as an action here: a trade arrives by being taken and reaching
+     one of its two levels, which is not a thing a button can do. */
+  if (!results.length) {
+    return (
+      <Card className="py-3">
+        <CardContent className="px-3 py-8 text-center">
+          <p className="text-sm font-medium">No finished trades yet</p>
+          <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
+            A saved setup lands here once its entry came round and it reached the target or the stop.
+            Each one keeps what it paid, why you took it, and a card of it to share.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
 
   const total = results.reduce((n, r) => n + r.r, 0)
   const won = results.filter((r) => r.level === 'target').length
