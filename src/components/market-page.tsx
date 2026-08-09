@@ -155,7 +155,7 @@ export default function MarketPage() {
   // the exchange's word on what's held, for drawing the real position over whatever the plan says
   const exch = useExchangePositions()
   // and what the server's sweeper has done with the setups armed against it
-  const { swept, cancelNow, busy } = useSweep(watches.some((w) => w.killAt))
+  const { swept, stuck: sweepStuck, cancelNow, busy } = useSweep(watches.some((w) => w.killAt))
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -902,7 +902,7 @@ export default function MarketPage() {
               sentence saying how it ended */}
           {!inIt && watched && (
             <AutoCancel w={watched} iv={(watched.interval ?? interval) as Interval} slow={cfg.slow}
-              swept={swept} cancelNow={cancelNow} busy={busy} />
+              swept={swept} stuck={sweepStuck} cancelNow={cancelNow} busy={busy} />
           )}
           {/* the levels as an instrument row, label over number — the same read-out pattern as the
               Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
@@ -1798,11 +1798,13 @@ const left = (ms: number) => {
  * re-render the page is a countdown that lies most of the time, and a minute is as often as one
  * measured in hours needs to move.
  */
-function AutoCancel({ w, iv, slow, swept, cancelNow, busy }: {
+function AutoCancel({ w, iv, slow, swept, stuck, cancelNow, busy }: {
   w: Watch
   iv: Interval
   slow: number
   swept: SweptRow[]
+  /** Nothing is reading the exchange — see the note by the warning below. */
+  stuck: boolean
   cancelNow: (id: string) => void
   busy: string | null
 }) {
@@ -1852,9 +1854,19 @@ function AutoCancel({ w, iv, slow, swept, cancelNow, busy }: {
           </div>
           <div className="bg-muted mt-1.5 h-1 overflow-hidden rounded-full">
             <div className={cn('h-full rounded-full transition-[width] duration-1000',
-              gone > 0.85 ? 'bg-amber-500' : 'bg-muted-foreground/40')}
+              stuck ? 'bg-muted-foreground/25' : gone > 0.85 ? 'bg-amber-500' : 'bg-muted-foreground/40')}
               style={{ width: `${gone * 100}%` }} />
           </div>
+          {/* A clock nobody is reading should not go on looking like a clock. The server says so
+              itself — three passes where it could not reach the exchange at all — and until then a
+              revoked key left this counting confidently down to something that was never going to
+              happen. */}
+          {stuck && (
+            <p className="text-amber-600 dark:text-amber-500 mt-1.5 text-xs">
+              Nothing is watching this: the exchange has not answered for a while. The clock keeps
+              running, but the cancel will not happen until the key works again — check Settings → Markets.
+            </p>
+          )}
         </>
       )}
     </div>
@@ -1875,10 +1887,16 @@ function AutoCancel({ w, iv, slow, swept, cancelNow, busy }: {
  */
 function useSweep(armed: boolean) {
   const [swept, setSwept] = useState<SweptRow[]>([])
+  /** The server cannot read the exchange at all — so nothing is watching what is armed. */
+  const [stuck, setStuck] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const take = (j: { swept?: SweptRow[]; stuck?: boolean }) => {
+    setSwept(j.swept ?? [])
+    setStuck(!!j.stuck)
+  }
   const load = () => fetch('/api/sweep')
     // signed out, offline, no server: there is nothing to show and nothing to say about it
-    .then(async (r) => { if (r.ok) setSwept((await r.json()).swept ?? []) })
+    .then(async (r) => { if (r.ok) take(await r.json()) })
     .catch(() => {})
   /* Asked once whatever happens — an outcome from yesterday belongs on the card whether or not
      anything is armed right now — and then kept up only while something actually is. Nothing is
@@ -1896,14 +1914,14 @@ function useSweep(armed: boolean) {
       const r = await fetch('/api/sweep', { method: 'POST', body: JSON.stringify({ watch }) })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.error ?? r.status)
-      setSwept(j.swept ?? [])
+      take(j)
     } catch (e) {
       toast.error(`Could not reach the sweeper — ${String((e as Error).message)}`)
     } finally {
       setBusy(null)
     }
   }
-  return { swept, cancelNow, busy }
+  return { swept, stuck, cancelNow, busy }
 }
 
 /**

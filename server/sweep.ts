@@ -297,6 +297,16 @@ export function createSweep(db: DatabaseSync) {
     try { return raw ? JSON.parse(raw) as Cred : null } catch { return null }
   }
 
+  /* Consecutive passes on which somebody's account could not be read at all. A key that has been
+     revoked, or a venue that stays down, otherwise leaves this whole feature failing in the one way
+     it must never fail: quietly. `settle` refuses to record an outcome it could not establish, so
+     the armed setups simply sit there, the card counts down, and nothing ever happens.
+     In memory, like the login throttle in index.ts and for the same reason — a restart costs one
+     more silent quarter of an hour, and the roster is ten people. */
+  const stuck = new Map<number, number>()
+  /** Three passes is fifteen minutes: past a blip, well short of a working day. */
+  const STUCK = 3
+
   async function tick(at = Date.now(), only?: number) {
     q.prune.run(at - FORGET)
     const cache = new Map<string, number[] | null>()
@@ -317,6 +327,10 @@ export function createSweep(db: DatabaseSync) {
       /* The account is read once per person, and only once something of theirs has actually died —
          an armed setup that is still standing is not a reason to go asking an exchange anything. */
       let acc: { book: Order[] | null; owns: Set<string> | null } | null = null
+      /* Only ever set by a setup that actually died and could not be dealt with. A pass where
+         nothing died asks the exchange nothing, learns nothing, and so says nothing about whether
+         the key still works — it leaves the count exactly as it found it. */
+      let asked = false, failed = false
       for (const w of armed) {
         // the clock is free and the chart is a kline call: a setup whose hour has already come is
         // over whatever the bars say, so it never asks for them
@@ -324,7 +338,12 @@ export function createSweep(db: DatabaseSync) {
         const why = deadBy(w, at, closes, HORIZON(w.horizon).slow)
         if (!why) continue
         if (cred && !acc) acc = await look(cred)
-        await settle(user, w, why, at, cred, acc)
+        asked = true
+        if (!(await settle(user, w, why, at, cred, acc))) failed = true
+      }
+      if (asked) {
+        if (failed) stuck.set(user, (stuck.get(user) ?? 0) + 1)
+        else stuck.delete(user)
       }
     }
   }
@@ -362,14 +381,28 @@ export function createSweep(db: DatabaseSync) {
     (q.mine.all(user, at - KEEP) as { watch: string; title: string; body: string; at: number }[])
       .map((r) => ({ id: r.watch.slice(0, r.watch.lastIndexOf(':')), key: r.watch, title: r.title, body: r.body, at: r.at }))
 
+  /** Whether this account's setups are armed against an exchange nobody here can currently read. */
+  const blocked = (user: number) => (stuck.get(user) ?? 0) >= STUCK
+
   const timer = setInterval(() => { void tick().catch(() => {}) }, TICK)
   timer.unref()   // a timer is not a reason for the process (or a test) to stay up
 
   return {
     /** What the sweeper did lately, as knocks — push.ts folds these in with everything else it
      *  has to say, so they queue behind the same quiet hours and the same one-knock-per-key rule. */
-    alerts: (user: number): Alert[] =>
-      recent(user).map((r) => ({ key: `sweep-${r.key}`, title: r.title, body: r.body, target: 'market' })),
+    alerts: (user: number, at = Date.now()): Alert[] => [
+      /* The one thing worth waking someone for that is not an outcome: armed setups with nothing
+         watching them. Keyed by the day, the way the digest is, so a venue down all afternoon is
+         one knock and an outage next week is news again. */
+      ...(blocked(user) ? [{
+        key: `sweep-stuck-${new Date(at).toISOString().slice(0, 10)}`,
+        title: 'Auto-cancel is not running',
+        body: 'The exchange has not answered for three passes, so nothing is watching your armed setups. Check the key in Settings — Markets.',
+        target: 'market',
+      }] : []),
+      ...recent(user).map((r) => ({ key: `sweep-${r.key}`, title: r.title, body: r.body, target: 'market' })),
+    ],
+    blocked,
     /** The same outcomes, for the app to show beside the setup they belong to. */
     recent,
     tick,

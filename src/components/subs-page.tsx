@@ -244,70 +244,75 @@ export default function SubsPage() {
             : 'No subscriptions yet. Add one above and it counts toward what to set aside each month.'}
         </p>
       ) : (
-        <div className="flex flex-col gap-2">
+        /* One table, not eleven cards. Every row here holds the same four things in the same four
+           columns — a card around each one is a border drawn around something already aligned, and
+           eleven of them is more chrome than list. A single sheet with rules between the rows says
+           "these are the same kind of thing" in the way the cards were only pretending to.
+           Still flex rows rather than a table element: the fields wrap onto a second line on a
+           narrow screen, which is the one thing table layout cannot do. */
+        <Card className="gap-0 overflow-hidden py-0">
           {shown.map((sub) => {
             const per = monthlyCost(sub)
-            /* Share of the biggest thing on the list, drawn along the bottom edge. Eleven rows of
-               identical boxes say nothing about where the money actually goes — €250 to Mom and
-               €10.99 to Spotify read the same. Against the peak rather than the total, because the
-               question this answers is "which of these is the big one", and shares of a total are
-               slivers nobody can compare by eye. Monthly-normalised, so a yearly bill is measured
-               the way it is actually felt. */
+            /* Share of the biggest thing on the list, drawn along the bottom edge. Rows of identical
+               boxes say nothing about where the money actually goes — €250 to Mom and €10.99 to
+               Spotify read the same. Against the peak rather than the total, because the question
+               this answers is "which of these is the big one", and shares of a total are slivers
+               nobody can compare by eye. Monthly-normalised, so a yearly bill is measured the way it
+               is actually felt. Run together down one sheet they read as a single falling shape. */
             const share = peak > 0 ? per / peak : 0
             return (
-            <Card key={sub.id} className="group relative gap-0 overflow-hidden py-3">
-              <CardContent className="flex flex-wrap items-center gap-2 px-3">
-                {/* uncontrolled name/cost: keyed by id, so editing never fights the store's own value.
-                    ponytail: a cross-tab edit won't refresh these fields; reopen the tab if it matters */}
-                <Input
-                  defaultValue={sub.name}
-                  onChange={(e) => patchSub(sub.id, { name: e.target.value })}
-                  className={cn('min-w-40 flex-1 font-medium', QUIET)}
-                />
-                <Cost quiet
-                  defaultValue={costStr(sub.cost)}
-                  onChange={(e) => patchSub(sub.id, { cost: num(e.target.value) })}
-                />
-                <CyclePicker quiet value={sub.cycle} onChange={(c) => patchSub(sub.id, { cycle: c })} />
-                {/* the app's own date picker — the next charge / payday */}
-                <div className="w-52 shrink-0">
-                  <DueField
-                    due={charge.get(sub.id) ?? null}
-                    placeholder={income ? 'No payday' : 'No date'}
-                    onPick={(v) => patchSub(sub.id, { due: v })}
+              <div key={sub.id} className="group relative border-b last:border-0">
+                <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  {/* uncontrolled name/cost: keyed by id, so editing never fights the store's own value.
+                      ponytail: a cross-tab edit won't refresh these fields; reopen the tab if it matters */}
+                  <Input
+                    defaultValue={sub.name}
+                    onChange={(e) => patchSub(sub.id, { name: e.target.value })}
+                    className={cn('min-w-40 flex-1 font-medium', QUIET)}
                   />
+                  <Cost quiet
+                    defaultValue={costStr(sub.cost)}
+                    onChange={(e) => patchSub(sub.id, { cost: num(e.target.value) })}
+                  />
+                  <CyclePicker quiet value={sub.cycle} onChange={(c) => patchSub(sub.id, { cycle: c })} />
+                  {/* the app's own date picker — the next charge / payday */}
+                  <div className="w-52 shrink-0">
+                    <DueField
+                      due={charge.get(sub.id) ?? null}
+                      placeholder={income ? 'No payday' : 'No date'}
+                      onPick={(v) => patchSub(sub.id, { due: v })}
+                    />
+                  </div>
+                  {/* The number the row is actually for: every cycle in one unit, which is the only
+                      way a yearly 98,99 and a monthly 10,99 can be compared at all. */}
+                  <span className={cn('ml-auto w-24 shrink-0 text-right text-sm tabular-nums',
+                    income ? MONEY_IN : 'text-foreground')}>
+                    {money(per)}
+                    <span className="text-muted-foreground text-xs">/mo</span>
+                  </span>
+                  {/* Shown on hover, and to a keyboard the moment it reaches the row — a column of
+                      standing red icons is a page that looks like it is mostly for deleting things. */}
+                  <Hint label="Remove">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${sub.name}`}
+                      className="text-muted-foreground hover:text-destructive size-8 shrink-0 opacity-0
+                        transition-opacity group-focus-within:opacity-100 group-hover:opacity-100
+                        focus-visible:opacity-100"
+                      onClick={() => del(sub)}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </Hint>
                 </div>
-                {/* The number the row is actually for: every cycle in one unit, which is the only
-                    way a yearly 98,99 and a monthly 10,99 can be compared at all. It used to be the
-                    palest thing here, behind four boxes of chrome. */}
-                <span className={cn('ml-auto w-24 shrink-0 text-right text-sm tabular-nums',
-                  income ? MONEY_IN : 'text-foreground')}>
-                  {money(per)}
-                  <span className="text-muted-foreground text-xs">/mo</span>
-                </span>
-                {/* Shown on hover, and to a keyboard the moment it reaches the row — eleven standing
-                    red icons is a page that looks like it is mostly for deleting things. */}
-                <Hint label="Remove">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Remove ${sub.name}`}
-                    className="text-muted-foreground hover:text-destructive size-8 shrink-0 opacity-0
-                      transition-opacity group-focus-within:opacity-100 group-hover:opacity-100
-                      focus-visible:opacity-100"
-                    onClick={() => del(sub)}
-                  >
-                    <Trash2 />
-                  </Button>
-                </Hint>
-              </CardContent>
-              <div aria-hidden className={cn('absolute inset-x-0 bottom-0 h-0.5',
-                income ? 'bg-emerald-500/50' : 'bg-foreground/25')}
-                style={{ width: `${Math.max(share * 100, 1)}%` }} />
-            </Card>
+                <div aria-hidden className={cn('absolute inset-x-0 bottom-0 h-0.5',
+                  income ? 'bg-emerald-500/50' : 'bg-foreground/25')}
+                  style={{ width: `${Math.max(share * 100, 1)}%` }} />
+              </div>
             )
           })}
-        </div>
+        </Card>
       )}
     </div>
   )

@@ -329,6 +329,9 @@ assert.ok(woke.every((a: any) => a.key && a.title && a.target), 'an alert with n
 assert.equal((await get('/api/sweep')).status, 401)
 assert.equal((await post('/api/sweep', { watch: 'x' })).status, 401)
 assert.deepEqual((await (await get('/api/sweep', leon)).json()).swept, [])
+// nothing armed is nothing failing: the "nobody is watching this" warning stays off until the
+// sweeper has actually tried and failed to read an account
+assert.equal((await (await get('/api/sweep', leon)).json()).stuck, false)
 // a setup that names nothing of theirs is a 404, not somebody else's order
 assert.equal((await post('/api/sweep', { watch: 'nope' }, leon)).status, 404)
 assert.equal((await post('/api/sweep', {}, leon)).status, 400)

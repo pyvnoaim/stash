@@ -1001,7 +1001,9 @@ export function start({
     if (path === '/api/sweep') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (req.method === 'GET') return send(res, 200, { swept: sweep.recent(user.id) })
+      // `stuck` is the card's half of the same warning the knock carries: a countdown that nothing
+      // is acting on should not go on counting down as though something were
+      if (req.method === 'GET') return send(res, 200, { swept: sweep.recent(user.id), stuck: sweep.blocked(user.id) })
       if (req.method === 'POST') {
         let b: any
         try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
@@ -1009,7 +1011,7 @@ export function start({
         if (!id) return send(res, 400, { error: 'which setup' })
         const done = await sweep.now(user.id, id).catch(() => null)
         if (!done) return send(res, 404, { error: 'no such setup, or it has already filled' })
-        return send(res, 200, { swept: sweep.recent(user.id) })
+        return send(res, 200, { swept: sweep.recent(user.id), stuck: sweep.blocked(user.id) })
       }
       return send(res, 405, { error: 'method not allowed' })
     }
