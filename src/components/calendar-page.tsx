@@ -5,8 +5,8 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import { hhmm, hourOf, hourWindow, mondayOf, today } from '@/lib/parse'
 import { PROJECT_DRAG } from '@/lib/utils'
-import { chargesBetween, patch, project, select, setCalView, SUBS, useStash, type Item, type Project, type Sub } from '@/lib/store'
-import { euro, isPosition, netOf, rLabel, signedEuro } from '@/lib/notify'
+import { chargesBetween, isReal, patch, project, select, setCalView, SUBS, useStash, type Item, type Project, type Sub } from '@/lib/store'
+import { euro, netOf, rLabel, signedEuro } from '@/lib/notify'
 import { calendar, type CalEvent } from '@/lib/sync'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -205,8 +205,10 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
          that really moved, so it belongs on a day even though `isPosition` is false for it. That
          test was the only gate here, which is why a trade closed by hand at a venue never reached
          this page: the app cannot price it in euros, and until the venue's number came along there
-         was nothing else to print. */
-      if (r.cash == null && !isPosition(r)) continue
+         was nothing else to print. `isReal` is now that gate, the same one the Log reads — and it
+         also lets through the exchange row whose venue sent no figure, which lands below as R with
+         no money against it rather than as nothing at all. */
+      if (!isReal(r)) continue
       const key = stamp(new Date(r.closedAt))
       const cash = r.cash != null ? null : netOf(r, r.r, 0, s.dials.funding, r.closedAt)
       const at = m.get(key) ?? { cash: null, usd: null, r: 0, unpricedR: 0 }

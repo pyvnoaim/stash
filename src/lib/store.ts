@@ -172,6 +172,28 @@ export interface Result extends Watch {
   cash?: number
 }
 
+/** Whether this row is money you actually have on the table, which is a different sentence. */
+export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
+
+/**
+ * Whether a finished row was a trade that really happened — one you sized yourself, or one a venue
+ * closed and settled. A setup that was only ever watched is neither: it has no size, so the record
+ * prices it off the hypothetical stake in Settings, which reads as money that moved when nothing
+ * did. The Log shows these and only these; the calendar has held to the same rule already.
+ *
+ * The id is the third test because an exchange row does not always carry the venue's own figure —
+ * the position-diff path files one whenever the history has no matching row — and the id is where
+ * the venue already is: those are built as `venue-symbol-when` (see closeWatch's callers in
+ * market-page.tsx), while everything the app saves itself is a bare `uid()`, seven characters of
+ * base36 that cannot contain a hyphen. Any venue, including one added later, reads as real.
+ */
+export const isReal = (r: Pick<Watch, 'id' | 'size' | 'lev'> & { cash?: number }) =>
+  r.cash != null || isPosition(r) || r.id.includes('-')
+
+/** How long a finished setup stays news — the bell's window, and the only reason a watched plan is
+ *  kept at all once the Log stopped showing it. */
+export const RESULT_FRESH = 12 * 3600_000
+
 /** How many finished setups are kept. Past a few dozen it is a spreadsheet, not a scoreboard. */
 const KEEP_RESULTS = 50
 
@@ -1153,10 +1175,14 @@ export const openWatch = (id: string, at: number) => set((s) => ({
  * It ran to its target or its stop: off the live list, into the record. Idempotent on the id, so
  * two ticks landing on the same crossing file it once.
  */
-export const closeWatch = (r: Result) => set((s) => (s.results.some((x) => x.id === r.id) ? s : {
+export const closeWatch = (r: Result, at = Date.now()) => set((s) => (s.results.some((x) => x.id === r.id) ? s : {
   ...s,
   watches: s.watches.filter((w) => w.id !== r.id),
-  results: [r, ...s.results].slice(0, KEEP_RESULTS),
+  /* A plan that was only ever watched is news for half a day — the bell says how it went — and
+     after that nothing reads it: the Log shows real trades only. Kept in the list past that, it
+     would spend the fifty on trades nobody took and push the real ones out the bottom. So the cap
+     is spent on real rows, and a watched one holds a place only while it is still being said. */
+  results: [r, ...s.results].filter((x) => isReal(x) || at - x.closedAt < RESULT_FRESH).slice(0, KEEP_RESULTS),
 }))
 
 /** Returns what it cleared so the caller can offer an undo — the same as every other delete here. */

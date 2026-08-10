@@ -12,6 +12,7 @@ Object.assign(globalThis, {
 })
 
 const { alarmAlerts, alerts, nakedAlerts, openRisk, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
 
@@ -241,6 +242,16 @@ assert.equal(one(200, { level: 'stop', r: -1 }).tone, 'warn')
 // it is news for half a day, and a record after that — the desk keeps it, the bell lets it go
 assert.equal(resultAlerts([result], 0, NOW + 11 * 3600_000).length, 1)
 assert.deepEqual(resultAlerts([result], 0, NOW + 13 * 3600_000), [])
+
+/* ---------- and which of them actually happened ---------- */
+
+// a plan that was only ever watched is not a trade, whatever it would have paid
+assert.equal(isReal(result), false)
+// one you sized yourself is, and so is one a venue closed — by its figure or by the id it files under
+assert.equal(isReal({ ...result, size: 100, lev: 10 }), true)
+assert.equal(isReal({ ...result, cash: 0 }), true)          // a scratch is a real answer, not a missing one
+assert.equal(isReal({ ...result, id: 'bitget-XAUUSDT-1700000000000' }), true)
+assert.equal(isReal({ ...result, id: 'mexc-HBARUSDT-1700000000000' }), true)
 
 console.log('notify ok')
 

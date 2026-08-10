@@ -1,6 +1,6 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
-import { nextCharge, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
+import { isPosition, nextCharge, RESULT_FRESH, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
 import { ASSETS, assetOf, DIALS, fmtPrice, moverMove, venueName, type Dials, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
@@ -168,8 +168,6 @@ export const moneyOf = (r: number, stake: number) => (stake > 0 ? r * stake : nu
 export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake = 0) =>
   (w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : stake)
 
-/** Whether this row is money you actually have on the table, which is a different sentence. */
-export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
 
 /** One open position, reduced to what a risk sum needs: where it got in, where it gets out, and
  *  how much of the thing it holds. The exchange feed's shape, minus everything else it carries. */
@@ -329,9 +327,6 @@ export function watchProgress(watches: Watch[], prices: Record<string, number>, 
   }
   return { opened, closed }
 }
-
-/** How long a finished setup stays in the bell. It is news, and then it is a record. */
-const RESULT_FRESH = 12 * 3600_000
 
 /**
  * The finished ones, while they are still news. The only alert here about something that has

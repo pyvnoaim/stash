@@ -9,13 +9,13 @@ import {
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
 import { Avatar } from '@/components/settings-dialog'
-import { euro, isPosition, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { euro, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
-import { addAlarm, addWatch, armWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
+import { addAlarm, addWatch, armWatch, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -1544,7 +1544,7 @@ export default function MarketPage() {
 /**
  * What this rule did on these bars. Every threshold on this page came out of backtests run by hand,
  * once, on Bitcoin, whose code no longer exists — the numbers survive only as prose in the comments
- * in market.ts. The Record below measures real expectancy but only over setups you saved yourself
+ * in market.ts. The Record below measures real expectancy but only over trades you actually took
  * and that finished, which is a handful of trades and forward-only. This is the same question asked
  * of whatever chart you are actually looking at.
  *
@@ -2412,7 +2412,14 @@ const LOG_SORTS = [
 ] as const
 
 function Record() {
-  const { results: all, stake, dials } = useStash()
+  const { results: every, stake, dials } = useStash()
+  /* Only the trades that really ran. A watched setup files itself here the same way a position does
+     — same shape, same two exits — and once it is in the list it is indistinguishable from a trade
+     that cost something, except in the money: it prices off the hypothetical stake in Settings, so
+     a plan nobody took reads as €40 won on an asset never traded. The rows are still kept and the
+     bell still says how a saved setup went; this is the log of what happened, not of what would
+     have. Same gate the calendar has always had. */
+  const all = every.filter(isReal)
   const [sort, setSort] = useState<(typeof LOG_SORTS)[number]['id']>('new')
   // whose card it is — the same byline the Desk signs with, and null signed out
   const { user } = useSyncExternalStore(subscribeSync, getSync)
@@ -2426,8 +2433,9 @@ function Record() {
         <CardContent className="px-3 py-8 text-center">
           <p className="text-sm font-medium">No finished trades yet</p>
           <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
-            A saved setup lands here once its entry came round and it reached the target or the stop.
-            Each one keeps what it paid, why you took it, and a card of it to share.
+            A trade lands here once it is over — one you sized yourself, or one an exchange closed.
+            Each keeps what it really paid and a card of it to share. Setups you only watched are
+            not trades and stay out of the log.
           </p>
         </CardContent>
       </Card>

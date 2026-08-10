@@ -661,13 +661,15 @@ assert.equal(pos({}).size, undefined)                     // a plain watched pla
   assert.equal(getState().watches.find((x) => x.id === 'r1')?.entryAt, 1000)
 
   const done = { ...w, entryAt: 1000, closedAt: 5000, level: 'target' as const, exit: 110, r: 2 }
-  closeWatch(done)
+  // the clock is passed rather than read: these rows close in 1970, and the prune below is the one
+  // thing here that cares what time it is
+  closeWatch(done, 5000)
   // off the live list and into the record — a finished setup must stop being watched, or the bell
   // shouts about a trade that is over for as long as the price stays past the level
   assert.equal(getState().watches.some((x) => x.id === 'r1'), false)
   assert.deepEqual(getState().results.map((r) => r.id), ['r1'])
   // filed twice (two ticks landing on one crossing) is filed once
-  closeWatch({ ...done, r: 99 })
+  closeWatch({ ...done, r: 99 }, 5000)
   assert.equal(getState().results.length, 1)
   assert.equal(getState().results[0].r, 2)
 
@@ -678,6 +680,17 @@ assert.equal(pos({}).size, undefined)                     // a plain watched pla
   assert.deepEqual(getState().results.map((r) => r.id), ['r1'])
   clearResults()
   assert.equal(clearResults(), null)
+
+  /* A watched plan is kept only while the bell still has something to say about it: half a day on,
+     the next close sweeps it out, because the Log it would otherwise sit in shows real trades only
+     (isReal) and there are fifty places in it. One that really ran stays, whatever its age. */
+  closeWatch({ ...done, id: 'mexc-HBARUSDT-1', closedAt: 6000 }, 6000)
+  closeWatch({ ...done, id: 'paper', closedAt: 6000 }, 6000)
+  assert.deepEqual(getState().results.map((r) => r.id).sort(), ['mexc-HBARUSDT-1', 'paper'])
+  const later = 6000 + 13 * 3600_000
+  closeWatch({ ...done, id: 'newer', closedAt: later }, later)
+  assert.deepEqual(getState().results.map((r) => r.id).sort(), ['mexc-HBARUSDT-1', 'newer'])
+  clearResults()
 }
 
 // the same trust boundary the live setups get, plus the two things only a finished one has: a row
