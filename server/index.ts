@@ -1285,7 +1285,8 @@ export function start({
             id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),
             dir: w?.dir === 'short' ? 'short' : 'long',
             entry: num(w?.entry), stop: num(w?.stop), target: num(w?.target),
-            entryAt: num(w?.entryAt),
+            // what they typed carries no live price; the venue sweep below fills it where there is one
+            entryAt: num(w?.entryAt), mark: null as number | null,
           })).filter((w: any) => w.entry !== null && w.stop !== null && w.target !== null),
         })
       }
@@ -1326,6 +1327,11 @@ export function start({
           id: `${keys[n].venue}-${p.symbol}-${p.openedAt ?? p.entry}`,
           label: p.symbol, horizon: keys[n].venue,
           dir: p.side, entry: p.entry, stop: p.stop, target: p.target,
+          /* Where the market is now, so the page can say how the trade is doing — in R, off the
+             entry and the stop it already has. The mark is the venue's public price and says
+             nothing about the position: `pnl` is that number times their size, which is exactly
+             what stays out. */
+          mark: p.mark,
           /* Open means in, whatever the feed says about when: a venue that carries no fill stamp
              must not read as a setup still waiting for its entry. */
           entryAt: (p.openedAt ? Date.parse(p.openedAt) : NaN) || Date.now(),

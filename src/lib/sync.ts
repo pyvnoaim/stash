@@ -437,6 +437,9 @@ export interface DeskRow {
   open: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
     entry: number, stop: number | null, target: number | null, entryAt: number | null,
+    /** The venue's price right now, so the page can read the trade in R. Null on a row that came
+     *  from someone's document rather than their exchange — nothing there knows the market. */
+    mark: number | null,
   }[]
 }
 

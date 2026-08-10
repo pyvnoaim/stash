@@ -8,6 +8,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
+import { Avatar } from '@/components/settings-dialog'
 import { euro, isPosition, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
@@ -664,6 +665,26 @@ export default function MarketPage() {
     <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
       {/* asset picker — a grouped dropdown, too many now for a pill row */}
       <div className="flex flex-wrap items-center gap-2">
+        {/* One question per tab. The page was ten cards in one scroll — the chart, the sweep over
+            every other asset, what everyone else is in, and the record of how the saved ones went
+            are separate sittings, and stacking them meant the answer to the one you came for was
+            somewhere in the middle. First in the toolbar rather than on a row of its own: which
+            page you are on is read before which asset it is about, and a row holding four pills
+            was a whole line of blank to the right of them. */}
+        <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+          {TABS.map(({ id, label, hint }) => (
+            <Hint key={id} label={hint}>
+              <Button
+                size="sm" variant={tab === id ? 'default' : 'ghost'} className="h-7"
+                aria-current={tab === id}
+                onClick={() => { setTab(id); setSeen((s) => ({ ...s, [id]: true })) }}
+              >
+                {label}
+              </Button>
+            </Hint>
+          ))}
+        </div>
+        <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
         <Select value={asset} onValueChange={setAsset}>
           <SelectTrigger className="h-8 w-44">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
@@ -777,24 +798,6 @@ export default function MarketPage() {
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
           is the one row here that is fact rather than reading. Absent unless the server has a key
           and a venue reports something open. */}
-      {/* One question per tab. The page was ten cards in one scroll — the chart, the sweep over
-          every other asset, what everyone else is in, and the record of how the saved ones went are
-          separate sittings, and stacking them meant the answer to the one you came for was
-          somewhere in the middle. */}
-      <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-1">
-        {TABS.map(({ id, label, hint }) => (
-          <Hint key={id} label={hint}>
-            <Button
-              size="sm" variant={tab === id ? 'default' : 'ghost'} className="h-7"
-              aria-current={tab === id}
-              onClick={() => { setTab(id); setSeen((s) => ({ ...s, [id]: true })) }}
-            >
-              {label}
-            </Button>
-          </Hint>
-        ))}
-      </div>
-
       <div className={cn('flex flex-col gap-4', tab !== 'chart' && 'hidden')}>
       <ExchangePositions />
 
@@ -912,7 +915,11 @@ export default function MarketPage() {
           {/* the levels as an instrument row, label over number — the same read-out pattern as the
               Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
               means nothing until you see it's 1.310 for 900. */}
-          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+          {/* max-content tracks, not four equal fractions: on a wide window the fractions pulled
+              the four read-outs to the far corners of the card with a hand's width of nothing
+              between each, and a row of numbers you have to sweep your eyes across is not a row.
+              They pack left and stay a group; the cells are w-fit already. */}
+          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-[repeat(4,max-content)] sm:gap-x-10">
             {/* the small grey number is the distance nobody was doing in their head: the entry's is
                 from where price stands now (how far until this is even live), the stop's and the
                 target's are from the entry, which is what they are risk and reward against. Two
@@ -1755,7 +1762,13 @@ function fileClosed(next: ExchangePosition[]) {
   let prev: ExchangePosition[] = []
   try { prev = JSON.parse(localStorage.getItem(LAST_OPEN) ?? '[]') } catch { /* first look */ }
   localStorage.setItem(LAST_OPEN, JSON.stringify(next))
-  const gone = prev.filter((p) => !next.some((n) => n.symbol === p.symbol))
+  /* venue and symbol, the way every other id here is built: two venues can hold the same symbol,
+     and matching on the symbol alone meant closing it on one of them read as still open because
+     the other one was — a trade that never landed in the record. A stored row from before the
+     second venue carries no venue at all, and there the symbol alone still decides: a snapshot
+     that cannot say where it was held must not file a close it is only guessing at. */
+  const gone = prev.filter((p) =>
+    !next.some((n) => n.symbol === p.symbol && (p.venue == null || n.venue === p.venue)))
   if (!gone.length) return
   for (const p of gone) {
     /* ponytail: no resting stop, no defined risk — there is no honest R to write, and the record
@@ -1959,6 +1972,59 @@ function useExchangePositions() {
 }
 
 /**
+ * One open trade, as a tile: who it is and which way, what it is doing, and the levels behind it.
+ * The same block for your own book and for everyone else's on the Desk — a position is a position,
+ * and two layouts for one thing meant reading the other tab twice as slowly.
+ *
+ * What differs is what each side is allowed to say. Yours knows the money, so `lead` carries the
+ * dollars and `size` the coins; someone else's carries neither — the server never sends their size
+ * — and their tile leads with the R instead. Everything a row has no answer for is simply left out.
+ */
+function PositionTile({ side, symbol, venue, up, lead, from, now, size, r, meta = [] }: {
+  side: 'long' | 'short'
+  symbol: string
+  /** Which exchange holds it, where saying so adds anything — null keeps the line short. */
+  venue: string | null
+  /** Which way the trade is going, for the one colour the whole tile is read in. */
+  up: boolean
+  /** The headline number on the right of the title row: money, percent, R — whatever this side has. */
+  lead: string | null
+  from: number
+  now: number | null
+  /** How much of it, in whatever unit the caller counts in. Absent where that is nobody's business. */
+  size?: string | null
+  r: number | null
+  /** The quiet line under the fold, already phrased; falsy entries drop out. */
+  meta?: (string | false | null)[]
+}) {
+  const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
+  const line = meta.filter(Boolean).join(' · ')
+  return (
+    <div className="grid gap-1 rounded-md border px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        {/* the side as a pill, not a word in the sentence: it is what the eye sorts the tiles by,
+            and green or red on its own said it twice as quietly */}
+        <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] tracking-wide uppercase',
+          side === 'long'
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+            : 'bg-destructive/10 text-destructive')}>
+          {side}
+        </span>
+        <span className="truncate font-medium">{symbol}</span>
+        {venue && <span className="text-muted-foreground truncate text-xs">{venue}</span>}
+        {lead && <span className={cn('ml-auto shrink-0 font-mono tabular-nums', good)}>{lead}</span>}
+      </div>
+      <div className="text-muted-foreground flex flex-wrap items-baseline gap-x-3 text-xs tabular-nums">
+        <span>{size ? `${size} from ` : 'from '}<span className="text-foreground">{fmtPrice(from)}</span></span>
+        {now != null && <span>now <span className="text-foreground">{fmtPrice(now)}</span></span>}
+        {r != null && <span className={cn('ml-auto font-mono', good)}>{rLabel(r)}</span>}
+      </div>
+      {line && <p className="text-muted-foreground border-t pt-1 text-xs">{line}</p>}
+    </div>
+  )
+}
+
+/**
  * What the exchanges say is actually open — every venue with a key saved (Settings → Markets),
  * proxied through the server so the keys stay there. Renders nothing at all unless an exchange
  * reports an open position: for everyone else this component is one failed fetch and no pixels.
@@ -2022,51 +2088,42 @@ export function ExchangePositions() {
             {risk.crowd && ` · ${risk.crowd.n} of ${risk.crowd.of} are ${risk.crowd.group}, closer to one bet than ${risk.crowd.of}`}
           </p>
         )}
+        {/* one tile per position rather than one full-width line. A row on a wide window put the
+            P&L a screen away from the symbol it belonged to and left the middle empty; a tile keeps
+            a trade's numbers inside its own box, and two or three of them sit side by side instead
+            of one per line. */}
+        <div className="mt-0.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {rows.map((p) => {
           // running R off the resting stop: the one number that says how the trade is going in
           // its own risk unit. Absent without a stop — risk nobody defined can't be counted in.
           const r = p.mark != null && p.stop != null && p.entry !== p.stop
             ? (p.side === 'long' ? (p.mark - p.entry) / (p.entry - p.stop) : (p.entry - p.mark) / (p.stop - p.entry))
             : null
+          const up = (p.pct ?? 0) >= 0
           return (
-            <div key={p.symbol} className="grid gap-0.5">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span className="font-medium">{p.symbol}</span>
-                {/* which venue holds it — only worth a word once more than one does */}
-                {venues.size > 1 && <span className="text-muted-foreground text-xs">{venueName(p.venue)}</span>}
-                <span className={p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{p.side}</span>
-                <span className="text-muted-foreground tabular-nums">{p.size} from {fmtPrice(p.entry)}</span>
-                {p.mark != null && <span className="tabular-nums">now {fmtPrice(p.mark)}</span>}
-                {p.pct != null && (
-                  <span className={cn('ml-auto font-mono tabular-nums',
-                    p.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {/* dollars and R beside the percent: same sign by construction, one colour carries all */}
-                    {p.pnl != null && `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · `}
-                    {p.pct >= 0 ? '+' : ''}{p.pct.toFixed(2)}%
-                    {r != null && ` · ${rLabel(r)}`}
-                  </span>
-                )}
-                {/* ponytail: no share button here. A card of a position still running is a number
-                    that has changed by the time anyone opens it, and the trade it brags about can
-                    still end red — the Record's rows are the ones with an answer on them. */}
-              </div>
-              {(p.value != null || p.stop != null || p.target != null || p.openedAt != null) && (
-                <p className="text-muted-foreground text-xs">
-                  {[
-                    p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-                    p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? `(${away(p.stop, p.mark)})` : ''}`.trim(),
-                    p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? `(${away(p.target, p.mark)})` : ''}`.trim(),
-                    p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? `(${away(p.liq, p.mark)})` : ''}`.trim(),
-                    p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
-                    p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                    })}`,
-                  ].filter(Boolean).join(' · ')}
-                </p>
-              )}
-            </div>
+            <PositionTile key={`${p.venue ?? ''}-${p.symbol}`} side={p.side} symbol={p.symbol}
+              venue={venues.size > 1 ? venueName(p.venue) : null} up={up}
+              /* dollars and R beside the percent: same sign by construction, one colour carries all */
+              lead={p.pct != null
+                ? `${p.pnl != null ? `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · ` : ''}${up ? '+' : ''}${p.pct.toFixed(2)}%`
+                : null}
+              from={p.entry} now={p.mark} size={String(p.size)} r={r}
+              /* ponytail: no share button here. A card of a position still running is a number that
+                 has changed by the time anyone opens it, and the trade it brags about can still end
+                 red — the Record's rows are the ones with an answer on them. */
+              meta={[
+                p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? `(${away(p.stop, p.mark)})` : ''}`.trim(),
+                p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? `(${away(p.target, p.mark)})` : ''}`.trim(),
+                p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? `(${away(p.liq, p.mark)})` : ''}`.trim(),
+                p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
+                p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
+                  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                })}`,
+              ]} />
           )
         })}
+        </div>
       </CardContent>
     </Card>
   )
@@ -2493,6 +2550,13 @@ function Record() {
  * renders nothing is one you press twice and stop trusting. Offline, signed out, and on a server
  * where nobody has switched it on all read the same, because from here they are the same.
  */
+/** Where a live position stands, in R, off the venue's mark. Null when there is no mark to read it
+ *  against, or no risk to divide by. The same arithmetic as your own open trade — one rOf. */
+const deskR = (w: DeskRow['open'][number]) =>
+  w.mark == null || w.stop == null || w.stop === w.entry
+    ? null
+    : rOf({ dir: w.dir, entry: w.entry, stop: w.stop } as Watch, w.mark)
+
 function Desk({ live }: { live: boolean }) {
   const [rows, setRows] = useState<DeskRow[]>([])
   const { user } = useSyncExternalStore(subscribeSync, getSync)
@@ -2538,13 +2602,20 @@ function Desk({ live }: { live: boolean }) {
             const won = p.results.filter((r) => r.level === 'target').length
             return (
               <div key={p.name} className="rounded-md border px-2.5 py-2">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-center gap-2">
+                  {/* ponytail: the initial, not their picture — /api/desk sends no avatar on
+                      purpose, since ten desks of data URI is a megabyte of image for a page that
+                      only needs to tell one row from the next. Put `avatar` on the desk payload if
+                      the faces ever earn it. */}
+                  <Avatar name={p.name} avatar={null} className="size-6 text-[11px]" />
                   <span className="truncate text-sm font-medium">{p.name}</span>
-                  {!!p.results.length && (
-                    <span className="text-muted-foreground text-xs tabular-nums">
-                      {p.results.length} finished · {Math.round((won / p.results.length) * 100)}% hit
-                    </span>
-                  )}
+                  {/* a desk with nothing finished says so: the empty stat slot read as a row that
+                      had failed to load its numbers rather than one with none to load */}
+                  <span className="text-muted-foreground text-xs tabular-nums">
+                    {p.results.length
+                      ? `${p.results.length} finished · ${Math.round((won / p.results.length) * 100)}% hit`
+                      : 'nothing finished yet'}
+                  </span>
                   {!!p.results.length && (
                     <span className={cn('ml-auto font-mono text-sm tabular-nums',
                       total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
@@ -2554,22 +2625,26 @@ function Desk({ live }: { live: boolean }) {
                 </div>
                 {/* someone watching thirty setups is a list nobody reads, and it would push every
                     other desk off the page — the count below says what was left out */}
-                {p.open.slice(0, 6).map((w) => (
-                  <div key={w.id} className="flex items-baseline gap-2 pt-1 text-xs">
-                    {/* the dot that separated real money from a watched plan is gone with the plans
-                        themselves — every row the server sends now is money somebody put down, and a
-                        marker that is true of everything marks nothing */}
-                    <span className="w-28 shrink-0 truncate">{w.label}</span>
-                    <span className="text-muted-foreground truncate">
-                      {w.dir === 'long' ? 'Long' : 'Short'}{w.horizon ? ` · ${w.horizon}` : ''}
-                    </span>
-                    <span className="text-muted-foreground ml-auto shrink-0 font-mono tabular-nums">
-                      {w.entryAt ? 'in' : 'waiting'} @ {fmtPrice(w.entry)}
-                    </span>
-                  </div>
-                ))}
+                <div className="mt-1.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {p.open.slice(0, 6).map((w) => {
+                    /* how it is doing right now, off the venue's own mark — still in R, so it says
+                       how far the trade has come between its entry and its stop and never what that
+                       is worth to them. Absent on a row that came from a document: nothing there
+                       knows the price. */
+                    const r = deskR(w)
+                    return (
+                      <PositionTile key={w.id} side={w.dir} symbol={w.label}
+                        venue={w.horizon || null} up={(r ?? 0) >= 0}
+                        // their R is the whole headline: it is the only number this side may say
+                        lead={r != null ? rLabel(r) : null}
+                        from={w.entry} now={w.mark} r={null}
+                        // no size, ever — the server strips it, which is what makes this desk safe to read
+                        meta={[!w.entryAt && 'waiting for the entry']} />
+                    )
+                  })}
+                </div>
                 {p.open.length > 6 && (
-                  <p className="text-muted-foreground pt-1 text-xs">
+                  <p className="text-muted-foreground pt-1.5 text-xs">
                     and {p.open.length - 6} more
                   </p>
                 )}

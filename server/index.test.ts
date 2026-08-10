@@ -178,6 +178,7 @@ assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that o
 assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1'], 'a plan she never took is not her record')
 assert.equal(seen[0].results[0].r, 2)
 assert.deepEqual(seen[0].open.map((w: any) => w.id), ['w1'], 'nor is a plan she is only watching')
+assert.equal(seen[0].open[0].mark, null, 'a document row carries no live price')
 // the filter reads size and leverage to decide, and neither one is what it sends
 assert.ok(!JSON.stringify(seen).includes('500'), "someone else's size left the server")
 assert.ok(!JSON.stringify(seen).includes('Cardano'), 'a watched plan left the server')
