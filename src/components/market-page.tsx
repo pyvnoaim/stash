@@ -711,13 +711,12 @@ export default function MarketPage() {
           ))}
         </div>
         <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
-        <div className="bg-muted/50 flex rounded-lg p-1">
         <Select value={asset} onValueChange={setAsset}>
           {/* Not a pill: the groups either side of it are one-of-N switches, and an outlined box the
               same height and radius sitting between them read as a third one. This is the thing the
               whole row is *about*, so it says so with the logo and its name and nothing else —
               borderless, narrower, and quiet until you go near it. */}
-          <SelectTrigger className="hover:bg-background/60 dark:bg-transparent dark:hover:bg-background/60 h-7 w-auto gap-1.5 border-0 px-2 font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
+          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted h-8 w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
@@ -733,7 +732,6 @@ export default function MarketPage() {
             ))}
           </SelectContent>
         </Select>
-        </div>
         {/* trade horizon — swaps the strategy, not just the speed. The MA pair (50/200 vs 9/21) and
             the bar size move with it, but so does the rule those numbers feed: accumulation on one
             side, a fixed-2R day trade on the other. Opening range pins 15m, so there the interval is
