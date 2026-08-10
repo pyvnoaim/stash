@@ -86,19 +86,26 @@ function SubChip({ sub }: { sub: Sub }) {
 
 /** The day's takings out of the record, in the header beside its number. Positions only — see
  *  pnlByDay for why a watched plan's hypothetical euros have no business on a date. */
-function Pnl({ pnl }: { pnl: { cash: number | null; r: number; unpricedR: number } | undefined }) {
+function Pnl({ pnl }: { pnl: { cash: number | null; usd: number | null; r: number; unpricedR: number } | undefined }) {
   if (!pnl) return null
+  /* Two currencies, never one total: a venue settles in USDT and the euros here are your own,
+     typed. Joined by a middot the way the at-risk line on the markets page joins them — a rate
+     nobody set is not a number this app is going to invent. */
+  const money = [
+    pnl.cash !== null && signedEuro(pnl.cash),
+    pnl.usd !== null && `${pnl.usd >= 0 ? '+' : '−'}$${Math.abs(pnl.usd).toFixed(2)}`,
+  ].filter(Boolean).join(' · ')
   return (
     <span
-      title="Positions you were in that closed this day. Setups you only watched are not counted — nothing was on them."
+      title="Trades that closed this day: what an exchange paid, in its own dollars, and what a position of your own made in euros. Setups you only watched are not counted — nothing was on them."
       className={cn(
         'truncate font-mono text-[10px] tabular-nums sm:text-xs',
-        (pnl.cash ?? pnl.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive',
+        (pnl.cash ?? pnl.usd ?? pnl.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive',
       )}
     >
-      {pnl.cash === null ? rLabel(pnl.r)
-        : pnl.unpricedR ? `${signedEuro(pnl.cash)} · ${rLabel(pnl.unpricedR)}`
-        : signedEuro(pnl.cash)}
+      {!money ? rLabel(pnl.r)
+        : pnl.unpricedR ? `${money} · ${rLabel(pnl.unpricedR)}`
+        : money}
     </span>
   )
 }
@@ -183,14 +190,20 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
      so the number is unchanged — but a row that ever slipped past the filter would price to null
      instead of to a loss nobody took. */
   const pnlByDay = useMemo(() => {
-    const m = new Map<string, { cash: number | null; r: number; unpricedR: number }>()
+    const m = new Map<string, { cash: number | null; usd: number | null; r: number; unpricedR: number }>()
     for (const r of s.results) {
-      if (!isPosition(r)) continue
+      /* A row an exchange closed carries the venue's own figure and no size at all — it is money
+         that really moved, so it belongs on a day even though `isPosition` is false for it. That
+         test was the only gate here, which is why a trade closed by hand at a venue never reached
+         this page: the app cannot price it in euros, and until the venue's number came along there
+         was nothing else to print. */
+      if (r.cash == null && !isPosition(r)) continue
       const key = stamp(new Date(r.closedAt))
-      const cash = netOf(r, r.r, 0, s.dials.funding, r.closedAt)
-      const at = m.get(key) ?? { cash: null, r: 0, unpricedR: 0 }
+      const cash = r.cash != null ? null : netOf(r, r.r, 0, s.dials.funding, r.closedAt)
+      const at = m.get(key) ?? { cash: null, usd: null, r: 0, unpricedR: 0 }
       at.r += r.r
-      if (cash !== null) at.cash = (at.cash ?? 0) + cash
+      if (r.cash != null) at.usd = (at.usd ?? 0) + r.cash
+      else if (cash !== null) at.cash = (at.cash ?? 0) + cash
       else at.unpricedR += r.r
       m.set(key, at)
     }

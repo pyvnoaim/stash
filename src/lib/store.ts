@@ -173,6 +173,13 @@ export interface Result extends Watch {
   exit: number
   /** Multiples of the risk. The only unit two setups on two different assets compare in. */
   r: number
+  /**
+   * What the trade really paid, in the exchange's own quote currency, where an exchange closed it
+   * and said so. Not euros and never converted: a venue settles in USDT and this app counts in
+   * euros, so the two are shown side by side rather than added. Absent on every row the app priced
+   * itself — those are `size × lev` against the stop, which is the euro arithmetic `netOf` does.
+   */
+  cash?: number
 }
 
 /** How many finished setups are kept. Past a few dozen it is a spreadsheet, not a scoreboard. */
@@ -615,6 +622,8 @@ export function load(data: unknown): State {
       level: r.level === 'stop' ? 'stop' as const : 'target' as const,
       exit: Number(r.exit),
       r: Number(r.r),
+      // the venue's own figure, and zero is a real answer: a scratch is not a missing number
+      ...(typeof r.cash === 'number' && isFinite(r.cash) ? { cash: r.cash } : {}),
       ...positionOf(r),
       ...noteOf(r),
     }))

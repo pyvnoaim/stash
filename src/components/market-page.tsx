@@ -1753,6 +1753,8 @@ const LAST_OPEN = 'stash-exchange-open'
 type ClosedRow = {
   venue: string, symbol: string, side: 'long' | 'short'
   entry: number, exit: number, openedAt: number | null, closedAt: number
+  /** What it paid in the venue's own currency, their arithmetic, fees and funding included. */
+  pnl: number | null
 }
 
 /**
@@ -1790,10 +1792,13 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
   localStorage.setItem(LAST_OPEN, JSON.stringify(next))
   if (!gone.length) return
   for (const p of gone) {
-    /* ponytail: no resting stop, no defined risk — there is no honest R to write, and the record
-       is a scoreboard in R. A stopless trade's close is not hidden by this, it simply leaves the
-       card rather than landing in the record. */
-    if (p.stop == null || !(p.entry > 0) || p.entry === p.stop) continue
+    /* What was at risk on it. A resting stop says so outright; without one the honest answer is
+       the liquidation price, because that is where a leveraged position really ends — the margin
+       is what was on the table, and −1R means it was lost. This used to skip a stopless row
+       entirely, which quietly dropped every trade closed by hand at a venue that rests no stop.
+       Neither number, and there is nothing to measure against: those still go unrecorded. */
+    const risk = p.stop ?? p.liq ?? null
+    if (risk == null || !(p.entry > 0) || p.entry === risk) continue
     /* the venue's own close for this very row: same book, same symbol, and the same open stamp
        where the history carries one — a symbol closed and reopened inside the week is two rows in
        here, and the newest is the wrong one to price the older by. */
@@ -1804,7 +1809,7 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
       ?? mine.sort((a, b) => b.closedAt - a.closedAt)[0]
     const exit = hit?.exit ?? p.mark   // failing that, the last mark seen — the old behaviour
     if (exit == null) continue
-    const r = p.side === 'long' ? (exit - p.entry) / (p.entry - p.stop) : (p.entry - exit) / (p.stop - p.entry)
+    const r = p.side === 'long' ? (exit - p.entry) / (p.entry - risk) : (p.entry - exit) / (risk - p.entry)
     const id = assetOf(p.symbol)
     closeWatch({
       // the open stamp is in the id, so closing and reopening the same symbol is two trades —
@@ -1814,15 +1819,22 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
       label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol,
       // the record names the venue the trade really ran on, now that there is more than one
       horizon: venueName(p.venue),
-      dir: p.side, entry: p.entry, stop: p.stop, target: p.target ?? exit,
+      dir: p.side, entry: p.entry, stop: risk,
+      /* A target on the right side of the entry, always. It used to fall back to the exit price,
+         and a losing trade's exit is on the *wrong* side — which loaded as a long aiming below its
+         own entry, and store.ts drops that row on the next read as a setup that could never have
+         been. So the fallback is one R away instead: no venue said it, and it is the only placement
+         that cannot silently delete the trade it belongs to. */
+      target: p.target ?? (p.side === 'long' ? p.entry + (p.entry - risk) : p.entry - (risk - p.entry)),
       ts: opened, entryAt: opened, closedAt: hit?.closedAt ?? Date.now(),
       /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —
          in profit files as 'target', at a loss as 'stopped'. The record has no third word, and the
          R beside it is exact either way. */
       level: r >= 0 ? 'target' : 'stop', exit, r,
-      // ponytail: no size/lev — the feed's size is coins, Watch.size is euros, and a currency
-      // guess would price a real trade wrong. The row reads in R; the bell says "had you taken
-      // it", which is the one wrong word this shortcut costs.
+      /* what it paid, in the venue's dollars, where the history said. No size or leverage: the
+         feed's size is coins and Watch.size is euros, so the app cannot price this row itself —
+         which is exactly why the venue's own figure rides along instead of a guess. */
+      ...(hit?.pnl != null ? { cash: hit.pnl } : {}),
     })
   }
 }
@@ -2338,6 +2350,14 @@ function Record() {
      watched off the stake in Settings. Null only when not a single row has a figure at all.
      Net of funding to the close, the same subtraction the bell's result alert makes. */
   const cashOf = (r: typeof results[number]) => netOf(r, r.r, stake, dials.funding, r.closedAt)
+  /* An exchange-closed row prints the venue's own dollars instead: it has no size in euros to be
+     priced from, and the figure it does have is the settled one — fees and funding already in it,
+     rather than this app's flat funding rate over a stake that was never at risk on it. */
+  const paid = (r: typeof results[number]) => {
+    if (r.cash != null) return `${r.cash >= 0 ? '+' : '−'}$${Math.abs(r.cash).toFixed(2)}`
+    const cash = cashOf(r)
+    return cash === null ? '' : signedEuro(cash)
+  }
   /* Which of your selves trades well: the same trades, cut by the rule that made them. The
      R-per-trade is the expectancy — the one number that says whether a lane pays to keep driving.
      Cut by rule and not by horizon, because the horizon stopped identifying a rule the day the two
@@ -2354,8 +2374,19 @@ function Record() {
       avg: rs.reduce((sum, r) => sum + r.r, 0) / rs.length,
     }))
     .sort((a, b) => b.n - a.n)
-  const money = results.some((r) => cashOf(r) !== null)
-    ? results.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
+  /* Two totals, never one: the euros are this app's own arithmetic over a stake or a size you
+     typed, and the dollars are what a venue actually settled. A row that has the venue's figure is
+     counted there and nowhere else — priced off the hypothetical stake as well, it would be the
+     same trade twice, once in a currency it was never in. */
+  const own = results.filter((r) => r.cash == null)
+  const money = own.some((r) => cashOf(r) !== null)
+    ? own.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
+  const usd = results.some((r) => r.cash != null)
+    ? results.reduce((n, r) => n + (r.cash ?? 0), 0) : null
+  const paidTotal = [
+    money !== null && signedEuro(money),
+    usd !== null && `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`,
+  ].filter(Boolean).join(' · ')
   const real = results.some(isPosition)
   const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
@@ -2369,9 +2400,9 @@ function Record() {
           </span>
           <span className={cn('ml-auto font-mono text-sm tabular-nums',
             total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-            {money === null ? rLabel(total) : signedEuro(money)}
+            {paidTotal || rLabel(total)}
           </span>
-          {money !== null && (
+          {!!paidTotal && (
             <span className="text-muted-foreground font-mono text-xs tabular-nums">{rLabel(total)}</span>
           )}
           <Button
@@ -2400,7 +2431,6 @@ function Record() {
         </div>
         {results.map((r) => {
           const hit = r.level === 'target'
-          const cash = cashOf(r)
           const open = noting === r.id
           return (
             <div key={r.id}>
@@ -2425,8 +2455,8 @@ function Record() {
                 </span>
                 <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
                 <span className={cn('w-20 shrink-0 text-right font-mono text-xs tabular-nums',
-                  r.r >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                  {cash === null ? '' : signedEuro(cash)}
+                  (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {paid(r)}
                 </span>
                 {/* the only thing on the row that says it has another half — filled once it does */}
                 <NotebookPen className={cn('size-3.5 shrink-0 self-center',
@@ -2442,7 +2472,10 @@ function Record() {
                       symbol: r.asset, side: r.dir, entry: r.entry, mark: r.exit,
                       // price move signed by the side, the same way a position's is
                       pct: r.entry > 0 ? (r.exit / r.entry - 1) * (r.dir === 'long' ? 100 : -100) : null,
-                      pnl: cash,
+                      /* only the venue's own dollars: the card draws a $ figure, and the euros this
+                         app works out for its own rows are not dollars. A row without one prints
+                         the R and the prices, which is the honest half of the same card. */
+                      pnl: r.cash ?? null,
                       openedAt: new Date(r.entryAt).toISOString(),
                       closedAt: new Date(r.closedAt).toISOString(),
                       // no size: a setup's stake is money where a position's size is coins, and the
@@ -2465,7 +2498,12 @@ function Record() {
           )
         })}
         <p className="text-muted-foreground mt-2 px-1.5 text-xs">
-          {real
+          {usd !== null
+            ? `A row in dollars is the exchange's own settled figure — its fees and its funding
+               already in it, which is why it is never added to the euros beside it. ${real
+                 ? 'A row in euros is a position of your own, off the size and leverage you gave it. '
+                 : ''}The rest are what the plan would have paid${stake > 0 ? `, risking ${euro(stake)} a setup` : ' in R'}.`
+            : real
             ? `The ones you were in are your own money, off the size and leverage you gave them —
                no fee and no funding counted, so a perp held for days read a little rich. The rest
                are what the plan would have paid${stake > 0 ? `, risking ${euro(stake)} a setup` : ' in R'}.`

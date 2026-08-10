@@ -704,6 +704,10 @@ assert.deepEqual(finished({ r: 'lots' }), [])
 assert.deepEqual(finished({ closedAt: null }), [])
 assert.deepEqual(finished({ stop: 105 }), [])                      // a long stopped above its entry
 assert.deepEqual(load({ results: 'nope' }).results, [])
+// the venue's own figure survives the load, including a scratch — and junk in that field does not
+assert.equal(finished({ cash: -4.2 })[0].cash, -4.2)
+assert.equal(finished({ cash: 0 })[0].cash, 0)
+assert.equal(finished({ cash: 'lots' })[0].cash, undefined)
 
 // a stake is money at risk: positive, real, or the answer "say it in R and leave money out of it"
 for (const junk of ['20', -5, NaN, Infinity, null, undefined]) {

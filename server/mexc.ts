@@ -109,6 +109,10 @@ export function shapeStops(rows: unknown[]): Map<string, { stop: number | null, 
 
 /** MEXC's closed positions, in the shape bitget.ts declares for them. */
 export function shapeClosed(rows: unknown[]): Closed[] {
+  const signed = (v: unknown) => {
+    const n = Number(v)
+    return v === '' || v == null || !isFinite(n) ? null : Math.round(n * 100) / 100
+  }
   return (rows as Record<string, unknown>[]).map((p) => {
     const at = Number(p.updateTime)
     const opened = Number(p.createTime)
@@ -120,6 +124,8 @@ export function shapeClosed(rows: unknown[]): Closed[] {
       exit: Number(p.closeAvgPrice),
       openedAt: isFinite(opened) && opened > 0 ? opened : null,
       closedAt: isFinite(at) && at > 0 ? at : 0,
+      // realised is what the position paid once it was over, MEXC's own figure
+      pnl: signed(p.realised),
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.exit) && p.exit > 0 && p.closedAt > 0)
 }

@@ -35,11 +35,11 @@ assert.equal(rows[1].funding, null)
 
 // closed positions: the underscore goes, the close price stays, and a row without one is dropped
 assert.deepEqual(shapeClosed([
-  { symbol: 'BTC_USDT', positionType: 2, openAvgPrice: 200, closeAvgPrice: 190, createTime: 1754400000000, updateTime: 1754500000000 },
+  { symbol: 'BTC_USDT', positionType: 2, openAvgPrice: 200, closeAvgPrice: 190, createTime: 1754400000000, updateTime: 1754500000000, realised: 19.94 },
   { symbol: 'ETH_USDT', positionType: 1, openAvgPrice: 100, closeAvgPrice: 0, updateTime: 1754500000000 },
 ]), [{
   venue: 'mexc', symbol: 'BTCUSDT', side: 'short', entry: 200, exit: 190,
-  openedAt: 1754400000000, closedAt: 1754500000000,
+  openedAt: 1754400000000, closedAt: 1754500000000, pnl: 19.94,
 }])
 assert.equal(rows[1].openedAt, null)
 
