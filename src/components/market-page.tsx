@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, armWatch, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
@@ -129,6 +130,7 @@ export default function MarketPage() {
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
+  const phone = useIsMobile() // which verbs the chart's footer offers — pinch and tap, or wheel
   const setPreset = setMarketPreset
   const setHorizon = setMarketHorizon // standing preference, same as the asset — see the store
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
@@ -297,6 +299,19 @@ export default function MarketPage() {
   // drag-to-pan: remember where the grab started, then offset from there (not per-move deltas, which
   // drift). Null means "not dragging", which is also what tells the move handler to do the crosshair.
   const grab = useRef<{ x: number; scroll: number } | null>(null)
+  /* Zoom was the wheel and only the wheel, which on a phone is no zoom at all: the chart panned, the
+     tap read a bar, and the footer said "scroll to zoom" to a device with nothing to scroll. Every
+     pointer that is down is kept here, and the moment there are two the gesture becomes a pinch —
+     the ratio of the span between the fingers against the span they started at, applied to the bar
+     count they started at. `touch-pan-y` on the box is what makes this arrive at all: it leaves the
+     vertical swipe to the page and takes pinch-zoom off the browser, so the two fingers are ours. */
+  const pts = useRef(new Map<number, number>())
+  const pinch = useRef<{ span: number; win: number } | null>(null)
+  /** The distance between the two fingers, or null while there are not two. */
+  const spanOf = () => {
+    const [a, b] = [...pts.current.values()]
+    return pts.current.size === 2 ? Math.abs(a - b) : null
+  }
 
   // session-open x-positions, memoised off the candles so hovering doesn't re-run the Intl work.
   // Mark the first bar that reaches the open each local day — works whether bars run continuously
@@ -1043,21 +1058,45 @@ export default function MarketPage() {
                   onPointerDown={(e) => {
                     // capture, so a drag that leaves the box keeps panning instead of stalling
                     e.currentTarget.setPointerCapture(e.pointerId)
-                    grab.current = { x: e.clientX, scroll }
+                    pts.current.set(e.pointerId, e.clientX)
+                    const span = spanOf()
+                    if (span) {
+                      // a second finger ends the pan and starts the pinch, from where it stands now
+                      pinch.current = { span, win: winBars }
+                      grab.current = null
+                    } else {
+                      grab.current = { x: e.clientX, scroll }
+                    }
                     if (e.pointerType === 'mouse') setHover(null)
                   }}
                   onPointerUp={(e) => {
                     // a finger has no hover, so the crosshair rides on the tap: a press that never
-                    // travelled reads the bar under it rather than having panned nowhere
-                    if (grab.current && e.pointerType !== 'mouse' && Math.abs(e.clientX - grab.current.x) < 6 && n) {
+                    // travelled reads the bar under it rather than having panned nowhere. A second
+                    // tap on the bar it is already on puts it away — a read-out with no pointer to
+                    // leave the box would otherwise sit over the chart until another bar was tapped.
+                    if (grab.current && !pinch.current && e.pointerType !== 'mouse'
+                      && Math.abs(e.clientX - grab.current.x) < 10 && n) {
                       const r = e.currentTarget.getBoundingClientRect()
-                      setHover(Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * xSpan))))
+                      const at = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * xSpan)))
+                      setHover((was) => (was === at ? null : at))
                     }
+                    pts.current.delete(e.pointerId)
+                    if (pts.current.size < 2) pinch.current = null
                     grab.current = null
                   }}
                   onPointerMove={(e) => {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
+                    if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, e.clientX)
+                    const span = spanOf()
+                    if (pinch.current && span) {
+                      /* fingers apart → fewer bars across the same box, which is zooming in. Off the
+                         span they started at rather than the last move, for the same reason the pan
+                         is: per-move ratios multiply their own rounding and the chart drifts. */
+                      const want = pinch.current.win * (pinch.current.span / Math.max(span, 1))
+                      setWin(Math.round(Math.max(MIN_BARS, Math.min(MAX_BARS, want))))
+                      return
+                    }
                     if (grab.current) {
                       // drag right → walk back in time by however many bars that many pixels covers
                       const bars = Math.round(((e.clientX - grab.current.x) / r.width) * winBars)
@@ -1069,8 +1108,17 @@ export default function MarketPage() {
                     // clamps in the future strip, so hovering it reads the last bar rather than nothing
                     setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
                   }}
-                  onPointerCancel={() => { grab.current = null }}
-                  onPointerLeave={(e) => { grab.current = null; if (e.pointerType === 'mouse') setHover(null) }}
+                  onPointerCancel={(e) => {
+                    pts.current.delete(e.pointerId)
+                    if (pts.current.size < 2) pinch.current = null
+                    grab.current = null
+                  }}
+                  onPointerLeave={(e) => {
+                    pts.current.delete(e.pointerId)
+                    if (pts.current.size < 2) pinch.current = null
+                    grab.current = null
+                    if (e.pointerType === 'mouse') setHover(null)
+                  }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
                   <defs>
@@ -1471,7 +1519,11 @@ export default function MarketPage() {
               {/* the same two numbers the range chip above now carries, so they are only spelled
                   out here when the overlay that draws them is off */}
               <span className="ml-auto tabular-nums">
-                <span className={cn('opacity-70', !structure && 'mr-4')}>drag to pan · scroll to zoom · {n} bars</span>
+                {/* the verbs the device actually has: a phone has no wheel to scroll and no pointer
+                    to hover, and being told to use one is how a chart reads as broken */}
+                <span className={cn('opacity-70', !structure && 'mr-4')}>
+                  {phone ? 'drag to pan · pinch to zoom · tap a bar' : 'drag to pan · scroll to zoom'} · {n} bars
+                </span>
                 {!structure && <>support {fmt(view.support)} · resistance {fmt(view.resistance)}</>}
               </span>
             </div>
