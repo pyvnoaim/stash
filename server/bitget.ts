@@ -170,6 +170,9 @@ export type Closed = {
    *  their side of it. This is the one figure the app cannot derive: it knows the size in coins and
    *  prices everything else in euros, and the two do not meet. Null where the row does not say. */
   pnl: number | null
+  /** What it was held at. This is what makes a history row filable on its own: the margin behind a
+   *  50× position is entry/50 of price, and that distance is the risk an R is counted in. */
+  lev: number | null
 }
 
 /** Bitget's closed positions into that shape. Rows with no usable close price are dropped: a
@@ -192,6 +195,7 @@ export function shapeClosed(rows: unknown[], venue = 'bitget'): Closed[] {
       closedAt: isFinite(at) && at > 0 ? at : 0,
       // netProfit is after their fees; pnl is before. The record wants what landed in the account
       pnl: signed(p.netProfit ?? p.pnl),
+      lev: (() => { const n = Number(p.openLeverage ?? p.leverage); return isFinite(n) && n > 0 ? n : null })(),
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.exit) && p.exit > 0 && p.closedAt > 0)
 }

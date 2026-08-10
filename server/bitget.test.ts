@@ -36,7 +36,7 @@ assert.equal(rows[1].lev, null)
 /* the closed book: the venue's own average close, which is the price the record files at. A row
    with no usable close price is dropped — it would be no better than the last mark it replaces. */
 const done = shapeClosed([
-  { symbol: 'btcusdt', holdSide: 'short', openAvgPrice: '200', closeAvgPrice: '190', ctime: '1754400000000', utime: '1754500000000', netProfit: '19.94' },
+  { symbol: 'btcusdt', holdSide: 'short', openAvgPrice: '200', closeAvgPrice: '190', ctime: '1754400000000', utime: '1754500000000', netProfit: '19.94', openLeverage: '10' },
   { symbol: 'ETHUSDT', holdSide: 'long', openAvgPrice: 100, closeAvgPrice: 0, utime: 1754500000000 },
   { symbol: 'SOLUSDT', holdSide: 'long', openAvgPrice: 10, closeAvgPrice: 12, utime: 0 },
 ])
@@ -45,6 +45,8 @@ assert.deepEqual(done, [{
   openedAt: 1754400000000, closedAt: 1754500000000,
   // net of their fees: what actually landed, which is the figure the record files
   pnl: 19.94,
+  // and the multiplier, which is what lets this row be filed without ever having been seen open
+  lev: 10,
 }])
 
 // equity sums whichever field name the account answers in

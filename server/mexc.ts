@@ -126,6 +126,7 @@ export function shapeClosed(rows: unknown[]): Closed[] {
       closedAt: isFinite(at) && at > 0 ? at : 0,
       // realised is what the position paid once it was over, MEXC's own figure
       pnl: signed(p.realised),
+      lev: (() => { const n = Number(p.leverage); return isFinite(n) && n > 0 ? n : null })(),
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.exit) && p.exit > 0 && p.closedAt > 0)
 }

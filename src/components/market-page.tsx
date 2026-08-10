@@ -1755,6 +1755,8 @@ type ClosedRow = {
   entry: number, exit: number, openedAt: number | null, closedAt: number
   /** What it paid in the venue's own currency, their arithmetic, fees and funding included. */
   pnl: number | null
+  /** What it was held at — the risk behind a stopless position, since the margin is entry/lev. */
+  lev: number | null
 }
 
 /**
@@ -1763,11 +1765,12 @@ type ClosedRow = {
  * the record counts it, with no second code path. The last look is kept in localStorage, so a
  * close that happened while the app was shut is still caught and written down at the next open.
  *
- * `history` is the venue's own word on where it ended, matched back to the row that vanished. The
- * exit used to be the last mark this app happened to see, which on a stop that gapped or a close
- * made while the tab was shut was the wrong price by however far it moved — and the R in the record
- * was wrong with it. Without a match it still falls back to that mark, which is no worse than
- * before and is the only answer available for a venue whose history call did not answer.
+ * `history` is the venue's own word on where it ended, and it does two jobs. It prices a row the
+ * diff caught — the exit used to be the last mark this app happened to see, which on a gap or a
+ * close made while the tab was shut was wrong by however far price moved, and the R was wrong with
+ * it. And it files the ones the diff can never catch: a position closed on the exchange's own site
+ * was in no snapshot to go missing from. Without a history it still falls back to the last mark,
+ * which is what it did before the route existed.
  */
 /**
  * What the last snapshot held and this one does not — the whole of how a close is noticed here.
@@ -1790,7 +1793,12 @@ function vanished(next: ExchangePosition[]): ExchangePosition[] {
 function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
   const gone = vanished(next)
   localStorage.setItem(LAST_OPEN, JSON.stringify(next))
-  if (!gone.length) return
+
+  /* Which history rows the diff below has claimed. It files the better row of the two — it knows
+     the resting stop the history does not carry — and this is what stops the same trade landing
+     twice when the two paths build a different id for it, which they do for a venue that gave the
+     open book no fill stamp. */
+  const used = new Set<ClosedRow>()
   for (const p of gone) {
     /* What was at risk on it. A resting stop says so outright; without one the honest answer is
        the liquidation price, because that is where a leveraged position really ends — the margin
@@ -1807,6 +1815,7 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
       c.symbol === p.symbol && c.side === p.side && (p.venue == null || c.venue === p.venue))
     const hit = mine.find((c) => c.openedAt != null && Math.abs(c.openedAt - opened) < 60_000)
       ?? mine.sort((a, b) => b.closedAt - a.closedAt)[0]
+    if (hit) used.add(hit)
     const exit = hit?.exit ?? p.mark   // failing that, the last mark seen — the old behaviour
     if (exit == null) continue
     const r = p.side === 'long' ? (exit - p.entry) / (p.entry - risk) : (p.entry - exit) / (risk - p.entry)
@@ -1835,6 +1844,36 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
          feed's size is coins and Watch.size is euros, so the app cannot price this row itself —
          which is exactly why the venue's own figure rides along instead of a guess. */
       ...(hit?.pnl != null ? { cash: hit.pnl } : {}),
+    })
+  }
+
+  /* Everything else the venue has closed, filed on the history's own account — whether or not this
+     app ever saw the position open. A trade closed on the exchange's website, or on a phone, or
+     while this was shut for a week, was never in a snapshot to go missing from, and the diff above
+     is blind to every one of them. The history row is not: it carries the entry, the exit, the
+     money and the leverage, and the leverage is what makes it filable — a position held at 50× has
+     entry/50 of price behind it, so that distance is what was risked and R is the share of it that
+     came back. Which is the same number the venue prints as ROI, before its fees.
+
+     ponytail: the margin, not a stop. A resting stop is the better denominator and the history does
+     not carry one, so a row the diff above could claim is claimed there and skipped here. */
+  for (const c of history) {
+    if (used.has(c) || c.lev == null || !(c.entry > 0)) continue
+    const risk = c.entry / c.lev                    // price distance to the margin being gone
+    const r = (c.side === 'long' ? c.exit - c.entry : c.entry - c.exit) / risk
+    const id = assetOf(c.symbol)
+    closeWatch({
+      // the same id the diff builds, so a trade both paths reach is still one row in the record
+      id: `${c.venue}-${c.symbol}-${c.openedAt != null ? new Date(c.openedAt).toISOString() : c.entry}`,
+      asset: id,
+      label: ASSETS.find((a) => a.id === id)?.label ?? c.symbol,
+      horizon: venueName(c.venue),
+      dir: c.side, entry: c.entry,
+      stop: c.side === 'long' ? c.entry - risk : c.entry + risk,
+      target: c.side === 'long' ? c.entry + risk : c.entry - risk,
+      ts: c.openedAt ?? c.closedAt, entryAt: c.openedAt ?? c.closedAt, closedAt: c.closedAt,
+      level: r >= 0 ? 'target' : 'stop', exit: c.exit, r,
+      ...(c.pnl != null ? { cash: c.pnl } : {}),
     })
   }
 }
@@ -1992,19 +2031,23 @@ function useExchangePositions() {
   const [feed, setFeed] = useState<{ rows: ExchangePosition[]; equity: number | null }>({ rows: [], equity: null })
   useEffect(() => {
     let dead = false
+    let first = true
     const load = () =>
       fetch('/api/positions')
         .then(async (r) => {
           if (!r.ok) return // offline, no key, exchange down: keep whatever the last answer was
           const d = await r.json()
           const rows: ExchangePosition[] = d.positions ?? []
-          /* the venue's closed book, but only on the tick where something actually went — asking
-             every minute would be two history calls a minute per reader to answer "nothing closed",
-             which is the answer on all but a handful of polls a week. It may fail: an empty history
-             files the close at the last mark, the way it did before the route existed. */
-          const h = vanished(rows).length
+          /* Once when the app opens, and after that only on the tick where a row actually went.
+             The first look is the catch-up: everything closed while this was shut — on the phone,
+             on the exchange's own site — is in the history and in no snapshot, so a session that
+             never asked would never see it. After that, asking every minute would be two history
+             calls a minute per reader to be told nothing closed, which is the answer on all but a
+             handful of polls a week. It may fail: no history is the old behaviour, no worse. */
+          const h = first || vanished(rows).length
             ? await fetch('/api/closed').then((c) => (c.ok ? c.json() : null)).catch(() => null)
             : null
+          first = false
           fileClosed(rows, h?.closed ?? [])
           if (!dead) setFeed({ rows, equity: d.equity ?? null })
         })
