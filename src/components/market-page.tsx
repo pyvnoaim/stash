@@ -2361,8 +2361,21 @@ function SetupNote({ w, placeholder, className }: { w: Watch, placeholder: strin
   )
 }
 
+/** One grid for the row and its header, so the columns line up by construction rather than by two
+ *  sets of hand-matched widths. The last track is the two icons, which are outside the row button. */
+const LOG_GRID = 'grid grid-cols-[minmax(4.5rem,1.2fr)_minmax(4.5rem,1fr)_4.5rem_4rem_5rem_auto] items-baseline gap-x-3 sm:grid-cols-[minmax(5rem,1.2fr)_minmax(5rem,1fr)_minmax(8rem,1fr)_4.5rem_4rem_5rem_auto]'
+
+/** How the record is stacked. Newest is the default because a log is read from the top down; the
+ *  other two are the question "what actually paid, and what actually cost" asked directly. */
+const LOG_SORTS = [
+  { id: 'new', label: 'Newest', hint: 'Most recently closed first — the order the record is written in' },
+  { id: 'won', label: 'Most made', hint: 'Biggest winners first, by what the trade paid' },
+  { id: 'lost', label: 'Most lost', hint: 'Worst first, by what the trade cost' },
+] as const
+
 function Record() {
-  const { results, stake, dials } = useStash()
+  const { results: all, stake, dials } = useStash()
+  const [sort, setSort] = useState<(typeof LOG_SORTS)[number]['id']>('new')
   // whose card it is — the same byline the Desk signs with, and null signed out
   const { user } = useSyncExternalStore(subscribeSync, getSync)
   /* Which row has its note open. One at a time and only on the row you asked for: fifty always-on
@@ -2372,7 +2385,7 @@ function Record() {
      it — a blank panel behind a visible tab reads as something broken rather than as something
      not started. Nothing to offer as an action here: a trade arrives by being taken and reaching
      one of its two levels, which is not a thing a button can do. */
-  if (!results.length) {
+  if (!all.length) {
     return (
       <Card className="py-3">
         <CardContent className="px-3 py-8 text-center">
@@ -2386,17 +2399,17 @@ function Record() {
     )
   }
 
-  const total = results.reduce((n, r) => n + r.r, 0)
-  const won = results.filter((r) => r.level === 'target').length
+  const total = all.reduce((n, r) => n + r.r, 0)
+  const won = all.filter((r) => r.level === 'target').length
   /* Row by row rather than off the total, because the rows are no longer all the same kind of
      money: one you were in prices itself off its own size and leverage, one that was only ever
      watched off the stake in Settings. Null only when not a single row has a figure at all.
      Net of funding to the close, the same subtraction the bell's result alert makes. */
-  const cashOf = (r: typeof results[number]) => netOf(r, r.r, stake, dials.funding, r.closedAt)
+  const cashOf = (r: typeof all[number]) => netOf(r, r.r, stake, dials.funding, r.closedAt)
   /* An exchange-closed row prints the venue's own dollars instead: it has no size in euros to be
      priced from, and the figure it does have is the settled one — fees and funding already in it,
      rather than this app's flat funding rate over a stake that was never at risk on it. */
-  const paid = (r: typeof results[number]) => {
+  const paid = (r: typeof all[number]) => {
     if (r.cash != null) return `${r.cash >= 0 ? '+' : '−'}$${Math.abs(r.cash).toFixed(2)}`
     const cash = cashOf(r)
     return cash === null ? '' : signedEuro(cash)
@@ -2407,10 +2420,10 @@ function Record() {
      got their own strategies: everything saved before that came off the old shared swing rule, and
      folding it in under the same lane name would let a retired rule's record vouch for a live one.
      Those rows have no `rule` and keep their horizon as their lane, which is all they ever knew. */
-  const lanes = [...results.reduce((m, r) => {
+  const lanes = [...all.reduce((m, r) => {
     const k = r.rule || r.horizon || '—'
     return m.set(k, [...(m.get(k) ?? []), r])
-  }, new Map<string, typeof results>())]
+  }, new Map<string, typeof all>())]
     .map(([name, rs]) => ({
       name, n: rs.length,
       hit: rs.filter((r) => r.level === 'target').length,
@@ -2421,17 +2434,24 @@ function Record() {
      typed, and the dollars are what a venue actually settled. A row that has the venue's figure is
      counted there and nowhere else — priced off the hypothetical stake as well, it would be the
      same trade twice, once in a currency it was never in. */
-  const own = results.filter((r) => r.cash == null)
+  const own = all.filter((r) => r.cash == null)
   const money = own.some((r) => cashOf(r) !== null)
     ? own.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
-  const usd = results.some((r) => r.cash != null)
-    ? results.reduce((n, r) => n + (r.cash ?? 0), 0) : null
+  const usd = all.some((r) => r.cash != null)
+    ? all.reduce((n, r) => n + (r.cash ?? 0), 0) : null
   const paidTotal = [
     money !== null && signedEuro(money),
     usd !== null && `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`,
   ].filter(Boolean).join(' · ')
-  const real = results.some(isPosition)
+  const real = all.some(isPosition)
   const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  /* What a row is worth for the purpose of stacking it. Its own money where it has any, and its R
+     where it has none — and dollars and euros are compared as the numbers they are, because the
+     alternative is a rate this app refuses to invent for a sum and would then invent for a sort.
+     ponytail: near enough while the two currencies are within a tenth of each other. */
+  const worth = (r: typeof all[number]) => r.cash ?? cashOf(r) ?? r.r
+  const results = sort === 'new' ? all : [...all].sort((a, b) =>
+    sort === 'won' ? worth(b) - worth(a) : worth(a) - worth(b))
 
   return (
     <Card className="py-3">
@@ -2448,6 +2468,20 @@ function Record() {
           {!!paidTotal && (
             <span className="text-muted-foreground font-mono text-xs tabular-nums">{rLabel(total)}</span>
           )}
+          {/* stacking, not filtering: every row stays, the question is only which end it is read
+              from. Beside the totals because those are what the answer is being compared against. */}
+          <div className="bg-muted/50 -my-1 ml-2 flex gap-1 rounded-lg p-1">
+            {LOG_SORTS.map((o) => (
+              <Hint key={o.id} label={o.hint}>
+                <Button size="sm" variant={sort === o.id ? 'secondary' : 'ghost'}
+                  aria-pressed={sort === o.id}
+                  className={cn('h-6 px-2 text-xs', sort !== o.id && 'text-muted-foreground')}
+                  onClick={() => setSort(o.id)}>
+                  {o.label}
+                </Button>
+              </Hint>
+            ))}
+          </div>
           <Button
             variant="ghost"
             size="sm"
@@ -2472,37 +2506,51 @@ function Record() {
             </span>
           ))}
         </div>
+        {/* what each column is, once, instead of the eye working it out from the first row */}
+        <div className={cn(LOG_GRID, 'text-muted-foreground font-heading border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
+          <span>Trade</span>
+          <span>Side</span>
+          <span className="hidden sm:block">Ran</span>
+          <span className="text-right">Ended</span>
+          <span className="text-right">R</span>
+          <span className="text-right">Paid</span>
+          <span />
+        </div>
         {results.map((r) => {
           const hit = r.level === 'target'
           const open = noting === r.id
           return (
-            <div key={r.id}>
-              <div className="flex items-center">
+            <div key={r.id} className={cn('border-b border-dashed last:border-0',
+              // the row's own verdict, as a wash rather than a word: red and green down the list is
+              // the shape of a record you can read without reading any of it
+              hit ? 'bg-emerald-500/[0.04]' : 'bg-destructive/[0.04]')}>
+              <div className="group flex items-center">
               {/* a real button, so the note is reachable from the keyboard the way every other
-                  control on this page is — a div with an onClick would not be */}
+                  control on this page is — a div with an onClick would not be. It spans every
+                  column but the icons, so the whole line is the target rather than the words on it */}
               <button
                 type="button"
                 onClick={() => setNoting(open ? null : r.id)}
-                className="hover:bg-muted/50 flex min-w-0 flex-1 items-baseline gap-2 rounded-md px-1.5 py-1 text-left text-sm"
+                className={cn(LOG_GRID, 'group-hover:bg-muted/50 min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left text-sm')}
               >
-                <span className="w-28 shrink-0 truncate font-medium">{r.label}</span>
-                <span className="text-muted-foreground w-24 shrink-0 truncate text-xs">
+                <span className="truncate font-medium">{r.label}</span>
+                <span className="text-muted-foreground truncate text-xs">
                   {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
                 </span>
                 {/* the two dates that matter: when the window opened and when it was over */}
-                <span className="text-muted-foreground hidden shrink-0 font-mono text-xs tabular-nums sm:block">
+                <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
                   {when(r.entryAt)} → {when(r.closedAt)}
                 </span>
-                <span className={cn('ml-auto shrink-0 text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {hit ? 'target' : 'stopped'}
                 </span>
-                <span className="w-16 shrink-0 text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
-                <span className={cn('w-20 shrink-0 text-right font-mono text-xs tabular-nums',
+                <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+                <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
                   (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {paid(r)}
                 </span>
                 {/* the only thing on the row that says it has another half — filled once it does */}
-                <NotebookPen className={cn('size-3.5 shrink-0 self-center',
+                <NotebookPen className={cn('size-3.5 shrink-0 self-center justify-self-end',
                   r.note ? 'text-foreground' : 'text-muted-foreground/40')} />
               </button>
               {/* The one thing on this desk anyone shows anyone else, and only ever from here: a

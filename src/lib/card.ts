@@ -92,9 +92,34 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
 <image href="${pic}" x="1048" y="84" width="72" height="72" preserveAspectRatio="xMidYMid slice" clip-path="url(#pfp)"/>
 <rect x="1048" y="84" width="72" height="72" rx="14" fill="none" stroke="#27272a" stroke-width="2"/>` : ''}
 ${t(pic ? 1028 : 1120, 132, 30, '#a1a1aa', 500, who.name, ' text-anchor="end"')}`
+  /* The ground the numbers stand on. It was one flat rectangle, which read as a screenshot of a
+     terminal rather than as a card anybody would post: three cheap SVG primitives fix that and cost
+     nothing to draw. A vertical wash so the top is not the same black as the bottom; the trade's own
+     colour bloomed behind the headline, which is what makes a green card feel green before a word
+     of it is read; and a hairline grid at 4% white, because this is a chart's result and a chart is
+     what it should look like. Every one of them takes its colour from `ink`, so a losing card
+     carries no trace of the winning one. */
+  const dressing = `<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#101014"/><stop offset="1" stop-color="#08080a"/>
+</linearGradient>
+<radialGradient id="bloom" cx="0.28" cy="0.62" r="0.62">
+<stop offset="0" stop-color="${ink}" stop-opacity="0.16"/><stop offset="1" stop-color="${ink}" stop-opacity="0"/>
+</radialGradient>
+<linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0" stop-color="${ink}"/><stop offset="0.55" stop-color="${ink}" stop-opacity="0.35"/>
+<stop offset="1" stop-color="${ink}" stop-opacity="0"/>
+</linearGradient>
+<pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+<path d="M60 0H0V60" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1"/>
+</pattern>
+</defs>
+<rect width="1200" height="630" fill="url(#bg)"/>
+<rect width="1200" height="630" fill="url(#grid)"/>
+<rect width="1200" height="630" fill="url(#bloom)"/>
+<rect x="0" y="0" width="1200" height="6" fill="url(#edge)"/>`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
-<rect width="1200" height="630" fill="#09090b"/>
-<rect x="0" y="0" width="1200" height="6" fill="${ink}"/>
+${dressing}
 ${t(80, 140, 68, '#fafafa', 600, name)}${byline}
 ${t(80, 190, 28, '#a1a1aa', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null].filter(Boolean).join('   ·   '))}
 ${t(80, 400, 156, ink, 700, pct)}

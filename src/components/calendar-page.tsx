@@ -110,6 +110,15 @@ function Pnl({ pnl }: { pnl: { cash: number | null; usd: number | null; r: numbe
   )
 }
 
+/** Whether a day's trading ended up or down, as a wash across the whole cell — a month of green
+ *  and red squares is the shape of how it went, read before a single number on it is. Undefined on
+ *  a day that closed nothing, which is most of them, and those stay the plain background. */
+const dayTone = (pnl: { cash: number | null; usd: number | null; r: number } | undefined) => {
+  if (!pnl) return undefined
+  const n = pnl.cash ?? pnl.usd ?? pnl.r
+  return n >= 0 ? 'bg-emerald-500/10 dark:bg-emerald-500/[0.12]' : 'bg-destructive/10 dark:bg-destructive/[0.12]'
+}
+
 /**
  * The month as a grid, with the work sitting on the days it is due — and the week as an hour grid,
  * which is the one that can show *when*. The due-date field's calendar is a picker in a popover; a
@@ -360,6 +369,8 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                       'bg-background flex min-h-0 flex-col gap-0.5 overflow-y-auto p-1 sm:p-1.5',
                       // the dimmed number already says it is another month; a fill as well is loud
                       outside && 'bg-muted/20',
+                      // how the day's trading went, across the whole square
+                      !outside && dayTone(pnlByDay.get(key)),
                       // the target you are over, outlined the same way the sidebar's are
                       over === key && 'ring-primary bg-accent ring-1 ring-inset',
                     )}
@@ -400,7 +411,9 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
             {days.map((d) => {
               const key = stamp(d)
               return (
-                <div key={key} className="bg-background flex items-center justify-between gap-1 px-1 py-1.5 sm:px-2">
+                <div key={key} className={cn('bg-background flex items-center justify-between gap-1 px-1 py-1.5 sm:px-2',
+                  // the same wash as the month grid, on the only cell the week view has for a whole day
+                  dayTone(pnlByDay.get(key)))}>
                   <span className="text-muted-foreground font-heading flex items-center gap-1.5 text-[10px] tracking-wider uppercase sm:text-[11px]">
                     {WEEKDAYS[(d.getDay() + 6) % 7]}
                     <span
