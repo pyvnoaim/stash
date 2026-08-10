@@ -716,7 +716,7 @@ export default function MarketPage() {
               same height and radius sitting between them read as a third one. This is the thing the
               whole row is *about*, so it says so with the logo and its name and nothing else —
               borderless, narrower, and quiet until you go near it. */}
-          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted h-7 w-auto gap-1.5 rounded-md border-0 px-2 py-0 text-sm font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3 [&_img]:size-3.5">
+          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted h-8 w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
@@ -792,37 +792,37 @@ export default function MarketPage() {
                 </Button>
               </Hint>
             ))}
-          </div>
-          {/* swings and the range they span — off is for reading the candles on their own */}
+          {/* swings and the range they span — off is for reading the candles on their own. In the
+              same tray as the panels: every switch in here answers "what is drawn on the chart",
+              and four trays in a row for one question each is what made this bar feel like a lot. */}
           <Hint label={structure
             ? 'Structure — swing highs and lows, the range they span, and the gaps price has not come back for. Click to hide.'
             : 'Structure — swing highs and lows, the range they span, and the gaps price has not come back for. Off.'}>
-            {/* Icon alone — the word cost the row 80px it did not have, and the tooltip says more
-                than the word did. In the same tray as every other switch on this row, because a
-                bare button beside four boxed groups is a 28px control next to four 32px ones
-                however the button inside it is sized. */}
-            <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
-              <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
-                aria-pressed={structure} className={cn('size-7', !structure && 'text-muted-foreground')}
-                onClick={() => setStructure((v) => !v)}>
-                <Waypoints className="size-3.5" />
-              </Button>
-            </div>
+            <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
+              aria-pressed={structure} className={cn('size-7', !structure && 'text-muted-foreground')}
+              onClick={() => setStructure((v) => !v)}>
+              <Waypoints className="size-3.5" />
+            </Button>
           </Hint>
+          </div>
+          {/* the feed's own two controls, in one tray of their own: whether it is updating, and
+              asking it to update now. Neither is about the chart, which is why they sit apart. */}
+          <div className="bg-muted/50 flex items-center gap-1 rounded-lg p-1">
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
           <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
             : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
-            <Button size="sm" variant="ghost" className={cn('h-8 gap-1.5', (!live || stale) && 'text-muted-foreground')}
+            <Button size="sm" variant="ghost" className={cn('h-7 gap-1.5', (!live || stale) && 'text-muted-foreground')}
               onClick={() => setLive((v) => !v)}>
               <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
               Live
             </Button>
           </Hint>
           <Hint label="Refresh">
-            <Button size="icon" variant="ghost" aria-label="Refresh" className="size-8" onClick={() => setNonce((n) => n + 1)}>
-              <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+            <Button size="icon" variant="ghost" aria-label="Refresh" className="size-7" onClick={() => setNonce((n) => n + 1)}>
+              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
             </Button>
           </Hint>
+          </div>
         </div>
       </div>
 
