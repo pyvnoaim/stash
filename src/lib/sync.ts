@@ -423,6 +423,10 @@ export const roster = (): Promise<Face[]> =>
  * One person on the Desk: how their trades went, and what they are in now. Trades they were really
  * in and nothing else — the server drops watched plans before sending, so every row here is money
  * somebody put down. No euros either: it strips the size and leverage, so how much is never said.
+ *
+ * `open` is the exchange's own book for anyone whose account has a key on it, and what they typed
+ * for everyone else. A venue carries a resting stop or take-profit only sometimes, which is why
+ * those two are nullable here and why nothing on the page reads them.
  */
 export interface DeskRow {
   name: string
@@ -432,7 +436,7 @@ export interface DeskRow {
   }[]
   open: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
-    entry: number, stop: number, target: number, entryAt: number | null,
+    entry: number, stop: number | null, target: number | null, entryAt: number | null,
   }[]
 }
 

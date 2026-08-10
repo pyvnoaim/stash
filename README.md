@@ -608,10 +608,19 @@ document is pushed whole on every edit and kept fifty versions deep.
 
 ### The others
 
-Under your own record sits everyone else's, if they want it there. **Settings → Markets → The
-others** switches your desk on: the trades you actually took — finished ones and the ones you are
+**People**, the third tab on the Markets page, is everyone else's desk. **Settings → Markets → The
+others** switches yours on: the trades you actually took — finished ones and the ones you are
 in now — become readable by everyone with an account on this server, and theirs by you. Off until
-you say so, and off is what a document that has never heard of the setting means.
+you say so, and off is what a document that has never heard of the setting means. The tab says so
+when nobody has, rather than showing an empty page.
+
+**What you are in now is your exchange's book**, for anyone whose account has a venue key on it
+(Settings → Markets). Those are fills — the positions the exchange says are open — rather than the
+ones somebody remembered to type in, and they arrive without anyone writing anything down. The page
+re-asks on the minute, so a position closed at the venue leaves the others' screens too; behind that
+the server keeps its answer per key for thirty seconds, so ten people reading is not ten calls to
+Bitget. An account with no key still shows what it typed, and so does one whose key has stopped
+working — a credential that expired is not a book that went flat.
 
 **Only trades you were really in travel.** A plan you watched and never took is not sent at all,
 which is a stronger promise than not showing it: the filter is on the server, so an untaken idea
@@ -620,11 +629,13 @@ because there the distinction is drawn on the row; on somebody else's page a hit
 claim about how that person trades, and nobody scrolls a list of other people's results thinking
 half of these were hypothetical.
 
-What travels is the trade — the asset, the side, the horizon, whether the entry has been reached,
-and how the finished ones scored in R. What does not is the money: the size and leverage a position
-was taken with never leave the device they were typed on, so the page can say someone is up 3.2R
-across eleven trades and cannot say what that was worth to them. Those two numbers are read to
-decide what to send and are never part of what is sent.
+What travels is the trade — the asset, the side, the venue or horizon, whether the entry has been
+reached, and how the finished ones scored in R. What does not is the money: the size and leverage a
+position was taken with never leave the device they were typed on, so the page can say someone is up
+3.2R across eleven trades and cannot say what that was worth to them. Those two numbers are read to
+decide what to send and are never part of what is sent. The exchange book is held to the same line —
+the venue reports the position's size, its value and its open profit, and none of the three is on
+the list of what a shared trade is.
 
 The **Opening range** preset pins 15m bars and marks the high and low of the first hour of the New
 York session — 09:30 local, daylight saving included — which is the window the breakout play watches.

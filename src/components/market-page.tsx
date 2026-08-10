@@ -58,7 +58,8 @@ const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
  */
 const TABS = [
   { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart, the readings behind the call, and what the rule did on these bars' },
-  { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, what is trending on-chain, and what the other desks hold' },
+  { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, and what is trending on-chain' },
+  { id: 'people', label: 'People', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
   { id: 'record', label: 'Log', hint: 'Every finished trade: what it paid, why you took it, and a card of it to share. Hit rate and expectancy by rule.' },
 ] as const
 
@@ -646,7 +647,7 @@ export default function MarketPage() {
   const [at, setTab] = useState<(typeof TABS)[number]['id']>('chart')
   // which tabs have ever been opened — see the note by the Scan below
   const [seen, setSeen] = useState<Partial<Record<(typeof TABS)[number]['id'], boolean>>>({ chart: true })
-  /* All three, always. The Record used to appear only once something had finished, which meant the
+  /* All of them, always. The Record used to appear only once something had finished, which meant the
      one place the app keeps your results was invisible to anyone who had not got any yet — a tab
      you cannot find until you no longer need to be told it exists. Empty, it says what lands there.
      Which also retires the fallback that stood here: nothing takes a tab away mid-session any more,
@@ -776,9 +777,10 @@ export default function MarketPage() {
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
           is the one row here that is fact rather than reading. Absent unless the server has a key
           and a venue reports something open. */}
-      {/* Three questions, three tabs. The page was ten cards in one scroll — the chart, the sweep
-          over every other asset, and the record of how the saved ones went are separate sittings,
-          and stacking them meant the answer to the one you came for was somewhere in the middle. */}
+      {/* One question per tab. The page was ten cards in one scroll — the chart, the sweep over
+          every other asset, what everyone else is in, and the record of how the saved ones went are
+          separate sittings, and stacking them meant the answer to the one you came for was
+          somewhere in the middle. */}
       <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-1">
         {TABS.map(({ id, label, hint }) => (
           <Hint key={id} label={hint}>
@@ -1515,9 +1517,12 @@ export default function MarketPage() {
           <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
             onPick={(id) => { setAsset(id); setTab('chart') }} />
           <Trending />
-          {/* what other people hold is the same question as what is moving — neither is your own
-              record, which is the only thing the Log is for */}
-          <Desk />
+        </div>
+      )}
+
+      {seen.people && (
+        <div className={cn('flex flex-col gap-4', tab !== 'people' && 'hidden')}>
+          <Desk live={tab === 'people'} />
         </div>
       )}
 
@@ -2479,17 +2484,44 @@ function Record() {
  * have gone. That filter is deliberately not repeated on this side — arriving and then being hidden
  * is not the same as never being sent, and only one of the two is a promise.
  *
- * Nothing here when nobody has turned it on, which is also what it looks like offline and on a
- * stash with no account at all.
+ * What each is in right now is their exchange's own book where their account has a key on it — the
+ * fills, not what anyone remembered to type. Which is why this re-asks on a minute: an empty desk
+ * here is a flat book, and it should not stay on screen once it stops being true. The server's own
+ * per-key cache is what keeps that from being a minute's worth of exchange calls per reader.
+ *
+ * It says so rather than disappearing when there is nobody: this is a tab now, and a tab that
+ * renders nothing is one you press twice and stop trusting. Offline, signed out, and on a server
+ * where nobody has switched it on all read the same, because from here they are the same.
  */
-function Desk() {
+function Desk({ live }: { live: boolean }) {
   const [rows, setRows] = useState<DeskRow[]>([])
   const { user } = useSyncExternalStore(subscribeSync, getSync)
 
-  useEffect(() => { void deskRows().then(setRows) }, [user?.name])
+  /* Only while the tab is the one on screen. A hidden tab stays mounted here — throwing its rows
+     away would cost a round trip on every switch back — and a minute-long poll behind it would be
+     every reader asking every exchange about everybody, forever, to redraw nothing. Coming back to
+     the tab asks again on the spot, which is the same thing the poll was for. */
+  useEffect(() => {
+    if (!live) return
+    const load = () => { void deskRows().then(setRows) }
+    load()
+    const h = window.setInterval(load, 60_000)
+    return () => window.clearInterval(h)
+  }, [user?.name, live])
 
   const people = rows.filter((p) => p.results.length || p.open.length)
-  if (!people.length) return null
+  if (!people.length) {
+    return (
+      <Card className="py-3">
+        <CardContent className="text-muted-foreground px-3 text-sm">
+          {user
+            ? `Nobody else on this server has switched their desk on yet. Settings → Markets → The
+               others puts yours here for them.`
+            : 'Sign in to see what everyone else on this server is in.'}
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card className="py-3">

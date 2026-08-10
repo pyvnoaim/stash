@@ -265,6 +265,17 @@ function readBytes(req: IncomingMessage, cap: number): Promise<Buffer> {
 }
 
 /** Hashing a miss against this keeps "no such user" as slow as "wrong password". */
+/**
+ * When a venue last refused someone's key, so the Desk stops asking for a while. The venue modules
+ * cache an answer and never a failure — right for /api/positions, where one person waits on their
+ * own key, and wrong here, where every reader waits on everybody's. One expired credential would
+ * otherwise put its ten-second timeout in front of every load of the People tab, for everyone, for
+ * as long as nobody noticed. Five minutes is long enough to outlast the tab's own minute-long
+ * refresh, so a dead key costs one slow read rather than every read.
+ */
+const refused = new Map<string, number>()
+const REFUSED_FOR = 5 * 60_000
+
 const DUMMY_SALT = randomBytes(16)
 /**
  * On the threadpool rather than scryptSync on the event loop. At N=2^15 one hash is a tenth of a
@@ -422,7 +433,7 @@ export function start({
        the exact shape JSON.stringify writes, and a note that happens to contain the same string
        only buys itself a parse that then turns it down. */
     everyone: db.prepare(`select * from (
-        select u.name,
+        select u.id, u.name,
           (select json from docs d where d.user = u.id order by d.v desc limit 1) as json
         from users u where u.id <> ?
       ) where json like '%"desk":true%' order by name`),
@@ -1244,7 +1255,7 @@ export function start({
     if (path === '/api/desk' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const rows = q.everyone.all(user.id) as { name: string, json: string | null }[]
+      const rows = q.everyone.all(user.id) as { id: number, name: string, json: string | null }[]
       // another person's document is untrusted input to my page: numbers are numbers or the row goes
       const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
       const arr = (a: unknown) => (Array.isArray(a) ? a : [])
@@ -1253,10 +1264,13 @@ export function start({
          the string "500" must not count, and NaN must not either. Both fall out of the typeof. */
       const taken = (w: any) => typeof w?.size === 'number' && w.size > 0 && typeof w?.lev === 'number' && w.lev > 0
       const desk = []
+      // whose desk each row is, kept beside the list rather than on it: the account id is ours
+      const who: number[] = []
       for (const row of rows) {
         let s: any
         try { s = JSON.parse(row.json ?? '{}') } catch { continue }
         if (s?.desk !== true) continue
+        who.push(row.id)
         desk.push({
           /* The name and nothing else of who they are: an avatar is up to 128 KB of data URI and
              the page draws none of them, so ten desks would have been a megabyte of picture. */
@@ -1275,6 +1289,49 @@ export function start({
           })).filter((w: any) => w.entry !== null && w.stop !== null && w.target !== null),
         })
       }
+
+      /* What they are in *now* is the exchange's word where there is one. A hand-entered position
+         is a thing somebody typed; a venue row is a fill, and it is the only kind that appears
+         without anyone remembering to write it down — which is why a desk whose account has a key
+         shows its book and not its notes. Same stored keys and same 30s per-key cache as
+         /api/positions, so a page of desks costs one call per venue per half minute, not one per
+         reader. A venue that errors leaves that desk on what the document said rather than
+         emptying it: a key that expired is not a book that closed.
+
+         The allowlist holds. `size` is coins here rather than euros and is still position size, so
+         it stays out with `value`, `pnl` and the equity — what is sent is the trade and its levels.
+
+         ponytail: every opted-in desk is asked on every read. Ten accounts behind a 30s cache is
+         nothing; if this server ever has a hundred, one sweep writing the books into a table the
+         route reads is the lever. */
+      await Promise.all(desk.map(async (d, i) => {
+        /* One desk's exchange never takes the page down with it. The venue calls have their own
+           catch; this is for everything around them — a credential row that will not parse being
+           the one that would otherwise throw past the awaits and 500 the whole route over one
+           account's bad data. */
+        try {
+        const keys = [
+          { venue: 'Bitget', raw: (q.bitget.get(who[i]) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
+          { venue: 'MEXC', raw: (q.mexc.get(who[i]) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret) },
+        ].filter((v) => v.raw && !((refused.get(`${v.venue}:${who[i]}`) ?? 0) > Date.now() - REFUSED_FOR))
+        if (!keys.length) return
+        const feeds = await Promise.all(keys.map((v) => v.go(JSON.parse(v.raw!)).catch(() => {
+          if (refused.size >= 64) refused.clear()
+          refused.set(`${v.venue}:${who[i]}`, Date.now())
+          return null
+        })))
+        if (feeds.every((f) => f === null)) return
+        d.open = feeds.flatMap((f, n) => (f?.positions ?? []).map((p) => ({
+          // the venue and the fill stamp make it the same row across reads, the way the app's own does
+          id: `${keys[n].venue}-${p.symbol}-${p.openedAt ?? p.entry}`,
+          label: p.symbol, horizon: keys[n].venue,
+          dir: p.side, entry: p.entry, stop: p.stop, target: p.target,
+          /* Open means in, whatever the feed says about when: a venue that carries no fill stamp
+             must not read as a setup still waiting for its entry. */
+          entryAt: (p.openedAt ? Date.parse(p.openedAt) : NaN) || Date.now(),
+        })))
+        } catch { /* this desk stays on what its document said */ }
+      }))
       return send(res, 200, { desk })
     }
 
