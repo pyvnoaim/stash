@@ -877,17 +877,22 @@ export default function MarketPage() {
             {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
                 watch that kept re-reading it would quietly become a different trade every bar */}
             {!inIt && (
-            <Button size="sm" variant={watched ? 'secondary' : 'outline'} className="ml-auto"
-              onClick={() => (watched
-                ? removeWatch(watched.id)
-                : side !== 'flat' && addWatch({
-                    id: uid(), asset: current.id, label: current.label, horizon: cfg.label,
-                    rule: cfg.strategy, dir: side, interval,
-                    entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
-                  }))}>
-              {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
-              {watched ? 'Alerting' : 'Alert me'}
-            </Button>
+            <Hint label={watched
+              ? `Saved. These three levels are watched as they stand — entry ${fmt(plan.entry)}, stop ${fmt(plan.stop)}, target ${fmt(plan.target)} — and the bell says when price reaches the entry, and again when it ends at one of the other two. Nothing is ordered and nothing is bought: this is a note that shouts. Click to forget it.`
+              : 'Watch these levels. The bell tells you when price comes to the entry, and how it went when it is over — on this device and on your phone. It places no order.'}>
+              <Button size="sm" variant={watched ? 'secondary' : 'outline'} className="ml-auto"
+                aria-pressed={!!watched}
+                onClick={() => (watched
+                  ? removeWatch(watched.id)
+                  : side !== 'flat' && addWatch({
+                      id: uid(), asset: current.id, label: current.label, horizon: cfg.label,
+                      rule: cfg.strategy, dir: side, interval,
+                      entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
+                    }))}>
+                {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
+                {watched ? 'Alerting' : 'Alert me'}
+              </Button>
+            </Hint>
             )}
             {/* The other half, and only ever offered on a saved setup: the alert says the entry
                 came, this says what happens when it doesn't. Off unless pressed — everything the
@@ -2790,14 +2795,24 @@ function Desk({ live }: { live: boolean }) {
 }
 
 /** One asset through the desk's read, bars and all. The two halves live in market.ts, because the
- *  push server runs the same scan to decide whether a setup is worth waking someone for. */
-const scanOne = async (a: Asset, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number) =>
-  scanRead(a, await scanBars(a), horizon, interval, orbMode, fee)
+ *  push server runs the same scan to decide whether a setup is worth waking someone for.
+ *
+ *  The closes ride back out with the row for the row's own line. Kept here rather than on ScanRow:
+ *  the bars are already in hand and cost nothing, but the server builds these rows too and has no
+ *  line to draw — a hundred numbers a row is a payload it would carry for nobody. */
+type ScanCard = ScanRow & { closes: number[] }
+
+const scanOne = async (a: Asset, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number): Promise<ScanCard | null> => {
+  const bars = await scanBars(a)
+  const row = scanRead(a, bars, horizon, interval, orbMode, fee)
+  // the last of them, not all: a weekly chart hands over a year and the line is 4rem wide
+  return row && { ...row, closes: (bars[interval] ?? []).slice(-60).map((c) => c.c) }
+}
 
 /** One grid for the header, the row and the row's second line, so all three line up by
  *  construction. They were three sets of hand-matched widths, and the cascade line was indented by
  *  a number that had to be re-guessed every time a column moved. */
-const SCAN_GRID = 'grid grid-cols-[1.5rem_minmax(4rem,7rem)_3.25rem_auto_minmax(0,1fr)_2.75rem] items-baseline gap-x-2'
+const SCAN_GRID = 'grid grid-cols-[1.5rem_minmax(4rem,7rem)_3.25rem_auto_4rem_minmax(0,1fr)_2.75rem] items-baseline gap-x-2'
 
 // how actionable the row's phrase is, by tier — the same palette the verdict card speaks in
 const TIER_CLS = [
@@ -2828,7 +2843,7 @@ function Scan({ orbMode, interval, onPick }: {
   const { marketHorizon: horizon, dials } = useStash()
   const fee = dials.fee
   const cfg = HORIZONS[horizon]
-  const [rows, setRows] = useState<ScanRow[] | null>(null)
+  const [rows, setRows] = useState<ScanCard[] | null>(null)
   const [nonce, setNonce] = useState(0)
   // the worker answers these routes from cache offline — rows drawn from old bars must say so
   const online = useOnline()
@@ -2842,7 +2857,7 @@ function Scan({ orbMode, interval, onPick }: {
       if (!on) return
       // ranked on the net R:R, not the gross one — the whole point of the column is which of these
       // to look at first, and the fee is exactly what reorders the close ones
-      setRows(r.filter((x): x is ScanRow => !!x)
+      setRows(r.filter((x): x is ScanCard => !!x)
         /* the completed cascade first — three timeframes in sequence is a better answer than any
            single chart's grade, which is the whole reason it is computed. Then the desk's own
            tier, then how many timeframes agree: between two setups of the same grade, the one the
@@ -2887,6 +2902,7 @@ function Scan({ orbMode, interval, onPick }: {
                 </span>
               ))}
             </span>
+            <span className="text-center">{interval}</span>
             <span />
             <span className="text-right">net</span>
           </div>
@@ -2930,6 +2946,13 @@ function Scan({ orbMode, interval, onPick }: {
                 )
               })}
             </span>
+            {/* What the arrows beside it are a reading of. Coloured by its own two ends rather than
+                by the desk's side: the line is where price has been, and a short setup drawn in red
+                on a chart that rose says the wrong thing about both. Self-aligned because the row
+                is baseline-aligned and an svg has no baseline to sit on. */}
+            <span className="self-center">
+              <Sparkline data={r.closes} up={r.closes.at(-1)! >= r.closes[0]} id={`scan-${r.a.id}`} className="h-4 w-full" />
+            </span>
             <span className={cn('truncate text-xs', TIER_CLS[r.tier])}>{r.say}</span>
             <span className={cn('text-right font-mono text-xs tabular-nums',
               !r.plan ? 'text-muted-foreground/40'
@@ -2941,7 +2964,7 @@ function Scan({ orbMode, interval, onPick }: {
                 Under the phrase, in the phrase's own column — it is the same question asked of
                 three charts instead of one, and the ↳ is what says so without a second heading. */}
             {r.cascade.stage >= 2 && (
-              <span className={cn('col-start-5 col-end-7 truncate text-xs',
+              <span className={cn('col-start-6 col-end-8 truncate text-xs',
                 r.cascade.stage === 3 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
                 <span className="opacity-50">↳ </span>{r.cascade.say}
               </span>

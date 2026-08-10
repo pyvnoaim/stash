@@ -8,6 +8,7 @@ import { PROJECT_DRAG } from '@/lib/utils'
 import { chargesBetween, isReal, patch, project, select, setCalView, SUBS, useStash, type Item, type Project, type Sub } from '@/lib/store'
 import { euro, netOf, rLabel, signedEuro } from '@/lib/notify'
 import { calendar, type CalEvent } from '@/lib/sync'
+import { useIsMobile } from '@/hooks/use-mobile'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const stamp = (d: Date) => d.toLocaleDateString('sv')
@@ -132,6 +133,13 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
      looking at is the whole point of the switch, and a week that remembered somewhere else would
      be a second place to navigate. */
   const [anchor, setAnchor] = useState(() => new Date())
+  /* A phone cannot show a month of work in seven columns: a cell is fifty pixels, which is six
+     characters, so every chip in the picture read "€ Adre…". So on a phone the grid says only that
+     a day has something — the numbers, the wash of how the trading went, and a mark per entry —
+     and the day you tap is written out underneath it, full width, where the words fit. The desktop
+     grid is untouched: it has the room, and reading the month at a glance is what it is for. */
+  const phone = useIsMobile()
+  const [pick, setPick] = useState<string | null>(null)
 
   /* Whole weeks from the Monday on or before the 1st, however many the month needs — five for a
      short one, six when it runs over. A fixed six leaves an empty row most months. The week view
@@ -170,6 +178,11 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
   // calendar is asked for
   const from = stamp(weeks[0][0])
   const to = stamp(weeks[weeks.length - 1][6])
+
+  /* Which day the phone's list is written for. Derived rather than stored, so paging to another
+     month cannot leave it reading out a day that is no longer on screen: a pick that scrolled away
+     falls back to today, and to the 1st in a month today is not in. */
+  const day = pick && pick >= from && pick <= to ? pick : (t >= from && t <= to ? t : stamp(month))
 
   // subscription charges land on the days they bill, generated across the visible window only
   const subsByDay = useMemo(() => {
@@ -307,6 +320,15 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
     }))
   }, [view, days, byDay, events])
 
+  /* One mark per thing on the day, in the chips' own language: an event is hollow the way its bar
+     is, a done item fades, income is green. Four at most — a fifth dot in a fifty-pixel cell is a
+     smudge, and the list underneath is where the answer actually is. */
+  const marksFor = (key: string) => [
+    ...(events.get(key) ?? []).map(() => 'border-muted-foreground/60 border'),
+    ...(byDay.get(key) ?? []).map((it) => (it.done ? 'bg-muted-foreground/40' : 'bg-muted-foreground')),
+    ...(subsByDay.get(key) ?? []).map((sub) => (sub.kind === 'income' ? 'bg-emerald-500' : 'bg-muted-foreground/60')),
+  ].slice(0, 4)
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <div className="flex items-center gap-2">
@@ -339,11 +361,14 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
       </div>
 
       {view === 'month' ? (
-        /* gap-px over a bordered background is the grid's own ruling — no borders to double up.
+       <>
+        {/* gap-px over a bordered background is the grid's own ruling — no borders to double up.
            The weekday strip is the first row rather than its own grid, so the two cannot drift.
-           minmax keeps a week readable on a short window and stops cells ballooning on a tall one. */
+           minmax keeps a week readable on a short window and stops cells ballooning on a tall one.
+           The phone's row is short because its cells hold a number and four dots: at the old 4rem
+           the six weeks needed scrolling to say nothing, and the list below is what wants the space. */}
         <div
-          className="bg-border grid min-h-0 flex-1 gap-px overflow-y-auto rounded-lg border [--cal-row:4rem] sm:[--cal-row:5.5rem]"
+          className="bg-border grid min-h-0 flex-1 gap-px overflow-y-auto rounded-lg border [--cal-row:2.5rem] sm:[--cal-row:5.5rem]"
           style={{ gridTemplateRows: `auto repeat(${weeks.length}, minmax(var(--cal-row), 1fr))` }}
         >
           <div className="grid grid-cols-7 gap-px">
@@ -377,32 +402,81 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
                       over === key && 'ring-primary bg-accent ring-1 ring-inset',
                     )}
                   >
-                    <div className="mb-0.5 flex shrink-0 items-center justify-between gap-1">
-                      <span
-                        className={cn(
-                          'flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums',
-                          outside && 'text-muted-foreground/50',
-                          key === t && 'bg-foreground text-background font-medium',
-                        )}
-                      >
-                        {d.getDate()}
-                      </span>
-                      <Pnl pnl={pnlByDay.get(key)} />
-                    </div>
+                    {phone ? (
+                      /* The whole square is the button — a fifty-pixel cell has no room for a
+                         target inside it. The money stays off it and goes in the list's own
+                         heading: "−$…" truncated to nothing is worse than not printed. */
+                      <button type="button" onClick={() => setPick(key)} aria-pressed={day === key}
+                        className="flex min-h-0 flex-1 flex-col items-center gap-1 pt-0.5">
+                        <span
+                          className={cn(
+                            'flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums',
+                            outside && 'text-muted-foreground/50',
+                            key === t && 'bg-foreground text-background font-medium',
+                            day === key && key !== t && 'ring-foreground/40 ring-1',
+                          )}
+                        >
+                          {d.getDate()}
+                        </span>
+                        <span className="flex flex-wrap justify-center gap-0.5">
+                          {marksFor(key).map((m, n) => (
+                            <span key={n} className={cn('size-1 rounded-full', m)} />
+                          ))}
+                        </span>
+                      </button>
+                    ) : (
+                      <>
+                        <div className="mb-0.5 flex shrink-0 items-center justify-between gap-1">
+                          <span
+                            className={cn(
+                              'flex size-5 shrink-0 items-center justify-center rounded-full text-xs tabular-nums',
+                              outside && 'text-muted-foreground/50',
+                              key === t && 'bg-foreground text-background font-medium',
+                            )}
+                          >
+                            {d.getDate()}
+                          </span>
+                          <Pnl pnl={pnlByDay.get(key)} />
+                        </div>
 
-                    {(events.get(key) ?? []).map((e, n) => (
-                      <EventChip key={`${e.at ?? ''}-${e.summary}-${n}`} e={e} withTime />
-                    ))}
-                    {(byDay.get(key) ?? []).map((it) => (
-                      <ItemChip key={it.id} it={it} filed={project(s, it.pid)} onOpen={onOpen} />
-                    ))}
-                    {(subsByDay.get(key) ?? []).map((sub) => <SubChip key={sub.id} sub={sub} />)}
+                        {(events.get(key) ?? []).map((e, n) => (
+                          <EventChip key={`${e.at ?? ''}-${e.summary}-${n}`} e={e} withTime />
+                        ))}
+                        {(byDay.get(key) ?? []).map((it) => (
+                          <ItemChip key={it.id} it={it} filed={project(s, it.pid)} onOpen={onOpen} />
+                        ))}
+                        {(subsByDay.get(key) ?? []).map((sub) => <SubChip key={sub.id} sub={sub} />)}
+                      </>
+                    )}
                   </div>
                 )
               })}
             </div>
           ))}
         </div>
+        {/* The tapped day, written out — the half of the phone's month view that has the words in
+            it. Its own scroll, so a day with a dozen things on it cannot push the grid off screen. */}
+        {phone && (
+          <div className="flex max-h-[45%] shrink-0 flex-col gap-0.5 overflow-y-auto rounded-lg border p-2">
+            <div className="flex items-baseline justify-between gap-2 pb-1">
+              <span className="font-heading text-xs tracking-wide uppercase">
+                {new Date(`${day}T00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+              </span>
+              <Pnl pnl={pnlByDay.get(day)} />
+            </div>
+            {(events.get(day) ?? []).map((e, n) => (
+              <EventChip key={`${e.at ?? ''}-${e.summary}-${n}`} e={e} withTime />
+            ))}
+            {(byDay.get(day) ?? []).map((it) => (
+              <ItemChip key={it.id} it={it} filed={project(s, it.pid)} onOpen={onOpen} withTime />
+            ))}
+            {(subsByDay.get(day) ?? []).map((sub) => <SubChip key={sub.id} sub={sub} />)}
+            {!marksFor(day).length && (
+              <p className="text-muted-foreground py-1 text-xs">Nothing on this day.</p>
+            )}
+          </div>
+        )}
+       </>
       ) : (
         /* The week: an hour column down the left, seven days across, and an all-day strip above the
            grid for everything that named a day but no time. The header and the strip stay put while
