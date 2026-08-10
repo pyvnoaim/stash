@@ -716,7 +716,10 @@ export default function MarketPage() {
               same height and radius sitting between them read as a third one. This is the thing the
               whole row is *about*, so it says so with the logo and its name and nothing else —
               borderless, narrower, and quiet until you go near it. */}
-          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted h-8 w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
+          {/* 36px, the height of a tray: a h-7 button in p-1. Written as the data-variant because
+              SelectTrigger's own `data-[size=default]:h-8` is an attribute selector and outranks a
+              plain `h-9` — which is why every attempt to match this row left it a size short. */}
+          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none data-[size=default]:h-9 focus-visible:ring-0 [&_svg]:size-3.5">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
