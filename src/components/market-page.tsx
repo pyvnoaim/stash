@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, Bell, BellRing, ChevronDown, CircleSlash2, CloudOff, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -16,7 +16,7 @@ import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { addAlarm, addWatch, armWatch, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
+import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -61,13 +61,17 @@ const TABS = [
   { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, and what is trending on-chain' },
   { id: 'people', label: 'People', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
   { id: 'record', label: 'Log', hint: 'Every finished trade: what it paid, why you took it, and a card of it to share. Hit rate and expectancy by rule.' },
+  { id: 'paper', label: 'Paper', hint: 'The rule tested forward: every setup the desk endorsed, filed automatically and followed to its stop or target. Nothing traded.' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
-/* How long an armed setup gets before it is treated as never having filled. Six bars, whatever the
-   bars are: the entry is a moving average frozen at the moment it was saved, and six bars is about
-   how long that number stays the number — on the 4h chart a day, on the daily most of a week. */
-const KILL_BARS = 6
+
+/** "4h 20m", "12m", "any moment" — a countdown nobody has to subtract two clock times to read. */
+const left = (ms: number) => {
+  if (ms <= 0) return 'any moment'
+  const m = Math.round(ms / 60_000)
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
 
 
 /* The service worker keeps the last candles it fetched, so the chart still draws with no network.
@@ -159,8 +163,6 @@ export default function MarketPage() {
   const cfg = HORIZONS[horizon]
   // the exchange's word on what's held, for drawing the real position over whatever the plan says
   const exch = useExchangePositions()
-  // and what the server's sweeper has done with the setups armed against it
-  const { swept, stuck: sweepStuck, cancelNow, busy } = useSweep(watches.some((w) => w.killAt))
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -550,9 +552,6 @@ export default function MarketPage() {
     hold: 'text-foreground',
     wait: 'text-amber-600 dark:text-amber-500',
   } as const
-  // an existing alert for this asset, side and horizon — the button toggles that one, and an alert
-  // saved on the other horizon is left alone rather than being silently replaced
-  const watched = watches.find((w) => w.asset === current.id && w.dir === side && w.horizon === cfg.label)
   /* Money already on this asset. The alert button is hidden while there is: saving a plan on the
      same asset, side and horizon replaces the row it finds, and the row it would find is the
      position — a real trade quietly overwritten by a hypothetical one. The position is watched at
@@ -712,7 +711,11 @@ export default function MarketPage() {
         </div>
         <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
         <Select value={asset} onValueChange={setAsset}>
-          <SelectTrigger className="h-8 w-44">
+          {/* Not a pill: the groups either side of it are one-of-N switches, and an outlined box the
+              same height and radius sitting between them read as a third one. This is the thing the
+              whole row is *about*, so it says so with the logo and its name and nothing else —
+              borderless, narrower, and quiet until you go near it. */}
+          <SelectTrigger className="hover:bg-muted h-8 w-auto gap-1.5 border-0 bg-transparent px-2 font-medium shadow-none focus-visible:ring-0">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
@@ -891,57 +894,7 @@ export default function MarketPage() {
                   : `${side === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, ${side === 'long' ? 'above' : 'below'} the session VWAP`}
               </span>
             </span>
-            {/* saving snapshots the levels as they stand — the entry rides a moving average, so a
-                watch that kept re-reading it would quietly become a different trade every bar */}
-            {!inIt && (
-            <Hint label={watched
-              ? `Saved. These three levels are watched as they stand — entry ${fmt(plan.entry)}, stop ${fmt(plan.stop)}, target ${fmt(plan.target)} — and the bell says when price reaches the entry, and again when it ends at one of the other two. Nothing is ordered and nothing is bought: this is a note that shouts. Click to forget it.`
-              : 'Watch these levels. The bell tells you when price comes to the entry, and how it went when it is over — on this device and on your phone. It places no order.'}>
-              <Button size="sm" variant={watched ? 'secondary' : 'outline'} className="ml-auto"
-                aria-pressed={!!watched}
-                onClick={() => (watched
-                  ? removeWatch(watched.id)
-                  : side !== 'flat' && addWatch({
-                      id: uid(), asset: current.id, label: current.label, horizon: cfg.label,
-                      rule: cfg.strategy, dir: side, interval,
-                      entry: plan.entry, stop: plan.stop, target: plan.target, ts: Date.now(),
-                    }))}>
-                {watched ? <BellRing className="text-emerald-600 dark:text-emerald-400" /> : <Bell />}
-                {watched ? 'Alerting' : 'Alert me'}
-              </Button>
-            </Hint>
-            )}
-            {/* The other half, and only ever offered on a saved setup: the alert says the entry
-                came, this says what happens when it doesn't. Off unless pressed — everything the
-                sweeper is allowed to touch is decided here. */}
-            {!inIt && watched && (() => {
-              /* The bar the setup was *saved* on, which is not always the one on screen: the chart
-                 moves under a saved row, and the sweeper reads the row. Arming off the picker
-                 instead would hand a setup saved on the daily a six-hour life because the 1h
-                 button happened to be lit. */
-              const iv = (watched.interval ?? interval) as Interval
-              const entry = fmt(watched.entry)
-              return (
-              <Hint label={watched.killAt
-                ? `Armed. Unfilled by ${new Date(watched.killAt).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}, or a ${iv} close ${side === 'long' ? 'below' : 'above'} the ${cfg.slow}-MA before then, and the server cancels the order resting at ${entry} — the one at that price on that side, and only while it is untouched. Needs a Bitget key that can trade; MEXC has its cancel endpoint closed, so there you get the knock and do it by hand. Click to disarm.`
-                : `Cancel the resting order if this setup never fills. ${KILL_BARS} ${iv} bars from now, or sooner if a ${iv} bar closes ${side === 'long' ? 'below' : 'above'} the ${cfg.slow}-MA and the thesis is gone. The server cancels the one resting at ${entry} and tells you either way — it needs a Bitget key with trade rights, and it will not touch an order that has begun to fill.`}>
-                <Button size="sm" variant={watched.killAt ? 'secondary' : 'ghost'}
-                  className={cn('h-8', !watched.killAt && 'text-muted-foreground')}
-                  aria-pressed={!!watched.killAt}
-                  onClick={() => armWatch(watched.id, watched.killAt ? null : Date.now() + KILL_BARS * BAR_MS[iv])}>
-                  <CircleSlash2 className={cn(watched.killAt && 'text-amber-600 dark:text-amber-500')} />
-                  {watched.killAt ? 'Auto-cancel on' : 'Auto-cancel'}
-                </Button>
-              </Hint>
-              )
-            })()}
           </div>
-          {/* and what that press is actually doing, on its own line: the clock running down, or the
-              sentence saying how it ended */}
-          {!inIt && watched && (
-            <AutoCancel w={watched} iv={(watched.interval ?? interval) as Interval} slow={cfg.slow}
-              swept={swept} stuck={sweepStuck} cancelNow={cancelNow} busy={busy} />
-          )}
           {/* the levels as an instrument row, label over number — the same read-out pattern as the
               Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
               means nothing until you see it's 1.310 for 900. */}
@@ -1000,10 +953,11 @@ export default function MarketPage() {
           </div>
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
-          {!inIt && !watched && (
+          {!inIt && (
             <p className="text-muted-foreground mt-2 text-xs">
-              Alert me saves these levels as they stand and the bell tells you when price reaches
-              the entry, the target, or the stop. Nothing is traded.
+              Nothing to press. When the desk endorses a setup it files itself on the Paper tab and
+              is followed to its stop or its target — including the ones that appear while every
+              device here is shut. Nothing is ever traded.
             </p>
           )}
           {against && (
@@ -1592,6 +1546,12 @@ export default function MarketPage() {
         </div>
       )}
 
+      {seen.paper && (
+        <div className={cn('flex flex-col gap-4', tab !== 'paper' && 'hidden')}>
+          <PaperDesk />
+        </div>
+      )}
+
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
   )
@@ -1847,148 +1807,6 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
 }
 
 /** What the server's sweeper did to a setup, as the app reads it back. */
-type SweptRow = { id: string; title: string; body: string; at: number }
-
-/** "4h 20m", "12m", "now" — a countdown nobody has to subtract two clock times to read. */
-const left = (ms: number) => {
-  if (ms <= 0) return 'any moment'
-  const m = Math.round(ms / 60_000)
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
-/**
- * The armed setup, made visible: how long it has left, what became of it, and the two ways out —
- * end it now, or call the whole thing off.
- *
- * Its own component for the clock. A countdown that only moved when something else happened to
- * re-render the page is a countdown that lies most of the time, and a minute is as often as one
- * measured in hours needs to move.
- */
-function AutoCancel({ w, iv, slow, swept, stuck, cancelNow, busy }: {
-  w: Watch
-  iv: Interval
-  slow: number
-  swept: SweptRow[]
-  /** Nothing is reading the exchange — see the note by the warning below. */
-  stuck: boolean
-  cancelNow: (id: string) => void
-  busy: string | null
-}) {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const h = window.setInterval(() => setNow(Date.now()), 60_000)
-    return () => window.clearInterval(h)
-  }, [])
-  const done = swept.find((s) => s.id === w.id)
-  if (!w.killAt && !done) return null
-  /* The bar fills across the life it was given, so the read is "how much of this setup's rope is
-     left" rather than a date to compare against a clock.
-     Measured back from `killAt` across the window arming grants, *not* forward from `ts`: a setup
-     saved on Monday and armed on Thursday was not three days into a one-day life, but that is
-     exactly what the saved-at stamp would have drawn — a bar that starts nearly full. */
-  const span = KILL_BARS * BAR_MS[iv]
-  const gone = Math.min(1, Math.max(0, w.killAt ? 1 - (w.killAt - now) / span : 1))
-  return (
-    <div className="mt-2 rounded-md border px-2.5 py-2">
-      {done ? (
-        <p className="text-xs">
-          <span className="font-medium">{done.title}</span>
-          <span className="text-muted-foreground"> · {done.body}</span>
-        </p>
-      ) : (
-        <>
-          <div className="flex items-baseline gap-2 text-xs">
-            <span className="font-medium">Auto-cancel in {left(w.killAt! - now)}</span>
-            <span className="text-muted-foreground">
-              or on a {iv} close through the {slow}-MA
-            </span>
-            <span className="ml-auto flex gap-1">
-              <Hint label="End it now: the server looks for the order resting at this entry and takes it off the book, on the same rules the timer uses. Nothing to wait for.">
-                <Button size="sm" variant="outline" className="h-6 px-2 text-xs"
-                  disabled={busy === w.id} onClick={() => cancelNow(w.id)}>
-                  {busy === w.id ? <Loader2 className="animate-spin" /> : null}
-                  Cancel now
-                </Button>
-              </Hint>
-              <Hint label="Leave the order alone and stop watching the clock — the setup stays saved and the bell still watches its levels.">
-                <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-muted-foreground"
-                  onClick={() => armWatch(w.id, null)}>
-                  Call it off
-                </Button>
-              </Hint>
-            </span>
-          </div>
-          <div className="bg-muted mt-1.5 h-1 overflow-hidden rounded-full">
-            <div className={cn('h-full rounded-full transition-[width] duration-1000',
-              stuck ? 'bg-muted-foreground/25' : gone > 0.85 ? 'bg-amber-500' : 'bg-muted-foreground/40')}
-              style={{ width: `${gone * 100}%` }} />
-          </div>
-          {/* A clock nobody is reading should not go on looking like a clock. The server says so
-              itself — three passes where it could not reach the exchange at all — and until then a
-              revoked key left this counting confidently down to something that was never going to
-              happen. */}
-          {stuck && (
-            <p className="text-amber-600 dark:text-amber-500 mt-1.5 text-xs">
-              Nothing is watching this: the exchange has not answered for a while. The clock keeps
-              running, but the cancel will not happen until the key works again — check Settings → Markets.
-            </p>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
-/**
- * The sweeper's own history, and the button that ends one setup now.
- *
- * Polled, because the outcomes live on the server: it is the thing holding the key, and it acts
- * with the app closed. Without this the only way to learn that an order had been cancelled was a
- * push notification, which is a strange thing to require of someone sitting in front of the page
- * it happened on.
- *
- * `cancelNow` names the setup rather than moving its clock forward: arming writes into the synced
- * document and the sync arrives when it arrives, while a pressed button is someone waiting. The
- * answer carries the fresh list, so the card says what happened without a second round trip.
- */
-function useSweep(armed: boolean) {
-  const [swept, setSwept] = useState<SweptRow[]>([])
-  /** The server cannot read the exchange at all — so nothing is watching what is armed. */
-  const [stuck, setStuck] = useState(false)
-  const [busy, setBusy] = useState<string | null>(null)
-  const take = (j: { swept?: SweptRow[]; stuck?: boolean }) => {
-    setSwept(j.swept ?? [])
-    setStuck(!!j.stuck)
-  }
-  const load = () => fetch('/api/sweep')
-    // signed out, offline, no server: there is nothing to show and nothing to say about it
-    .then(async (r) => { if (r.ok) take(await r.json()) })
-    .catch(() => {})
-  /* Asked once whatever happens — an outcome from yesterday belongs on the card whether or not
-     anything is armed right now — and then kept up only while something actually is. Nothing is
-     armed by default, so for most people this was a request a minute, forever, about a table the
-     server was never going to write a row into. */
-  useEffect(() => {
-    void load()
-    if (!armed) return
-    const h = window.setInterval(() => void load(), 60_000)
-    return () => window.clearInterval(h)
-  }, [armed])
-  const cancelNow = async (watch: string) => {
-    setBusy(watch)
-    try {
-      const r = await fetch('/api/sweep', { method: 'POST', body: JSON.stringify({ watch }) })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(j.error ?? r.status)
-      take(j)
-    } catch (e) {
-      toast.error(`Could not reach the sweeper — ${String((e as Error).message)}`)
-    } finally {
-      setBusy(null)
-    }
-  }
-  return { swept, stuck, cancelNow, busy }
-}
 
 /**
  * The exchange feed, polled while something is looking. Only an answered request moves anything:
@@ -2360,6 +2178,191 @@ const LOG_SORTS = [
   { id: 'won', label: 'Most made', hint: 'Biggest winners first, by what the trade paid' },
   { id: 'lost', label: 'Most lost', hint: 'Worst first, by what the trade cost' },
 ] as const
+
+/** One paper trade as the server keeps it. Mirrors server/paper.ts — the route sends these rows
+ *  through unchanged, so the two shapes are the same shape or the tab draws nonsense. */
+type PaperRow = {
+  id: string; asset: string; label: string; dir: 'long' | 'short'
+  rule: string; interval: string
+  entry: number; stop: number; target: number; net: number | null
+  ts: number; entryAt: number | null; closedAt: number | null
+  level: 'target' | 'stop' | 'gone' | null; exit: number | null; r: number | null
+}
+
+/**
+ * The rule tested forward.
+ *
+ * The Log is what you did; this is what the desk would have done, on every setup it endorsed,
+ * whether or not anyone was at a screen for it. That difference is the whole point of it: a record
+ * of the setups somebody happened to notice measures the noticing, not the rule.
+ *
+ * Read-only, and filed by the server (see server/paper.ts) — the app cannot add a row here, which
+ * is what keeps the sample honest. Nothing here was ever traded and nothing here is money: it is
+ * in R, because R is the only unit two setups on two different assets can be added up in.
+ */
+function PaperDesk() {
+  const [rows, setRows] = useState<PaperRow[] | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let on = true
+    const tick = () => fetch('/api/paper')
+      .then(async (r) => {
+        if (!r.ok) { if (on) { setFailed(true); setRows([]) } ; return }
+        const j = await r.json()
+        if (on) { setFailed(false); setRows(j.rows ?? []) }
+      })
+      .catch(() => { if (on) setFailed(true) })
+    tick()
+    // the desk files on its own quarter-hour clock; a minute is plenty to see it land
+    const h = setInterval(tick, 60_000)
+    return () => { on = false; clearInterval(h) }
+  }, [])
+
+  if (rows === null) return <Card className="py-3"><CardContent className="text-muted-foreground px-3 text-sm">Reading the desk…</CardContent></Card>
+  if (failed) {
+    return (
+      <Card className="py-3">
+        <CardContent className="text-muted-foreground px-3 text-sm">
+          Sign in to see this. The paper desk runs on the server — that is what lets it file the
+          setups that appear while every device here is shut.
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const live = rows.filter((r) => r.closedAt == null)
+  const done = rows.filter((r) => r.closedAt != null && r.level !== 'gone' && r.r != null)
+  const gone = rows.filter((r) => r.level === 'gone').length
+  /* Expectancy over the ones that ran. The unfilled are counted beside it and never in it: a plan
+     whose entry never came round is not a trade that lost, which is the rule the whole app keeps. */
+  const exp = done.length ? done.reduce((n, r) => n + (r.r ?? 0), 0) / done.length : null
+  const won = done.filter((r) => r.level === 'target').length
+  const lanes = [...done.reduce((m, r) => m.set(r.rule, [...(m.get(r.rule) ?? []), r]), new Map<string, PaperRow[]>())]
+    .map(([name, rs]) => ({ name, n: rs.length, hit: rs.filter((r) => r.level === 'target').length,
+      avg: rs.reduce((s, r) => s + (r.r ?? 0), 0) / rs.length }))
+    .sort((a, b) => b.n - a.n)
+  const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+
+  return (
+    <>
+      <Card className="py-3">
+        <CardContent className="px-3">
+          <div className="mb-2 flex flex-wrap items-baseline gap-2">
+            <span className="font-heading text-sm tracking-wide uppercase">Forward test</span>
+            <span className="text-muted-foreground text-xs">
+              {done.length} finished · {live.length} running{gone ? ` · ${gone} never filled` : ''}
+            </span>
+            {exp !== null && (
+              <span className={cn('ml-auto font-mono text-sm tabular-nums',
+                exp >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {rLabel(exp)}/trade
+              </span>
+            )}
+            {!!done.length && (
+              <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                {Math.round((won / done.length) * 100)}% hit
+              </span>
+            )}
+          </div>
+          {!rows.length ? (
+            <p className="text-muted-foreground py-4 text-sm">
+              Nothing filed yet. The desk reads every keyless chart a few times an hour and files the
+              setups it grades top — the ones the Scan card prints in green. Quiet days file nothing,
+              which is itself the answer to how often this rule actually speaks.
+            </p>
+          ) : (
+            <div className="text-muted-foreground flex flex-wrap gap-1.5 text-xs">
+              {lanes.map((l) => (
+                <span key={l.name} className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
+                  <span className="text-foreground font-medium">{l.name}</span>
+                  <span>{l.n}×</span>
+                  <span>{Math.round((l.hit / l.n) * 100)}% hit</span>
+                  <span className={l.avg >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
+                    {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {!!live.length && (
+        <Card className="py-3">
+          <CardContent className="px-3">
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="font-heading text-sm tracking-wide uppercase">Running</span>
+              <span className="text-muted-foreground text-xs">
+                {live.filter((r) => r.entryAt != null).length} in, {live.filter((r) => r.entryAt == null).length} waiting for the entry
+              </span>
+            </div>
+            {live.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-dashed py-1.5 text-sm last:border-0">
+                <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] tracking-wide uppercase',
+                  r.dir === 'long' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive')}>
+                  {r.dir}
+                </span>
+                <span className="font-medium">{r.label}</span>
+                <span className="text-muted-foreground text-xs">{r.rule} · {r.interval}</span>
+                <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                  {fmtPrice(r.entry)} → {fmtPrice(r.target)}, stop {fmtPrice(r.stop)}
+                </span>
+                <span className={cn('ml-auto text-xs', r.entryAt != null ? 'text-foreground' : 'text-muted-foreground')}>
+                  {r.entryAt != null ? `in since ${when(r.entryAt)}` : 'waiting for the entry'}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {!!done.length && (
+        <Card className="py-3">
+          <CardContent className="px-3">
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="font-heading text-sm tracking-wide uppercase">How they went</span>
+            </div>
+            <div className={cn(LOG_GRID, 'text-muted-foreground font-heading border-b px-1.5 pb-1 text-[10px] tracking-wider uppercase')}>
+              <span>Trade</span>
+              <span>Side</span>
+              <span className="hidden sm:block">Ran</span>
+              <span className="text-right">Ended</span>
+              <span className="text-right">R</span>
+              <span className="text-right">Rule</span>
+            </div>
+            {done.map((r) => {
+              const hit = r.level === 'target'
+              return (
+                <div key={r.id} className={cn(LOG_GRID, 'hover:bg-muted/40 border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
+                  <span className="truncate font-medium">{r.label}</span>
+                  <span className="text-muted-foreground truncate text-xs">
+                    {r.dir === 'long' ? 'Long' : 'Short'} · {r.interval}
+                  </span>
+                  <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
+                    {when(r.entryAt ?? r.ts)} → {when(r.closedAt!)}
+                  </span>
+                  <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {hit ? 'target' : 'stopped'}
+                  </span>
+                  <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r ?? 0)}</span>
+                  <span className="text-muted-foreground truncate text-right text-xs">{r.rule}</span>
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      <p className="text-muted-foreground px-1 text-xs">
+        Filed by the server off the same read the Scan card shows, a few times an hour, whether or
+        not this app is open. Nothing is ordered and nothing is money — the entry is the plan\'s
+        entry, the exit is the price that was actually polled when a level was reached, and a setup
+        whose entry never came round is counted separately rather than as a loss.
+      </p>
+    </>
+  )
+}
 
 function Record() {
   const { results: every, stake, dials } = useStash()

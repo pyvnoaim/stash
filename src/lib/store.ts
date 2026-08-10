@@ -126,14 +126,6 @@ export interface Watch {
    */
   interval?: string
   /**
-   * When an unfilled setup gives up, as a timestamp — set only on one armed for auto-cancel, which
-   * is off by default and always a deliberate press. Past it, the server takes the matching resting
-   * order off the exchange; before it, a closed bar the wrong side of the slow MA does the same.
-   * Either way it is only ever about a setup that never filled: `entryAt` set means the trade
-   * started and the stop owns it from there. See server/sweep.ts, which is the whole rule.
-   */
-  killAt?: number
-  /**
    * When a live price was first actually seen at the entry — the window really opening. Absent
    * until it is, which is what separates a setup that ran from one that never started: a plan
    * whose entry never came round is not a trade that lost, it is a trade nobody was ever in.
@@ -579,10 +571,9 @@ export function load(data: unknown): State {
       // checked against the real list: the arm button turns this into a span of bars, and an
       // interval that isn't one gives NaN — a button that quietly does nothing when pressed
       ...((INTERVALS as readonly string[]).includes(String(w.interval)) ? { interval: String(w.interval) } : {}),
-      /* A kill time that isn't a real timestamp is dropped, not kept: this is the one field on a
-         watch that a server acts on by cancelling something, and a NaN compared against `now` is
-         either never true or always. Absent is the safe half of that, and the default. */
-      ...(typeof w.killAt === 'number' && isFinite(w.killAt) && w.killAt > 0 ? { killAt: w.killAt } : {}),
+      /* killAt was the auto-cancel's deadline, and the sweeper that read it is gone — the desk no
+         longer arms anything at an exchange. Dropped on load rather than carried: a field nothing
+         writes and nothing reads is a field that will be misread eventually. */
       // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
       ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
       ...positionOf(w),
@@ -1144,23 +1135,6 @@ export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))
 export const resetDials = () => set((s) => ({ ...s, dials: { ...DIALS } }))
 export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
-
-/**
- * Hand one setup to the server's sweeper, or take it back. `until` is the moment an unfilled setup
- * gives up; null disarms, and disarmed is what every setup is until this is pressed.
- *
- * The only writer of `killAt`, and deliberately its own action rather than a field on `addWatch`:
- * saving a setup and letting something cancel orders for it are two different decisions, and the
- * second one should read as a press in the code as much as it does on the screen.
- */
-export const armWatch = (id: string, until: number | null) => set((s) => ({
-  ...s,
-  watches: s.watches.map((w) => {
-    if (w.id !== id) return w
-    const { killAt: _, ...rest } = w
-    return until == null ? rest : { ...rest, killAt: until }
-  }),
-}))
 
 export const addAlarm = (a: Alarm) => set((s) => ({ ...s, alarms: [a, ...s.alarms].slice(0, 100) }))
 export const removeAlarm = (id: string) => set((s) => ({ ...s, alarms: s.alarms.filter((a) => a.id !== id) }))

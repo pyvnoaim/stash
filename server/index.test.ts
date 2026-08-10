@@ -324,40 +324,14 @@ const woke = (await (await get('/api/alerts?tz=0', leon)).json()).alerts
 assert.ok(woke.some((a: any) => a.target === 'today' && /overdue/.test(a.title)), 'the overdue line')
 assert.ok(woke.every((a: any) => a.key && a.title && a.target), 'an alert with nothing to show')
 
-/* The sweeper's two routes. The account here has no exchange key, which is the case worth pinning:
-   the setup is still settled and still says what became of it — "do it by hand" — because a knock
-   nobody can act on is better than an armed setup that silently does nothing. */
-assert.equal((await get('/api/sweep')).status, 401)
-assert.equal((await post('/api/sweep', { watch: 'x' })).status, 401)
-assert.deepEqual((await (await get('/api/sweep', leon)).json()).swept, [])
-// nothing armed is nothing failing: the "nobody is watching this" warning stays off until the
-// sweeper has actually tried and failed to read an account
-assert.equal((await (await get('/api/sweep', leon)).json()).stuck, false)
-// a setup that names nothing of theirs is a 404, not somebody else's order
-assert.equal((await post('/api/sweep', { watch: 'nope' }, leon)).status, 404)
-assert.equal((await post('/api/sweep', {}, leon)).status, 400)
-await put(leon, (await (await get('/state', leon)).json()).version, {
-  items: ['a', 'b'],
-  watches: [
-    { id: 'sw1', asset: 'DOGEUSDT', label: 'Dogecoin', horizon: 'Trading', interval: '4h',
-      dir: 'short', entry: 0.1985, stop: 0.2023, target: 0.1909, ts: Date.now() - 36e5 },
-    // already at its entry: a trade that started, which the button may not reach for
-    { id: 'sw2', asset: 'BTCUSDT', label: 'Bitcoin', horizon: 'Trading', dir: 'long',
-      entry: 100, stop: 90, target: 120, ts: Date.now(), entryAt: Date.now() },
-  ],
-})
-assert.equal((await post('/api/sweep', { watch: 'sw2' }, leon)).status, 404)
-const swept = (await (await post('/api/sweep', { watch: 'sw1' }, leon)).json()).swept
-assert.equal(swept.length, 1)
-assert.equal(swept[0].id, 'sw1')
-assert.match(swept[0].title, /called off/)
-assert.match(swept[0].body, /by hand/)
-// and it is theirs alone — mia's list is empty, and she cannot settle a setup she does not have
-assert.deepEqual((await (await get('/api/sweep', mia)).json()).swept, [])
-assert.equal((await post('/api/sweep', { watch: 'sw1' }, mia)).status, 404)
-// the outcome rides out to the phone as well, on the same list the worker reads
-assert.ok((await (await get('/api/alerts?tz=0', leon)).json()).alerts
-  .some((a: any) => a.key === 'sweep-sw1:0'), 'the sweep outcome as a knock')
+/* The paper desk. Read-only and signed-in only — the rows are the server's own record of what the
+   desk did, so there is nothing for a client to write and nobody else's desk to read. Empty here
+   because this process has filed nothing: the scan behind it needs a network. */
+assert.equal((await get('/api/paper')).status, 401)
+assert.deepEqual((await (await get('/api/paper', leon)).json()).rows, [])
+assert.equal((await post('/api/paper', {}, leon)).status, 405)   // read-only, and it says so
+// and it is one desk per person: mia's is her own, and empty
+assert.deepEqual((await (await get('/api/paper', mia)).json()).rows, [])
 
 // an endpoint is a string anyone could send: only the account holding it may drop it
 const unsub = (cookie: string) => fetch(`${url}/api/push`, {

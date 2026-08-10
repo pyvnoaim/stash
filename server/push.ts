@@ -282,12 +282,7 @@ export function alertsOf(
   return out
 }
 
-/**
- * @param extra Anything another module has to say to a given user, folded in with what the
- *   document itself produces — the sweeper's outcomes arrive this way. Same keys, same dedupe,
- *   same quiet hours: a knock is a knock whoever decided it was one.
- */
-export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = () => []) {
+export function createPush(db: DatabaseSync) {
   db.exec(`
     create table if not exists meta (k text primary key, v text not null);
     create table if not exists pushes (
@@ -547,7 +542,7 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
    *  another module already decided, which stands on its own: an order that has been cancelled at
    *  an exchange is news whether or not the document it came from still parses. */
   function alertsFor(user: number, tz: number): Alert[] {
-    const out = extra(user)
+    const out: Alert[] = []
     const row = q.doc.get(user) as { json: string } | undefined
     if (!row) return out
     try {
@@ -599,7 +594,7 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
         // the price has reached is exactly the thing that cannot wait for office hours — and
         // neither is an hour someone set themselves, whatever hour they set it to, nor an order
         // that has just been cancelled at an exchange, or is still resting there wanting a hand.
-        && (a.key.startsWith('watch-') || a.key.startsWith('at-') || a.key.startsWith('sweep-')
+        && (a.key.startsWith('watch-') || a.key.startsWith('at-')
           || localHour(r.tz) >= QUIET_UNTIL))
       if (!fresh.length) continue
       /* Before the knock, not after: the phone can be asking /api/alerts while this line is still

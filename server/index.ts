@@ -33,7 +33,7 @@ import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPo
 import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
-import { createSweep } from './sweep.ts'
+import { createPaper } from './paper.ts'
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -550,11 +550,11 @@ export function start({
 
   /* The one thing here that reaches back out to an exchange and changes something: armed setups
      that died unfilled, and the orders resting for them. Built before the push it speaks through
-     — everything it decides leaves as a knock. See server/sweep.ts. */
-  const sweep = createSweep(db)
+     — every setup the desk endorses, filed and followed in R. See server/paper.ts. */
+  const paper = createPaper(db)
   /* The notifications that reach a closed app: its own module, its own table, and the minute
      timer that decides when anything is worth a knock. See server/push.ts. */
-  const push = createPush(db, sweep.alerts)
+  const push = createPush(db)
 
   /* ponytail: in-memory, per-process — a restart forgives everyone, which at ten users is fine.
      Keyed by address *and* name so one flooded account never locks the rest out. */
@@ -1010,30 +1010,13 @@ export function start({
       return send(res, 405, { error: 'method not allowed' })
     }
 
-    /* What became of the armed setups, and the button that ends one now.
-       GET is the app showing its own history back to itself — the sweeper's outcomes used to
-       leave only as pushes, which meant anyone with notifications off never learned what had
-       happened to their order.
-       POST names one setup and settles it on the spot, rather than moving its `killAt` and waiting
-       for both the sync and the next five-minute pass: someone pressing "cancel now" is standing
-       there watching. The id is looked up in that account's own document, so it can only ever name
-       one of their own. */
-    if (path === '/api/sweep') {
+    /* The paper desk's own rows — read-only, because nothing in the app writes them: the server
+       files them off the same scan the notifications come from, and this is the app being shown
+       what its desk did while nobody was watching. */
+    if (path === '/api/paper' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      // `stuck` is the card's half of the same warning the knock carries: a countdown that nothing
-      // is acting on should not go on counting down as though something were
-      if (req.method === 'GET') return send(res, 200, { swept: sweep.recent(user.id), stuck: sweep.blocked(user.id) })
-      if (req.method === 'POST') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const id = String(b?.watch ?? '').trim()
-        if (!id) return send(res, 400, { error: 'which setup' })
-        const done = await sweep.now(user.id, id).catch(() => null)
-        if (!done) return send(res, 404, { error: 'no such setup, or it has already filled' })
-        return send(res, 200, { swept: sweep.recent(user.id), stuck: sweep.blocked(user.id) })
-      }
-      return send(res, 405, { error: 'method not allowed' })
+      return send(res, 200, { rows: paper.rows(user.id) })
     }
 
     /* What the service worker asks the moment a knock arrives. The notification is written from
@@ -1724,8 +1707,8 @@ export function start({
   })
 
   server.listen(port)
-  server.on('close', () => { push.stop(); sweep.stop() })
-  return Object.assign(server, { invite, push, sweep })
+  server.on('close', () => { push.stop(); paper.stop() })
+  return Object.assign(server, { invite, push, paper })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
