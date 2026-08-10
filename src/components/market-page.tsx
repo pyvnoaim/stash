@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, Bell, BellRing, ChevronDown, CircleSlash2, CloudOff, KeyRound, Loader2, Minus, NotebookPen, RefreshCw, Share2, TrendingDown, TrendingUp, Wallet, Waypoints, X } from 'lucide-react'
+import { AlarmClock, Bell, BellRing, ChevronDown, CircleSlash2, CloudOff, KeyRound, Loader2, Minus, NotebookPen, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -12,7 +12,6 @@ import { Avatar } from '@/components/settings-dialog'
 import { euro, isPosition, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
-import { Label } from '@/components/ui/label'
 import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
@@ -1004,8 +1003,7 @@ export default function MarketPage() {
         )}
         {/* what you are actually in on this asset, if anything — the card's last word, because the
             plan is what the tool thinks and this is what you did, and they are not always the same */}
-        <Position asset={current.id} label={current.label} horizon={cfg.label}
-          rule={cfg.strategy} price={last ?? null} plan={plan} dir={side} />
+        <Position asset={current.id} price={last ?? null} />
       </Card>
 
       {/* the open, when there is something to act on — in the opening-range preset, always: there
@@ -2187,64 +2185,19 @@ function AlarmButton({ asset, label, price }: { asset: string; label: string; pr
  * and when it ends at one of its levels it files itself into the record below. The only difference
  * is that the euros are the ones you put in rather than the hypothetical stake from Settings.
  *
+ * Nothing writes one of these by hand any more: the exchanges do. A form asking for the entry, the
+ * size and the leverage of a fill that already happened is the same numbers typed a second time,
+ * and typed wrong is a position the desk believes in and the venue never had. The card reads out
+ * what is already on the row and lets you drop it; Open positions above is where a real one comes
+ * from now.
+ *
  * ponytail: one position per asset, closed only by its own stop or target. Closing half, adding to
  * it, or getting out by hand at some third price are all real things a person does and none of them
- * are here — they want an exit price on the row and a partial-fill model, which is a bigger thing
- * than a number and a multiplier. "Not in it any more" drops the row without filing a result.
+ * are here. "Not in it any more" drops the row without filing a result.
  */
-function Position({ asset, label, horizon, rule, price, plan, dir }: {
-  asset: string
-  label: string
-  horizon: string
-  /** The strategy that produced the levels this was prefilled from — see Watch.rule. */
-  rule: string
-  price: number | null
-  plan: { entry: number; stop: number; target: number } | null
-  dir: 'long' | 'short' | 'flat'
-}) {
+function Position({ asset, price }: { asset: string, price: number | null }) {
   const { watches, dials } = useStash()
   const held = watches.find((w) => w.asset === asset && isPosition(w))
-  const [open, setOpen] = useState(false)
-  const [f, setF] = useState({ side: 'long', entry: '', stop: '', target: '', size: '', lev: '' })
-
-  // a comma is what a German keyboard puts there, and Number('4,1') is NaN
-  const num = (v: string) => Number(v.replace(',', '.'))
-  const [entry, stop, target, size, lev] = [f.entry, f.stop, f.target, f.size, f.lev].map(num)
-  const sane = [entry, stop, target, size].every((x) => isFinite(x) && x > 0) && lev >= 1
-  // the same geometry the store holds every saved row to: a long stops below and aims above
-  const geometry = f.side === 'long' ? stop < entry && target > entry : stop > entry && target < entry
-  const risk = sane && geometry ? (size * lev * Math.abs(entry - stop)) / entry : 0
-
-  const start = () => {
-    setF({
-      side: dir === 'short' ? 'short' : 'long',
-      entry: price != null ? String(price) : '',
-      // the plan's own stop and target, which is where they'd be if you took what it offered
-      stop: plan ? String(plan.stop) : '',
-      target: plan ? String(plan.target) : '',
-      size: '', lev: '',
-    })
-    setOpen(true)
-  }
-
-  const save = () => {
-    addWatch({
-      id: uid(), asset, label, horizon, rule, dir: f.side === 'short' ? 'short' : 'long',
-      entry, stop, target, ts: Date.now(),
-      // you are in it already: the window opened now, not whenever price next comes back to the entry
-      entryAt: Date.now(),
-      size, lev,
-    })
-    setOpen(false)
-  }
-
-  const field = (k: keyof typeof f, text: string, hint?: string) => (
-    <div className="grid gap-1">
-      <Label htmlFor={`pos-${k}`} className="text-xs">{text}</Label>
-      <Input id={`pos-${k}`} inputMode="decimal" value={f[k]} placeholder={hint}
-        onChange={(e) => setF((s) => ({ ...s, [k]: e.target.value }))} />
-    </div>
-  )
 
   if (held) {
     const r = price != null ? rOf(held, price) : null
@@ -2285,49 +2238,7 @@ function Position({ asset, label, horizon, rule, price, plan, dir }: {
     )
   }
 
-  return (
-    <CardContent className="border-t px-3 pt-3">
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-    <Popover open={open} onOpenChange={(v) => (v ? start() : setOpen(false))}>
-      {/* it was a ghost button on a line of its own, which reads as a stray label rather than the
-          one control on this card that writes down a real trade. Outlined, and told what it does. */}
-      <PopoverTrigger asChild>
-        <Button size="sm" variant="outline" className="h-7 gap-1.5"><Wallet className="size-3.5" />I'm in this trade</Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 grid gap-3">
-        <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
-          {(['long', 'short'] as const).map((d) => (
-            <Button key={d} size="sm" variant={f.side === d ? 'secondary' : 'ghost'}
-              className={cn('h-7 flex-1', f.side !== d && 'text-muted-foreground')}
-              onClick={() => setF((s) => ({ ...s, side: d }))}>
-              {d === 'long' ? 'Long' : 'Short'}
-            </Button>
-          ))}
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          {field('size', 'Money in', '100')}
-          {field('lev', 'Leverage', '10')}
-          {field('entry', 'Your entry')}
-          {field('stop', 'Stop')}
-        </div>
-        {field('target', 'Target')}
-        <p className="text-muted-foreground text-xs">
-          {!sane
-            ? 'Every field is a number above zero, and leverage is at least 1.'
-            : !geometry
-              ? `A ${f.side} stops ${f.side === 'long' ? 'below' : 'above'} the entry and aims ${f.side === 'long' ? 'above' : 'below'} it — as written, this one is already over.`
-              : `${euro(risk)} at risk to the stop. The bell watches all three levels from here.`}
-        </p>
-        <Button size="sm" disabled={!sane || !geometry} onClick={save}>Track it</Button>
-      </PopoverContent>
-    </Popover>
-    <p className="text-muted-foreground text-xs">
-      Money and leverage on the levels above, and the running profit sits here — this one is yours,
-      not a hypothetical.
-    </p>
-    </div>
-    </CardContent>
-  )
+  return null
 }
 
 /**
@@ -2532,6 +2443,22 @@ function Record() {
 }
 
 /**
+ * Where a live position stands: the price move in the trade's own favour, and the same distance in
+ * R where a stop says what the risk was. Null each where there is nothing to read it against — no
+ * mark on a row that came from a document, and no R on a venue that carries no resting stop, which
+ * is most of MEXC's book.
+ *
+ * The percent is the move from the entry, not the return on their margin — the same thing your own
+ * card shows, and for the same reason: leverage is theirs and the server never sent it.
+ */
+const deskNow = (w: DeskRow['open'][number]) => ({
+  pct: w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null,
+  r: w.mark == null || w.stop == null || w.stop === w.entry
+    ? null
+    : rOf({ dir: w.dir, entry: w.entry, stop: w.stop } as Watch, w.mark),
+})
+
+/**
  * Everyone else on this server who has switched their desk on: how their trades went, and what they
  * are in right now. In R and never in euros — the server does not send their size, so this cannot
  * say what anyone is up in money, which is the point.
@@ -2550,13 +2477,6 @@ function Record() {
  * renders nothing is one you press twice and stop trusting. Offline, signed out, and on a server
  * where nobody has switched it on all read the same, because from here they are the same.
  */
-/** Where a live position stands, in R, off the venue's mark. Null when there is no mark to read it
- *  against, or no risk to divide by. The same arithmetic as your own open trade — one rOf. */
-const deskR = (w: DeskRow['open'][number]) =>
-  w.mark == null || w.stop == null || w.stop === w.entry
-    ? null
-    : rOf({ dir: w.dir, entry: w.entry, stop: w.stop } as Watch, w.mark)
-
 function Desk({ live }: { live: boolean }) {
   const [rows, setRows] = useState<DeskRow[]>([])
   const { user } = useSyncExternalStore(subscribeSync, getSync)
@@ -2627,16 +2547,17 @@ function Desk({ live }: { live: boolean }) {
                     other desk off the page — the count below says what was left out */}
                 <div className="mt-1.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {p.open.slice(0, 6).map((w) => {
-                    /* how it is doing right now, off the venue's own mark — still in R, so it says
-                       how far the trade has come between its entry and its stop and never what that
-                       is worth to them. Absent on a row that came from a document: nothing there
-                       knows the price. */
-                    const r = deskR(w)
+                    /* how it is doing right now, off the venue's own mark. The percent and the R,
+                       the same two the own-book tile leads with — the money in front of them there
+                       is the one thing missing, and it is missing because it was never sent. */
+                    const { pct, r } = deskNow(w)
                     return (
                       <PositionTile key={w.id} side={w.dir} symbol={w.label}
-                        venue={w.horizon || null} up={(r ?? 0) >= 0}
-                        // their R is the whole headline: it is the only number this side may say
-                        lead={r != null ? rLabel(r) : null}
+                        venue={w.horizon || null} up={(pct ?? r ?? 0) >= 0}
+                        lead={[
+                          pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
+                          r != null && rLabel(r),
+                        ].filter(Boolean).join(' · ') || null}
                         from={w.entry} now={w.mark} r={null}
                         // no size, ever — the server strips it, which is what makes this desk safe to read
                         meta={[!w.entryAt && 'waiting for the entry']} />
