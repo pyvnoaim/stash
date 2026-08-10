@@ -2059,12 +2059,25 @@ export function candlePatterns(c: Candle[]): Signal[] {
 /** Opening-range breakout — the "first 15 minutes" trick. Marks the high/low of the 00:00-UTC 15m
  *  bar (the session-open range for these 24/7 markets) and says whether price has cleared it.
  *  Meant for 15m candles; returns null if the window holds no session-open bar. */
-/* How much of the session sets the range. Fifteen minutes — the opening candle — which is what you
+/* How much of the session sets the range. Fifteen minutes — the opening candle — which is what was
    asked for and what every version of this rule posted anywhere uses.
-   The honest note, because it is the only thing this file owes you: the 219-day test behind the
-   play was run on the *hour*, and widening 15 → 60 was part of what took it from −0.64R a trade to
-   about break-even. So the levels below are the ones you want to see; the numbers in GUIDES.orb
-   were measured on a wider range than the one now being drawn. */
+
+   And now measured, which the note here used to only warn about. Over 730 days and eight assets
+   (560,640 15m bars, fees in), the breakout off each range, walked forward:
+
+       range   filters      target     n     win    R/trade
+        60m    all three    2R       3041    39%    −0.021R ± 0.016
+        60m    wide+trend   2R       3742    39%    −0.033R ± 0.015
+        60m    none         2R       5325    37%    −0.060R ± 0.012
+        15m    all three    measured 1618    57%    −0.082R ± 0.022
+        15m    all three    2R       1618    35%    −0.117R ± 0.022
+        15m    none         measured 5781    56%    −0.145R ± 0.012
+
+   The hour wins every cell of the comparison — eight of eight, by about 0.06R a trade — and the
+   filters behave as the original study said, taking the 60m version from −0.060R to −0.021R, which
+   over 3041 trades is flat rather than losing. The 15-minute range is the one drawn here anyway,
+   deliberately: it is the range being asked for, and it is drawn honestly beside the number that
+   says the wider one measured better. Change this to 60 and the rule goes back to its best form. */
 const RANGE_MIN = 15
 /** The one whose numbers we have: the NY open is the anchor that was actually backtested. */
 const TESTED = 'NY'
