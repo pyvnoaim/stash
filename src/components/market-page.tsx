@@ -18,11 +18,11 @@ import { cn } from '@/lib/utils'
 import { addAlarm, addWatch, armWatch, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
   TREND_NETWORK, usMarketOpen, venueName,
   scanBars, scanRead,
-  type Asset, type Backtest, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
+  type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -682,8 +682,13 @@ export default function MarketPage() {
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
           {TABS.map(({ id, label, hint }) => (
             <Hint key={id} label={hint}>
+              {/* the same two states every other group in this row has — secondary for the one that
+                  is on, muted ghost for the rest. It used to be `default`, which put the one solid
+                  white pill in the toolbar on the tabs and made four identical-looking groups read
+                  as two different kinds of control. */}
               <Button
-                size="sm" variant={tab === id ? 'default' : 'ghost'} className="h-7"
+                size="sm" variant={tab === id ? 'secondary' : 'ghost'}
+                className={cn('h-7', tab !== id && 'text-muted-foreground')}
                 aria-current={tab === id}
                 onClick={() => { setTab(id); setSeen((s) => ({ ...s, [id]: true })) }}
               >
@@ -1506,9 +1511,6 @@ export default function MarketPage() {
           </CardContent>
         </Card>
       )}
-      {/* the backtest of the rule on the bars above it — the chart's own question, and it was a
-          tab away from the chart it is asking about */}
-      <Measure candles={candles} horizon={horizon} interval={interval} asset={asset} />
       </>
       )}
       </div>
@@ -1543,112 +1545,6 @@ export default function MarketPage() {
 
       <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
-  )
-}
-
-/**
- * What this rule did on these bars. Every threshold on this page came out of backtests run by hand,
- * once, on Bitcoin, whose code no longer exists — the numbers survive only as prose in the comments
- * in market.ts. The Record below measures real expectancy but only over trades you actually took
- * and that finished, which is a handful of trades and forward-only. This is the same question asked
- * of whatever chart you are actually looking at.
- *
- * On a button rather than on load: it re-reads the whole signal stack once per evaluated bar, which
- * is most of a second on a 5000-bar stock, and a chart that hitched every time you changed asset
- * would be a worse tool than one that stays quiet until asked.
- */
-// the horizon rather than its config, for the same reason scanOne takes one: which strategy is on
-// now decides what gets walked, not just how fast the averages are
-function Measure({ candles, horizon, interval, asset }: { candles: Candle[]; horizon: Horizon; interval: Interval; asset: string }) {
-  const cfg = HORIZONS[horizon]
-  const [result, setResult] = useState<Backtest | null>(null)
-  const [busy, setBusy] = useState(false)
-  /* A new asset, timeframe or horizon invalidates the answer — leaving it up would attach one
-     chart's numbers to another chart's name, which is the one way this card could actively mislead.
-     Keyed on those three and deliberately *not* on `candles`: the live poll hands back a fresh
-     array every five seconds, so depending on it cleared the result before it could be read and
-     made the card unusable without turning Live off first. A repriced forming bar cannot change a
-     measurement of what already happened, which is the whole reason this is safe. */
-  useEffect(() => { setResult(null) }, [asset, interval, horizon])
-
-  const run = () => {
-    setBusy(true)
-    // let the spinner paint before the main thread goes away for a second
-    setTimeout(() => {
-      setResult(backtest(candles, horizon, { window: 600 }))
-      setBusy(false)
-    }, 20)
-  }
-
-  if (!candles.length) return null
-  const pays = result && result.expectancy > 0
-  return (
-    <Card className="py-3">
-      <CardContent className="px-3">
-        <div className="flex flex-wrap items-baseline gap-2">
-          <span className="font-heading text-sm tracking-wide uppercase">What this rule did here</span>
-          {/* names the strategy, not just the horizon — the two run different rules now, and a card
-              headed "the investing read" over a walk of a day-trading rule was the exact confusion
-              backtest taking a Horizon was meant to make impossible */}
-          <span className="text-muted-foreground text-xs">
-            {cfg.strategy.toLowerCase()}, walked forward over {result ? result.bars : Math.max(0, Math.min(600, candles.length - cfg.slow - 2))} {interval} bars
-          </span>
-          <Button size="sm" variant="outline" className="ml-auto h-7" onClick={run} disabled={busy}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {busy ? 'Measuring…' : result ? 'Run again' : 'Measure'}
-          </Button>
-        </div>
-        {/* "Nothing to take" and "nothing was ever looked at" are different answers, and the second
-            one used to wear the first one's words. The slow MA has to warm up before the walk can
-            start, so a short history can leave no bars to evaluate at all. */}
-        {result && (result.bars === 0 ? (
-          <p className="text-muted-foreground mt-3 text-sm">
-            Not enough history to measure. The {cfg.slow}-MA needs {cfg.slow + 2} bars before the walk
-            can start, and this feed returned {candles.length}.
-          </p>
-        ) : result.trades.length === 0 ? (
-          <p className="text-muted-foreground mt-3 text-sm">
-            The rule never fired over these {result.bars} bars — no setup ever reached its entry.
-            That is an answer: on this chart there was nothing to take.
-          </p>
-        ) : (
-          <>
-            <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
-              {([
-                ['Trades', String(result.trades.length), ''],
-                ['R per trade', `${result.expectancy >= 0 ? '+' : ''}${result.expectancy.toFixed(2)}R`,
-                  pays ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'],
-                ['Median', `${result.median >= 0 ? '+' : ''}${result.median.toFixed(2)}R`, ''],
-                ['Reached target', `${(result.hit * 100).toFixed(0)}%`, ''],
-              ] as const).map(([k, v, cls]) => (
-                <div key={k}>
-                  <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
-                  <p className={cn('font-medium tabular-nums', cls)}>{v}</p>
-                </div>
-              ))}
-            </div>
-            {/* The caveats are the point, not the small print. A number this easy to produce is
-                also easy to believe, and every one of these pushes the real result downwards. */}
-            <p className="text-muted-foreground mt-3 text-xs">
-              {pays
-                ? 'Positive here — but read the caveats before you believe it. '
-                : 'Negative here: over this window the rule cost more than it made. '}
-              {result.missed > 0 && `${result.missed} more setup${result.missed === 1 ? '' : 's'} never reached the entry and ${result.missed === 1 ? 'is' : 'are'} not counted — a trade nobody was in is not a trade that lost. `}
-              {result.unresolved > 0 && `${result.unresolved} was still running when the bars ran out, so it has no result to score. `}
-              {/* the higher-timeframe card is the one vote the desk counts that this walk cannot:
-                  it needs candles from a second interval, which this only has one of. Accumulation
-                  does not apply that filter live either, so on that side there is nothing missing */}
-              {horizon !== 'long' && <>The {HIGHER[interval] ?? 'higher-timeframe'} trend filter the desk
-              applies is not applied here — this measures the rest of the rule.{' '}</>}
-              No fee, no funding, no slippage, and every fill exactly on its level, so a bar that gapped
-              through a stop really paid worse than this says. It is measured on the same window you are
-              looking at, one position at a time, and a bar that touched the stop and the target both is
-              counted as a stop. Read it as the floor under “does this do anything here”, not as a forecast.
-            </p>
-          </>
-        ))}
-      </CardContent>
-    </Card>
   )
 }
 
@@ -2406,7 +2302,7 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
 
 /** One grid for the row and its header, so the columns line up by construction rather than by two
  *  sets of hand-matched widths. The last track is the two icons, which are outside the row button. */
-const LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4.5rem,10rem)_minmax(4.5rem,9rem)_1fr_4.5rem_3.5rem_5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_minmax(7rem,12rem)_1fr_4.5rem_3.5rem_5rem]'
+const LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4.5rem,10rem)_1fr_4.5rem_3.5rem_5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_5rem]'
 
 /** How the record is stacked. Newest is the default because a log is read from the top down; the
  *  other two are the question "what actually paid, and what actually cost" asked directly. */
@@ -2553,14 +2449,18 @@ function Record() {
             Clear
           </Button>
         </div>
-        {/* the same trades cut by lane — expectancy per horizon is what the record is kept to say */}
-        <div className="text-muted-foreground mb-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+        {/* The same trades cut by lane — expectancy per rule is what the record is kept to say. As
+            chips rather than as a run-on sentence: three lanes in a row of prose separated by
+            middots is one long line where every third word is a number, and the eye has to parse
+            the punctuation to find where one lane ends and the next starts. */}
+        <div className="mb-2 flex flex-wrap gap-1.5 text-xs">
           {lanes.map((l) => (
-            <span key={l.name} className="tabular-nums">
+            <span key={l.name} className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
               <span className="font-medium">{l.name}</span>
-              {' '}{l.n} trade{l.n === 1 ? '' : 's'} · {Math.round((l.hit / l.n) * 100)}% hit ·{' '}
+              <span className="text-muted-foreground">{l.n}×</span>
+              <span className="text-muted-foreground">{Math.round((l.hit / l.n) * 100)}% hit</span>
               <span className={l.avg >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
-                {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R/trade
+                {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R
               </span>
             </span>
           ))}
@@ -2569,21 +2469,21 @@ function Record() {
         <div className={cn(LOG_GRID, 'text-muted-foreground font-heading border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
           <span>Trade</span>
           <span>Side</span>
+          {/* the dates take the slack rather than an empty track taking it: the numbers stay at the
+              right edge either way, and the row stops having a hole in the middle of it */}
           <span className="hidden sm:block">Ran</span>
-          {/* the slack track: the words keep to their own width on a wide window and the numbers
-              stay at the right edge, instead of four columns drifting to the four corners */}
-          <span />
           <span className="text-right">Ended</span>
           <span className="text-right">R</span>
           <span className="text-right">Paid</span>
         </div>
         {results.map((r) => {
           const hit = r.level === 'target'
+          /* The verdict used to be a wash across the whole row, which at four percent of the accent
+             over a dark background is not a colour, it is a smudge — four of them stacked read as a
+             table someone had spilled something on. The word, the R and the money are all already
+             coloured, three times over; the row itself can be a row. */
           return (
-            <div key={r.id} className={cn('border-b border-dashed last:border-0',
-              // the row's own verdict, as a wash rather than a word: red and green down the list is
-              // the shape of a record you can read without reading any of it
-              hit ? 'bg-emerald-500/[0.04]' : 'bg-destructive/[0.04]')}>
+            <div key={r.id} className="hover:bg-muted/40 border-b border-dashed last:border-0">
               <div className="flex items-center">
               {/* not a button: the row opened a note field, and there are no notes any more — a row
                   here is what the trade did, and nothing left to press but the share. */}
@@ -2596,7 +2496,6 @@ function Record() {
                 <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
                   {when(r.entryAt)} → {when(r.closedAt)}
                 </span>
-                <span />
                 <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {hit ? 'target' : 'stopped'}
                 </span>
@@ -2715,12 +2614,16 @@ function Desk({ live }: { live: boolean }) {
             {people.length === 1 ? 'one desk' : `${people.length} desks`}
           </span>
         </div>
-        <div className="grid gap-2">
+        {/* A ruled list, not a stack of boxes. Each desk used to be a bordered card holding bordered
+            tiles inside a bordered card — three nested rectangles for what is really a name and the
+            positions under it, and at two desks the page read as packaging. The rule between people
+            does the same separating with none of the weight. */}
+        <div className="grid gap-3">
           {people.map((p) => {
             const total = p.results.reduce((n, r) => n + r.r, 0)
             const won = p.results.filter((r) => r.level === 'target').length
             return (
-              <div key={p.name} className="rounded-md border px-2.5 py-2">
+              <div key={p.name} className="border-t pt-3 first:border-t-0 first:pt-0">
                 <div className="flex items-center gap-2">
                   {/* ponytail: the initial, not their picture — /api/desk sends no avatar on
                       purpose, since ten desks of data URI is a megabyte of image for a page that
@@ -2784,11 +2687,6 @@ function Desk({ live }: { live: boolean }) {
             )
           })}
         </div>
-        <p className="text-muted-foreground mt-2 px-1.5 text-xs">
-          A live trade reads as its exchange has it, money and all; a finished one reads in R,
-          because what it paid was priced off a stake that is theirs and not yours. Settings →
-          Markets puts your own desk here, and takes it back off.
-        </p>
       </CardContent>
     </Card>
   )
@@ -2982,21 +2880,14 @@ function Scan({ orbMode, interval, onPick }: {
           <span>
             <span className="text-emerald-600 dark:text-emerald-400">▲</span>
             <span className="text-destructive">▼</span>
-            {' '}each timeframe&rsquo;s own lean
-            <span className="opacity-70"> · boxed is the one the desk reads</span>
+            {' '}each timeframe&rsquo;s lean<span className="opacity-70"> · boxed is the desk&rsquo;s</span>
           </span>
           <span>
-            <span className="opacity-50">↳</span> 4h direction → 15m structure → 5m trigger
-            <span className="opacity-70"> · green once all three land</span>
+            <span className="opacity-50">↳</span> 4h → 15m → 5m<span className="opacity-70"> · green when all three land</span>
           </span>
-          <span className="opacity-70">
-            Stocks sit this out — they need your key and their own rate limit. Open one from the picker.
-          </span>
+          <span className="opacity-70">A side every chart agrees on beats one only the fastest sees.</span>
+          <span className="opacity-70">Stocks need your own key — open one from the picker.</span>
         </div>
-        <p className="text-muted-foreground mt-1.5 text-xs">
-          A side every chart agrees on is the one worth taking; one only the fastest sees is a trade
-          against the tide.
-        </p>
       </CardContent>
     </Card>
   )
