@@ -695,21 +695,19 @@ export default function MarketPage() {
             page you are on is read before which asset it is about, and a row holding four pills
             was a whole line of blank to the right of them. */}
         <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
-          {TABS.map(({ id, label, hint }) => (
-            <Hint key={id} label={hint}>
-              {/* the same two states every other group in this row has — secondary for the one that
-                  is on, muted ghost for the rest. It used to be `default`, which put the one solid
-                  white pill in the toolbar on the tabs and made four identical-looking groups read
-                  as two different kinds of control. */}
-              <Button
-                size="sm" variant={tab === id ? 'secondary' : 'ghost'}
-                className={cn('h-7', tab !== id && 'text-muted-foreground')}
-                aria-current={tab === id}
-                onClick={() => { setTab(id); setSeen((s) => ({ ...s, [id]: true })) }}
-              >
-                {label}
-              </Button>
-            </Hint>
+          {/* No tooltip: these are the four pages, and a page you can see the name of does not need
+              a paragraph explaining it — it needs clicking. The same two states every other group in
+              this row has: secondary for the one that is on, muted ghost for the rest. */}
+          {TABS.map(({ id, label }) => (
+            <Button
+              key={id}
+              size="sm" variant={tab === id ? 'secondary' : 'ghost'}
+              className={cn('h-7', tab !== id && 'text-muted-foreground')}
+              aria-current={tab === id}
+              onClick={() => { setTab(id); setSeen((s) => ({ ...s, [id]: true })) }}
+            >
+              {label}
+            </Button>
           ))}
         </div>
         <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
@@ -754,13 +752,12 @@ export default function MarketPage() {
           {/* opening range pins 15m, so the interval picker only shows in Standard */}
           {preset === 'standard' && (
             <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+              {/* and no tooltip here either: "one candle is 15m" is what the button already says */}
               {INTERVALS.map((iv) => (
-                <Hint key={iv} label={`One candle is ${iv}${HIGHER[iv] ? ` · the trend filter checks the ${HIGHER[iv]}` : ''}`}>
-                  <Button size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
-                    className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
-                    {iv}
-                  </Button>
-                </Hint>
+                <Button key={iv} size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
+                  className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
+                  {iv}
+                </Button>
               ))}
             </div>
           )}
