@@ -697,6 +697,9 @@ assert.deepEqual(await (await get('/api/mexc', kUser)).json(), { set: true })
 // empty both takes it off again
 assert.deepEqual(await (await post('/api/mexc', {}, kUser)).json(), { set: false })
 assert.equal((await get('/api/positions', kUser)).status, 501)
+// the closed book asks the same two keys, so with none on the account it answers the same way
+assert.equal((await get('/api/closed')).status, 401)
+assert.equal((await get('/api/closed', kUser)).status, 501)
 
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 

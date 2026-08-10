@@ -1736,6 +1736,8 @@ type ExchangePosition = {
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
   stop: number | null; target: number | null; funding: number | null
+  /** The multiplier the venue holds it at, where its row says. */
+  lev?: number | null
   /** The exchange's own liquidation price, where its feed says one. */
   liq?: number | null
   venue?: string
@@ -1747,36 +1749,62 @@ type ExchangePosition = {
    A fresh key means the first look after the upgrade files nothing, which is the honest answer. */
 const LAST_OPEN = 'stash-exchange-open'
 
+/** A position the venue has already closed, as /api/closed hands it over. */
+type ClosedRow = {
+  venue: string, symbol: string, side: 'long' | 'short'
+  entry: number, exit: number, openedAt: number | null, closedAt: number
+}
+
 /**
  * A position that was here last look and is gone this one has closed, and the trade files itself
  * into the record — the same Result a hand-entered position writes, so the bell announces it and
  * the record counts it, with no second code path. The last look is kept in localStorage, so a
  * close that happened while the app was shut is still caught and written down at the next open.
  *
- * ponytail: the exit is the last mark seen, not the fill. Neither venue left on the desk answers
- * a fills call this code has a key for; add one when a mark-priced close in the record annoys.
+ * `history` is the venue's own word on where it ended, matched back to the row that vanished. The
+ * exit used to be the last mark this app happened to see, which on a stop that gapped or a close
+ * made while the tab was shut was the wrong price by however far it moved — and the R in the record
+ * was wrong with it. Without a match it still falls back to that mark, which is no worse than
+ * before and is the only answer available for a venue whose history call did not answer.
  */
-function fileClosed(next: ExchangePosition[]) {
+/**
+ * What the last snapshot held and this one does not — the whole of how a close is noticed here.
+ * Read-only, so the caller can ask before deciding whether the venue's history is worth a request:
+ * on almost every poll nothing has vanished, and that is a round trip and two exchange calls saved.
+ *
+ * venue and symbol, the way every other id here is built: two venues can hold the same symbol, and
+ * matching on the symbol alone meant closing it on one of them read as still open because the other
+ * one was — a trade that never landed in the record. A stored row from before the second venue
+ * carries no venue at all, and there the symbol alone still decides: a snapshot that cannot say
+ * where it was held must not file a close it is only guessing at.
+ */
+function vanished(next: ExchangePosition[]): ExchangePosition[] {
   let prev: ExchangePosition[] = []
   try { prev = JSON.parse(localStorage.getItem(LAST_OPEN) ?? '[]') } catch { /* first look */ }
-  localStorage.setItem(LAST_OPEN, JSON.stringify(next))
-  /* venue and symbol, the way every other id here is built: two venues can hold the same symbol,
-     and matching on the symbol alone meant closing it on one of them read as still open because
-     the other one was — a trade that never landed in the record. A stored row from before the
-     second venue carries no venue at all, and there the symbol alone still decides: a snapshot
-     that cannot say where it was held must not file a close it is only guessing at. */
-  const gone = prev.filter((p) =>
+  return prev.filter((p) =>
     !next.some((n) => n.symbol === p.symbol && (p.venue == null || n.venue === p.venue)))
+}
+
+function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
+  const gone = vanished(next)
+  localStorage.setItem(LAST_OPEN, JSON.stringify(next))
   if (!gone.length) return
   for (const p of gone) {
     /* ponytail: no resting stop, no defined risk — there is no honest R to write, and the record
        is a scoreboard in R. A stopless trade's close is not hidden by this, it simply leaves the
        card rather than landing in the record. */
     if (p.stop == null || !(p.entry > 0) || p.entry === p.stop) continue
-    const exit = p.mark // the last mark seen is the closest this has to a fill price
+    /* the venue's own close for this very row: same book, same symbol, and the same open stamp
+       where the history carries one — a symbol closed and reopened inside the week is two rows in
+       here, and the newest is the wrong one to price the older by. */
+    const opened = p.openedAt ? Date.parse(p.openedAt) : Date.now()
+    const mine = history.filter((c) =>
+      c.symbol === p.symbol && c.side === p.side && (p.venue == null || c.venue === p.venue))
+    const hit = mine.find((c) => c.openedAt != null && Math.abs(c.openedAt - opened) < 60_000)
+      ?? mine.sort((a, b) => b.closedAt - a.closedAt)[0]
+    const exit = hit?.exit ?? p.mark   // failing that, the last mark seen — the old behaviour
     if (exit == null) continue
     const r = p.side === 'long' ? (exit - p.entry) / (p.entry - p.stop) : (p.entry - exit) / (p.stop - p.entry)
-    const opened = p.openedAt ? Date.parse(p.openedAt) : Date.now()
     const id = assetOf(p.symbol)
     closeWatch({
       // the open stamp is in the id, so closing and reopening the same symbol is two trades —
@@ -1787,7 +1815,7 @@ function fileClosed(next: ExchangePosition[]) {
       // the record names the venue the trade really ran on, now that there is more than one
       horizon: venueName(p.venue),
       dir: p.side, entry: p.entry, stop: p.stop, target: p.target ?? exit,
-      ts: opened, entryAt: opened, closedAt: Date.now(),
+      ts: opened, entryAt: opened, closedAt: hit?.closedAt ?? Date.now(),
       /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —
          in profit files as 'target', at a loss as 'stopped'. The record has no third word, and the
          R beside it is exact either way. */
@@ -1958,7 +1986,14 @@ function useExchangePositions() {
           if (!r.ok) return // offline, no key, exchange down: keep whatever the last answer was
           const d = await r.json()
           const rows: ExchangePosition[] = d.positions ?? []
-          fileClosed(rows)
+          /* the venue's closed book, but only on the tick where something actually went — asking
+             every minute would be two history calls a minute per reader to answer "nothing closed",
+             which is the answer on all but a handful of polls a week. It may fail: an empty history
+             files the close at the last mark, the way it did before the route existed. */
+          const h = vanished(rows).length
+            ? await fetch('/api/closed').then((c) => (c.ok ? c.json() : null)).catch(() => null)
+            : null
+          fileClosed(rows, h?.closed ?? [])
           if (!dead) setFeed({ rows, equity: d.equity ?? null })
         })
         .catch(() => {})
@@ -1974,15 +2009,18 @@ function useExchangePositions() {
  * The same block for your own book and for everyone else's on the Desk — a position is a position,
  * and two layouts for one thing meant reading the other tab twice as slowly.
  *
- * What differs is what each side is allowed to say. Yours knows the money, so `lead` carries the
- * dollars and `size` the coins; someone else's carries neither — the server never sends their size
- * — and their tile leads with the R instead. Everything a row has no answer for is simply left out.
+ * What differs is only what each side has to hand: your own row knows the coins it is sized in, and
+ * someone else's does not, because the server reads their size to price the trade and never sends
+ * the number itself. Everything a row has no answer for is simply left out.
  */
-function PositionTile({ side, symbol, venue, up, lead, from, now, size, r, meta = [] }: {
+function PositionTile({ side, symbol, venue, lev, up, lead, from, now, size, r, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Which exchange holds it, where saying so adds anything — null keeps the line short. */
   venue: string | null
+  /** The multiplier it is held at. Beside the side, because 10× short is the position and "short"
+   *  on its own is half of it. */
+  lev?: number | null
   /** Which way the trade is going, for the one colour the whole tile is read in. */
   up: boolean
   /** The headline number on the right of the title row: money, percent, R — whatever this side has. */
@@ -2006,7 +2044,7 @@ function PositionTile({ side, symbol, venue, up, lead, from, now, size, r, meta 
           side === 'long'
             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
             : 'bg-destructive/10 text-destructive')}>
-          {side}
+          {side}{lev ? ` ${lev}×` : ''}
         </span>
         <span className="truncate font-medium">{symbol}</span>
         {venue && <span className="text-muted-foreground truncate text-xs">{venue}</span>}
@@ -2100,7 +2138,7 @@ export function ExchangePositions() {
           const up = (p.pct ?? 0) >= 0
           return (
             <PositionTile key={`${p.venue ?? ''}-${p.symbol}`} side={p.side} symbol={p.symbol}
-              venue={venues.size > 1 ? venueName(p.venue) : null} up={up}
+              venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev} up={up}
               /* dollars and R beside the percent: same sign by construction, one colour carries all */
               lead={p.pct != null
                 ? `${p.pnl != null ? `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · ` : ''}${up ? '+' : ''}${p.pct.toFixed(2)}%`
@@ -2111,6 +2149,10 @@ export function ExchangePositions() {
                  red — the Record's rows are the ones with an answer on them. */
               meta={[
                 p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                /* what the price move did to the margin behind it — the number a leveraged trade is
+                   actually felt in. pct stays the price move it has always been; this is that times
+                   the multiplier, and it only appears where the venue said what the multiplier is. */
+                p.pct != null && p.lev != null && `${p.pct * p.lev >= 0 ? '+' : ''}${(p.pct * p.lev).toFixed(1)}% on margin`,
                 p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? `(${away(p.stop, p.mark)})` : ''}`.trim(),
                 p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? `(${away(p.target, p.mark)})` : ''}`.trim(),
                 p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? `(${away(p.liq, p.mark)})` : ''}`.trim(),
@@ -2547,20 +2589,32 @@ function Desk({ live }: { live: boolean }) {
                     other desk off the page — the count below says what was left out */}
                 <div className="mt-1.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {p.open.slice(0, 6).map((w) => {
-                    /* how it is doing right now, off the venue's own mark. The percent and the R,
-                       the same two the own-book tile leads with — the money in front of them there
-                       is the one thing missing, and it is missing because it was never sent. */
+                    /* how it is doing right now, off the venue's own book — the same tile as your
+                       own, and now the same numbers on it: the money, the percent, the R where a
+                       stop defines one. A row from someone's document has none of them. */
                     const { pct, r } = deskNow(w)
                     return (
                       <PositionTile key={w.id} side={w.dir} symbol={w.label}
-                        venue={w.horizon || null} up={(pct ?? r ?? 0) >= 0}
+                        venue={w.horizon || null} lev={w.lev} up={(w.pnl ?? pct ?? r ?? 0) >= 0}
                         lead={[
+                          w.pnl != null && `${w.pnl >= 0 ? '+' : '−'}$${Math.abs(w.pnl).toFixed(2)}`,
                           pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
                           r != null && rLabel(r),
                         ].filter(Boolean).join(' · ') || null}
                         from={w.entry} now={w.mark} r={null}
-                        // no size, ever — the server strips it, which is what makes this desk safe to read
-                        meta={[!w.entryAt && 'waiting for the entry']} />
+                        // the same line the own book prints, minus the funding nobody else's rate is known for
+                        meta={[
+                          w.value != null && `worth $${w.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                          pct != null && w.lev != null && `${pct * w.lev >= 0 ? '+' : ''}${(pct * w.lev).toFixed(1)}% on margin`,
+                          w.stop != null && `stop ${fmtPrice(w.stop)} ${w.mark != null ? `(${away(w.stop, w.mark)})` : ''}`.trim(),
+                          w.target != null && `target ${fmtPrice(w.target)} ${w.mark != null ? `(${away(w.target, w.mark)})` : ''}`.trim(),
+                          w.liq != null && `liq ${fmtPrice(w.liq)} ${w.mark != null ? `(${away(w.liq, w.mark)})` : ''}`.trim(),
+                          w.entryAt
+                            ? `opened ${new Date(w.entryAt).toLocaleString(undefined, {
+                                day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                              })}`
+                            : 'waiting for the entry',
+                        ]} />
                     )
                   })}
                 </div>
@@ -2574,8 +2628,9 @@ function Desk({ live }: { live: boolean }) {
           })}
         </div>
         <p className="text-muted-foreground mt-2 px-1.5 text-xs">
-          In R, because it is not your stake — what anyone had on a trade stays on their own
-          device. Settings → Markets puts your own record here.
+          A live trade reads as its exchange has it, money and all; a finished one reads in R,
+          because what it paid was priced off a stake that is theirs and not yours. Settings →
+          Markets puts your own desk here, and takes it back off.
         </p>
       </CardContent>
     </Card>

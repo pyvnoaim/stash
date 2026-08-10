@@ -29,8 +29,8 @@ import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
-import { positions as bitgetPositions } from './bitget.ts'
-import { positions as mexcPositions } from './mexc.ts'
+import { closed as bitgetClosed, positions as bitgetPositions, type Closed } from './bitget.ts'
+import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
 import { createSweep } from './sweep.ts'
@@ -275,6 +275,12 @@ function readBytes(req: IncomingMessage, cap: number): Promise<Buffer> {
  */
 const refused = new Map<string, number>()
 const REFUSED_FOR = 5 * 60_000
+
+/* Closed positions, per account, for the half minute /api/closed hands them out over. The venue
+   caches its own open book; this list has no cache of its own down there, and a phone and a laptop
+   both noticing the same close would otherwise be two history calls for one answer.
+   ponytail: clear-all past 64, the same as every other cache here — the roster is ten people. */
+const closedCache = new Map<number, { at: number, rows: Closed[] }>()
 
 const DUMMY_SALT = randomBytes(16)
 /**
@@ -1167,6 +1173,34 @@ export function start({
       }
     }
 
+    /* What the exchanges have already closed, so a trade files itself into the record at the price
+       it really left at. The app can only ever notice a close by missing a row it saw last look,
+       and by then the price is gone — this is the venue's own average close, matched back to that
+       missing row. A week is the window: anything older has been filed or was never seen.
+
+       Per account and behind a half minute, the same as the positions it is polled beside. A venue
+       that errors contributes nothing rather than failing the call: an empty list means the record
+       falls back to the last mark, which is what it did before this route existed. */
+    if (path === '/api/closed' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const hit = closedCache.get(user.id)
+      if (hit && Date.now() - hit.at < 30_000) return send(res, 200, { closed: hit.rows })
+      const since = Date.now() - 7 * 86400_000
+      const stored = [
+        { raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetClosed(c.key, c.secret, c.passphrase, since) },
+        { raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcClosed(c.key, c.secret, since) },
+      ].filter((v) => v.raw)
+      if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
+      const lists = await Promise.all(stored.map((v) => {
+        try { return v.go(JSON.parse(v.raw!)).catch(() => []) } catch { return [] }
+      }))
+      const rows = lists.flat().sort((a, b) => b.closedAt - a.closedAt)
+      if (closedCache.size >= 64) closedCache.clear()
+      closedCache.set(user.id, { at: Date.now(), rows })
+      return send(res, 200, { closed: rows })
+    }
+
     /* MCP over plain HTTP: the same dispatcher the stdio server runs, mounted where the app
        already lives — `claude mcp add --transport http` and no clone, no node, no path. The
        credentials ride the Authorization header because an MCP client keeps no cookie jar;
@@ -1240,10 +1274,16 @@ export function start({
     }
 
     /* The Desk: how everyone else's trades went, and what they are in now. Opt-in per account —
-       a document that has not set `desk` is not read past that field — and money-free by
-       construction: the size and leverage a position was taken with never leave the document, so
-       this says what the trade is, never what it is worth to them. Read-only, and everyone here
+       a document that has not set `desk` is not read past that field. Read-only, and everyone here
        is someone an admin let in.
+
+       What the exchange says about a live position now goes out whole: the running dollars, what it
+       is worth at the mark, and where it liquidates. That is money, and it is a deliberate change of
+       what switching the desk on means — the size is recoverable from any of those three, so the
+       switch now reads "everyone here sees this trade and what it is doing", which is what the
+       screen says beside it. What stays behind is the document's own euros: `size` and `lev` are
+       still read only to decide whether a row is real, and a hand-typed position carries no venue
+       numbers at all, so it still leaves as levels and nothing else.
 
        Real positions only, on both lists. A record keeps watched plans beside taken trades and
        prices them off a hypothetical stake, which is fine on your own page where the distinction is
@@ -1251,7 +1291,7 @@ export function start({
        person trades. Nobody scrolls a leaderboard thinking "some of these were never taken". The
        filter is here rather than on the page because this is the boundary: a plan somebody never
        took should not leave their document at all, and filtering after it arrived would ship it and
-       then hide it. It also means `size` and `lev` are read to decide what to send, never sent. */
+       then hide it. */
     if (path === '/api/desk' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
@@ -1285,8 +1325,13 @@ export function start({
             id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),
             dir: w?.dir === 'short' ? 'short' : 'long',
             entry: num(w?.entry), stop: num(w?.stop), target: num(w?.target),
-            // what they typed carries no live price; the venue sweep below fills it where there is one
-            entryAt: num(w?.entryAt), mark: null as number | null,
+            /* what they typed carries none of the venue's numbers; the sweep below fills them in
+               where an account has a key, and leaves them null where it does not */
+            entryAt: num(w?.entryAt),
+            mark: null as number | null, pnl: null as number | null,
+            value: null as number | null, liq: null as number | null,
+            // the one venue number a document does have: what they said they took it at
+            lev: num(w?.lev),
           })).filter((w: any) => w.entry !== null && w.stop !== null && w.target !== null),
         })
       }
@@ -1299,8 +1344,11 @@ export function start({
          reader. A venue that errors leaves that desk on what the document said rather than
          emptying it: a key that expired is not a book that closed.
 
-         The allowlist holds. `size` is coins here rather than euros and is still position size, so
-         it stays out with `value`, `pnl` and the equity — what is sent is the trade and its levels.
+         The allowlist still decides, it is simply wider than it was: the trade, its levels, and what
+         the venue says it is doing — mark, running pnl, value at the mark, liquidation. The account
+         equity is not on it, and neither is `size`: the coins are recoverable from value ÷ mark
+         anyway, so leaving them off is tidiness rather than a promise, but the equity is about
+         everything they hold and this route is about one trade.
 
          ponytail: every opted-in desk is asked on every read. Ten accounts behind a 30s cache is
          nothing; if this server ever has a hundred, one sweep writing the books into a table the
@@ -1327,11 +1375,10 @@ export function start({
           id: `${keys[n].venue}-${p.symbol}-${p.openedAt ?? p.entry}`,
           label: p.symbol, horizon: keys[n].venue,
           dir: p.side, entry: p.entry, stop: p.stop, target: p.target,
-          /* Where the market is now, so the page can say how the trade is doing — in R, off the
-             entry and the stop it already has. The mark is the venue's public price and says
-             nothing about the position: `pnl` is that number times their size, which is exactly
-             what stays out. */
-          mark: p.mark,
+          /* What the trade is doing, as the venue has it: the price it is marked at, the running
+             money, what it is worth there, and where it gets closed for them. The page reads the
+             first into a percent and an R and prints the rest under the fold. */
+          mark: p.mark, pnl: p.pnl, value: p.value, liq: p.liq ?? null, lev: p.lev,
           /* Open means in, whatever the feed says about when: a venue that carries no fill stamp
              must not read as a setup still waiting for its entry. */
           entryAt: (p.openedAt ? Date.parse(p.openedAt) : NaN) || Date.now(),

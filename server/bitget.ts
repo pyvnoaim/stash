@@ -21,8 +21,9 @@ export type Position = {
   size: number
   entry: number
   mark: number | null
-  /** Price move from entry, signed by the side: positive is in your favour. ponytail: price move,
-   *  not return on margin — leverage is not in the read scope, and a made-up ROE is worse than none. */
+  /** Price move from entry, signed by the side: positive is in your favour. Price alone, never
+   *  return on margin — the page multiplies it by `lev` where it wants that, and keeping the two
+   *  apart is what stops a 2% drift being filed as a 20% one. */
   pct: number | null
   /** Unrealised price PnL in the quote currency: (mark − entry) × size, signed by the side.
    *  ponytail: funding not included — where a feed reports it at all it is pennies, and a second
@@ -38,8 +39,14 @@ export type Position = {
   /** The exchange's own liquidation price, where the feed says one. The chart prefers this over
    *  any estimate, since it is the number that fires. */
   liq: number | null
-  /** Funding accrued and not yet realized, straight off the feed with its own sign convention. */
+  /** Funding accrued on the position so far, as the venue signs it: negative is what it has cost
+   *  to hold, positive what holding it has paid. Bitget totals it on the position row and MEXC
+   *  calls it holdFee; neither is in `pnl`, which is price alone. */
   funding: number | null
+  /** The multiplier the position is held at, where the venue's row says. It is not in `pct` — that
+   *  stays a price move — but it is the difference between a 2% drift and a margin call, so the
+   *  card that shows one shows the other. */
+  lev: number | null
 }
 
 export type Feed = { positions: Position[]; equity: number | null }
@@ -83,6 +90,12 @@ export function shape(rows: unknown[]): Position[] {
     const n = Number(v)
     return isFinite(n) && n > 0 ? n : null
   }
+  /** For the fields where zero and below are real answers — funding paid is a negative number, and
+   *  a position that has not been held over a settlement has genuinely accrued nothing. */
+  const signed = (v: unknown) => {
+    const n = Number(v)
+    return v === '' || v == null || !isFinite(n) ? null : round(n)
+  }
   return (rows as Record<string, unknown>[]).map((p) => {
     const symbol = String(p.symbol ?? '').toUpperCase()
     const side = p.holdSide === 'short' ? 'short' as const : 'long' as const
@@ -99,8 +112,10 @@ export function shape(rows: unknown[]): Position[] {
       stop: num(p.stopLoss),
       target: num(p.takeProfit),
       liq: num(p.liquidationPrice),
-      // the row carries fees, not accrued funding — null rather than the wrong number
-      funding: null,
+      // totalFee is the funding accrued on this position — signed, so it needs the parser that
+      // lets a negative through rather than the one that reads 0-or-less as "the feed said none"
+      funding: signed(p.totalFee),
+      lev: num(p.leverage),
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.size) && p.size > 0)
 }
@@ -137,9 +152,48 @@ export async function positions(key: string, secret: string, pass: string): Prom
   return data
 }
 
-/* ponytail: no fills call. When a Bitget position vanishes, fileClosed prices the close at the
-   last mark it saw — the fallback it already has for a fill the list doesn't know. The exact-fill
-   nicety needs one more authed endpoint; add it when a mark-priced close in the record annoys. */
+/**
+ * A position the venue has already closed, cut down to what the record wants: what it was, what it
+ * opened and closed at, and when. This is the exchange's own average close price — the thing the
+ * snapshot diff could never know, since by the time a row is missing the price it left at is gone.
+ */
+export type Closed = {
+  venue: string
+  symbol: string
+  side: 'long' | 'short'
+  entry: number
+  exit: number
+  /** The open and the close, as epoch millis — the open stamp is what matches a row to a snapshot. */
+  openedAt: number | null
+  closedAt: number
+}
+
+/** Bitget's closed positions into that shape. Rows with no usable close price are dropped: a
+ *  history row that cannot say where it ended is not an improvement on the last mark. */
+export function shapeClosed(rows: unknown[], venue = 'bitget'): Closed[] {
+  return (rows as Record<string, unknown>[]).map((p) => {
+    const at = Number(p.utime ?? p.uTime)
+    const opened = Number(p.ctime ?? p.cTime)
+    return {
+      venue,
+      symbol: String(p.symbol ?? '').toUpperCase(),
+      side: p.holdSide === 'short' ? 'short' as const : 'long' as const,
+      entry: Number(p.openAvgPrice ?? p.openPriceAvg),
+      exit: Number(p.closeAvgPrice),
+      openedAt: isFinite(opened) && opened > 0 ? opened : null,
+      closedAt: isFinite(at) && at > 0 ? at : 0,
+    }
+  }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.exit) && p.exit > 0 && p.closedAt > 0)
+}
+
+/** What Bitget closed lately, newest first. Uncached and small: it is asked once a minute beside
+ *  the positions, and only to put a real price on a row that has just vanished from them. */
+export async function closed(key: string, secret: string, pass: string, since: number): Promise<Closed[]> {
+  const r = await authed(key, secret, pass,
+    `/api/v2/mix/position/history-position?productType=USDT-FUTURES&startTime=${since}&limit=100`)
+  if (r?.code !== '00000') throw new Error(String(r?.msg ?? 'the exchange did not answer'))
+  return shapeClosed(r.data?.list ?? [])
+}
 
 /**
  * A resting order, cut down to what deciding "is this the one my setup is waiting on" needs. The

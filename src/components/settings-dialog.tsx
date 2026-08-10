@@ -368,8 +368,8 @@ function MarketsPanel() {
       <Section
         title="The others"
         hint="Puts your finished setups and the ones you are in on everyone else's Markets page,
-          the way theirs land on yours. In R only — what you had on a trade never leaves this
-          device."
+          the way theirs land on yours. A trade your exchange is holding goes over whole — the
+          running dollars, what it is worth and where it liquidates. Finished ones stay in R."
       >
         <div className="grid grid-cols-2 gap-1.5">
           {([[false, 'Private', Lock], [true, 'On the desk', Users]] as const).map(([on, label, Icon]) => (

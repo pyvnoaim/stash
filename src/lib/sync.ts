@@ -422,11 +422,13 @@ export const roster = (): Promise<Face[]> =>
 /**
  * One person on the Desk: how their trades went, and what they are in now. Trades they were really
  * in and nothing else — the server drops watched plans before sending, so every row here is money
- * somebody put down. No euros either: it strips the size and leverage, so how much is never said.
+ * somebody put down.
  *
  * `open` is the exchange's own book for anyone whose account has a key on it, and what they typed
- * for everyone else. A venue carries a resting stop or take-profit only sometimes, which is why
- * those two are nullable here and why nothing on the page reads them.
+ * for everyone else. The venue's own numbers ride along on the first kind — the running dollars
+ * included, which is what switching the desk on now publishes — and none of them on the second.
+ * `results` stay in R: a finished trade is priced off the document, and the document's euros are
+ * still nobody else's business.
  */
 export interface DeskRow {
   name: string
@@ -437,9 +439,14 @@ export interface DeskRow {
   open: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
     entry: number, stop: number | null, target: number | null, entryAt: number | null,
-    /** The venue's price right now, so the page can read the trade in R. Null on a row that came
-     *  from someone's document rather than their exchange — nothing there knows the market. */
-    mark: number | null,
+    /**
+     * What the venue says the trade is doing right now: the mark, the running money, what it is
+     * worth at that mark, and where it liquidates. All null on a row that came from someone's
+     * document rather than their exchange — nothing there knows the market.
+     */
+    mark: number | null, pnl: number | null, value: number | null, liq: number | null,
+    /** The multiplier it is held at — the venue's, or what they typed on a hand-written row. */
+    lev: number | null,
   }[]
 }
 

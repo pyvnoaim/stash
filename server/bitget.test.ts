@@ -1,12 +1,13 @@
 // npm test — the Bitget shaping: their row, our shape, and junk numbers turn null not NaN
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { equityOf, shape, shapeOrders, sign } from './bitget.ts'
+import { equityOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
 
 const rows = shape([
   {
     symbol: 'btcusdt', holdSide: 'long', total: '0.5', openPriceAvg: '100', markPrice: '110',
-    stopLoss: '90', takeProfit: '130', liquidationPrice: '80.5', cTime: '1754400000000',
+    stopLoss: '90', takeProfit: '130', liquidationPrice: '80.5', cTime: '1754400000000', leverage: '10',
+    totalFee: '-0.42',
   },
   // a short, with the empty-string stop/target Bitget writes when none rests, and no liq
   { symbol: 'ETHUSDT', holdSide: 'short', total: 2, openPriceAvg: 200, markPrice: 190, stopLoss: '', takeProfit: '', liquidationPrice: 0 },
@@ -18,7 +19,9 @@ assert.equal(rows.length, 2)
 // pct and pnl positive when the trade is in your favour, whichever side it is
 assert.deepEqual(rows[0], {
   symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 100, mark: 110, pct: 10,
-  pnl: 5, value: 55, openedAt: '2025-08-05T13:20:00.000Z', stop: 90, target: 130, liq: 80.5, funding: null,
+  pnl: 5, value: 55, openedAt: '2025-08-05T13:20:00.000Z', stop: 90, target: 130, liq: 80.5,
+  // funding is signed: what holding it has cost is a negative, where a price at 0 means "none"
+  funding: -0.42, lev: 10,
 })
 assert.equal(rows[1].pct, 5)
 assert.equal(rows[1].pnl, 20) // (190 − 200) × 2, flipped by the short side
@@ -27,6 +30,20 @@ assert.equal(rows[1].stop, null)
 assert.equal(rows[1].target, null)
 assert.equal(rows[1].liq, null)
 assert.equal(rows[1].openedAt, null)
+assert.equal(rows[1].funding, null) // no field at all is not funding of zero
+assert.equal(rows[1].lev, null)
+
+/* the closed book: the venue's own average close, which is the price the record files at. A row
+   with no usable close price is dropped — it would be no better than the last mark it replaces. */
+const done = shapeClosed([
+  { symbol: 'btcusdt', holdSide: 'short', openAvgPrice: '200', closeAvgPrice: '190', ctime: '1754400000000', utime: '1754500000000' },
+  { symbol: 'ETHUSDT', holdSide: 'long', openAvgPrice: 100, closeAvgPrice: 0, utime: 1754500000000 },
+  { symbol: 'SOLUSDT', holdSide: 'long', openAvgPrice: 10, closeAvgPrice: 12, utime: 0 },
+])
+assert.deepEqual(done, [{
+  venue: 'bitget', symbol: 'BTCUSDT', side: 'short', entry: 200, exit: 190,
+  openedAt: 1754400000000, closedAt: 1754500000000,
+}])
 
 // equity sums whichever field name the account answers in
 assert.equal(equityOf([{ usdtEquity: '1200.505' }, { accountEquity: 99.5 }]), 1300.01)
