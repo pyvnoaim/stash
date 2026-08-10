@@ -1192,20 +1192,28 @@ export function start({
         { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcClosed(c.key, c.secret, since) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
-      /* A venue that will not answer is logged rather than swallowed. An empty list here is
-         indistinguishable from a quiet week on the page, and "the history endpoint is refusing this
-         key" is not something anyone should have to guess at from a record that stays empty. */
+      /* A venue that will not answer says so in the answer, not only in the log. An empty list is
+         indistinguishable from a quiet week, and "the history endpoint is refusing this key" is not
+         something anyone should have to infer from a record that stays empty — least of all by
+         reading a container's log. The page ignores `why`; a person opening the route reads it. */
+      const why: string[] = []
       const lists = await Promise.all(stored.map((v) => {
         const oops = (e: unknown) => {
-          log('closed-fail', `${v.venue}: ${String((e as Error)?.message ?? e)}`, via(req))
+          const said = String((e as Error)?.message ?? e)
+          why.push(`${v.venue}: ${said}`)
+          log('closed-fail', `${v.venue}: ${said}`, via(req))
           return []
         }
         try { return v.go(JSON.parse(v.raw!)).catch(oops) } catch (e) { return oops(e) }
       }))
       const rows = lists.flat().sort((a, b) => b.closedAt - a.closedAt)
-      if (closedCache.size >= 64) closedCache.clear()
-      closedCache.set(user.id, { at: Date.now(), rows })
-      return send(res, 200, { closed: rows })
+      /* Only a good read is cached. Half a minute of "the venue was down once" would otherwise be
+         handed to every tab that asked, and the first look of a session is the one that matters. */
+      if (!why.length) {
+        if (closedCache.size >= 64) closedCache.clear()
+        closedCache.set(user.id, { at: Date.now(), rows })
+      }
+      return send(res, 200, { closed: rows, ...(why.length ? { why } : {}) })
     }
 
     /* MCP over plain HTTP: the same dispatcher the stdio server runs, mounted where the app
