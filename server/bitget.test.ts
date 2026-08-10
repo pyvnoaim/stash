@@ -1,7 +1,7 @@
 // npm test — the Bitget shaping: their row, our shape, and junk numbers turn null not NaN
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { equityOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
+import { accountLev, equityOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
 
 const rows = shape([
   {
@@ -48,6 +48,14 @@ assert.deepEqual(done, [{
   // and the multiplier, which is what lets this row be filed without ever having been seen open
   lev: 10,
 }])
+
+/* the history has no leverage on most accounts, so the account's own setting stands in: per side
+   where the symbol is isolated, and the crossed figure for whichever side has none of its own */
+assert.deepEqual(accountLev({ isolatedLongLev: 10, isolatedShortLev: '50', crossedMarginLeverage: 20 }),
+  { long: 10, short: 50 })
+assert.deepEqual(accountLev({ crossedMarginLeverage: 20 }), { long: 20, short: 20 })
+assert.deepEqual(accountLev({ isolatedLongLev: 0 }), { long: null, short: null })
+assert.deepEqual(accountLev(null), { long: null, short: null })
 
 // equity sums whichever field name the account answers in
 assert.equal(equityOf([{ usdtEquity: '1200.505' }, { accountEquity: 99.5 }]), 1300.01)

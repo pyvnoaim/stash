@@ -200,14 +200,45 @@ export function shapeClosed(rows: unknown[], venue = 'bitget'): Closed[] {
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.exit) && p.exit > 0 && p.closedAt > 0)
 }
 
-/** What Bitget closed lately, newest first. Uncached and small: it is asked once a minute beside
- *  the positions, and only to put a real price on a row that has just vanished from them. */
+/**
+ * What Bitget closed lately, newest first, with the leverage filled in.
+ *
+ * The history row does not carry one — it has the prices, the money and the funding and stops
+ * there — and leverage is not decoration here: the margin behind a position is what an R is
+ * counted in, so a row without it cannot be filed at all. The account's own setting for that symbol
+ * is the closest honest stand-in, so the symbols that need one are asked for, once each.
+ *
+ * ponytail: the setting as it stands now, not as it stood when the trade ran. Change the leverage
+ * on a symbol and this week's closed trades on it read at the new multiplier. The exact answer is
+ * per-fill margin off the bills endpoint, which is a page of ledger lines per trade; worth it the
+ * day someone actually trades one symbol at two leverages in a week.
+ */
 export async function closed(key: string, secret: string, pass: string, since: number): Promise<Closed[]> {
   const r = await authed(key, secret, pass,
     `/api/v2/mix/position/history-position?productType=USDT-FUTURES&startTime=${since}&limit=100`)
   if (r?.code !== '00000') throw new Error(String(r?.msg ?? 'the exchange did not answer'))
   // the list is under `list` on this endpoint and is the data itself on others — take either
-  return shapeClosed(Array.isArray(r.data) ? r.data : r.data?.list ?? [])
+  const rows = shapeClosed(Array.isArray(r.data) ? r.data : r.data?.list ?? [])
+  // eight at most: a week of one person's trades is a handful of symbols, and this is a call each
+  const need = [...new Set(rows.filter((x) => x.lev == null).map((x) => x.symbol))].slice(0, 8)
+  if (!need.length) return rows
+  const levs = new Map<string, { long: number | null, short: number | null }>()
+  await Promise.all(need.map(async (symbol) => {
+    const a = await authed(key, secret, pass,
+      `/api/v2/mix/account/account?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`).catch(() => null)
+    if (a?.code !== '00000') return
+    levs.set(symbol, accountLev(a.data))
+  }))
+  return rows.map((x) => (x.lev != null ? x : { ...x, lev: levs.get(x.symbol)?.[x.side] ?? null }))
+}
+
+/** The leverage an account is set to on one symbol, per side. Isolated keeps a number per side and
+ *  crossed one for both, so the crossed figure stands in where a side has none of its own. */
+export function accountLev(d: unknown): { long: number | null, short: number | null } {
+  const a = (d ?? {}) as Record<string, unknown>
+  const num = (v: unknown) => { const n = Number(v); return isFinite(n) && n > 0 ? n : null }
+  const crossed = num(a.crossedMarginLeverage)
+  return { long: num(a.isolatedLongLev) ?? crossed, short: num(a.isolatedShortLev) ?? crossed }
 }
 
 /**
