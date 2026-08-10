@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, Bell, BellRing, ChevronDown, CircleSlash2, CloudOff, KeyRound, Loader2, Minus, NotebookPen, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, Bell, BellRing, ChevronDown, CircleSlash2, CloudOff, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -2378,9 +2378,6 @@ function Record() {
   const [sort, setSort] = useState<(typeof LOG_SORTS)[number]['id']>('new')
   // whose card it is — the same byline the Desk signs with, and null signed out
   const { user } = useSyncExternalStore(subscribeSync, getSync)
-  /* Which row has its note open. One at a time and only on the row you asked for: fifty always-on
-     textareas is a form, and the record is meant to read as a list. */
-  const [noting, setNoting] = useState<string | null>(null)
   /* The tab stands whether or not anything has finished, so the empty case has to say what fills
      it — a blank panel behind a visible tab reads as something broken rather than as something
      not started. Nothing to offer as an action here: a trade arrives by being taken and reaching
@@ -2443,6 +2440,12 @@ function Record() {
     money !== null && signedEuro(money),
     usd !== null && `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`,
   ].filter(Boolean).join(' · ')
+  /* Green or red on what is actually printed, which is not always the R. A week can settle up in
+     money and down in R — a small winner at a wide risk and a big loser at a tight one does it —
+     and the total read red while saying +$1.15. Two currencies disagreeing with each other get no
+     colour at all rather than the first one's: neither is the answer on its own. */
+  const upTotal = money !== null && usd !== null && (money >= 0) !== (usd >= 0)
+    ? null : (money ?? usd ?? total) >= 0
   const real = all.some(isPosition)
   const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
   /* What a row is worth for the purpose of stacking it. Its own money where it has any, and its R
@@ -2462,7 +2465,7 @@ function Record() {
             {results.length} finished · {won} hit target
           </span>
           <span className={cn('ml-auto font-mono text-sm tabular-nums',
-            total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+            upTotal === null ? '' : upTotal ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
             {paidTotal || rLabel(total)}
           </span>
           {!!paidTotal && (
@@ -2514,25 +2517,19 @@ function Record() {
           <span className="text-right">Ended</span>
           <span className="text-right">R</span>
           <span className="text-right">Paid</span>
-          <span />
         </div>
         {results.map((r) => {
           const hit = r.level === 'target'
-          const open = noting === r.id
           return (
             <div key={r.id} className={cn('border-b border-dashed last:border-0',
               // the row's own verdict, as a wash rather than a word: red and green down the list is
               // the shape of a record you can read without reading any of it
               hit ? 'bg-emerald-500/[0.04]' : 'bg-destructive/[0.04]')}>
-              <div className="group flex items-center">
-              {/* a real button, so the note is reachable from the keyboard the way every other
-                  control on this page is — a div with an onClick would not be. It spans every
-                  column but the icons, so the whole line is the target rather than the words on it */}
-              <button
-                type="button"
-                onClick={() => setNoting(open ? null : r.id)}
-                className={cn(LOG_GRID, 'group-hover:bg-muted/50 min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left text-sm')}
-              >
+              <div className="flex items-center">
+              {/* not a button any more: the row opened a note field, and a finished trade is not
+                  where anybody writes one — the reason is written when the setup is saved, on the
+                  card that is still offering the trade. Nothing left to press but the share. */}
+              <div className={cn(LOG_GRID, 'min-w-0 flex-1 px-1.5 py-1.5 text-sm')}>
                 <span className="truncate font-medium">{r.label}</span>
                 <span className="text-muted-foreground truncate text-xs">
                   {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
@@ -2549,10 +2546,7 @@ function Record() {
                   (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {paid(r)}
                 </span>
-                {/* the only thing on the row that says it has another half — filled once it does */}
-                <NotebookPen className={cn('size-3.5 shrink-0 self-center justify-self-end',
-                  r.note ? 'text-foreground' : 'text-muted-foreground/40')} />
-              </button>
+              </div>
               {/* The one thing on this desk anyone shows anyone else, and only ever from here: a
                   finished trade is the only one with a result to show. Beside the row's button
                   rather than inside it — a button in a button is not markup a browser accepts. */}
@@ -2580,11 +2574,10 @@ function Record() {
                   </Button>
                 </Hint>
               </div>
-              {open
-                ? <SetupNote w={r} placeholder="Why this one, and how that read" className="mt-1 mb-1.5" />
-                : r.note && (
-                  <p className="text-muted-foreground mb-1 px-1.5 text-xs whitespace-pre-wrap">{r.note}</p>
-                )}
+              {/* what was written while it was still a plan, read back beside how it went */}
+              {r.note && (
+                <p className="text-muted-foreground mb-1 px-1.5 text-xs whitespace-pre-wrap">{r.note}</p>
+              )}
             </div>
           )
         })}
@@ -2605,8 +2598,8 @@ function Record() {
                  in R.`}
         </p>
         <p className="text-muted-foreground mt-1 px-1.5 text-xs">
-          A row opens its note — why it was taken, and how that read. It stays on your own devices:
-          the Desk publishes how a trade went and never why.
+          A note written while the setup was still a plan is read back under its row. It stays on
+          your own devices: the Desk publishes how a trade went and never why.
         </p>
       </CardContent>
     </Card>
