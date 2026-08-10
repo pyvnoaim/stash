@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, amdBacktest, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -237,10 +237,10 @@ assert.ok(dayFee.breakEven < 0.5 && dayFee.thin === false)
 
 // INVESTING — accumulate above the 200-MA, out below it, and the regime line is the stop.
 // price 120 above both MAs: hold, and the add sits back at the 50-MA
-const hold = holdPlan(120, 100, 80, band)
-assert.equal(hold.plan?.entry, 100) // the 50-MA
-assert.equal(hold.plan?.stop, 80)   // the 200-MA — the position ends with the trend, not on a wick
-assert.equal(hold.plan?.target, 110) // the wide high, a trim
+const held = holdPlan(120, 100, 80, band)
+assert.equal(held.plan?.entry, 100) // the 50-MA
+assert.equal(held.plan?.stop, 80)   // the 200-MA — the position ends with the trend, not on a wick
+assert.equal(held.plan?.target, 110) // the wide high, a trim
 /* The case the two rules genuinely disagree on, and the reason this could not stay a retune. Price
    has come *under* the 50-MA while still holding the 200: tradePlan calls that a chase and declines
    it, so under the old shared rule the single best moment to add to a long-term position rendered as
@@ -444,6 +444,100 @@ assert.deepEqual(deskSignals(null, null, null, own), own)
 // the bug itself: a missing vwap card is a missing vote, and one vote is a whole verdict
 assert.equal(tally(deskSignals(htf, null, null, [sig('a', 'bear')])).dir, 'flat')
 assert.equal(tally(deskSignals(htf, null, { signal: sig('vwap', 'bear') }, [sig('a', 'bear')])).dir, 'short')
+
+/* ---------- the engine: the results that must be impossible ---------- */
+
+/* Both backtests below run on hold(), so these are the assertions they no longer each need their
+   own copy of. They are written as statements about what cannot happen rather than as expected
+   values, because the failures that matter here are not off-by-one — they are numbers that could
+   not have been earned by a position anyone could have held. */
+const hb = (o: number, h: number, l: number, c: number) => ({ t: 0, o, h, l, c })
+
+// a bar that touched the stop and the target both is a stop. Which came first is not in OHLC, and
+// the kind reading is the one that flatters
+const both = hold([hb(100, 112, 94, 105)], 0, { long: true, entry: 100, stop: 95, target: 110 })
+assert.deepEqual([both.exit, both.r], ['stop', -1])
+// …and a bar that touched only the target is the target, at the target, not at its close
+const won = hold([hb(100, 111, 99, 110.5)], 0, { long: true, entry: 100, stop: 95, target: 110 })
+assert.deepEqual([won.exit, won.price, won.r], ['target', 110, 2])
+
+// a rule's own exit signal is read at the close, and only after both levels: a bar that traded
+// through the stop had taken the trade off before its close was ever known
+const sigBars = [hb(100, 101, 99.5, 100), hb(100, 100.5, 98.9, 98.9)]
+const bySignal = hold(sigBars, 0, { long: true, entry: 100, stop: 95, signal: (b) => b.c < 99 })
+assert.deepEqual([bySignal.exit, bySignal.price], ['signal', 98.9])
+// the same signal on a bar that also went through the stop: the stop wins, and the loss is 1R
+const stopFirst = hold([sigBars[0], hb(100, 100.5, 94, 98.9)], 0,
+  { long: true, entry: 100, stop: 95, signal: (b) => b.c < 99 })
+assert.deepEqual([stopFirst.exit, stopFirst.r], ['stop', -1])
+
+/* A trail only ever tightens. This one asks to be moved to 90 — five dollars looser than it
+   started — and the next bar's low of 93 has to stop it anyway: a rule that could widen its own
+   stop after entry would be reporting R against a risk it no longer takes. */
+const loosen = hold([hb(100, 102, 99, 101), hb(101, 105, 93, 104)], 0,
+  { long: true, entry: 100, stop: 95, target: 130, trail: () => 90 })
+assert.deepEqual([loosen.exit, loosen.r], ['stop', -1])
+// tightening does move it, and the smaller loss is the whole reason to trail
+const tighten = hold([hb(100, 102, 99, 101), hb(101, 105, 98, 104)], 0,
+  { long: true, entry: 100, stop: 95, target: 130, trail: () => 99 })
+assert.deepEqual([tighten.exit, tighten.r], ['stop', -0.2])
+// and the trail is applied after the bar it was read from, never against it: 99 is read off bar 0,
+// whose own low of 99 must not be tested against a stop that did not exist while it printed
+assert.equal(hold([hb(100, 102, 99, 101)], 0,
+  { long: true, entry: 100, stop: 95, trail: () => 99 }).exit, 'end')
+
+// geometry that is not a trade is refused loudly rather than priced. A stop the wrong side of the
+// entry is a division by something that is not a risk, and every number after it is fiction
+assert.throws(() => hold([hb(100, 101, 99, 100)], 0, { long: true, entry: 100, stop: 105 }), /wrong side/)
+assert.throws(() => hold([hb(100, 101, 99, 100)], 0, { long: true, entry: 100, stop: 100 }), /wrong side/)
+assert.throws(() => hold([hb(100, 101, 99, 100)], 0, { long: true, entry: 100, stop: 95, target: 90 }),
+  /target is the wrong side/)
+
+/* The one this whole engine exists for: **a trailing stop cannot lose 8R.** It cannot lose more
+   than 1R plus its fee, ever — whatever the market does, however the rule trails, on either side.
+   Asserted over five hundred random markets rather than one fixture, because the run that started
+   this reported −7.2R a trade and a worst trade of −2500R, and no single hand-written bar sequence
+   would have caught it. hold() throws on its own if it ever computes one, so this is the belt and
+   the assertion below is the braces. */
+let seed = 20260811
+const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+for (let run = 0; run < 500; run++) {
+  const long = rnd() > 0.5
+  let p = 100
+  const bars = Array.from({ length: 120 }, () => {
+    p = Math.max(1, p * (1 + (rnd() - 0.5) * 0.08))
+    const o = p * (1 + (rnd() - 0.5) * 0.02)
+    return hb(o, Math.max(o, p) * (1 + rnd() * 0.03), Math.min(o, p) * (1 - rnd() * 0.03), p)
+  })
+  const entry = bars[0].c, risk = entry * (0.005 + rnd() * 0.05), fee = 0.002
+  const { r } = hold(bars, 0, {
+    long, entry, stop: long ? entry - risk : entry + risk,
+    target: long ? entry + risk * 3 : entry - risk * 3,
+    // a trail that lurches about on purpose, and spends most of its time trying to loosen
+    trail: (b) => (long ? b.c - risk * (0.2 + rnd() * 4) : b.c + risk * (0.2 + rnd() * 4)),
+    signal: () => rnd() < 0.02,
+    fee,
+  })
+  assert.ok(r >= -1 - (fee * entry) / risk - 1e-9, `run ${run}: a trailing stop lost ${r.toFixed(2)}R`)
+}
+
+/* The shape that produced those numbers, priced both ways. A rule that calls the distance to its
+   moving average "risk", enters a hair above it, and then leaves on a close far below: five cents
+   of risk and a seven-dollar fall is −140R by that arithmetic. Through the engine the same bars pay
+   −1R, because a level you called your risk is a stop, and a stop is where you get out. */
+const crash = [hb(100, 100.2, 99.96, 100), hb(100, 100.1, 92, 93)]
+const naive = (crash[1].c - 100) / 0.05
+assert.ok(naive < -100, 'the fixture has to reproduce the impossible number or this proves nothing')
+assert.equal(hold(crash, 0, { long: true, entry: 100, stop: 99.95, signal: (b) => b.c < 99 }).r, -1)
+
+/* An unfilled plan is never scored. fill() is the only way into hold(), and −1 is a plan nobody was
+   ever in — not a loss, which is the same rule the live record and the paper desk both keep. */
+const fb = [hb(100, 101, 99, 100), hb(100, 102, 99.5, 101)]
+assert.equal(fill(fb, 0, 1, true, 98), -1)   // price never came down for it
+assert.equal(fill(fb, 0, 1, true, 99.5), 0)  // the first bar that traded through it, not the best one
+assert.equal(fill(fb, 0, 1, false, 102), 1)
+assert.equal(fill(fb, 0, 0, false, 102), -1) // the window closed before the bar that would have filled
+assert.equal(fill(fb, 0, 99, true, 98), -1)  // a window past the end of the data is not a fill either
 
 /* ---------- the backtest ---------- */
 

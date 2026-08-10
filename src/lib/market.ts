@@ -1481,6 +1481,122 @@ export function strategyPlan(h: Horizon, i: {
 
 /** One simulated trade: the bar the plan was made on, the bar its entry was actually reached, and
  *  the bar and side it ended on. `r` is +rr on a target and −1 on a stop. */
+/* ---------- the engine every walk below runs on ---------- */
+
+/**
+ * Where a position ended. `end` is "the bars ran out" — not a result, and what the caller does with
+ * it is the caller's business: the swing walk counts it unresolved, the intraday one calls it the
+ * bell and scores it at the last price.
+ */
+export type ExitKind = 'target' | 'stop' | 'signal' | 'end'
+
+/** A position, as the engine needs to hold it: geometry, and the two ways a rule can change its
+ *  mind after the fact. Everything else — why it was taken, what it is called — belongs to whoever
+ *  is walking it. */
+export type Position = {
+  long: boolean
+  entry: number
+  stop: number
+  /** Null for a rule that has no fixed target and leaves on its trail or its own signal instead. */
+  target?: number | null
+  /** A new stop for the bar just closed, or null to leave it. **Only ever tightened** — the engine
+   *  takes the max (min, short) against the standing stop, so a rule cannot widen its own risk after
+   *  entry. Without that clamp a "trailing" stop that loosens turns the R denominator into a lie,
+   *  which is the whole failure this type exists to make unrepresentable. */
+  trail?: (bar: Candle, i: number) => number | null
+  /** Leave at this bar's close — a rule's own exit signal, like a close back under the MA. Read
+   *  *after* the stop and the target, never before: a bar that traded through the stop had already
+   *  taken you out before its close was known. */
+  signal?: (bar: Candle, i: number) => boolean
+  /** Round-trip cost as a share of price, 0.002 for 0.2%. Charged in R off the entry-to-stop
+   *  distance, which is the same subtraction the setup card makes. */
+  fee?: number
+}
+
+export type Held = {
+  closedAt: number
+  exit: ExitKind
+  /** Where it came off — the stop, the target, or a close. */
+  price: number
+  r: number
+}
+
+/**
+ * How far a plan waited for its entry, and whether it ever got one. `-1` is a plan nobody was ever
+ * in, which is not a loss and must never be scored as one — the same rule the live record and the
+ * paper desk both keep.
+ *
+ * Its own function because both walks below had this loop copied out, and a fill rule that drifts
+ * between two backtests is two backtests that cannot be compared.
+ */
+export function fill(c: Candle[], from: number, until: number, long: boolean, entry: number): number {
+  for (let j = from; j <= until && j < c.length; j++) {
+    if (long ? c[j].l <= entry : c[j].h >= entry) return j
+  }
+  return -1
+}
+
+/**
+ * One position, held bar by bar until something takes it off. The single exit loop in this file:
+ * both backtests had their own copy, alike enough to look verified and different enough that a fix
+ * to one silently left the other wrong.
+ *
+ * The ordering is the whole point, and it is pessimistic on purpose:
+ *
+ *  1. **The stop**, against the stop standing at the *start* of the bar. Trailing it on the same bar
+ *     it is tested against is how a walk gives itself a stop that ran away from a loss.
+ *  2. **The target**, only if the stop did not go. A bar that touched both is a stop: intrabar order
+ *     is not in OHLC, and picking the kind one is how a backtest invents an edge.
+ *  3. **The signal**, at the close — after the two levels, because a bar that traded through either
+ *     had taken the trade off before its close existed.
+ *  4. **The trail**, last, for the bar after this one.
+ *
+ * That ordering makes one thing true by construction, and it is the property this engine exists to
+ * hold: **the exit price is never worse than the stop**, so a position cannot lose more than 1R plus
+ * its fee, however the rule trails or signals. It is asserted below rather than assumed. A rule that
+ * cannot state its stop has no R to report — measure it in percent instead, and see `above` in the
+ * trend runs, which reported −7R a trade by dividing by a distance that was sometimes 0.0015% of
+ * price.
+ *
+ * What it still does not model: slippage, funding, and a bar that gaps clean through a stop, which
+ * really fills worse than the level says.
+ * ponytail: a `gap` dial that fills a stop at the bar's open when the open is already past it would
+ * cover the third one; nothing here needs it until a rule survives without it.
+ */
+export function hold(c: Candle[], opened: number, pos: Position, until = c.length - 1): Held {
+  const { long, entry, target = null, trail, signal, fee = 0 } = pos
+  const risk = long ? entry - pos.stop : pos.stop - entry
+  // the caller handed over a position that is not one. Loud, because every number downstream of a
+  // zero or negative risk is a division by something that is not a risk
+  if (!(risk > 0)) throw new Error(`hold: stop is the wrong side of the entry (${pos.stop} vs ${entry})`)
+  if (target != null && (long ? target <= entry : target >= entry)) {
+    throw new Error(`hold: target is the wrong side of the entry (${target} vs ${entry})`)
+  }
+
+  const last = Math.min(until, c.length - 1)
+  let stop = pos.stop
+  let closedAt = last, exit: ExitKind = 'end', price = c[last]?.c ?? entry
+
+  for (let j = opened; j <= last; j++) {
+    const bar = c[j]
+    if (long ? bar.l <= stop : bar.h >= stop) { closedAt = j; exit = 'stop'; price = stop; break }
+    if (target != null && (long ? bar.h >= target : bar.l <= target)) {
+      closedAt = j; exit = 'target'; price = target; break
+    }
+    if (signal?.(bar, j)) { closedAt = j; exit = 'signal'; price = bar.c; break }
+    const want = trail?.(bar, j)
+    if (want != null) stop = long ? Math.max(stop, want) : Math.min(stop, want)
+  }
+
+  const r = (long ? price - entry : entry - price) / risk - (fee * entry) / risk
+  /* The impossible one. The stop is checked first and only ever tightens, so no exit can be priced
+     below it — if this ever fires, the walk has invented a loss the position could not have taken,
+     and returning the number would be worse than stopping. */
+  const floor = -1 - (fee * entry) / risk
+  if (r < floor - 1e-9) throw new Error(`hold: ${r.toFixed(3)}R is past the ${floor.toFixed(3)}R the stop allows`)
+  return { closedAt, exit, price, r }
+}
+
 export type Trade = {
   at: number; openedAt: number; closedAt: number
   dir: 'long' | 'short'
@@ -1573,10 +1689,7 @@ export function backtest(
     /* `expiry` bounds the wait for the entry and nothing else. A plan whose pull-back never comes
        round is not a loss — it is a trade nobody was ever in, the same rule the live record keeps. */
     const waitEnd = Math.min(c.length - 1, i + expiry)
-    let open = -1
-    for (let j = i + 1; j <= waitEnd; j++) {
-      if (long ? c[j].l <= plan.entry : c[j].h >= plan.entry) { open = j; break }
-    }
+    const open = fill(c, i + 1, waitEnd, long, plan.entry)
     if (open < 0) {
       // only a real miss if it got its whole window; one cut short by the end of the data was
       // never given its chance, and counting it either way would be scoring an unplayed hand
@@ -1589,22 +1702,14 @@ export function backtest(
        and with a bias that flattered nothing: the stop sits at the near swing and the target three
        windows past it, so the slow ones are disproportionately the winners. On the test fixture it
        reported 2 trades out of 11 entered and called the rule a loser on the strength of it. */
-    let end = -1
-    let exit: 'target' | 'stop' = 'stop'
-    for (let j = open; j < c.length; j++) {
-      const stopped = long ? c[j].l <= plan.stop : c[j].h >= plan.stop
-      const won = long ? c[j].h >= plan.target : c[j].l <= plan.target
-      // stop first: which came first inside the bar is not in the data, and guessing the kind one
-      // is how a backtest talks itself into an edge it never had
-      if (stopped || won) { end = j; exit = stopped ? 'stop' : 'target'; break }
-    }
+    const ran = hold(c, open, { long, entry: plan.entry, stop: plan.stop, target: plan.target })
     // still open when the bars ran out: there is no result to score, and it is said rather than dropped
-    if (end < 0) { unresolved++; break }
+    if (ran.exit === 'end') { unresolved++; break }
     trades.push({
-      at: i, openedAt: open, closedAt: end, dir: long ? 'long' : 'short', entry: plan.entry,
-      stop: plan.stop, target: plan.target, exit, r: exit === 'stop' ? -1 : plan.rr,
+      at: i, openedAt: open, closedAt: ran.closedAt, dir: long ? 'long' : 'short', entry: plan.entry,
+      stop: plan.stop, target: plan.target, exit: ran.exit === 'target' ? 'target' : 'stop', r: ran.r,
     })
-    i = end + 1
+    i = ran.closedAt + 1
   }
 
   const rs = trades.map((t) => t.r).sort((a, b) => a - b)
@@ -1782,30 +1887,17 @@ export function amdBacktest(c: Candle[], opts: AmdOpts = {}): AmdRun {
     // a range target the entry has already run past is not a trade, it is a fill on the wrong side
     if (long ? aim <= level : aim >= level) continue
 
-    let opened = -1
-    for (let j = shift + 1; j <= last; j++) {
-      if (long ? c[j].l <= level : c[j].h >= level) { opened = j; break }
-    }
+    const opened = fill(c, shift + 1, last, long, level)
     if (opened < 0) { missed++; continue }
 
-    let end = -1
-    let exit: AmdTrade['exit'] = 'bell'
-    for (let j = opened; j <= last; j++) {
-      const hitStop = long ? c[j].l <= stop : c[j].h >= stop
-      const hitAim = long ? c[j].h >= aim : c[j].l <= aim
-      // stop first: which came first inside the bar is not in the data, and guessing the kind one
-      // is how a backtest talks itself into an edge it never had — backtest() above reads the same
-      if (hitStop || hitAim) { end = j; exit = hitStop ? 'stop' : 'target'; break }
-    }
-    if (end < 0) end = last   // the bell, at whatever the last price was
-
-    const out = exit === 'target' ? aim : exit === 'stop' ? stop : c[last].c
-    // one formula for all three exits, so a stop is exactly −1 gross and nothing else has to be
-    // special-cased. The fee is a share of price and the risk is what it is charged against.
-    const r = (long ? out - level : level - out) / risk - (fee * level) / risk
+    // the same engine backtest() above runs on, bounded at the bell: `end` is a day that reached
+    // neither level, scored at the last price, which is the only honest close for a same-session rule
+    const ran = hold(c, opened, { long, entry: level, stop, target: aim, fee }, last)
     trades.push({
-      at: shift, openedAt: opened, closedAt: end, dir: long ? 'long' : 'short',
-      entry: level, stop, target: aim, exit, r,
+      at: shift, openedAt: opened, closedAt: ran.closedAt, dir: long ? 'long' : 'short',
+      entry: level, stop, target: aim,
+      exit: ran.exit === 'end' ? 'bell' : ran.exit === 'target' ? 'target' : 'stop',
+      r: ran.r,
     })
   }
 
