@@ -36,6 +36,13 @@ const authed = (key: string, secret: string, path: string, query = '') => {
   }).then((r) => r.json())
 }
 
+/** MEXC answers a list either as the array itself or as a page wrapping one, depending on the
+ *  endpoint — and a `.map` on the wrapper throws, which up in the route is indistinguishable from
+ *  a venue that refused. Both shapes in, an array out, and anything else is an empty list. */
+export const rowsOf = (d: unknown): unknown[] =>
+  (Array.isArray(d) ? d : Array.isArray((d as { resultList?: unknown })?.resultList)
+    ? (d as { resultList: unknown[] }).resultList : [])
+
 /** MEXC rows into the shared shape. `marks` is fairPrice by symbol, `sizes` contractSize by
  *  symbol — both off the public feed. The underscore leaves the symbol here (BTC_USDT → BTCUSDT)
  *  so the app's asset join reads it like any other row. */
@@ -133,9 +140,13 @@ export function shapeClosed(rows: unknown[]): Closed[] {
 
 /** What MEXC closed lately. Page one is a hundred rows, which at a minute's poll is a lifetime. */
 export async function closed(key: string, secret: string, since: number): Promise<Closed[]> {
-  const r = await authed(key, secret, '/api/v1/private/position/list/history_positions', 'page_num=1&page_size=100')
+  /* No parameters, deliberately: they would ride into the signature as well as the URL, and this is
+     the one call here that had never been made against a real key. The default page is the most
+     recent trades — the same twenty MEXC's own history screen shows — and the window below is what
+     decides how far back the record cares about anyway. */
+  const r = await authed(key, secret, '/api/v1/private/position/list/history_positions')
   if (r?.success !== true) throw new Error(String(r?.message ?? r?.code ?? 'the exchange did not answer'))
-  return shapeClosed(r.data ?? []).filter((p) => p.closedAt >= since)
+  return shapeClosed(rowsOf(r.data)).filter((p) => p.closedAt >= since)
 }
 
 /** The USDT wallet's equity — the currency the product this reads is margined in. */
@@ -161,7 +172,7 @@ export async function positions(key: string, secret: string): Promise<Feed> {
     pub('/api/v1/contract/detail'),
     // and so are the levels: a stop book that will not answer leaves the rows stopless, which is
     // what they were before this call existed
-    authed(key, secret, '/api/v1/private/stoporder/list/orders', 'page_num=1&page_size=100').catch(() => null),
+    authed(key, secret, '/api/v1/private/stoporder/list/orders').catch(() => null),
   ])
   if (open?.success !== true) throw new Error(String(open?.message ?? open?.code ?? 'the exchange did not answer'))
   const marks = new Map(
@@ -173,7 +184,7 @@ export async function positions(key: string, secret: string): Promise<Feed> {
       .map((d) => [String(d.symbol ?? '').toUpperCase(), Number(d.contractSize)] as const),
   )
   const data = {
-    positions: shape(open.data ?? [], marks, sizes, stops?.success === true ? shapeStops(stops.data ?? []) : undefined),
+    positions: shape(rowsOf(open.data), marks, sizes, stops?.success === true ? shapeStops(rowsOf(stops.data)) : undefined),
     equity: assets?.success === true ? equityOf(assets.data) : null,
   }
   if (cached.size >= 64) cached.clear()

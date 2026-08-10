@@ -1,7 +1,7 @@
 // npm test — the MEXC shaping: contracts turn into coins, sides read off positionType, and a
 // symbol the contract list forgot is dropped rather than priced ten-thousand-fold wrong
 import assert from 'node:assert/strict'
-import { equityOf, shape, shapeClosed, shapeStops, sign } from './mexc.ts'
+import { equityOf, rowsOf, shape, shapeClosed, shapeStops, sign } from './mexc.ts'
 
 const marks = new Map([['BTC_USDT', 110], ['ETH_USDT', 190]])
 const sizes = new Map([['BTC_USDT', 0.0001], ['ETH_USDT', 0.01]])
@@ -42,6 +42,13 @@ assert.deepEqual(shapeClosed([
   openedAt: 1754400000000, closedAt: 1754500000000, pnl: 19.94, lev: 50,
 }])
 assert.equal(rows[1].openedAt, null)
+
+/* both list shapes: MEXC hands some endpoints the array and others a page wrapping it, and a
+   wrapper reaching `.map` threw — which up in the route was indistinguishable from a refused key */
+assert.deepEqual(rowsOf([{ a: 1 }]), [{ a: 1 }])
+assert.deepEqual(rowsOf({ totalCount: 1, resultList: [{ a: 1 }] }), [{ a: 1 }])
+assert.deepEqual(rowsOf(null), [])
+assert.deepEqual(rowsOf({ nothing: true }), [])
 
 // equity is the USDT wallet's, the currency the product is margined in
 assert.equal(equityOf([{ currency: 'BTC', equity: 1 }, { currency: 'USDT', equity: '1200.505' }]), 1200.51)

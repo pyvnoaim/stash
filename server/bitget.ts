@@ -206,7 +206,8 @@ export async function closed(key: string, secret: string, pass: string, since: n
   const r = await authed(key, secret, pass,
     `/api/v2/mix/position/history-position?productType=USDT-FUTURES&startTime=${since}&limit=100`)
   if (r?.code !== '00000') throw new Error(String(r?.msg ?? 'the exchange did not answer'))
-  return shapeClosed(r.data?.list ?? [])
+  // the list is under `list` on this endpoint and is the data itself on others — take either
+  return shapeClosed(Array.isArray(r.data) ? r.data : r.data?.list ?? [])
 }
 
 /**

@@ -1188,12 +1188,19 @@ export function start({
       if (hit && Date.now() - hit.at < 30_000) return send(res, 200, { closed: hit.rows })
       const since = Date.now() - 7 * 86400_000
       const stored = [
-        { raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetClosed(c.key, c.secret, c.passphrase, since) },
-        { raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcClosed(c.key, c.secret, since) },
+        { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetClosed(c.key, c.secret, c.passphrase, since) },
+        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcClosed(c.key, c.secret, since) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
+      /* A venue that will not answer is logged rather than swallowed. An empty list here is
+         indistinguishable from a quiet week on the page, and "the history endpoint is refusing this
+         key" is not something anyone should have to guess at from a record that stays empty. */
       const lists = await Promise.all(stored.map((v) => {
-        try { return v.go(JSON.parse(v.raw!)).catch(() => []) } catch { return [] }
+        const oops = (e: unknown) => {
+          log('closed-fail', `${v.venue}: ${String((e as Error)?.message ?? e)}`, via(req))
+          return []
+        }
+        try { return v.go(JSON.parse(v.raw!)).catch(oops) } catch (e) { return oops(e) }
       }))
       const rows = lists.flat().sort((a, b) => b.closedAt - a.closedAt)
       if (closedCache.size >= 64) closedCache.clear()
