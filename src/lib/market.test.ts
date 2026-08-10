@@ -51,17 +51,19 @@ assert.ok(hammer.includes('Hammer'))
 const forming = [...bull.slice(0, 30), { t: 30, o: 30, h: 30.05, l: 29.95, c: 30.01 }]
 assert.ok(!signals(forming).signals.some((s) => s.label === 'Doji'))
 
-// Opening range: the NY open (09:30 local — 14:30 UTC in January) starts it, the first hour
+// Opening range: the NY open (09:30 local — 14:30 UTC in January) starts it, the opening candle
 // sets it, and a later close beyond it is the break. Anchored there rather than at midnight UTC
-// because the midnight version lost money over 219 days of testing and this one didn't.
+// because the midnight version lost money over 219 days of testing and this one didn't. The range
+// is RANGE_MIN of session, which on these 15m bars is the first bar alone.
 const open = Date.UTC(2024, 0, 2, 14, 30)
 const bar = (n: number, h: number, l: number, c: number) => ({ t: open + n * 900000, o: c, h, l, c, v: 10 })
 const orbBars = [
-  bar(0, 105, 95, 102), bar(1, 104, 99, 100), bar(2, 106, 98, 103), bar(3, 104, 97, 101), // the hour → 95..106
+  bar(0, 105, 95, 102), // the opening candle → 95..105
+  bar(1, 104, 99, 100), bar(2, 104, 98, 103), bar(3, 104, 97, 101),
   bar(4, 109, 103, 108), // then a close above it
 ]
 const o = orb(orbBars)
-assert.equal(o?.high, 106) // the whole hour, not just the opening bar
+assert.equal(o?.high, 105) // the opening candle alone
 assert.equal(o?.low, 95)
 assert.equal(o?.t, open)
 assert.equal(o?.signal.label, 'Opening-range breakout')
@@ -109,12 +111,12 @@ assert.deepEqual(desks(1), ['Asia']) // 10:00 in Tokyo, and only there
 assert.deepEqual(openDesks(Date.UTC(2024, 6, 6, 14)), [])
 
 /* The open as an instruction, in the four moments it has. The fixture opens at 09:30 in NY and
-   its fifth bar closes above the hour's high, so: 20 minutes before, nothing to do; 30 minutes in,
-   the hour is still building; and after it, the break with a side on it. */
+   its fifth bar closes above the opening candle's high, so: 20 minutes before, nothing to do; ten
+   minutes in, the candle is still building; and after it, the break with a side on it. */
 const playAt = (mins: number, bars = orbBars) => openPlay(bars, open + mins * 60_000)
 assert.match(playAt(-20)!.say, /NY opens in 20 minutes/)
 assert.equal(playAt(-20)!.tone, 'wait')
-assert.match(playAt(30, orbBars.slice(0, 2))!.say, /still forming/)
+assert.match(playAt(10, orbBars.slice(0, 2))!.say, /still forming/)
 const broke = playAt(75)!
 assert.match(broke.say, /NY's high/)
 /* …and 'wait', not 'go': five bars are too few for an ATR, so the range cannot pass the width test,

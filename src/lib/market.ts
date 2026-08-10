@@ -1134,7 +1134,7 @@ export const DEMOS: Record<GuideKey, Demo> = {
     ]),
     mark: [4, 5],
   },
-  // the session's first hour sets the band; price leaves it later in the day
+  // the session's opening candle sets the band; price leaves it later in the day
   orb: {
     candles: walk([100, 103, 101, 102.5, 102, 101.4, 102.2, 101.6, 102.8, 103.4, 104.6, 105.2, 106.1, 105.6, 106.8]),
     band: 15, mark: [0, 3],
@@ -1258,7 +1258,7 @@ export const GUIDES: Record<GuideKey, string> = {
     'How much was traded on the latest bar against the recent average. A breakout on heavy volume means many people acted on it; the same break on thin volume often means very few did and it gets given back. Volume confirms, it never leads.',
   candle:
     'The shape of one or two bars. A body that swallows the previous bar in the other colour (engulfing) says the side that was winning got overwhelmed within a single bar; a long wick with a small body (hammer, shooting star) says an extreme was reached and rejected; a body of almost nothing (doji) says the two sides finished level. These are the oldest patterns in the trade and the most local — one bar of evidence, usually worth acting on only where a bigger reason already sits.',
-  orb: 'The opening range is the high and low of the first hour of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the NY open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. Gold and crypto never close, so the range here follows whichever of Asia, London and NY opened last — at nine in the morning in Berlin the NY range is sixteen hours old and the levels people are trading around are London\'s. Only the NY one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
+  orb: 'The opening range is the high and low of the opening candle — the first fifteen minutes of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the NY open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. And read this honestly too: the range drawn here is now the 15-minute opening candle, which is the version everyone trades and the narrower of the two that was measured — the numbers above came off the hour. Gold and crypto never close, so the range here follows whichever of Asia, London and NY opened last — at nine in the morning in Berlin the NY range is sixteen hours old and the levels people are trading around are London\'s. Only the NY one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
   vwap:
     'The volume-weighted average price since the session opened — every trade since the bell, each counted for the size it was. It is the number institutional desks are measured against (fill above it on a buy and you did worse than the day), which is a large part of why price keeps returning to it: size that has to be worked leans against the line rather than chasing away from it. Above it the buyers who showed up today are in front, below it the sellers are. Two things separate it from the moving averages here — it starts fresh at the open instead of dragging the last fifty bars behind it, and it weights the busy hour over the dead one. It is also why it decays: by the end of a long session it has averaged so much that it stops moving, and overnight it means nothing at all, which is why this one goes quiet once its session is more than eight hours behind. Gold and crypto have no closing bell, so the session here is whichever of Asia, London and NY opened last.',
   structure:
@@ -2050,7 +2050,13 @@ export function candlePatterns(c: Candle[]): Signal[] {
 /** Opening-range breakout — the "first 15 minutes" trick. Marks the high/low of the 00:00-UTC 15m
  *  bar (the session-open range for these 24/7 markets) and says whether price has cleared it.
  *  Meant for 15m candles; returns null if the window holds no session-open bar. */
-const RANGE_MIN = 60 // how much of the session sets the range
+/* How much of the session sets the range. Fifteen minutes — the opening candle — which is what you
+   asked for and what every version of this rule posted anywhere uses.
+   The honest note, because it is the only thing this file owes you: the 219-day test behind the
+   play was run on the *hour*, and widening 15 → 60 was part of what took it from −0.64R a trade to
+   about break-even. So the levels below are the ones you want to see; the numbers in GUIDES.orb
+   were measured on a wider range than the one now being drawn. */
+const RANGE_MIN = 15
 /** The one whose numbers we have: the NY open is the anchor that was actually backtested. */
 const TESTED = 'NY'
 
@@ -2112,8 +2118,11 @@ export function orb(c: Candle[]): Range | null {
   if (!anchor) return null
   const { at, where } = anchor
   const open = c[at]
-  // the first hour, not the first bar: a wider range is a wider stop, and the fees that eat this
-  // play are a fixed share of price, so they cost proportionally less against a bigger R
+  /* The opening candle: RANGE_MIN of session, however many bars of this feed that is. On a 15m
+     chart it is one bar; on a 5m chart it is three, which is the same window read finer.
+     Worth knowing what the width costs, because it is the whole economics of the play: the stop
+     rides the range, the fee is a fixed share of price, so a narrow range is a small R and a fee
+     that eats more of it. The hour was measurably kinder on that count. */
   const bars = c.slice(at, at + Math.max(1, Math.round((RANGE_MIN * 60_000) / step)))
   const high = Math.max(...bars.map((x) => x.h))
   const low = Math.min(...bars.map((x) => x.l))
@@ -2193,12 +2202,12 @@ export function openPlay(c: Candle[], at = Date.now()): Play | null {
     .sort((a, b) => a.mins - b.mins)[0]
   if (soon) return {
     where: soon.s.where, tone: 'wait', mins: soon.mins,
-    say: `${soon.s.where} opens in ${soon.mins} minute${soon.mins === 1 ? '' : 's'}. Nothing to do yet — the first hour after it sets the range, and the play is the break of that.`,
+    say: `${soon.s.where} opens in ${soon.mins} minute${soon.mins === 1 ? '' : 's'}. Nothing to do yet — the opening candle after it sets the range, and the play is the break of that.`,
   }
 
   const r = orb(c)
   if (!r) return null
-  // off the clock, not off the last bar: the hour that sets the range is an hour of the day, and a
+  // off the clock, not off the last bar: the window that sets the range is a time of day, and a
   // feed running a bar behind would otherwise hold the range open past the point it closed
   const age = (at - r.t) / 60_000
   if (age >= 8 * 60) return null // the session is over; the levels are yesterday's and say so elsewhere
@@ -2208,7 +2217,7 @@ export function openPlay(c: Candle[], at = Date.now()): Play | null {
     const left = Math.max(1, Math.round(RANGE_MIN - age))
     return {
       where: r.where, tone: 'wait', mins: left,
-      say: `${r.where}'s range is still forming — ${left} minute${left === 1 ? '' : 's'} of the hour left, ${band} so far. A break before the hour is up is a break of half a range.`,
+      say: `${r.where}'s range is still forming — ${left} minute${left === 1 ? '' : 's'} of the opening candle left, ${band} so far. A break before it closes is a break of half a range.`,
     }
   }
 
