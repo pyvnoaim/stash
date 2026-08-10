@@ -91,12 +91,6 @@ const authed = (key: string, secret: string, pass: string, path: string, body?: 
   }).then((r) => r.json())
 }
 
-/** Any authed GET, answered raw. For /api/venue-peek, which reads field names off the exchange's
- *  own reply rather than off documentation that has been wrong twice. Nothing shapes it here on
- *  purpose: shaping is what hides the field you are looking for. */
-export const raw = (key: string, secret: string, pass: string, path: string) =>
-  authed(key, secret, pass, path)
-
 /** One Bitget position row into the shared shape above — the app has one word for "a position"
  *  and this keeps it that way. Bitget is the generous feed of the two: the resting stop and target
  *  ride the row itself, and `liq` is the exchange's own liquidation price rather than anyone's
@@ -262,18 +256,61 @@ export async function closed(key: string, secret: string, pass: string, since: n
     `/api/v2/mix/position/history-position?productType=USDT-FUTURES&startTime=${since}&limit=100`)
   if (r?.code !== '00000') throw new Error(String(r?.msg ?? 'the exchange did not answer'))
   // the list is under `list` on this endpoint and is the data itself on others — take either
-  const rows = shapeClosed(Array.isArray(r.data) ? r.data : r.data?.list ?? [])
-  // eight at most: a week of one person's trades is a handful of symbols, and this is a call each
+  let rows = shapeClosed(Array.isArray(r.data) ? r.data : r.data?.list ?? [])
   const need = [...new Set(rows.filter((x) => x.lev == null).map((x) => x.symbol))].slice(0, 8)
   if (!need.length) return rows
+  /* The orders that opened them, which is where the leverage lives. One call for the week, matched
+     back to each position — the account's own setting below is only the fallback now, for a trade
+     whose opening fill is older than this window or on a page past the first hundred. */
+  const oh = await authed(key, secret, pass,
+    `/api/v2/mix/order/orders-history?productType=USDT-FUTURES&startTime=${since}&limit=100`).catch(() => null)
+  const orders = oh?.code === '00000'
+    ? (Array.isArray(oh.data) ? oh.data : oh.data?.entrustedList ?? oh.data?.list ?? []) as unknown[]
+    : []
+  rows = rows.map((x) => (x.lev != null ? x : { ...x, lev: levOf(orders, x) }))
+  const still = [...new Set(rows.filter((x) => x.lev == null).map((x) => x.symbol))].slice(0, 8)
+  if (!still.length) return rows
+  // eight at most: a week of one person's trades is a handful of symbols, and this is a call each
   const levs = new Map<string, { long: number | null, short: number | null }>()
-  await Promise.all(need.map(async (symbol) => {
+  await Promise.all(still.map(async (symbol) => {
     const a = await authed(key, secret, pass,
       `/api/v2/mix/account/account?symbol=${symbol}&productType=USDT-FUTURES&marginCoin=USDT`).catch(() => null)
     if (a?.code !== '00000') return
     levs.set(symbol, accountLev(a.data))
   }))
   return rows.map((x) => (x.lev != null ? x : { ...x, lev: levs.get(x.symbol)?.[x.side] ?? null }))
+}
+
+/**
+ * The leverage a closed position really ran at, worked out from the orders that opened it.
+ *
+ * The position history does not carry one. The order history does: every fill says its `leverage`
+ * and its `quoteVolume`, so quoteVolume ÷ leverage is the margin that fill put up, and the whole
+ * notional over the whole margin is the multiplier the position was actually held at — scaled in at
+ * two different leverages and it lands in between, which is the honest answer rather than either.
+ *
+ * Matched on symbol, side and the window the position was open for. Opening fills only: a
+ * reduce-only order is the way out, and counting it would halve the answer.
+ */
+export function levOf(orders: unknown[], p: { symbol: string, side: 'long' | 'short', openedAt: number | null, closedAt: number }): number | null {
+  if (p.openedAt == null) return null
+  let notional = 0, margin = 0
+  for (const o of (orders as Record<string, unknown>[])) {
+    if (String(o?.symbol ?? '').toUpperCase() !== p.symbol) continue
+    // hedge mode names the side outright; one-way mode does not, and there the window decides
+    const posSide = String(o?.posSide ?? '').toLowerCase()
+    if ((posSide === 'long' || posSide === 'short') && posSide !== p.side) continue
+    if (String(o?.reduceOnly ?? '').toUpperCase() === 'YES') continue
+    if (String(o?.tradeSide ?? '').toLowerCase() === 'close') continue
+    const at = Number(o?.cTime ?? o?.ctime)
+    // a minute either side: the fill that opened it is stamped a breath before the position is
+    if (!isFinite(at) || at < p.openedAt - 60_000 || at > p.closedAt + 60_000) continue
+    const vol = Number(o?.quoteVolume), lev = Number(o?.leverage)
+    if (!isFinite(vol) || vol <= 0 || !isFinite(lev) || lev <= 0) continue
+    notional += vol
+    margin += vol / lev
+  }
+  return margin > 0 ? Math.round((notional / margin) * 100) / 100 : null
 }
 
 /** The leverage an account is set to on one symbol, per side. Isolated keeps a number per side and

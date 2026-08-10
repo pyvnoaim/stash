@@ -1,7 +1,7 @@
 // npm test — the Bitget shaping: their row, our shape, and junk numbers turn null not NaN
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { accountLev, equityOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
+import { accountLev, equityOf, levOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
 
 const rows = shape([
   {
@@ -51,7 +51,29 @@ assert.deepEqual(done, [{
   lev: 10,
 }])
 
-/* the history has no leverage on most accounts, so the account's own setting stands in: per side
+/* what a closed position really ran at, off the fills that opened it: quoteVolume ÷ leverage is
+   the margin each put up, and the whole notional over the whole margin is the multiplier held. The
+   real row from the account this was written against — 1210 ADA at 50×, hedge mode. */
+const ada = { symbol: 'ADAUSDT', side: 'short' as const, openedAt: 1786310753682, closedAt: 1786355419730 }
+const fills = [
+  { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240.2806', leverage: '50', cTime: '1786310753600' },
+  // the way out is not the way in: counting a reduce-only fill would halve the answer
+  { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'close', reduceOnly: 'YES', quoteVolume: '235.95', leverage: '50', cTime: '1786355419000' },
+  // another symbol, the other side, and one outside the window it was open for
+  { symbol: 'DOGEUSDT', posSide: 'short', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '20', cTime: '1786310753600' },
+  { symbol: 'ADAUSDT', posSide: 'long', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '5', cTime: '1786310753600' },
+  { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '3', cTime: '1700000000000' },
+]
+assert.equal(levOf(fills, ada), 50)
+// scaled in at two leverages: the answer is the notional over the margin, which lands between them
+assert.equal(levOf([
+  { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', quoteVolume: 100, leverage: 10, cTime: 1786310753682 },
+  { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', quoteVolume: 100, leverage: 50, cTime: 1786310800000 },
+], ada), 16.67)
+assert.equal(levOf([], ada), null)
+assert.equal(levOf(fills, { ...ada, openedAt: null }), null)
+
+/* with no orders in the window the account's own setting stands in: per side
    where the symbol is isolated, and the crossed figure for whichever side has none of its own */
 assert.deepEqual(accountLev({ isolatedLongLev: 10, isolatedShortLev: '50', crossedMarginLeverage: 20 }),
   { long: 10, short: 50 })
