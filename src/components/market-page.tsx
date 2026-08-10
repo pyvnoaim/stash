@@ -2363,7 +2363,7 @@ function SetupNote({ w, placeholder, className }: { w: Watch, placeholder: strin
 
 /** One grid for the row and its header, so the columns line up by construction rather than by two
  *  sets of hand-matched widths. The last track is the two icons, which are outside the row button. */
-const LOG_GRID = 'grid grid-cols-[minmax(4.5rem,1.2fr)_minmax(4.5rem,1fr)_4.5rem_4rem_5rem_auto] items-baseline gap-x-3 sm:grid-cols-[minmax(5rem,1.2fr)_minmax(5rem,1fr)_minmax(8rem,1fr)_4.5rem_4rem_5rem_auto]'
+const LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4.5rem,10rem)_minmax(4.5rem,9rem)_1fr_4.5rem_3.5rem_5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_minmax(7rem,12rem)_1fr_4.5rem_3.5rem_5rem]'
 
 /** How the record is stacked. Newest is the default because a log is read from the top down; the
  *  other two are the question "what actually paid, and what actually cost" asked directly. */
@@ -2446,15 +2446,20 @@ function Record() {
      colour at all rather than the first one's: neither is the answer on its own. */
   const upTotal = money !== null && usd !== null && (money >= 0) !== (usd >= 0)
     ? null : (money ?? usd ?? total) >= 0
-  const real = all.some(isPosition)
   const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
   /* What a row is worth for the purpose of stacking it. Its own money where it has any, and its R
      where it has none — and dollars and euros are compared as the numbers they are, because the
      alternative is a rate this app refuses to invent for a sum and would then invent for a sort.
      ponytail: near enough while the two currencies are within a tenth of each other. */
   const worth = (r: typeof all[number]) => r.cash ?? cashOf(r) ?? r.r
-  const results = sort === 'new' ? all : [...all].sort((a, b) =>
-    sort === 'won' ? worth(b) - worth(a) : worth(a) - worth(b))
+  /* Newest by when the trade closed, not by the order the rows were written. An import files a
+     week of history in one go, each row prepended as it lands, so the list came out in the exact
+     reverse of the order it was read in — the oldest trade at the top under a button saying
+     Newest. The clock on the row is the only thing that actually knows. */
+  const results = [...all].sort((a, b) =>
+    sort === 'new' ? b.closedAt - a.closedAt
+      : sort === 'won' ? worth(b) - worth(a)
+      : worth(a) - worth(b))
 
   return (
     <Card className="py-3">
@@ -2514,6 +2519,9 @@ function Record() {
           <span>Trade</span>
           <span>Side</span>
           <span className="hidden sm:block">Ran</span>
+          {/* the slack track: the words keep to their own width on a wide window and the numbers
+              stay at the right edge, instead of four columns drifting to the four corners */}
+          <span />
           <span className="text-right">Ended</span>
           <span className="text-right">R</span>
           <span className="text-right">Paid</span>
@@ -2538,6 +2546,7 @@ function Record() {
                 <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
                   {when(r.entryAt)} → {when(r.closedAt)}
                 </span>
+                <span />
                 <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {hit ? 'target' : 'stopped'}
                 </span>
@@ -2581,26 +2590,6 @@ function Record() {
             </div>
           )
         })}
-        <p className="text-muted-foreground mt-2 px-1.5 text-xs">
-          {usd !== null
-            ? `A row in dollars is the exchange's own settled figure — its fees and its funding
-               already in it, which is why it is never added to the euros beside it. ${real
-                 ? 'A row in euros is a position of your own, off the size and leverage you gave it. '
-                 : ''}The rest are what the plan would have paid${stake > 0 ? `, risking ${euro(stake)} a setup` : ' in R'}.`
-            : real
-            ? `The ones you were in are your own money, off the size and leverage you gave them —
-               no fee and no funding counted, so a perp held for days read a little rich. The rest
-               are what the plan would have paid${stake > 0 ? `, risking ${euro(stake)} a setup` : ' in R'}.`
-            : stake > 0
-              ? `What each would have paid, risking ${euro(stake)} a setup. Nothing was bought and no
-                 fee is counted — it is the plan's own arithmetic, not a broker's.`
-              : `Set what a setup is worth in Settings → Markets and these read in euros as well as
-                 in R.`}
-        </p>
-        <p className="text-muted-foreground mt-1 px-1.5 text-xs">
-          A note written while the setup was still a plan is read back under its row. It stays on
-          your own devices: the Desk publishes how a trade went and never why.
-        </p>
       </CardContent>
     </Card>
   )
