@@ -238,7 +238,7 @@ export function createSweep(db: DatabaseSync) {
   const closesFor = async (cache: Map<string, number[] | null>, asset: string, interval: Interval) => {
     const k = `${asset}:${interval}`
     if (!cache.has(k)) {
-      const a = ASSETS.find((x) => x.id === asset && x.source === 'binance')
+      const a = ASSETS.find((x) => x.id === asset && x.source !== 'twelvedata')
       cache.set(k, a ? await fetchCandles(a, interval, '').then((c) => c.map((x) => x.c)).catch(() => null) : null)
     }
     return cache.get(k) ?? null

@@ -29,7 +29,7 @@ import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
-import { closed as bitgetClosed, positions as bitgetPositions, type Closed } from './bitget.ts'
+import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -1156,14 +1156,21 @@ export function start({
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const stored = [
-        { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
-        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret) },
+        { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase), book: (c: any) => bitgetPending(c.key, c.secret, c.passphrase) },
+        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret), book: null },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       try {
-        const feeds = await Promise.all(stored.map((v) => v.go(JSON.parse(v.raw!))))
+        /* The book rides along with the positions, and on softer terms: a limit order waiting at a
+           price is not a position and nothing files itself off it, so a venue that will not answer
+           for its book contributes an empty one rather than failing the call the rows come in. */
+        const [feeds, books] = await Promise.all([
+          Promise.all(stored.map((v) => v.go(JSON.parse(v.raw!)))),
+          Promise.all(stored.map((v) => (v.book ? v.book(JSON.parse(v.raw!)).catch(() => []) : []))),
+        ])
         return send(res, 200, {
           positions: feeds.flatMap((f, i) => f.positions.map((p) => ({ ...p, venue: stored[i].venue }))),
+          orders: books.flatMap((b, i) => b.map((o) => ({ ...o, venue: stored[i].venue }))),
           // one number when any venue says one, summed when several do — null only when none
           equity: feeds.every((f) => f.equity == null) ? null
             : Math.round(feeds.reduce((n, f) => n + (f.equity ?? 0), 0) * 100) / 100,
@@ -1688,11 +1695,12 @@ export function start({
         'cache-control': forever ? 'public, max-age=31536000, immutable' : 'no-cache',
         'x-content-type-options': 'nosniff',
         // set here rather than in the proxy, so they hold whatever terminates TLS in front.
-        // wasm-unsafe-eval is pdf.js; the three hosts are the market feeds; nothing else may load.
+        // wasm-unsafe-eval is pdf.js; the four hosts are the market feeds; nothing else may load.
         ...(ext === 'html' && {
           'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
             + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            + "connect-src 'self' https://api.binance.com https://api.twelvedata.com https://api.geckoterminal.com; "
+            + "connect-src 'self' https://api.binance.com https://api.bitget.com "
+            + 'https://api.twelvedata.com https://api.geckoterminal.com; '
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),

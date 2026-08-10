@@ -30,7 +30,7 @@ import type { DatabaseSync } from 'node:sqlite'
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
 import {
-  ASSETS, dialsOf, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, scanBars, scanRead,
+  ASSETS, dialsOf, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, scanBars, scanRead,
   SESSIONS, type Candle, type Dials, type Interval,
 } from '../src/lib/market.ts'
 
@@ -379,32 +379,26 @@ export function createPush(db: DatabaseSync, extra: (user: number) => Alert[] = 
   async function refreshPrices(users: number[]) {
     const want = new Set<string>()
     for (const u of users) {
-      // ponytail: Binance symbols only. The Twelve Data key rides the synced doc now, so pricing
+      // ponytail: the keyless feeds only. The Twelve Data key rides the synced doc now, so pricing
       // stocks here is possible — it just isn't done yet; the watcher stays crypto-and-gold.
-      for (const w of watchesOf(u)) if (typeof w?.asset === 'string' && w.asset.endsWith('USDT')) want.add(w.asset)
+      for (const w of watchesOf(u)) if (typeof w?.asset === 'string') want.add(w.asset)
     }
     if (!want.size) { prices = {}; return }
-    try {
-      const url = 'https://api.binance.com/api/v3/ticker/price?symbols='
-        + encodeURIComponent(JSON.stringify([...want]))
-      const rows = await fetch(url).then((r) => r.json()) as { symbol: string, price: string }[]
-      const out: Record<string, number> = {}
-      if (Array.isArray(rows)) {
-        for (const r of rows) {
-          const n = Number(r.price)
-          if (isFinite(n) && n > 0) out[r.symbol] = n
-        }
-      }
-      prices = out
-    } catch {
-      prices = {}
-    }
+    /* The app's own pricer, which is what keeps the two venues apart. Batching every USDT symbol
+       into one Binance call was what this did, and gold on Bitget is not a symbol Binance lists —
+       one such row and the whole batch comes back as an error, which is every alert on the desk
+       going quiet to serve a watch on the one asset. It never throws and never returns a stock:
+       an id it cannot price is simply missing, and a missing price fires nothing. */
+    prices = await fetchPrices([...want], '')
   }
 
   /* The listed assets that are moving, as of the last tick, already worded. Everything Binance
-     quotes on the desk — crypto and gold — and one pair of calls covers the lot however long that
+     quotes on the desk, which is the crypto, and one pair of calls covers the lot however long that
      list grows. Stocks sit it out: their feed needs the key, which stays in the browser it was
-     typed into, so this process has no way to ask and should not have one. */
+     typed into, so this process has no way to ask and should not have one. Gold sits it out too,
+     now that it is Bitget's perpetual: the windowed ticker below is a Binance endpoint and the
+     other venue has no equivalent — a level set on gold still fires, it is only the unasked-for
+     "this moved" sweep that no longer covers it. */
   const MOVERS = ASSETS.filter((a) => a.source === 'binance')
   type Row = { symbol: string, openPrice: string, lastPrice: string, highPrice: string, lowPrice: string }
   /* The tick's raw readings, not its sentences. Whether a move is worth waking someone for is that

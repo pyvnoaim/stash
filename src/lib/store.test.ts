@@ -13,7 +13,7 @@ const {
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
   openWatch, closeWatch, clearResults, dismissAlerts, tagsFor,
-  readHash, setWatchNote,
+  readHash,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -613,29 +613,21 @@ assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
 assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
 assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
 
-/* The note on a setup. It is written a keystroke at a time straight into the store, so the two
-   things worth pinning are that a half-typed word keeps its trailing space — a rule that trims on
-   every change is a field you cannot type two words into — and that emptying one drops the key
-   rather than storing a blank on all fifty rows. */
-addWatch({ ...mkWatch('Trading', 50), id: 'noted' })
-setWatchNote('noted', 'daily agrees ')
-assert.equal(getState().watches.find((w) => w.id === 'noted')?.note, 'daily agrees ')
-setWatchNote('noted', '   ')
-assert.equal(getState().watches.find((w) => w.id === 'noted')?.note, undefined)
-// and it follows the setup into the record, where the id is the same row one step later
-setWatchNote('noted', 'chased it')
-const noted = getState().watches.find((w) => w.id === 'noted')!
-closeWatch({ ...noted, entryAt: 1, closedAt: 2, level: 'stop', exit: 1, r: -1 })
-assert.equal(getState().results.find((r) => r.id === 'noted')?.note, 'chased it')
-// which is also where it can be written for the first time: the post-mortem is the point
-setWatchNote('noted', 'stop was too tight')
-assert.equal(getState().results.find((r) => r.id === 'noted')?.note, 'stop was too tight')
-removeWatch('noted')
-clearResults()   // the record is shared state, and what follows counts the rows in it
-// a loaded document is held to the same rule, and to the 1000-char ceiling the whole doc rides on
-assert.equal(load({ watches: [{ id: 'w', asset: 'X', entry: 100, stop: 95, target: 110, note: '  ' }] }).watches[0].note, undefined)
-assert.equal(load({ watches: [{ id: 'w', asset: 'X', entry: 100, stop: 95, target: 110, note: 7 }] }).watches[0].note, undefined)
-assert.equal(load({ watches: [{ id: 'w', asset: 'X', entry: 100, stop: 95, target: 110, note: 'x'.repeat(2000) }] }).watches[0].note?.length, 1000)
+/* Gold moved from Binance's XAUT token to Bitget's XAUUSDT perpetual, and every row already
+   written names the old one. An id on no asset list prices at nothing — the alarm never fires and
+   the chart falls back to Bitcoin — so the rows come across on load rather than going quiet. */
+const moved = load({
+  watches: [{ id: 'w', asset: 'XAUTUSDT', entry: 4000, stop: 3900, target: 4200 }],
+  alarms: [{ id: 'a', asset: 'XAUTUSDT', price: 4100 }],
+  results: [{ id: 'r', asset: 'XAUTUSDT', entry: 4000, stop: 3900, target: 4200, entryAt: 1, closedAt: 2, exit: 4200, r: 2 }],
+  marketAsset: 'XAUTUSDT',
+})
+assert.equal(moved.watches[0].asset, 'XAUUSDT')
+assert.equal(moved.alarms[0].asset, 'XAUUSDT')
+assert.equal(moved.results[0].asset, 'XAUUSDT')
+assert.equal(moved.marketAsset, 'XAUUSDT')
+// and nothing else is touched on the way past
+assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110 }] }).watches[0].asset, 'BTCUSDT')
 
 /* The hash is the view and the search over it, one string. It is what a bookmarked search is, so
    it has to survive being pasted — including pasted broken, where a bad escape reads as no search

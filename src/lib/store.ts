@@ -148,16 +148,6 @@ export interface Watch {
    */
   size?: number
   lev?: number
-  /**
-   * Why this one — the words beside the numbers, written when it is saved and read back when it is
-   * over. The record already says what a setup did; this is the only place it can say what you
-   * thought it would do, which is the half a hit rate cannot argue with afterwards.
-   *
-   * It rides into `Result` with everything else, since a setup keeps its id across the move. It is
-   * the one field on a Watch that never leaves the device pair the sync carries: `/api/desk`
-   * projects an allowlist of what a shared trade is, and this is not on it.
-   */
-  note?: string
 }
 
 /**
@@ -282,17 +272,6 @@ const cleanTime = (v: unknown): string | null =>
 const positionOf = (w: { size?: unknown, lev?: unknown }) => {
   const size = Number(w.size), lev = Number(w.lev)
   return isFinite(size) && size > 0 && isFinite(lev) && lev > 0 ? { size, lev } : {}
-}
-
-/** How long a setup's note may be. The document is pushed whole on every edit and kept fifty
- *  versions deep, so this is a paragraph about a trade, not a place to keep an essay. */
-const NOTE_MAX = 1000
-/** Absent stays absent: an empty string on every one of fifty rows is fifty keys of nothing.
- *  Whitespace decides that, but is never stripped — the field is edited a keystroke at a time,
- *  and a rule that eats the space you just typed is a field you cannot type two words into. */
-const noteOf = (w: { note?: unknown }) => {
-  const note = typeof w.note === 'string' ? w.note.slice(0, NOTE_MAX) : ''
-  return note.trim() ? { note } : {}
 }
 
 const liveGeometry = (w: Pick<Watch, 'asset' | 'dir' | 'entry' | 'stop' | 'target'>) =>
@@ -549,6 +528,14 @@ export function load(data: unknown): State {
       due: cleanDate(x.due),
     }))
 
+  /* Gold changed venue: the desk's gold was Binance's XAUT token and is now Bitget's XAUUSDT
+     perpetual, which is the contract the orders are actually placed on (see market.ts). Rows
+     already written name the old symbol, and an id on no list prices at nothing — the alarm never
+     fires, the chart falls back to Bitcoin, and the record's gold rows lose their asset. Same metal
+     a few dollars apart, so they come across rather than being dropped. Harmless once no document
+     mentions XAUT: it is one string comparison on load. */
+  const assetId = (v: unknown) => (String(v ?? '') === 'XAUTUSDT' ? 'XAUUSDT' : String(v ?? ''))
+
   // a level that isn't a real number can't be compared against a price — the alert would either
   // never fire or fire forever, so a broken row is dropped rather than kept and half-honoured
   const wseen = new Set<string>()
@@ -556,7 +543,7 @@ export function load(data: unknown): State {
     .filter((w) => w && w.id && !wseen.has(String(w.id)) && wseen.add(String(w.id)))
     .map((w) => ({
       id: String(w.id),
-      asset: String(w.asset ?? ''),
+      asset: assetId(w.asset),
       label: String(w.label || w.asset || 'Setup'),
       horizon: String(w.horizon ?? ''),
       // absent stays absent — see Watch.rule. Defaulting it to '' would be harmless, but defaulting
@@ -577,7 +564,6 @@ export function load(data: unknown): State {
       // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
       ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
       ...positionOf(w),
-      ...noteOf(w),
     }))
     // levels the wrong way round for their side are not a trade, they are an alarm that fires on
     // every tick forever: a long whose stop sits above its entry is already "stopped out" the
@@ -591,7 +577,7 @@ export function load(data: unknown): State {
     .filter((a) => a && a.id && !aseen.has(String(a.id)) && aseen.add(String(a.id)))
     .map((a) => ({
       id: String(a.id),
-      asset: String(a.asset ?? ''),
+      asset: assetId(a.asset),
       label: String(a.label || a.asset || 'Alarm'),
       price: Number(a.price),
       above: !!a.above,
@@ -608,7 +594,7 @@ export function load(data: unknown): State {
     .filter((r) => r && r.id && !rseen.has(String(r.id)) && rseen.add(String(r.id)))
     .map((r) => ({
       id: String(r.id),
-      asset: String(r.asset ?? ''),
+      asset: assetId(r.asset),
       label: String(r.label || r.asset || 'Setup'),
       horizon: String(r.horizon ?? ''),
       ...(r.rule ? { rule: String(r.rule) } : {}), // as on the watch above
@@ -625,7 +611,6 @@ export function load(data: unknown): State {
       // the venue's own figure, and zero is a real answer: a scratch is not a missing number
       ...(typeof r.cash === 'number' && isFinite(r.cash) ? { cash: r.cash } : {}),
       ...positionOf(r),
-      ...noteOf(r),
     }))
     /* `> 0` rather than isFinite for the three that cannot be zero: Number(null) and Number('')
        are both 0, which is finite — a row with no closing time would otherwise load as one that
@@ -654,7 +639,7 @@ export function load(data: unknown): State {
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
   st.calView = st.calView === 'week' ? 'week' : 'month'
-  st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? st.marketAsset : 'BTCUSDT'
+  st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? assetId(st.marketAsset) : 'BTCUSDT'
   st.marketHorizon = st.marketHorizon === 'long' ? 'long' : 'short'
   st.marketInterval = (INTERVALS as readonly string[]).includes(st.marketInterval) ? st.marketInterval : '1d'
   st.marketPreset = st.marketPreset === 'orb' ? 'orb' : 'standard'
@@ -1154,21 +1139,6 @@ export const armWatch = (id: string, until: number | null) => set((s) => ({
     return until == null ? rest : { ...rest, killAt: until }
   }),
 }))
-
-/**
- * The words on a setup — why it was taken while it is live, how that read once it is over. Both
- * lists, because a setup keeps its id across the move into the record and the note is the one
- * thing you want to add *after* the trade decided what it was worth writing.
- *
- * Emptied is gone rather than stored blank, which is the same rule `noteOf` holds a loaded
- * document to. Not an undo step: `set` only stacks a change to the items, projects or subs.
- */
-export const setWatchNote = (id: string, text: string) => set((s) => {
-  const next = text.slice(0, NOTE_MAX)
-  const note = next.trim() ? next : undefined
-  const put = <T extends Watch>(w: T): T => (w.id === id ? { ...w, note } : w)
-  return { ...s, watches: s.watches.map(put), results: s.results.map(put) }
-})
 
 export const addAlarm = (a: Alarm) => set((s) => ({ ...s, alarms: [a, ...s.alarms].slice(0, 100) }))
 export const removeAlarm = (id: string) => set((s) => ({ ...s, alarms: s.alarms.filter((a) => a.id !== id) }))

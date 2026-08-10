@@ -1,17 +1,24 @@
 // Live candles from Binance's public API (no key, no signup) + the handful of signals every TA
 // guide repeats: moving-average crosses, RSI extremes, horizontal support/resistance, and which
 // way the trend leans. No chart-shape recognition (head-and-shoulders and friends) — that's
-// guesswork dressed as maths. Gold rides XAUT (Tether Gold), a token pegged 1:1 to a troy ounce —
-// the closest thing to spot on a keyless feed, since Binance lists no XAUUSDT at all. It replaced
-// PAXG, the other gold token, on liquidity: about twice the 24h volume and twice the trades, which
-// is what decides how honest the wicks are. True spot XAU/USD would mean Twelve Data, a key, the
-// daily credit budget, and a session gate that knows gold trades 23/5 rather than US equity hours.
+// guesswork dressed as maths.
+//
+// Gold is Bitget's XAUUSDT perpetual, keyless off the same public feed the positions route signs
+// against. It used to be Binance's XAUT (Tether Gold), which is a fine proxy for spot and the wrong
+// chart to trade off: the perp is the contract the orders are actually placed on, and it prints its
+// own price — a few dollars either side of the token, which is a quarter of a stop. A chart you
+// cannot put an order on is a chart that flatters every backtest on it.
+//
+// It costs history: the contract listed in May 2026, so the daily has about 90 bars and the weekly
+// thirteen — the 200-MA on those two timeframes has nothing to be computed from and simply doesn't
+// draw. The intraday timeframes, which is where the trading rule works, are full.
+//
 // Binance lists no liquid silver token, so silver sits this one out.
 
 /** `v` is volume — optional, since not every feed sends it and every signal that uses it can sit out. */
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v?: number }
 
-export type Source = 'binance' | 'twelvedata'
+export type Source = 'binance' | 'bitget' | 'twelvedata'
 export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
 
 /* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
@@ -21,9 +28,13 @@ export type Asset = { id: string; label: string; source: Source; group: string; 
    nowhere to be found. */
 const logo = (name: string) => `/logos/${name}.png`
 
-// Crypto + gold ride Binance (keyless, 24/7). Stocks ride Twelve Data (needs a free key).
+// Crypto rides Binance and gold rides Bitget — both keyless and 24/7. Stocks ride Twelve Data
+// (needs a free key). The two keyless feeds are interchangeable everywhere the code says "not a
+// stock"; only the batch calls that quote a dozen symbols at once are Binance's alone.
 export const ASSETS: Asset[] = [
-  { id: 'XAUTUSDT', label: 'Gold', source: 'binance', group: 'Metals', logo: logo('xaut') },
+  // the perpetual, not the token: the id is the symbol Bitget's own order book and position feed
+  // use, so a trade on it lands on this chart with no mapping in between
+  { id: 'XAUUSDT', label: 'Gold', source: 'bitget', group: 'Metals', logo: logo('xaut') },
   { id: 'BTCUSDT', label: 'Bitcoin', source: 'binance', group: 'Crypto', logo: logo('btc') },
   { id: 'ETHUSDT', label: 'Ethereum', source: 'binance', group: 'Crypto', logo: logo('eth') },
   { id: 'SOLUSDT', label: 'Solana', source: 'binance', group: 'Crypto', logo: logo('sol') },
@@ -54,10 +65,13 @@ export type Interval = (typeof INTERVALS)[number]
 
 // Twelve Data spells the intervals differently from Binance
 const TD_INTERVAL: Record<Interval, string> = { '5m': '5min', '15m': '15min', '1h': '1h', '4h': '4h', '1d': '1day', '1w': '1week' }
+// and Bitget capitalises everything from the hour up
+const BG_INTERVAL: Record<Interval, string> = { '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W' }
 
-/** Routes to the right feed. Both return candles oldest → newest. Stocks need the key. */
+/** Routes to the right feed. All three return candles oldest → newest. Stocks need the key. */
 export function fetchCandles(asset: Asset, interval: Interval, apiKey: string): Promise<Candle[]> {
-  return asset.source === 'twelvedata' ? fetchTwelve(asset.id, interval, apiKey) : fetchBinance(asset.id, interval)
+  if (asset.source === 'twelvedata') return fetchTwelve(asset.id, interval, apiKey)
+  return asset.source === 'bitget' ? fetchBitget(asset.id, interval) : fetchBinance(asset.id, interval)
 }
 
 /**
@@ -82,6 +96,7 @@ export const usMarketOpen = (now = Date.now()) => {
 export async function fetchPrices(ids: string[], apiKey: string, now = Date.now()): Promise<Record<string, number>> {
   const assets = ids.map((id) => ASSETS.find((a) => a.id === id)).filter((a): a is Asset => !!a)
   const bn = assets.filter((a) => a.source === 'binance').map((a) => a.id)
+  const bg = assets.filter((a) => a.source === 'bitget').map((a) => a.id)
   const td = assets.filter((a) => a.source === 'twelvedata').map((a) => a.id)
   const out: Record<string, number> = {}
   const put = (id: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) out[id] = n }
@@ -93,6 +108,13 @@ export async function fetchPrices(ids: string[], apiKey: string, now = Date.now(
       .then((rows: { symbol: string; price: string }[]) => {
         if (Array.isArray(rows)) for (const r of rows) put(r.symbol, r.price)
       }),
+  )
+  /* One call per symbol here rather than one for the lot: Bitget's batch ticker is every contract
+     it lists, a couple of hundred KB to be told about gold. The desk has one symbol on this feed. */
+  for (const id of bg) jobs.push(
+    fetch(`https://api.bitget.com/api/v2/mix/market/ticker?symbol=${id}&productType=USDT-FUTURES`)
+      .then((r) => r.json())
+      .then((j: { data?: { lastPr?: string }[] }) => put(id, j?.data?.[0]?.lastPr)),
   )
   // a shut market's last price is the closing price the caller already has — see usMarketOpen
   if (td.length && apiKey && usMarketOpen(now)) jobs.push(
@@ -169,6 +191,19 @@ async function fetchBinance(symbol: string, interval: Interval): Promise<Candle[
   if (!Array.isArray(rows)) throw new Error(rows?.msg || 'No data for this symbol')
   // each kline is [openTime, open, high, low, close, volume, …]
   return rows.map((k: (string | number)[]) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }))
+}
+
+/** Bitget's USDT-margined futures, keyless and CORS-open like Binance's. A thousand bars is the
+ *  endpoint's ceiling and the contract's history may be shorter than that — a symbol listed this
+ *  year simply has fewer, which the callers already handle: an MA with no window returns null. */
+async function fetchBitget(symbol: string, interval: Interval): Promise<Candle[]> {
+  const url = `https://api.bitget.com/api/v2/mix/market/candles?symbol=${symbol}`
+    + `&productType=USDT-FUTURES&granularity=${BG_INTERVAL[interval]}&limit=1000`
+  const j = await fetch(url).then((r) => r.json())
+  // the venue reports its own errors in the body, with its success code on the good ones
+  if (j?.code !== '00000' || !Array.isArray(j.data)) throw new Error(j?.msg || 'No data for this symbol')
+  // [openTime, open, high, low, close, baseVolume, quoteVolume], oldest first
+  return j.data.map((k: string[]) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }))
 }
 
 async function fetchTwelve(symbol: string, interval: Interval, apiKey: string): Promise<Candle[]> {

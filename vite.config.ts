@@ -70,6 +70,18 @@ export default defineConfig({
             expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
           },
         }, {
+          /* Gold's feed, on the same footing as Binance's bars: the candles endpoint only, never
+             the ticker beside it. Matched on the path, so the signed calls to the same host — which
+             go through the server and never appear here anyway — could not join by accident. */
+          urlPattern: /^https:\/\/api\.bitget\.com\/api\/v2\/mix\/market\/candles/,
+          handler: 'NetworkFirst',
+          options: {
+            cacheName: 'candles-bitget',
+            networkTimeoutSeconds: 10,
+            cacheableResponse: { statuses: [200] },
+            expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
+          },
+        }, {
           /* Twelve Data reports its own errors with 200 OK, so a rate-limited reply caches like a
              good one and is what you get offline until the next success replaces it. Living with
              it: generateSW takes serialisable config only, so filtering the body would mean owning

@@ -321,7 +321,7 @@ assert.deepEqual(moverAlerts([{ ...btc, high: 63000, low: 63000 }]), [])
 /* The grind the hour cannot see — gold's morning of 5 Aug 2026, real figures: 1.4% over four
    hours, half the day's range, and the best single hour in it was 0.66%, under the floor. The
    four-hour window is what turns that from silence into a sentence. */
-const gold = { asset: 'XAUTUSDT', label: 'Gold', open: 4095.3, last: 4153.25, high: 4163.19, low: 4044.71, hours: 4 }
+const gold = { asset: 'XAUUSDT', label: 'Gold', open: 4095.3, last: 4153.25, high: 4163.19, low: 4044.71, hours: 4 }
 const bestHour = { ...gold, open: 4126.06, last: 4153.25, hours: 1 } // its steepest hour: 0.66%
 assert.deepEqual(moverAlerts([bestHour]), [])
 const [grind] = moverAlerts([bestHour, gold])
@@ -372,7 +372,7 @@ assert.equal(openRisk([], [{ asset: 'BTCUSDT', entry: 100, stop: 95 }], null).mi
 
 /* The crowd. BTCUSDT and ETHUSDT both resolve through assetOf into Crypto, and gold is its own
    group — so two of three is the sentence worth saying. */
-const gold3 = { symbol: 'XAUTUSDT', entry: 4_000, stop: 3_900, size: 1 }
+const gold3 = { symbol: 'XAUUSDT', entry: 4_000, stop: 3_900, size: 1 }
 assert.deepEqual(openRisk([...rows, gold3], [], null).crowd, { group: 'Crypto', n: 2, of: 3 })
 /* "2 of 2 are Crypto, closer to one bet than 2" is a sentence that tells you nothing you did not
    already know from the row count, so a group that is simply everything open stays quiet. */

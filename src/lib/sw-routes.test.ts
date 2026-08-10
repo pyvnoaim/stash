@@ -21,7 +21,7 @@ const sw = readFileSync('dist/sw.js', 'utf8')
 assert(!sw.includes('clientsClaim'), 'worker claims clients — registerType is back to autoUpdate')
 const cachedBy = [...sw.matchAll(/registerRoute\((\/\^https[^,]+?\/),new e\.NetworkFirst/g)]
   .map((m) => new RegExp(m[1].slice(1, -1)))
-assert.equal(cachedBy.length, 2, 'expected the two candle routes in the built worker')
+assert.equal(cachedBy.length, 3, 'expected the three candle routes in the built worker')
 
 /* The pictures in notes are the one CacheFirst route, and the only thing here that may be: a blob
    id is random and its bytes never change, so a cached copy cannot be a stale answer to anything.
@@ -43,11 +43,13 @@ const asked = async (fn: () => Promise<unknown>) => {
 }
 const cached = (url: string) => cachedBy.some((re) => re.test(url))
 const crypto = ASSETS.find((a) => a.id === 'BTCUSDT')!
+const gold = ASSETS.find((a) => a.source === 'bitget')!
 const stock = ASSETS.find((a) => a.id === 'NVDA')!
 
 // bars are cached, so the chart and every signal over it survive with no network
 for (const url of [
   ...(await asked(() => fetchCandles(crypto, '1d', ''))),
+  ...(await asked(() => fetchCandles(gold, '1d', ''))),
   ...(await asked(() => fetchCandles(stock, '1d', 'KEY'))),
 ]) assert.ok(cached(url), `candles should be cached: ${url}`)
 
@@ -58,6 +60,7 @@ const OPEN = Date.parse('2026-01-07T15:00:00Z')
 // prices are not, on either feed, and must never quietly become so
 const priceUrls = [
   ...(await asked(() => fetchPrices([crypto.id], ''))),
+  ...(await asked(() => fetchPrices([gold.id], ''))),
   ...(await asked(() => fetchPrices([stock.id], 'KEY', OPEN))),
 ]
 assert.ok(priceUrls.length >= 2, 'fetchPrices asked for nothing on one of the feeds')

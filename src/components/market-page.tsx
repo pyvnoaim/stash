@@ -15,8 +15,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
 import { shareCard } from '@/lib/card'
 import { cn } from '@/lib/utils'
-import { Textarea } from '@/components/ui/textarea'
-import { addAlarm, addWatch, armWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, setWatchNote, uid, useStash, type Watch } from '@/lib/store'
+import { addAlarm, addWatch, armWatch, clearResults, closeWatch, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, backtest, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -558,7 +557,17 @@ export default function MarketPage() {
   // the exchange's own liquidation price where the feed carries one — that is the number that
   // actually fires — and the entry ± entry/lev estimate off the hand-entered position otherwise
   const liq = held?.liq ?? (mine ? liqOf(mine) : null)
+  /* And what is only waiting: an order resting on this symbol's book. It is money committed at a
+     price nobody has traded yet — the one thing the desk knew about and never drew, so an entry
+     placed on the exchange looked, on this page, exactly like an entry nobody had placed. Same
+     fuchsia as the position it would become, at half weight and its own dash: it is not a level
+     the trade is being measured against, it is a level the trade starts at if price comes. */
+  const resting = exch.orders.filter((o) => assetOf(o.symbol) === current.id)
   const posLines = [
+    // the price is in the label so two orders on the same book are two chips, not one drawn twice
+    ...resting.map((o) => ({
+      label: `${o.side} resting ${fmt(o.price)}`, lvl: o.price, w: 1, dash: '4 4', op: 0.75,
+    })),
     ...(held ? [
       { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
       ...(held.stop != null ? [{ label: 'stop', lvl: held.stop, w: 1, dash: '2 3', op: 0.6 }] : []),
@@ -967,16 +976,6 @@ export default function MarketPage() {
               </Hint>
             ))}
           </div>
-          {/* Once there is a row to hang it on, the reason goes with the levels — written here,
-              read back in the record months later when the numbers have stopped meaning anything
-              on their own. `watched` and nothing else: it is keyed on this asset, this side and
-              this horizon, so it is the row these levels belong to — and a position taken on them
-              is that same row. Falling back to the position on the *other* side, which an earlier
-              cut did, put the long's note under the short's card and edited a trade you were not
-              looking at. */}
-          {watched && (
-            <SetupNote w={watched} placeholder="Why this one? — kept with the trade and read back in the Log" />
-          )}
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
           {!inIt && !watched && (
@@ -1747,6 +1746,21 @@ type ExchangePosition = {
   venue?: string
 }
 
+/** An order still resting on the book, as /api/positions sends the venue's own. Not a position and
+ *  never treated as one: nothing files off it, and the moment it fills it is a row above instead. */
+type RestingOrder = {
+  id: string; symbol: string
+  /** Which way it would trade — a long entry rests a buy, a short entry a sell. */
+  side: 'buy' | 'sell'
+  price: number; size: number
+  /** Untouched, as against one that has already begun to fill. */
+  live: boolean
+  /** Whether it would open a trade rather than close one. On a one-way-mode account the venue does
+   *  not say, and this is true either way — see the note in sweep.ts on what that costs. */
+  opens: boolean
+  venue?: string
+}
+
 
 /* Renamed off `stash-kraken-open` when Kraken came off the desk, deliberately: the old key holds
    that venue's last look, and rows that vanished because the venue did are not rows that closed.
@@ -2032,7 +2046,8 @@ function useSweep(armed: boolean) {
  * where an empty answer would read as everything having closed at once.
  */
 function useExchangePositions() {
-  const [feed, setFeed] = useState<{ rows: ExchangePosition[]; equity: number | null }>({ rows: [], equity: null })
+  const [feed, setFeed] = useState<{ rows: ExchangePosition[]; orders: RestingOrder[]; equity: number | null }>(
+    { rows: [], orders: [], equity: null })
   useEffect(() => {
     let dead = false
     let first = true
@@ -2053,7 +2068,7 @@ function useExchangePositions() {
             : null
           first = false
           fileClosed(rows, h?.closed ?? [])
-          if (!dead) setFeed({ rows, equity: d.equity ?? null })
+          if (!dead) setFeed({ rows, orders: d.orders ?? [], equity: d.equity ?? null })
         })
         .catch(() => {})
     load()
@@ -2122,15 +2137,16 @@ function PositionTile({ side, symbol, venue, lev, up, lead, from, now, size, r, 
 /**
  * What the exchanges say is actually open — every venue with a key saved (Settings → Markets),
  * proxied through the server so the keys stay there. Renders nothing at all unless an exchange
- * reports an open position: for everyone else this component is one failed fetch and no pixels.
- * The Overview shows the same card, which is what makes its header the desk's status line.
+ * reports an open position or an order still waiting on one: for everyone else this component is
+ * one failed fetch and no pixels. The Overview shows the same card, which is what makes its
+ * header the desk's status line.
  *
  * ponytail: the pct is price move from entry, not return on margin — leverage is not in the
  * feed's read scope. Anyone leveraged knows to multiply. The R beside it is real, though: risk
  * is entry-to-stop, which the resting stop defines.
  */
 export function ExchangePositions() {
-  const { rows, equity } = useExchangePositions()
+  const { rows, orders, equity } = useExchangePositions()
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
@@ -2140,24 +2156,33 @@ export function ExchangePositions() {
      the two is a number no rate ever produced. */
   const usd = (n: number) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const atRisk = [risk.exch > 0 && usd(risk.exch), risk.mine > 0 && euro(risk.mine)].filter(Boolean)
-  if (!rows.length) return null
+  if (!rows.length && !orders.length) return null
   /* The strip that answers "am I fine?" without opening a single row: how many are open, and the
      nearest liquidation as a distance — the worst number on the desk, said first. Only where a
      feed vouches for a liq price; an estimate has no place next to real money. */
   const dists = rows.flatMap((p) => (p.liq != null && p.mark != null && p.mark > 0
     ? [Math.abs(p.mark - p.liq) / p.mark * 100] : []))
   const nearestLiq = dists.length ? Math.min(...dists) : null
-  const venues = new Set(rows.map((p) => p.venue ?? 'exchange'))
+  // named on the rows only where there is more than one venue in play — and the book counts, or a
+  // card that is nothing but somebody's resting orders would never say whose book they are on
+  const venues = new Set([...rows, ...orders].map((p) => p.venue ?? 'exchange'))
   return (
     <Card className="py-3">
       <CardContent className="grid gap-1.5 px-3 text-sm">
         <div className="flex items-baseline gap-2">
-          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Open positions</p>
+          {/* the header follows what is actually below it: an order placed and not yet filled is
+              the whole card on a quiet morning, and calling that "open positions" is a lie about
+              money that is not on the table yet */}
+          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">
+            {rows.length ? 'Open positions' : 'Resting orders'}
+          </p>
           <Hint label={nearestLiq != null
             ? 'The worst single row: how far price has to travel before an exchange closes it for you. Only where the venue vouches for the number.'
             : 'What the exchanges say is open right now, keys held server-side'}>
             <span className="text-muted-foreground text-xs tabular-nums">
-              {rows.length} open{nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
+              {[rows.length && `${rows.length} open`, orders.length && `${orders.length} resting`]
+                .filter(Boolean).join(' · ')}
+              {nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
             </span>
           </Hint>
           {equity != null && (
@@ -2233,6 +2258,28 @@ export function ExchangePositions() {
           )
         })}
         </div>
+        {/* Placed and waiting, which is neither a position nor a plan: the exchange is holding it,
+            price has not come to it, and until this line existed the desk showed nothing at all
+            between "an idea" and "in it". One line each rather than a tile — there is no P&L on an
+            order, only where it sits and what it would do when it fills. */}
+        {!!orders.length && (
+          <div className="mt-0.5 grid gap-1 border-t pt-1.5">
+            {orders.map((o) => (
+              <p key={`${o.venue ?? ''}-${o.id}`} className="text-muted-foreground text-xs tabular-nums">
+                <span className={cn('font-mono uppercase',
+                  o.side === 'buy' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {o.side}
+                </span>{' '}
+                {o.size} {o.symbol} at <span className="text-foreground">{fmtPrice(o.price)}</span>
+                {venues.size > 1 && ` · ${venueName(o.venue)}`}
+                {/* what the row is not: a close is somebody's exit resting, and a part-filled one
+                    is already a trade in progress rather than an order waiting */}
+                {!o.opens && ' · closing'}
+                {!o.live && ' · part-filled'}
+              </p>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -2350,29 +2397,6 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
   }
 
   return null
-}
-
-/**
- * The words beside the numbers. Every other thing on this page is arithmetic over prices; this is
- * the only field on the desk where the reason lives, and the reason is what the record cannot
- * reconstruct afterwards from a hit rate.
- *
- * Typed straight into the store, the way the inspector's note field is — no save button, because a
- * note you have to remember to commit is the note that goes missing with the tab. It never leaves
- * this pair of devices: `/api/desk` sends an allowlist of what a shared trade is and `note` is not
- * on it, so switching the Desk on publishes how a trade went and never why it was taken.
- */
-function SetupNote({ w, placeholder, className }: { w: Watch, placeholder: string, className?: string }) {
-  return (
-    <Textarea
-      // a placeholder is not a label: it goes the moment there is anything to read out
-      aria-label={`Note on the ${w.label} ${w.dir} setup`}
-      value={w.note ?? ''}
-      placeholder={placeholder}
-      onChange={(e) => setWatchNote(w.id, e.target.value)}
-      className={cn('min-h-9 resize-none py-1.5 text-sm md:text-xs', className)}
-    />
-  )
 }
 
 /** One grid for the row and its header, so the columns line up by construction rather than by two
@@ -2548,9 +2572,8 @@ function Record() {
               // the shape of a record you can read without reading any of it
               hit ? 'bg-emerald-500/[0.04]' : 'bg-destructive/[0.04]')}>
               <div className="flex items-center">
-              {/* not a button any more: the row opened a note field, and a finished trade is not
-                  where anybody writes one — the reason is written when the setup is saved, on the
-                  card that is still offering the trade. Nothing left to press but the share. */}
+              {/* not a button: the row opened a note field, and there are no notes any more — a row
+                  here is what the trade did, and nothing left to press but the share. */}
               <div className={cn(LOG_GRID, 'min-w-0 flex-1 px-1.5 py-1.5 text-sm')}>
                 <span className="truncate font-medium">{r.label}</span>
                 <span className="text-muted-foreground truncate text-xs">
@@ -2597,10 +2620,6 @@ function Record() {
                   </Button>
                 </Hint>
               </div>
-              {/* what was written while it was still a plan, read back beside how it went */}
-              {r.note && (
-                <p className="text-muted-foreground mb-1 px-1.5 text-xs whitespace-pre-wrap">{r.note}</p>
-              )}
             </div>
           )
         })}
@@ -2810,7 +2829,7 @@ function Scan({ orbMode, interval, onPick }: {
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source === 'binance').map((a) => scanOne(a, horizon, interval, orbMode, fee).catch(() => null)),
+      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee).catch(() => null)),
     ).then((r) => {
       if (!on) return
       // ranked on the net R:R, not the gross one — the whole point of the column is which of these
