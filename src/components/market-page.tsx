@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, ChevronDown, CloudOff, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,10 +13,11 @@ import { euro, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
-import { shareCard } from '@/lib/card'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Watch } from '@/lib/store'
+import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result, type Watch } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -710,12 +711,13 @@ export default function MarketPage() {
           ))}
         </div>
         <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
+        <div className="bg-muted/50 flex rounded-lg p-1">
         <Select value={asset} onValueChange={setAsset}>
           {/* Not a pill: the groups either side of it are one-of-N switches, and an outlined box the
               same height and radius sitting between them read as a third one. This is the thing the
               whole row is *about*, so it says so with the logo and its name and nothing else —
               borderless, narrower, and quiet until you go near it. */}
-          <SelectTrigger className="hover:bg-muted dark:bg-transparent dark:hover:bg-muted h-8 w-auto gap-1.5 border-0 px-2 font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
+          <SelectTrigger className="hover:bg-background/60 dark:bg-transparent dark:hover:bg-background/60 h-7 w-auto gap-1.5 border-0 px-2 font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
@@ -731,6 +733,7 @@ export default function MarketPage() {
             ))}
           </SelectContent>
         </Select>
+        </div>
         {/* trade horizon — swaps the strategy, not just the speed. The MA pair (50/200 vs 9/21) and
             the bar size move with it, but so does the rule those numbers feed: accumulation on one
             side, a fixed-2R day trade on the other. Opening range pins 15m, so there the interval is
@@ -746,11 +749,9 @@ export default function MarketPage() {
             </Hint>
           ))}
         </div>
-        {/* what you're looking at, then how you're looking at it — one divider between the two
-            clusters rather than `ml-auto`, which on a narrow window pushed the whole right-hand
-            cluster onto a second line and left the first half of that line empty. Packed left,
-            a wrap reads as the toolbar continuing. */}
-        <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
+        {/* what you're looking at, then how you're looking at it. No divider between these two:
+            the row wraps here on most windows, and a rule at the end of a line separates a cluster
+            from nothing at all. The one after the tabs stays, because that one never wraps. */}
         <div className="flex flex-wrap items-center gap-2">
           {/* opening range pins 15m, so the interval picker only shows in Standard */}
           {preset === 'standard' && (
@@ -2368,6 +2369,22 @@ function PaperDesk() {
   )
 }
 
+/** One finished row as the share card wants it — the same payload whichever verb is chosen. */
+const cardOf = (r: Result) => ({
+  symbol: r.asset, side: r.dir, entry: r.entry, mark: r.exit,
+  // price move signed by the side, the same way a position's is
+  pct: r.entry > 0 ? (r.exit / r.entry - 1) * (r.dir === 'long' ? 100 : -100) : null,
+  /* only the venue's own dollars: the card draws a $ figure, and the euros this app works out for
+     its own rows are not dollars. A row without one prints the R and the prices, which is the
+     honest half of the same card. */
+  pnl: r.cash ?? null,
+  openedAt: new Date(r.entryAt).toISOString(),
+  closedAt: new Date(r.closedAt).toISOString(),
+  // no size: a setup's stake is money where a position's size is coins, and the card prints both in
+  // the same place with no unit. The rule that made it says more about the trade than either.
+  venue: r.rule || r.horizon || undefined,
+})
+
 function Record() {
   const { results: every, stake, dials } = useStash()
   /* Only the trades that really ran. A watched setup files itself here the same way a position does
@@ -2562,31 +2579,30 @@ function Record() {
                 </span>
               </div>
               {/* The one thing on this desk anyone shows anyone else, and only ever from here: a
-                  finished trade is the only one with a result to show. Beside the row's button
-                  rather than inside it — a button in a button is not markup a browser accepts. */}
-                <Hint label="A card of this trade — asset, side and what it paid — to the share sheet, or saved as a picture">
-                  <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
-                    className="text-muted-foreground hover:text-foreground shrink-0"
-                    onClick={() => void shareCard({
-                      symbol: r.asset, side: r.dir, entry: r.entry, mark: r.exit,
-                      // price move signed by the side, the same way a position's is
-                      pct: r.entry > 0 ? (r.exit / r.entry - 1) * (r.dir === 'long' ? 100 : -100) : null,
-                      /* only the venue's own dollars: the card draws a $ figure, and the euros this
-                         app works out for its own rows are not dollars. A row without one prints
-                         the R and the prices, which is the honest half of the same card. */
-                      pnl: r.cash ?? null,
-                      openedAt: new Date(r.entryAt).toISOString(),
-                      closedAt: new Date(r.closedAt).toISOString(),
-                      // no size: a setup's stake is money where a position's size is coins, and the
-                      // card prints both in the same place with no unit. The rule that made it says
-                      // more about the trade than either.
-                      venue: r.rule || r.horizon || undefined,
-                    }, r.r, user).then((how) => {
-                      if (how === 'saved') toast('Card saved', { description: 'No share sheet here, so it went to your downloads.' })
-                    }).catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
-                    <Share2 className="size-3.5" />
-                  </Button>
-                </Hint>
+                  finished trade is the only one with a result to show. Two verbs rather than one
+                  button that guesses: the share sheet only exists on a phone, and on a desktop the
+                  same press quietly became a download, which is not what it said it would do. */}
+                <DropdownMenu>
+                  <Hint label="Share">
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
+                        className="text-muted-foreground hover:text-foreground shrink-0">
+                        <Share2 className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                  </Hint>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => void downloadCard(cardOf(r), r.r, user)
+                      .catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
+                      <Download className="size-3.5" /> Download
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void copyCard(cardOf(r), r.r, user)
+                      .then(() => toast('Card copied', { description: 'On the clipboard as a picture.' }))
+                      .catch(() => toast('Not copied', { description: 'This browser will not put a picture on the clipboard — download it instead.' }))}>
+                      <Copy className="size-3.5" /> Copy
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
           )

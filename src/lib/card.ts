@@ -140,7 +140,10 @@ ${t(1120, 560, 28, '#52525b', 600, 'stash', ' text-anchor="end"')}
  *
  * Returns what happened, so the caller can say "saved" when nothing visibly went anywhere.
  */
-export async function shareCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<'shared' | 'saved'> {
+/** The card as PNG bytes, and the filename it should carry. Split out of shareCard so the row can
+ *  offer the two things a person actually wants — save it, or put it on the clipboard — rather than
+ *  one button that guesses which. */
+export async function cardBlob(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<{ blob: Blob; name: string }> {
   const svg = cardSvg(p, r, who)
   const img = new Image()
   // data:, not a blob: URL — the page is served under `img-src 'self' data:`
@@ -153,14 +156,23 @@ export async function shareCard(p: CardPosition, r: number | null = null, who: C
   const blob = await new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('no card'))), 'image/png'))
   // the symbol is the exchange's word, not ours: anything that is not a filename comes out
   const name = (p.symbol.replace(/[^\w.-]/g, '') || 'position') + '.png'
-  const file = new File([blob], name, { type: 'image/png' })
-  if (navigator.canShare?.({ files: [file] })) {
-    const done = await navigator.share({ files: [file] })
-      .then(() => true)
-      // the sheet was opened and dismissed: that was an answer, and not one to override
-      .catch((e: Error) => e.name === 'AbortError')
-    if (done) return 'shared'
-  }
+  return { blob, name }
+}
+
+/** Straight to the download folder, no share sheet asked. */
+export async function downloadCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<void> {
+  const { blob, name } = await cardBlob(p, r, who)
+  save(blob, name)
+}
+
+/** Onto the clipboard as an image, for pasting into whatever is open. Throws where the browser has
+ *  no clipboard for pictures, which the caller turns into a sentence rather than a silent nothing. */
+export async function copyCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<void> {
+  const { blob } = await cardBlob(p, r, who)
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+}
+
+function save(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -172,5 +184,19 @@ export async function shareCard(p: CardPosition, r: number | null = null, who: C
   a.remove()
   // after the click has been processed: revoking in the same tick cancels the download outright
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/** The share sheet where there is one, the download folder where there is not. */
+export async function shareCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<'shared' | 'saved'> {
+  const { blob, name } = await cardBlob(p, r, who)
+  const file = new File([blob], name, { type: 'image/png' })
+  if (navigator.canShare?.({ files: [file] })) {
+    const done = await navigator.share({ files: [file] })
+      .then(() => true)
+      // the sheet was opened and dismissed: that was an answer, and not one to override
+      .catch((e: Error) => e.name === 'AbortError')
+    if (done) return 'shared'
+  }
+  save(blob, name)
   return 'saved'
 }
