@@ -1738,6 +1738,10 @@ type ExchangePosition = {
   stop: number | null; target: number | null; funding: number | null
   /** The multiplier the venue holds it at, where its row says. */
   lev?: number | null
+  /** The next funding settlement: the venue's rate as a fraction, and when it is taken. Signed the
+   *  venue's way — positive is longs paying shorts. */
+  fundingRate?: number | null
+  fundingAt?: number | null
   /** The exchange's own liquidation price, where its feed says one. */
   liq?: number | null
   venue?: string
@@ -2204,6 +2208,16 @@ export function ExchangePositions() {
                  red — the Record's rows are the ones with an answer on them. */
               meta={[
                 p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+                /* The next settlement, put the way it lands on this position: the venue signs its
+                   rate for a long, so a short reads the same number the other way up. The one cost
+                   of holding that is neither in the entry nor in the pnl — a trade can be right
+                   about the price and still bleed out through this. */
+                p.fundingRate != null && (() => {
+                  const mine = p.fundingRate * (p.side === 'long' ? 1 : -1)
+                  const when = p.fundingAt != null && p.fundingAt > Date.now()
+                    ? ` in ${left(p.fundingAt - Date.now())}` : ''
+                  return `${mine >= 0 ? 'pays' : 'earns'} ${Math.abs(mine * 100).toFixed(3)}%${when}`
+                })(),
                 /* what the price move did to the margin behind it — the number a leveraged trade is
                    actually felt in. pct stays the price move it has always been; this is that times
                    the multiplier, and it only appears where the venue said what the multiplier is. */

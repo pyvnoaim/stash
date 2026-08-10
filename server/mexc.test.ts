@@ -24,6 +24,8 @@ assert.deepEqual(rows[0], {
   symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 100, mark: 110, pct: 10,
   pnl: 5, value: 55, openedAt: '2025-08-05T13:20:00.000Z', stop: 90, target: 130, liq: 80.5,
   funding: -0.42, lev: 10,
+  // the next settlement is public and asked for per symbol held, not shaped off the row
+  fundingRate: null, fundingAt: null,
 })
 assert.equal(rows[1].side, 'short')
 assert.equal(rows[1].size, 2) // 200 × 0.01

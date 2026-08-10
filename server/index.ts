@@ -29,7 +29,7 @@ import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
-import { closed as bitgetClosed, positions as bitgetPositions, type Closed } from './bitget.ts'
+import { closed as bitgetClosed, positions as bitgetPositions, raw as bitgetRaw, type Closed } from './bitget.ts'
 import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -1214,6 +1214,37 @@ export function start({
         closedCache.set(user.id, { at: Date.now(), rows })
       }
       return send(res, 200, { closed: rows, ...(why.length ? { why } : {}) })
+    }
+
+    /* One raw row out of each of Bitget's closed-trade endpoints, so what gets built on their
+       field names is built on the names they actually send. Twice now a field guessed from the
+       documentation has come back null and taken a feature down with it quietly — `openLeverage` on
+       the position history being the last one — and guessing a third time is worse than looking.
+
+       Own account only, and it is the caller's own trades either way. One row per endpoint: this is
+       for reading field names, not for hoarding somebody's ledger. The keys themselves never appear
+       in it — what is echoed is the exchange's answer, not what was sent.
+       ponytail: delete this route once the margin lands. It exists to answer one question. */
+    if (path === '/api/venue-peek' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const raw = (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget
+      if (!raw) return send(res, 501, { error: 'no bitget key on this account' })
+      let c: any
+      try { c = JSON.parse(raw) } catch { return send(res, 500, { error: 'the stored key will not parse' }) }
+      const since = Date.now() - 7 * 86400_000
+      const one = async (label: string, path: string) => {
+        try {
+          const r = await bitgetRaw(c.key, c.secret, c.passphrase, path)
+          const rows = Array.isArray(r?.data) ? r.data : r?.data?.list ?? r?.data?.bills ?? r?.data?.entrustedList ?? []
+          return [label, { code: r?.code, msg: r?.msg, rows: rows.length, first: rows[0] ?? null }]
+        } catch (e) { return [label, { error: String((e as Error).message) }] }
+      }
+      return send(res, 200, Object.fromEntries(await Promise.all([
+        one('history-position', `/api/v2/mix/position/history-position?productType=USDT-FUTURES&startTime=${since}&limit=1`),
+        one('history-orders', `/api/v2/mix/order/orders-history?productType=USDT-FUTURES&startTime=${since}&limit=1`),
+        one('bills', `/api/v2/mix/account/bill?productType=USDT-FUTURES&startTime=${since}&limit=5`),
+      ])))
     }
 
     /* MCP over plain HTTP: the same dispatcher the stdio server runs, mounted where the app

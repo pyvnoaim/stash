@@ -86,6 +86,9 @@ export function shape(
       // holdFee is the funding accrued while it has been held, as MEXC signs it
       funding: signed(p.holdFee),
       lev: num(p.leverage),
+      // filled in by `positions` below, off the public feed and per symbol held
+      fundingRate: null as number | null,
+      fundingAt: null as number | null,
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.size) && p.size > 0)
 }
@@ -183,8 +186,23 @@ export async function positions(key: string, secret: string): Promise<Feed> {
     ((details?.data ?? []) as { symbol?: unknown; contractSize?: unknown }[])
       .map((d) => [String(d.symbol ?? '').toUpperCase(), Number(d.contractSize)] as const),
   )
+  const rows = shape(rowsOf(open.data), marks, sizes, stops?.success === true ? shapeStops(rowsOf(stops.data)) : undefined)
+  /* the next funding settlement per symbol held, off the public feed. The row's own `holdFee` is
+     what holding it has cost so far; this is what the next one will cost, which is the half a
+     reader can still do something about. */
+  await Promise.all([...new Set(rows.map((p) => p.symbol))].map(async (symbol) => {
+    // back to MEXC's own spelling: the shape strips the underscore, the feed still wants it
+    const raw = symbol.replace(/USDT$/, '_USDT')
+    const f = await pub(`/api/v1/contract/funding_rate/${raw}`).catch(() => null)
+    if (f?.success !== true) return
+    const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : null }
+    for (const p of rows) if (p.symbol === symbol) {
+      p.fundingRate = n(f.data?.fundingRate)
+      p.fundingAt = n(f.data?.nextSettleTime)
+    }
+  }))
   const data = {
-    positions: shape(rowsOf(open.data), marks, sizes, stops?.success === true ? shapeStops(rowsOf(stops.data)) : undefined),
+    positions: rows,
     equity: assets?.success === true ? equityOf(assets.data) : null,
   }
   if (cached.size >= 64) cached.clear()
