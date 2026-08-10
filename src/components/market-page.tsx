@@ -715,7 +715,7 @@ export default function MarketPage() {
               same height and radius sitting between them read as a third one. This is the thing the
               whole row is *about*, so it says so with the logo and its name and nothing else —
               borderless, narrower, and quiet until you go near it. */}
-          <SelectTrigger className="hover:bg-muted h-8 w-auto gap-1.5 border-0 bg-transparent px-2 font-medium shadow-none focus-visible:ring-0">
+          <SelectTrigger className="hover:bg-muted h-7 w-auto gap-1.5 border-0 bg-transparent px-2 font-medium shadow-none focus-visible:ring-0 [&_svg]:size-3.5">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
@@ -801,9 +801,9 @@ export default function MarketPage() {
             {/* icon alone — the word cost the row 80px it did not have, and the tooltip says more
                 than the word did */}
             <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
-              aria-pressed={structure} className={cn('size-8', !structure && 'text-muted-foreground')}
+              aria-pressed={structure} className={cn('size-7', !structure && 'text-muted-foreground')}
               onClick={() => setStructure((v) => !v)}>
-              <Waypoints className="size-4" />
+              <Waypoints className="size-3.5" />
             </Button>
           </Hint>
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
