@@ -1877,7 +1877,16 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      FRESH_CROSS it stays on the page as context — knowing which regime you are in is worth something
      — but it drops to a flat tone, and the tally only counts the sides. Tested on BTC and ETH: 20
      bars is neutral-to-slightly-better for the setup rule's expectancy (+0.55R vs +0.54R on BTC,
-     +0.47R vs +0.39R on ETH), so this is a clarity fix that costs nothing. */
+     +0.47R vs +0.39R on ETH), so this is a clarity fix that costs nothing.
+
+     Re-measured since, and the headline number did not survive: over the 120 days to 10 Aug 2026,
+     on 15m bars, this rule walked forward gives −0.004R a trade on BTC (470 trades, 33% hit),
+     −0.014R on ETH and +0.031R on SOL. Zero, in other words, where the run above said half an R.
+     Different period, and the rule has been split into two strategies since — but the honest
+     reading is that the +0.5R belonged to its window and not to the rule.
+     What that walk cannot see is the half the desk actually applies: the higher-timeframe filter
+     and the cascade, which is what a tier-3 row on the Scan card means. The paper desk measures
+     exactly that subset, forward, which is the number worth waiting for. */
   const cross = lastCross(smaFast, smaSlow)
   if (cross) {
     const stale = cross.ago > FRESH_CROSS
