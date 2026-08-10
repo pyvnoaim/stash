@@ -337,7 +337,7 @@ export default function MarketPage() {
       let prev = localClock(ts[0], s.tz)
       for (let i = 1; i < ts.length; i++) {
         const cur = localClock(ts[i], s.tz)
-        // …and only on a day that desk actually opens. Bitcoin prints a bar at 09:30 New York on a
+        // …and only on a day that desk actually opens. Bitcoin prints a bar at 09:30 in NY on a
         // Saturday and nobody whatsoever opened for business — openDesks owns the weekend rule, so
         // the line and the overlap band below it can't disagree about whether anyone is there.
         if (cur.min >= s.min && cur.min < s.min + barMin && (cur.day !== prev.day || prev.min < s.min)
@@ -346,7 +346,7 @@ export default function MarketPage() {
         prev = cur
       }
     }
-    /* And the stretches where two desks are at work at once — Frankfurt and New York overlap for two
+    /* And the stretches where two desks are at work at once — London and NY overlap for two
        hours a day, and that is when most of gold's range gets made. Drawn as a band rather than said
        in a sentence: the point of it is which candles happened inside it. */
     const overlaps: { x0: number; x1: number }[] = []
@@ -1612,7 +1612,7 @@ export default function MarketPage() {
 /**
  * Who is at their desks, right now, on your own clock. The chart marks the opens and says nothing
  * about the closes, which is half a day's information: gold's range is mostly made in the two hours
- * Frankfurt and New York are both working, and the stretch when neither is is the one where a break
+ * London and NY are both working, and the stretch when neither is is the one where a break
  * has nobody behind it.
  *
  * Read off the last bar rather than the wall clock, so it never claims a session the drawn chart

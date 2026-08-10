@@ -529,7 +529,7 @@ const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string
   { k: 'setupAgree', label: 'Setups worth a knock', unit: 'of 6',
     hint: 'The scan reads every keyless chart on all six timeframes and grades the ones whose entry is here right now. This is how many of the six have to lean that way before your phone hears about it — the setup\'s own timeframe always counts itself, so 1 is every one of them and 0 is off. Raise it if the bell is loud: a "Buy now" only the fastest chart can see is the one most likely to be noise. Held back by the quiet hours, unlike a level you saved yourself.' },
   { k: 'openIn', label: 'Before a market opens', unit: 'min',
-    hint: 'A push that much before Frankfurt or New York opens — where the volume that moves gold and crypto arrives. Zero is off, and it ships off. Tokyo opens in the middle of the European night and is held back by the quiet hours like anything else.' },
+    hint: 'A push that much before London or NY opens — where the volume that moves gold and crypto arrives. Zero is off, and it ships off. Asia opens in the middle of the European night and is held back by the quiet hours like anything else.' },
 ]
 
 /**

@@ -444,15 +444,19 @@ export const MOVER_FLOOR = 0.75  // percent, under which nothing counts however 
  * and an open in two places is two opens the week a country moves its clocks.
  *
  * `end` is the closing bell, same local clock. It earns its place on the overlap: for two hours a
- * day Frankfurt and New York are both at their desks, and that is when most of gold's daily range
- * gets made. Tokyo's lunch break is not modelled — ponytail: it is an hour in the middle of a
+ * day London and NY are both at their desks, and that is when most of gold's daily range
+ * gets made. The Asian lunch break is not modelled — ponytail: it is an hour in the middle of a
  * session nobody here trades, and no reading turns on it.
  */
+/* Named for the session rather than for a city's exchange: these are the three windows a trader
+   talks in, and "Frankfurt" for the European one was a building, not the session. The clocks are
+   unchanged where the change is only a name — London 08:00–16:30 is the same instant Frankfurt
+   09:00–17:30 was, and Asia keeps Tokyo's hours because Tokyo is what sets them. */
 export const SESSIONS = [
-  // 09:00–15:00, no DST all year
-  { label: 'Asia', where: 'Tokyo', tz: 'Asia/Tokyo', min: 9 * 60, end: 15 * 60, color: '#f43f5e' },
-  { label: 'Europe', where: 'Frankfurt', tz: 'Europe/Berlin', min: 9 * 60, end: 17 * 60 + 30, color: '#6366f1' },
-  { label: 'US', where: 'New York', tz: 'America/New_York', min: 9 * 60 + 30, end: 16 * 60, color: '#14b8a6' },
+  // 09:00–15:00 in Tokyo, no DST all year
+  { label: 'Asia', where: 'Asia', tz: 'Asia/Tokyo', min: 9 * 60, end: 15 * 60, color: '#f43f5e' },
+  { label: 'London', where: 'London', tz: 'Europe/London', min: 8 * 60, end: 16 * 60 + 30, color: '#6366f1' },
+  { label: 'NY', where: 'NY', tz: 'America/New_York', min: 9 * 60 + 30, end: 16 * 60, color: '#14b8a6' },
 ]
 
 /** Which desks are at their desks at that moment — weekends are nobody. Used for the line over the
@@ -1254,9 +1258,9 @@ export const GUIDES: Record<GuideKey, string> = {
     'How much was traded on the latest bar against the recent average. A breakout on heavy volume means many people acted on it; the same break on thin volume often means very few did and it gets given back. Volume confirms, it never leads.',
   candle:
     'The shape of one or two bars. A body that swallows the previous bar in the other colour (engulfing) says the side that was winning got overwhelmed within a single bar; a long wick with a small body (hammer, shooting star) says an extreme was reached and rejected; a body of almost nothing (doji) says the two sides finished level. These are the oldest patterns in the trade and the most local — one bar of evidence, usually worth acting on only where a bigger reason already sits.',
-  orb: 'The opening range is the high and low of the first hour of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the New York open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. Gold and crypto never close, so the range here follows whichever of Tokyo, Frankfurt and New York opened last — at nine in the morning in Berlin the New York range is sixteen hours old and the levels people are trading around are Frankfurt\'s. Only the New York one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
+  orb: 'The opening range is the high and low of the first hour of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the NY open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. Gold and crypto never close, so the range here follows whichever of Asia, London and NY opened last — at nine in the morning in Berlin the NY range is sixteen hours old and the levels people are trading around are London\'s. Only the NY one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
   vwap:
-    'The volume-weighted average price since the session opened — every trade since the bell, each counted for the size it was. It is the number institutional desks are measured against (fill above it on a buy and you did worse than the day), which is a large part of why price keeps returning to it: size that has to be worked leans against the line rather than chasing away from it. Above it the buyers who showed up today are in front, below it the sellers are. Two things separate it from the moving averages here — it starts fresh at the open instead of dragging the last fifty bars behind it, and it weights the busy hour over the dead one. It is also why it decays: by the end of a long session it has averaged so much that it stops moving, and overnight it means nothing at all, which is why this one goes quiet once its session is more than eight hours behind. Gold and crypto have no closing bell, so the session here is whichever of Tokyo, Frankfurt and New York opened last.',
+    'The volume-weighted average price since the session opened — every trade since the bell, each counted for the size it was. It is the number institutional desks are measured against (fill above it on a buy and you did worse than the day), which is a large part of why price keeps returning to it: size that has to be worked leans against the line rather than chasing away from it. Above it the buyers who showed up today are in front, below it the sellers are. Two things separate it from the moving averages here — it starts fresh at the open instead of dragging the last fifty bars behind it, and it weights the busy hour over the dead one. It is also why it decays: by the end of a long session it has averaged so much that it stops moving, and overnight it means nothing at all, which is why this one goes quiet once its session is more than eight hours behind. Gold and crypto have no closing bell, so the session here is whichever of Asia, London and NY opened last.',
   structure:
     'Market structure is the sequence of swing highs and swing lows — a swing being a bar whose high or low stands past its neighbours on both sides, which means it only exists in hindsight, a couple of bars after it happened. An uptrend is higher highs and higher lows; when price closes through the last swing low, that sequence has broken. A break against the standing direction is called a change of character (CHoCH) — the earliest structural sign of a turn. A break that extends the standing direction is a break of structure (BOS) — plain continuation, and deliberately quieter news. Two honest caveats: swings confirm bars after the fact, so this label always arrives late by construction; and a move in the trend\'s own direction, however violent, prints no character change at all — a huge drop inside a downtrend is the trend working, not the trend turning.',
   htf: 'The trend on the timeframe one step above the one you are looking at. A cross on the hourly means something different depending on whether the daily is climbing or falling, and trades taken against the bigger timeframe need to be right about timing as well as direction. It is the oldest filter there is and the one most often skipped.',
@@ -1624,9 +1628,9 @@ export function backtest(
 export type AmdTrade = Omit<Trade, 'exit'> & { exit: 'target' | 'stop' | 'bell' }
 
 export type AmdOpts = {
-  /** Which desk's open times the manipulation. New York is the anchor the opening-range numbers
+  /** Which desk's open times the manipulation. NY is the anchor the opening-range numbers
    *  were run on, so it is the one the two tables can be read against each other. */
-  open?: 'New York' | 'Frankfurt'
+  open?: 'NY' | 'London'
   /** The model's own target is the far side of the accumulation range — the opposing liquidity it
    *  says the distribution leg is going for. 2R is here only so the row is comparable with the
    *  opening-range table above it, not because the model asks for it. */
@@ -1658,14 +1662,14 @@ export type AmdRun = {
   hit: number
 }
 
-const ACCUMULATION = SESSIONS[0]   // Tokyo 09:00–15:00 — the quiet window the model calls the range
+const ACCUMULATION = SESSIONS[0]   // Asia 09:00–15:00 Tokyo — the quiet window the model calls the range
 
 /**
  * AMD, walked forward — the ICT model, as literally as it can be written down.
  *
  * Three phases, one trade a day, every knob fixed in advance rather than fitted:
  *
- *  - **Accumulation** is the Tokyo session's high and low, `SESSIONS[0]` as this file already
+ *  - **Accumulation** is the Asian session's high and low, `SESSIONS[0]` as this file already
  *    defines it rather than a window invented for this rule.
  *  - **Manipulation** is the first bar after the chosen open that trades beyond either side of it —
  *    the judas swing, and the side it takes is the side this trade will be *against*.
@@ -1686,14 +1690,14 @@ const ACCUMULATION = SESSIONS[0]   // Tokyo 09:00–15:00 — the quiet window t
  * times nothing, and this never runs on a live tick. Hoist the swing scan if it ever does.
  */
 export function amdBacktest(c: Candle[], opts: AmdOpts = {}): AmdRun {
-  const { open = 'New York', target = 'range', entry = 'fvg', fee = 0 } = opts
+  const { open = 'NY', target = 'range', entry = 'fvg', fee = 0 } = opts
   const session = SESSIONS.find((s) => s.where === open) ?? SESSIONS[2]
   const within = (t: number, s: typeof SESSIONS[number]) => {
     const { min } = localClock(t, s.tz)
     return min >= s.min && min < s.end
   }
 
-  /* Both windows land on the same UTC date — Tokyo's session is 00:00–06:00 UTC and New York's
+  /* Both windows land on the same UTC date — Asia's session is 00:00–06:00 UTC and NY's
      opens at 13:30 — so one key groups the range with the open that follows it. Weekends go by the
      same date: Bitcoin prints bars all Saturday and nobody opened for business, which is the rule
      `sessionAnchor` already holds the opening range to. */
@@ -1979,7 +1983,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
        rather than caution. Backtested over 9 assets and a 600-bar window with the card's vote on
        and off, the whole rule's expectancy moved −0.033R per trade on the 1h, +0.023R on the 4h and
        −0.094R on the daily: inconsistent in sign and negative on two of the three. A card that
-       cannot pick a direction across timeframes has not earned one. Same standing as the Frankfurt
+       cannot pick a direction across timeframes has not earned one. Same standing as the London
        opening range above, and for the same reason.
        The first run of this read −0.013/+0.068/−0.241 and was taken on a backtest that silently
        dropped every trade still open at its expiry. The conclusion survived the correction; the
@@ -2047,8 +2051,8 @@ export function candlePatterns(c: Candle[]): Signal[] {
  *  bar (the session-open range for these 24/7 markets) and says whether price has cleared it.
  *  Meant for 15m candles; returns null if the window holds no session-open bar. */
 const RANGE_MIN = 60 // how much of the session sets the range
-/** The one whose numbers we have: the New York open is the anchor that was actually backtested. */
-const TESTED = 'New York'
+/** The one whose numbers we have: the NY open is the anchor that was actually backtested. */
+const TESTED = 'NY'
 
 /**
  * The most recent session open in the window: which bar it is, and which desk it belongs to.
@@ -2058,10 +2062,10 @@ const TESTED = 'New York'
  * falls inside, scanning back from now, which is whichever market opened most recently.
  *
  * The bar it falls *inside*, not the one that starts on it, which is the same rule the session
- * lines on the chart are drawn by: New York opens at 09:30 and an hourly bar starts at 09:00, so an
+ * lines on the chart are drawn by: NY opens at 09:30 and an hourly bar starts at 09:00, so an
  * exact match would make the tested anchor invisible on every chart but the 15m one.
  *
- * Weekends are skipped — Bitcoin prints a bar at 09:30 New York on a Saturday and nobody whatsoever
+ * Weekends are skipped — Bitcoin prints a bar at 09:30 in NY on a Saturday and nobody whatsoever
  * opened for business. So is a bar big enough to swallow a whole session: an open inside a daily
  * candle is not an opening range, it is a date.
  */
@@ -2088,7 +2092,7 @@ export type Range = {
   until: number
   high: number
   low: number
-  /** Which desk's open set it — 'New York' is the one the backtest below was run on. */
+  /** Which desk's open set it — 'NY' is the one the backtest below was run on. */
   where: string
   /** Whether the break clears the three tests that separated a losing rule from a break-even one. */
   quality: { wide: boolean; volume: boolean }
@@ -2099,10 +2103,10 @@ export function orb(c: Candle[]): Range | null {
   const step = Math.min(...c.slice(1).map((x, i) => x.t - c[i].t).filter((d) => d > 0))
   /* 24/7 assets never gap, so the session has to be named. It used to be the 00:00-UTC roll, which
      is a date boundary rather than a moment anyone shows up for — backtested over 219 days of BTC
-     and ETH it lost 0.64R a trade. The New York open, the same test, was the best of the three
+     and ETH it lost 0.64R a trade. The NY open, the same test, was the best of the three
      candidates by a distance. See GUIDES.orb for the numbers.
      It now follows whichever desk opened last, because at nine in the morning in Berlin the New
-     York range is sixteen hours old and the one being traded around is Frankfurt's. Only the tested
+     York range is sixteen hours old and the one being traded around is London's. Only the tested
      anchor votes, though — see the tone below. */
   const anchor = sessionAnchor(c, step)
   if (!anchor) return null
@@ -2132,17 +2136,17 @@ export function orb(c: Candle[]): Range | null {
   /* This is a same-session play: the range is the hour the day's participants arrived in, and the
      break that follows it is the day's. Sixteen hours later those are yesterday's levels — still
      worth drawing, because other people can see them too, but not worth a vote in a 15m tally.
-     ponytail: 8h is the New York session plus its afternoon; if the anchor ever stops being the NY
+     ponytail: 8h is the NY session plus its afternoon; if the anchor ever stops being the NY
      open this has to follow it. */
   const stale = hrs >= 8
-  /* Frankfurt's range at nine in the morning is the one people are actually trading around, and it
+  /* London's range in the morning is the one people are actually trading around, and it
      is drawn and described like any other — but the 219 days behind this play were run on the New
      York open, and a reading that votes on the strength of a test it wasn't in is the tool
      borrowing credibility it hasn't got. So the other desks inform and only this one votes. */
   const untested = where !== TESTED && where !== 'session'
   const weak = [
     stale && 'the range is from a session that has since closed',
-    untested && `this is the ${where} open, and the numbers behind the play were run on New York's`,
+    untested && `this is the ${where} open, and the numbers behind the play were run on NY's`,
     !wide && 'the range is tighter than a normal bar',
     !volume && 'it is trading on thin volume',
   ].filter(Boolean).join(' and ')

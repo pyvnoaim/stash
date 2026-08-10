@@ -51,7 +51,7 @@ assert.ok(hammer.includes('Hammer'))
 const forming = [...bull.slice(0, 30), { t: 30, o: 30, h: 30.05, l: 29.95, c: 30.01 }]
 assert.ok(!signals(forming).signals.some((s) => s.label === 'Doji'))
 
-// Opening range: the New York open (09:30 local — 14:30 UTC in January) starts it, the first hour
+// Opening range: the NY open (09:30 local — 14:30 UTC in January) starts it, the first hour
 // sets it, and a later close beyond it is the break. Anchored there rather than at midnight UTC
 // because the midnight version lost money over 219 days of testing and this one didn't.
 const open = Date.UTC(2024, 0, 2, 14, 30)
@@ -68,64 +68,64 @@ assert.equal(o?.signal.label, 'Opening-range breakout')
 // the quality tests are what the backtest showed separate a losing rule from a break-even one
 assert.equal(typeof o?.quality.wide, 'boolean')
 assert.equal(orb([{ t: Date.UTC(2024, 0, 2, 3, 30), o: 1, h: 1, l: 1, c: 1 }]), null) // no session open → null
-assert.equal(o?.where, 'New York')
+assert.equal(o?.where, 'NY')
 /* …and a range from a session that has closed is context, not a vote: same break, no side. The
-   filler stops at 23:45 UTC — one more bar and it would land on Tokyo's 09:00, which is a fresh
+   filler stops at 23:45 UTC — one more bar and it would land on Asia's 09:00, which is a fresh
    session open and a different (correct) answer. */
 const stale = [...orbBars, ...Array.from({ length: 33 }, (_, i) => bar(5 + i, 109, 103, 108))]
 assert.equal(orb(stale)?.signal.label, 'Opening-range breakout')
 assert.equal(orb(stale)?.signal.tone, 'flat')
 
-/* The anchor follows whichever desk opened last. Frankfurt, 09:00 local on a winter Tuesday, is
+/* The anchor follows whichever desk opened last. London, 08:00 local on a winter Tuesday, is
    08:00 UTC: the range is its first hour, the break is described the same way — and it does not
-   vote, because the 219 days behind this play were run on New York's open and not on this one. */
+   vote, because the 219 days behind this play were run on NY's open and not on this one. */
 const fra = Date.UTC(2024, 0, 2, 8)
 const fraBar = (n: number, h: number, l: number, c: number) => ({ t: fra + n * 900000, o: c, h, l, c, v: 10 })
 const fraBars = [fraBar(0, 105, 95, 102), fraBar(1, 104, 99, 100), fraBar(2, 106, 98, 103), fraBar(3, 104, 97, 101), fraBar(4, 109, 103, 108)]
-assert.equal(orb(fraBars)?.where, 'Frankfurt')
+assert.equal(orb(fraBars)?.where, 'London')
 assert.equal(orb(fraBars)?.signal.label, 'Opening-range breakout')
 assert.equal(orb(fraBars)?.signal.tone, 'flat')
-assert.ok(orb(fraBars)?.signal.detail.includes('Frankfurt'))
-// a Saturday 09:30 in New York is a bar nobody opened for: crypto prints one, no desk sat down
+assert.ok(orb(fraBars)?.signal.detail.includes('London'))
+// a Saturday 09:30 in NY is a bar nobody opened for: crypto prints one, no desk sat down
 assert.equal(orb(orbBars.map((b) => ({ ...b, t: b.t + 4 * 864e5 }))), null)
-/* The open is looked for inside a bar, not on its first tick: New York's 09:30 falls in the 09:00
+/* The open is looked for inside a bar, not on its first tick: NY's 09:30 falls in the 09:00
    hourly bar, and matching the minute exactly hid the only anchor that votes from every chart but
    the 15m one. A day-long bar swallows every session there is, and anchors to none of them. */
 const hourly = [13, 14, 15, 16].map((h, i) => ({ t: Date.UTC(2024, 0, 2, h), o: 100, h: 105, l: 95, c: 100 + i, v: 10 }))
 assert.equal(orb(hourly)?.t, Date.UTC(2024, 0, 2, 14))
-assert.equal(orb(hourly)?.where, 'New York')
+assert.equal(orb(hourly)?.where, 'NY')
 assert.equal(orb([0, 1, 2, 3].map((d) => ({ t: Date.UTC(2024, 0, 2 + d), o: 100, h: 105, l: 95, c: 100, v: 10 }))), null)
 
-/* Who is at their desks. A summer Tuesday, in UTC: Frankfurt works 07:00–15:30, New York
-   13:30–20:00, so 13:30–15:30 is the overlap that makes the day's range — and 21:00, with Tokyo
-   still hours away, is nobody at all. */
+/* Who is at their desks. A summer Tuesday, in UTC: London works 07:00–15:30, NY 13:30–20:00,
+   so 13:30–15:30 is the overlap that makes the day's range — and 21:00, with Asia still hours
+   away, is nobody at all. */
 const desks = (h: number, m = 0) => openDesks(Date.UTC(2024, 6, 2, h, m)).map((s) => s.where)
-assert.deepEqual(desks(8), ['Frankfurt'])
-assert.deepEqual(desks(14), ['Frankfurt', 'New York'])
-assert.deepEqual(desks(16), ['New York'])
+assert.deepEqual(desks(8), ['London'])
+assert.deepEqual(desks(14), ['London', 'NY'])
+assert.deepEqual(desks(16), ['NY'])
 assert.deepEqual(desks(21), [])
-assert.deepEqual(desks(1), ['Tokyo']) // 10:00 in Tokyo, and only there
+assert.deepEqual(desks(1), ['Asia']) // 10:00 in Tokyo, and only there
 // Saturday is nobody, however wide awake the crypto feed is
 assert.deepEqual(openDesks(Date.UTC(2024, 6, 6, 14)), [])
 
-/* The open as an instruction, in the four moments it has. The fixture opens at 09:30 New York and
+/* The open as an instruction, in the four moments it has. The fixture opens at 09:30 in NY and
    its fifth bar closes above the hour's high, so: 20 minutes before, nothing to do; 30 minutes in,
    the hour is still building; and after it, the break with a side on it. */
 const playAt = (mins: number, bars = orbBars) => openPlay(bars, open + mins * 60_000)
-assert.match(playAt(-20)!.say, /New York opens in 20 minutes/)
+assert.match(playAt(-20)!.say, /NY opens in 20 minutes/)
 assert.equal(playAt(-20)!.tone, 'wait')
 assert.match(playAt(30, orbBars.slice(0, 2))!.say, /still forming/)
 const broke = playAt(75)!
-assert.match(broke.say, /New York's high/)
+assert.match(broke.say, /NY's high/)
 /* …and 'wait', not 'go': five bars are too few for an ATR, so the range cannot pass the width test,
    and a play that can't check its own filter stands you down rather than pretending it passed. */
 assert.equal(broke.tone, 'wait')
 // inside the range there is a trigger but no trade, and past the session there is nothing to say
 assert.match(openPlay(orbBars.slice(0, 4), open + 75 * 60_000)!.say, /range is set|worth less/)
-// 23:00 UTC: the New York range is eight and a half hours behind, and Tokyo is still an hour off —
-// which is the one moment of the day this has nothing to say. Half an hour later it announces Tokyo.
+// 23:00 UTC: the NY range is eight and a half hours behind, and Asia is still an hour off —
+// which is the one moment of the day this has nothing to say. Half an hour later it announces Asia.
 assert.equal(openPlay(orbBars, open + 8.5 * 3600_000), null)
-assert.match(openPlay(orbBars, open + 9 * 3600_000)!.say, /Tokyo opens in 30 minutes/)
+assert.match(openPlay(orbBars, open + 9 * 3600_000)!.say, /Asia opens in 30 minutes/)
 
 /* Session VWAP: the average price paid since that open, weighted by what traded at each. Most of
    the size went through at 100 and price has walked to 108, so the average sits well below it. */
@@ -134,7 +134,7 @@ const vw = sessionVwap([
   { ...bar(2, 109, 107, 108), v: 10 }, { ...bar(3, 109, 107, 108), v: 10 },
 ])
 assert.ok(vw != null && vw.vwap > 100 && vw.vwap < 102) // dragged only a little by the thin bars
-assert.equal(vw?.where, 'New York')
+assert.equal(vw?.where, 'NY')
 assert.equal(vw?.signal.tone, 'bull')
 // no volume is no VWAP — an average weighted by nothing is a number with no claim behind it
 assert.equal(sessionVwap(orbBars.map(({ v: _v, ...b }) => b)), null)
@@ -539,8 +539,8 @@ assert.deepEqual(backtest([], 'short').trades, [])
 /* ---------- AMD: accumulation, manipulation, distribution ---------- */
 
 /* One session built to walk every phase exactly once, so the three the model names can each be
-   checked rather than inferred from a summary. 15m bars all through a Monday: Tokyo 09:00–15:00 is
-   00:00–05:45 UTC and New York 09:30 is 13:30 UTC, which is where the indices below come from. */
+   checked rather than inferred from a summary. 15m bars all through a Monday: Asia 09:00–15:00 is
+   00:00–05:45 UTC and NY 09:30 is 13:30 UTC, which is where the indices below come from. */
 const amdBar = (i: number, h: number, l: number, c: number) =>
   ({ t: Date.parse('2026-08-10T00:00:00Z') + i * 15 * 60_000, o: (h + l) / 2, h, l, c, v: 100 })
 /** The two windows and the drift between them; `ny` is the session where the play happens. */
