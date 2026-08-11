@@ -493,7 +493,7 @@ export default function Overview({ onTag, onNavigate }: {
       )}
 
       {/* the same card the desk shows — renders nothing unless a key is saved and something is open */}
-      <ExchangePositions />
+      <ExchangePositions onOpen={(id) => { setMarketAsset(id); onNavigate(MARKET) }} />
 
       <Panel title="Markets" sub="Biggest 24-hour moves · tap one through to the desk">
         {/* the desk opens on whatever was tapped, rather than on Bitcoin and a hunt through the picker */}

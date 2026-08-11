@@ -189,6 +189,30 @@ export const RESULT_FRESH = 12 * 3600_000
 /** How many finished setups are kept. Past a few dozen it is a spreadsheet, not a scoreboard. */
 const KEEP_RESULTS = 50
 
+/**
+ * One trade filed twice under two ids.
+ *
+ * The exchange filer has two ways to a finished trade — a position that vanished from the open
+ * book, and the venue's own closed history — and each builds an id out of what its own feed
+ * carries. Where a venue stamps its history differently from its book the two ids differ, the
+ * id is all the dedupe below can see, and the same trade lands twice: same money, two Rs, because
+ * the two paths measure risk off different things (see fileClosed in market-page.tsx).
+ *
+ * The asset, the side, the venue's own average entry and an hour of each other. Two real trades
+ * do not share all four — an average fill price agreeing to the sixth digit is one fill.
+ *
+ * Both sides have to be the exchange filer's own row, whose id is `venue-symbol-when` (see isReal).
+ * A plan you watched and a trade you took on the same asset at the same price *are* two rows, and
+ * this must never quietly eat one of them: only the filer writes one close down twice.
+ */
+type Filed = { id: string; asset: string; dir: string; entry: number; closedAt: number }
+function twice(a: Filed, b: Filed) {
+  return a.id.includes('-') && b.id.includes('-')
+    && a.asset === b.asset && a.dir === b.dir
+    && b.entry > 0 && Math.abs(a.entry - b.entry) <= b.entry * 1e-6
+    && Math.abs(a.closedAt - b.closedAt) < 3600_000
+}
+
 /** A price and which way through it counts — decided from where price stood when it was set. */
 export interface Alarm {
   id: string
@@ -630,6 +654,12 @@ export function load(data: unknown): State {
        finished in 1970 and sit at the bottom of the record forever. */
     .filter((r) => liveGeometry(r) && [r.entryAt, r.closedAt, r.exit].every((n) => n > 0)
       && isFinite(r.r))
+    /* and the same trade under two ids, which is what every record written before closeWatch
+       checked for it already holds — one close, twice, with two different Rs against one lot of
+       money. The newer row wins for no better reason than being first in the list; both name the
+       same trade and the money on them agrees.
+       ponytail: O(n²) over fifty rows, once per load. */
+    .filter((r, i, all) => !all.slice(0, i).some((x) => twice(x, r)))
     .slice(0, KEEP_RESULTS)
 
   // a stake is money at risk: a real number, never negative. Zero is the answer "say it in R"
@@ -1147,9 +1177,10 @@ export const openWatch = (id: string, at: number) => set((s) => ({
 
 /**
  * It ran to its target or its stop: off the live list, into the record. Idempotent on the id, so
- * two ticks landing on the same crossing file it once.
+ * two ticks landing on the same crossing file it once — and on the trade itself, so the exchange
+ * filer's two paths cannot write one close twice under two ids (see `twice`).
  */
-export const closeWatch = (r: Result, at = Date.now()) => set((s) => (s.results.some((x) => x.id === r.id) ? s : {
+export const closeWatch = (r: Result, at = Date.now()) => set((s) => (s.results.some((x) => x.id === r.id || twice(x, r)) ? s : {
   ...s,
   watches: s.watches.filter((w) => w.id !== r.id),
   /* A plan that was only ever watched is news for half a day — the bell says how it went — and

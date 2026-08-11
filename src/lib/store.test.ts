@@ -673,6 +673,19 @@ assert.equal(pos({}).size, undefined)                     // a plain watched pla
   assert.equal(getState().results.length, 1)
   assert.equal(getState().results[0].r, 2)
 
+  /* The same trade the exchange filer reached both ways: one from the open book it saw vanish, one
+     from the venue's history, two ids, two Rs, one lot of money. It is one trade. A second at the
+     same entry an hour and a half later is not the same trade and still files. */
+  clearResults()
+  closeWatch({ ...done, id: 'mexc-SOLUSDT-2026', asset: 'SOLUSDT', r: -1 }, 5000)
+  closeWatch({ ...done, id: 'mexc-SOLUSDT-142.35', asset: 'SOLUSDT', r: -1.31 }, 5000)
+  assert.deepEqual(getState().results.map((r) => r.r), [-1])
+  closeWatch({ ...done, id: 'mexc-SOLUSDT-later', asset: 'SOLUSDT', closedAt: 5000 + 5400_000, r: -1.4 },
+    5000 + 5400_000)
+  assert.equal(getState().results.length, 2)
+  clearResults()
+  closeWatch(done, 5000)
+
   const cleared = clearResults()
   assert.equal(cleared?.n, 1)
   assert.deepEqual(getState().results, [])

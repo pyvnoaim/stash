@@ -101,6 +101,35 @@ function AssetLogo({ src, className }: { src: string; className?: string }) {
     className={cn('size-4 shrink-0 rounded-full object-contain', className)} />
 }
 
+/** The asset a row is about, from whatever names it: an id, a venue's symbol, or the label a desk
+ *  saved. Null for anything this app draws no chart of — a memecoin, or somebody else's asset. */
+const assetFor = (name: string) => ASSETS.find((a) => a.id === assetOf(name) || a.label === name) ?? null
+
+/**
+ * A trade's name, with its mark, as the way through to the chart of it. Every list here — your book,
+ * the log, the paper desk, somebody else's tiles — names an asset and none of them used to be a way
+ * to look at one: the picker was the only door, and it is on the other tab.
+ *
+ * A name the desk has no chart for stays plain text rather than becoming a button that goes nowhere.
+ */
+function TradeName({ name, asset = name, onPick, className }: {
+  name: string
+  /** What to look the chart up by, where the row knows it — otherwise the printed name is tried. */
+  asset?: string
+  onPick?: ((asset: string) => void) | null
+  className?: string
+}) {
+  const a = assetFor(asset)
+  const body = <>{a && <AssetLogo src={a.logo} />}<span className="truncate">{name}</span></>
+  const cls = cn('flex min-w-0 items-center gap-1.5', className)
+  return a && onPick
+    ? (
+      <button type="button" onClick={() => onPick(a.id)} aria-label={`Open ${name} chart`}
+        className={cn(cls, 'hover:underline')}>{body}</button>
+    )
+    : <span className={cls}>{body}</span>
+}
+
 // which side a signal is on, as a dot. Colour used to be on the label text of every card, which
 // made a page of eight readings look like an alarm going off rather than a read-out.
 const DOT = {
@@ -845,7 +874,7 @@ export default function MarketPage() {
           that can send you somewhere other than where you already are */}
       <SetupsNow orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
         current={current.id} onPick={(id) => { setAsset(id); setTab('chart') }} />
-      <ExchangePositions />
+      <ExchangePositions onOpen={setAsset} />
 
       {needKey ? <KeyPrompt label={current.label} /> : (
       <>
@@ -1581,19 +1610,19 @@ export default function MarketPage() {
 
       {seen.people && (
         <div className={cn('flex flex-col gap-4', tab !== 'people' && 'hidden')}>
-          <Desk live={tab === 'people'} />
+          <Desk live={tab === 'people'} onPick={(id) => { setAsset(id); setTab('chart') }} />
         </div>
       )}
 
       {seen.record && (
         <div className={cn('flex flex-col gap-4', tab !== 'record' && 'hidden')}>
-          <Record />
+          <Record onPick={(id) => { setAsset(id); setTab('chart') }} />
         </div>
       )}
 
       {seen.paper && (
         <div className={cn('flex flex-col gap-4', tab !== 'paper' && 'hidden')}>
-          <PaperDesk />
+          <PaperDesk onPick={(id) => { setAsset(id); setTab('chart') }} />
         </div>
       )}
 
@@ -1909,9 +1938,11 @@ function useExchangePositions() {
  * someone else's does not, because the server reads their size to price the trade and never sends
  * the number itself. Everything a row has no answer for is simply left out.
  */
-function PositionTile({ side, symbol, venue, lev, up, lead, from, now, size, r, meta = [] }: {
+function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, size, r, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
+  /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
+  onPick?: ((asset: string) => void) | null
   /** Which exchange holds it, where saying so adds anything — null keeps the line short. */
   venue: string | null
   /** The multiplier it is held at. Beside the side, because 10× short is the position and "short"
@@ -1942,7 +1973,7 @@ function PositionTile({ side, symbol, venue, lev, up, lead, from, now, size, r, 
             : 'bg-destructive/10 text-destructive')}>
           {side}{lev ? ` ${lev}×` : ''}
         </span>
-        <span className="truncate font-medium">{symbol}</span>
+        <TradeName name={symbol} onPick={onPick} className="font-medium" />
         {venue && <span className="text-muted-foreground truncate text-xs">{venue}</span>}
         {lead && <span className={cn('ml-auto shrink-0 font-mono tabular-nums', good)}>{lead}</span>}
       </div>
@@ -1967,7 +1998,7 @@ function PositionTile({ side, symbol, venue, lev, up, lead, from, now, size, r, 
  * feed's read scope. Anyone leveraged knows to multiply. The R beside it is real, though: risk
  * is entry-to-stop, which the resting stop defines.
  */
-export function ExchangePositions() {
+export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void }) {
   const { rows, orders, equity } = useExchangePositions()
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
@@ -2046,7 +2077,7 @@ export function ExchangePositions() {
           const up = (p.pct ?? 0) >= 0
           return (
             <PositionTile key={`${p.venue ?? ''}-${p.symbol}`} side={p.side} symbol={p.symbol}
-              venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev} up={up}
+              onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev} up={up}
               /* dollars and R beside the percent: same sign by construction, one colour carries all */
               lead={p.pct != null
                 ? `${p.pnl != null ? `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · ` : ''}${up ? '+' : ''}${p.pct.toFixed(2)}%`
@@ -2265,7 +2296,7 @@ type PaperRow = {
  * is what keeps the sample honest. Nothing here was ever traded and nothing here is money: it is
  * in R, because R is the only unit two setups on two different assets can be added up in.
  */
-function PaperDesk() {
+function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
   const [rows, setRows] = useState<PaperRow[] | null>(null)
   const [failed, setFailed] = useState(false)
 
@@ -2368,7 +2399,7 @@ function PaperDesk() {
                   r.dir === 'long' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive')}>
                   {r.dir}
                 </span>
-                <span className="font-medium">{r.label}</span>
+                <TradeName name={r.label} asset={r.asset} className="font-medium" onPick={onPick} />
                 <span className="text-muted-foreground text-xs">{r.rule} · {r.interval}</span>
                 <span className="text-muted-foreground font-mono text-xs tabular-nums">
                   {fmtPrice(r.entry)} → {fmtPrice(r.target)}, stop {fmtPrice(r.stop)}
@@ -2403,7 +2434,7 @@ function PaperDesk() {
                   {/* the rule rides under the name on a phone, where its own column does not fit
                       and a truncated one names nothing */}
                   <span className="min-w-0">
-                    <span className="block truncate font-medium">{r.label}</span>
+                    <TradeName name={r.label} asset={r.asset} className="font-medium" onPick={onPick} />
                     <span className="text-muted-foreground block truncate text-[10px] sm:hidden">{r.rule}</span>
                   </span>
                   <span className="text-muted-foreground truncate text-xs">
@@ -2460,7 +2491,7 @@ const cardOf = (r: Result) => ({
   venue: r.rule || r.horizon || undefined,
 })
 
-function Record() {
+function Record({ onPick }: { onPick: (asset: string) => void }) {
   const { results: every, stake, dials } = useStash()
   /* Only the trades that really ran. A watched setup files itself here the same way a position does
      — same shape, same two exits — and once it is in the list it is indistinguishable from a trade
@@ -2636,7 +2667,7 @@ function Record() {
               {/* not a button: the row opened a note field, and there are no notes any more — a row
                   here is what the trade did, and nothing left to press but the share. */}
               <div className={cn(LOG_GRID, 'min-w-0 flex-1 px-1.5 py-1.5 text-sm')}>
-                <span className="truncate font-medium">{r.label}</span>
+                <TradeName name={r.label} asset={r.asset} className="font-medium" onPick={onPick} />
                 <span className="text-muted-foreground truncate text-xs">
                   {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
                 </span>
@@ -2747,12 +2778,14 @@ const deskTally = (rs: DeskRow['results']) => ({
  * print their R and an empty Paid, and the footer's total counts only the ones a venue settled, so
  * it is never half a sum passed off as a whole one.
  */
-function DeskLog({ p }: { p: DeskRow }) {
+function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void }) {
   const rows = useMemo(() => [...p.results].sort((a, b) => b.closedAt - a.closedAt), [p.results])
   const { total, won, usd } = deskTally(rows)
+  // held open rather than uncontrolled, so a row that sends you to the chart takes its dialog with it
+  const [open, setOpen] = useState(false)
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm"
           className="text-muted-foreground hover:text-foreground -my-1 h-6 px-1.5 text-xs tabular-nums">
@@ -2786,7 +2819,8 @@ function DeskLog({ p }: { p: DeskRow }) {
                  a thing their file is allowed to contain and this list must not break on. Nothing
                  in a row holds state, so the index is a key with nothing to get wrong. */
               <div key={i} className={cn(DESK_LOG_GRID, 'border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
-                <span className="truncate font-medium">{r.label}</span>
+                <TradeName name={r.label} className="font-medium"
+                  onPick={(id) => { setOpen(false); onPick(id) }} />
                 <span className="text-muted-foreground truncate text-xs">
                   {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
                 </span>
@@ -2848,7 +2882,7 @@ function DeskLog({ p }: { p: DeskRow }) {
  * renders nothing is one you press twice and stop trusting. Offline, signed out, and on a server
  * where nobody has switched it on all read the same, because from here they are the same.
  */
-function Desk({ live }: { live: boolean }) {
+function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void }) {
   const [rows, setRows] = useState<DeskRow[]>([])
   const { user } = useSyncExternalStore(subscribeSync, getSync)
 
@@ -2900,7 +2934,7 @@ function Desk({ live }: { live: boolean }) {
                       nothing behind it there is nothing to press, so it stays a word rather than
                       becoming a button that opens an empty table */}
                   {p.results.length
-                    ? <DeskLog p={p} />
+                    ? <DeskLog p={p} onPick={onPick} />
                     : <span className="text-muted-foreground text-xs">nothing finished yet</span>}
                   {!!p.results.length && (
                     /* The same two figures the log's own footer prints, and in the same order, so
@@ -2934,7 +2968,7 @@ function Desk({ live }: { live: boolean }) {
                        stop defines one. A row from someone's document has none of them. */
                     const { pct, r } = deskNow(w)
                     return (
-                      <PositionTile key={w.id} side={w.dir} symbol={w.label}
+                      <PositionTile key={w.id} side={w.dir} symbol={w.label} onPick={onPick}
                         venue={w.horizon || null} lev={w.lev} up={(w.pnl ?? pct ?? r ?? 0) >= 0}
                         lead={[
                           w.pnl != null && `${w.pnl >= 0 ? '+' : '−'}$${Math.abs(w.pnl).toFixed(2)}`,
