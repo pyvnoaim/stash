@@ -27,7 +27,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
-  TREND_NETWORK, usMarketOpen, venueName,
+  TREND_NETWORK, usMarketOpen, venueName, priceDigits,
   scanBars, scanRead,
   type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -146,6 +146,28 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
   return d.trim()
 }
 
+/**
+ * A price you can take with you. Grouping is what makes 1,999.20 readable and what makes it
+ * unpickable — a double-click stops dead at the comma and hands over "999", and dragging a
+ * selection across three of these picks up the labels between them. One press copies the number
+ * ungrouped, which is the form the exchange's own field wants anyway. The display never changes.
+ */
+function CopyNum({ v, className, children }: { v: string; className?: string; children: React.ReactNode }) {
+  return (
+    <button type="button" aria-label={`Copy ${v}`}
+      className={cn('cursor-copy tabular-nums decoration-dotted underline-offset-4 hover:underline', className)}
+      /* The toast waits for the write rather than announcing one: a browser that refuses the
+         clipboard — no permission, or a page not on https — still owes you the number, and
+         "Copied" over a clipboard that holds last week's is the one failure worth catching. */
+      onClick={() => { void navigator.clipboard?.writeText(v).then(
+        () => toast('Copied', { description: v }),
+        () => toast(v, { description: 'This browser would not take it — select it here instead.' }),
+      ) }}>
+      {children}
+    </button>
+  )
+}
+
 export default function MarketPage() {
   const {
     chart, apiKey, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
@@ -198,6 +220,8 @@ export default function MarketPage() {
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
   // Bitcoin, 4 for a coin at 0.17 — where two printed entry, stop and target as the same number
   const fmt = (v: number) => fmtPrice(v, candles.at(-1)?.c ?? 1)
+  // the same number without the grouping, for the clipboard — see CopyNum
+  const plain = (v: number) => v.toFixed(priceDigits(candles.at(-1)?.c ?? 1))
   const needKey = current.source === 'twelvedata' && !apiKey
 
   // the opening-range play only makes sense on 15m bars, so selecting it pins the interval
@@ -964,15 +988,18 @@ export default function MarketPage() {
               [holding ? 'Add at' : 'Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400', price != null ? away(plan.entry, price) : null,
                 holding
                   ? `The ${cfg.fast}-MA, or the price itself once it has come under it — a dip inside the band is where you add, not somewhere to wait out. ${inBand ? 'Price is in the band now.' : `${price != null ? away(plan.entry, price) : ''} from here.`}`
-                  : `The ${cfg.fast}-MA: wait for price to come back ${side === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`],
+                  : `The ${cfg.fast}-MA: wait for price to come back ${side === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`,
+                plain(plan.entry)],
               [holding ? 'Out under' : 'Stop', fmt(plan.stop), 'text-destructive', away(plan.stop, plan.entry),
                 holding
                   ? `The ${cfg.slow}-MA — the line the whole thesis rests on. A daily close back under it ends the position; anything above it is weather. Deliberately far (${away(plan.stop, plan.entry)} from the add), because a holding stopped out by an ugly week was never a holding.`
-                  : `One ATR past the entry — a normal bar's travel, so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} away. Broken, the idea was wrong.`],
+                  : `One ATR past the entry — a normal bar's travel, so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} away. Broken, the idea was wrong.`,
+                plain(plan.stop)],
               [holding ? 'Trim into' : 'Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400', away(plan.target, plan.entry),
                 holding
                   ? `The wide high, ${away(plan.target, plan.entry)} from the add. A trim, not a deadline — the position ends on the regime, not here, and taking something off into the highs is optional.`
-                  : `Two ATR — a fixed 2R off the stop, so the payoff is the same shape every time instead of wherever the last swing happened to land. ${away(plan.target, plan.entry)} from the entry.`],
+                  : `Two ATR — a fixed 2R off the stop, so the payoff is the same shape every time instead of wherever the last swing happened to land. ${away(plan.target, plan.entry)} from the entry.`,
+                plain(plan.target)],
               /* Net first, gross in brackets behind it. The gross ratio is the one every guide and
                  every other chart tool quotes, so dropping it would look like a different number
                  for the same trade — but it is not the one that decides anything, and shown alone
@@ -988,8 +1015,9 @@ export default function MarketPage() {
                   ? `From the add down to the ${cfg.slow}-MA against the add up to the wide high. Context only — this side does not decline a position on its ratio, because the trim is not where the holding ends and the regime line is not a stop you get taken out at on a bad Tuesday.`
                   : plan.thin
                   ? `More than half of these have to win just to break even — ${(plan.breakEven * 100).toFixed(0)}%, with the ${dials.fee}%-a-side fee on the way in and the way out. Right idea, maths that does not pay. Guides pass on these.`
-                  : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`],
-            ] as const).map(([k, v, cls, sub, hint]) => (
+                  : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`,
+                null],
+            ] as const).map(([k, v, cls, sub, hint, raw]) => (
               <Hint key={k} label={hint}>
                 {/* w-fit: the cell stretches the whole grid track, and a tooltip centres on its
                     trigger — so the arrow was landing in the empty space to the right of the number
@@ -997,7 +1025,7 @@ export default function MarketPage() {
                 <div className="w-fit">
                   <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
                   <p className={cn('font-medium tabular-nums', cls)}>
-                    {v}
+                    {raw ? <CopyNum v={raw}>{v}</CopyNum> : v}
                     {sub && <span className="text-muted-foreground ml-1.5 text-xs font-normal">{sub}</span>}
                   </p>
                 </div>
@@ -2250,7 +2278,10 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
                   o.side === 'buy' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {o.side}
                 </span>{' '}
-                {o.size} {o.symbol} at <span className="text-foreground">{fmtPrice(o.price)}</span>
+                {o.size} {o.symbol} at{' '}
+                <CopyNum v={o.price.toFixed(priceDigits(o.price))} className="text-foreground">
+                  {fmtPrice(o.price)}
+                </CopyNum>
                 {venues.size > 1 && ` · ${venueName(o.venue)}`}
                 {/* what the row is not: a close is somebody's exit resting, and a part-filled one
                     is already a trade in progress rather than an order waiting */}
