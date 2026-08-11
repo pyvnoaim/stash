@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, ChevronDown, CloudOff, Copy, Crosshair, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -808,9 +808,13 @@ export default function MarketPage() {
             </Button>
           </Hint>
           </div>
-          {/* the feed's own two controls, in one tray of their own: whether it is updating, and
-              asking it to update now. Neither is about the chart, which is why they sit apart. */}
+          {/* the controls that are not about the chart in front of you, in one tray of their own:
+              whether the feed is updating, asking it to update now, and the one glance at every
+              other asset. Not a tray of its own for the last of those — the row already had enough
+              of them, and "not this chart" is a real thing for three buttons to have in common. */}
           <div className="bg-muted/50 flex items-center gap-1 rounded-lg p-1">
+          <SetupsButton orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
+            onPick={(id) => { setAsset(id); setTab('chart') }} />
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
           <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
             : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
@@ -2778,6 +2782,102 @@ const scanOne = async (a: Asset, horizon: Horizon, interval: Interval, orbMode: 
   const row = scanRead(a, bars, horizon, interval, orbMode, fee)
   // the last of them, not all: a weekly chart hands over a year and the line is 4rem wide
   return row && { ...row, closes: (bars[interval] ?? []).slice(-60).map((c) => c.c) }
+}
+
+/**
+ * Which *other* asset has a setup, without leaving the chart. The Scan tab below is this same
+ * sweep at full width, ranked, with every timeframe's lean on it; this is the glance version —
+ * only the rows the desk would act on, and only the three numbers you would act with.
+ *
+ * ponytail: fetched when the popover opens, never on mount, and thrown away when it closes. It is
+ * eleven assets × five intervals of klines a pass, and the chart must not spend that on someone
+ * who never asks. Re-opening refetches, which is also how you refresh it — no button for that.
+ * A shared per-(asset, interval) cache is the lever if this and the Scan tab ever run together.
+ */
+function SetupsButton({ orbMode, interval, onPick }: {
+  orbMode: boolean
+  interval: Interval
+  onPick: (asset: string) => void
+}) {
+  const { marketHorizon: horizon, dials } = useStash()
+  const fee = dials.fee
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState<ScanCard[] | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let on = true
+    setRows(null)
+    void Promise.all(
+      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee).catch(() => null)),
+    ).then((r) => {
+      if (!on) return
+      /* A plan and a tier the desk stands behind. Tier 0 and 1 are "there is a shape here but do
+         not press it" — worth a paragraph on the Scan tab, and noise in a list this size. Ranked
+         on the net R:R, the fee already taken off, because that is the order to look in. */
+      setRows(r.filter((x): x is ScanCard => !!x && !!x.plan && x.tier >= 2)
+        .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
+    })
+    return () => { on = false }
+  }, [open, horizon, interval, orbMode, fee])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Hint label="Every other chart's setup — entry, stop and target, for the ones worth pressing">
+        <PopoverTrigger asChild>
+          <Button size="icon" variant={open ? 'secondary' : 'ghost'} aria-label="Setups on every asset"
+            className={cn('size-7', !open && 'text-muted-foreground')}>
+            <Crosshair className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+      </Hint>
+      <PopoverContent align="end" className="w-80 p-2">
+        <p className="px-1 text-sm font-medium">Setups now</p>
+        <p className="text-muted-foreground mb-2 px-1 text-xs">
+          every keyless chart on the {orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read · click to open one
+        </p>
+        {rows === null && <p className="text-muted-foreground px-1 py-3 text-sm">Reading every chart…</p>}
+        {rows?.length === 0 && (
+          <p className="text-muted-foreground px-1 py-3 text-sm">
+            Nothing to press on any of them. Waiting is the position.
+          </p>
+        )}
+        {!!rows?.length && (
+          <div className="text-muted-foreground grid grid-cols-[1fr_3.5rem_3.5rem_3.5rem] gap-x-2 px-1 text-[10px]">
+            <span /><span className="text-right">entry</span><span className="text-right">stop</span><span className="text-right">target</span>
+          </div>
+        )}
+        {rows?.map((r) => (
+          <button key={r.a.id} type="button" onClick={() => { onPick(r.a.id); setOpen(false) }}
+            className="hover:bg-accent border-border/40 -mx-1 w-[calc(100%+0.5rem)] rounded-md border-b px-2 py-1.5 text-left last:border-0">
+            <span className="grid grid-cols-[1fr_3.5rem_3.5rem_3.5rem] items-baseline gap-x-2">
+              <span className="flex items-center gap-1.5 truncate">
+                <AssetLogo src={r.a.logo} />
+                <span className="truncate text-sm font-medium">{r.a.label}</span>
+              </span>
+              {/* the three numbers keep the colours they have on the chart and in the verdict card:
+                  the line you are waiting on, the one that ends it, the one that pays */}
+              <span className="text-right font-mono text-xs tabular-nums text-sky-600 dark:text-sky-400">{fmtPrice(r.plan!.entry)}</span>
+              <span className="text-destructive text-right font-mono text-xs tabular-nums">{fmtPrice(r.plan!.stop)}</span>
+              <span className="text-right font-mono text-xs tabular-nums text-emerald-600 dark:text-emerald-400">{fmtPrice(r.plan!.target)}</span>
+            </span>
+            {/* which way, and what it pays after the fee — the row is four prices otherwise, and a
+                price column says nothing about the side it belongs to */}
+            <span className="text-muted-foreground mt-0.5 flex items-baseline gap-1.5 text-xs">
+              <span className={cn('font-medium',
+                r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {r.dir === 'long' ? 'Long' : 'Short'}
+              </span>
+              <span className={cn('font-mono tabular-nums', r.plan!.thin && 'text-amber-600 dark:text-amber-500')}>
+                {r.plan!.net.toFixed(1)}×
+              </span>
+              <span className="truncate">{r.say}</span>
+            </span>
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 /** One grid for the header, the row and the row's second line, so all three line up by
