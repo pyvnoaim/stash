@@ -522,13 +522,23 @@ const tools: Record<string, {
 
   market_setups: {
     annotations: READS,
-    description: 'The saved setups the bell is watching, and the record of the ones that finished — '
-      + 'scored in R off the price actually seen when they ended. A row carrying size and leverage '
-      + 'is a position that was really taken and its money is real; every other row is a plan, and '
-      + 'its money is what the stake says it would have paid.',
+    description: 'What is open at the exchange right now, the saved setups the bell is watching, '
+      + 'and the record of the ones that finished — scored in R off the price actually seen when '
+      + 'they ended. A row carrying size and leverage is a position that was really taken and its '
+      + 'money is real; every other row is a plan, and its money is what the stake says it would '
+      + 'have paid.',
     schema: { type: 'object', properties: {} },
     run: async () => {
       const s = await pull()
+      /* The exchange's word on what is actually held. It is deliberately not in the document — a
+         live position rides the feed and only files itself into `results` when it closes — so a
+         tool reading `pull()` alone answered "your setups" with the resting plans and the closed
+         history and none of the open money, which is the half a question about positions is about.
+         Degrades the way the market page does: no key on the account (501) or a venue that would
+         not answer (502) is a reply with no `open`, not a call that fails. */
+      const held = await api('/api/positions')
+        .then((r) => (r.ok ? r.json() as Promise<{ positions: any[] }> : null))
+        .catch(() => null)
       /* One R in euros, per row: a taken position off its own notional, everything else off the
          stake. The same arithmetic as stakeOf in src/lib/notify.ts — see the note there. */
       const per = (w: { entry: number, stop: number, size?: number, lev?: number }) => {
@@ -542,6 +552,14 @@ const tools: Record<string, {
       const total = s.results.reduce((n, r) => n + r.r, 0)
       return {
         stake: s.stake || null,
+        open: (held?.positions ?? []).map((p) => ({
+          // the desk's own word for the symbol where it lists one, the exchange's where it doesn't
+          asset: market.ASSETS.find((x) => x.id === p.symbol)?.label ?? p.symbol,
+          venue: p.venue, dir: p.side, size: p.size, leverage: p.lev,
+          entry: p.entry, now: p.mark, stop: p.stop, target: p.target, liq: p.liq,
+          pnl: p.pnl, pct: p.pct, worth: p.value, funding: p.funding,
+          opened: p.openedAt,
+        })),
         watching: s.watches.map((w) => ({
           asset: w.label, dir: w.dir, horizon: w.horizon,
           entry: w.entry, stop: w.stop, target: w.target,

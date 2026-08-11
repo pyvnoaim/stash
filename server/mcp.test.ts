@@ -103,6 +103,14 @@ assert.equal((await call('stash_read', { view: 'flagged' })).count, 1)
 assert.equal((await call('stash_read', { view: 'done' })).count, 0)
 assert.deepEqual((await call('stash_read', {})).projects, [{ name: 'Kova', open: 1 }])
 
+/* The open positions come off the exchange feed rather than the document, and this account has no
+   key on it — so /api/positions 501s and the answer is an empty `open`, not a failed call. The rows
+   themselves need a real venue to assert; this is the branch that would otherwise take the whole
+   tool down for every account that has never connected one. */
+const desk = await call('market_setups', {})
+assert.deepEqual(desk.open, [])
+assert.deepEqual(desk.watching, [])
+
 // finishing a repeating task opens the next one — the store's rule, reached rather than copied
 const rep = await call('stash_capture', { text: 'water the plants every week' })
 await call('stash_edit', { id: rep.added[0].id, done: true })
