@@ -1074,7 +1074,8 @@ docker compose -f compose.standalone.yml up -d --build
 ```
 
 Every push to `main` here lands as a versioned GitHub release, so pin a tag if you would rather
-not track `main` live.
+not track `main` live. Updating is `git pull && docker compose up -d --build` — schema migrations
+run on boot, and a tab that is already open offers **Reload** when the new bundle is waiting.
 
 One optional variable on the container: `STASH_TD_KEY` lets the hosted MCP route read the stocks
 — absent, they answer with what is missing, and everything else runs the same. The exchange keys
