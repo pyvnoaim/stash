@@ -122,7 +122,7 @@ const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => 
 
 export default function MarketPage() {
   const {
-    chart, apiKey, watches, dials, marketAsset: asset, marketHorizon: horizon,
+    chart, apiKey, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
     marketInterval: interval, marketPreset: preset,
   } = useStash()
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
@@ -553,11 +553,6 @@ export default function MarketPage() {
     hold: 'text-foreground',
     wait: 'text-amber-600 dark:text-amber-500',
   } as const
-  /* Money already on this asset. The alert button is hidden while there is: saving a plan on the
-     same asset, side and horizon replaces the row it finds, and the row it would find is the
-     position — a real trade quietly overwritten by a hypothetical one. The position is watched at
-     all three of its own levels anyway, so there is nothing the button would add. */
-  const inIt = watches.some((w) => w.asset === current.id && isPosition(w))
   // the exchange position on this very chart, if there is one — its levels get drawn with the plan's.
   // The whole position wears fuchsia — the one hue nothing else on the chart uses (candles are
   // emerald/red, plan entry sky, MAs sky/amber, range violet, sessions rose/indigo/teal), and the
@@ -569,6 +564,11 @@ export default function MarketPage() {
      With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
      the feed's entry/stop/target are the trade's real ones. */
   const mine = watches.find((w) => w.asset === current.id && isPosition(w))
+  /* Money already on this asset, from either side of the house: the exchange's own row counts, not
+     only a hand-entered one. It used to be the hand-entered ones alone, which left the card telling
+     someone whose position it was drawing on the chart that nothing here is ever traded — the tool
+     not knowing what the strip above it knew. */
+  const inIt = !!held || !!mine
   // the exchange's own liquidation price where the feed carries one — that is the number that
   // actually fires — and the entry ± entry/lev estimate off the hand-entered position otherwise
   const liq = held?.liq ?? (mine ? liqOf(mine) : null)
@@ -961,13 +961,40 @@ export default function MarketPage() {
               </Hint>
             ))}
           </div>
+          {/* The one number the card knew and never said: how many units the stake in Settings buys
+              at this stop. Every other line here is per unit, which is why a correct call kept
+              paying a euro — the size was being guessed at the exchange. ponytail: the stake is
+              euros and the quote is USDT, taken as the same money; a €/$ rate for a number you
+              typed yourself is precision the rest of this card doesn't have either. */}
+          {!holding && stake > 0 && (
+            <p className="text-muted-foreground mt-2 text-xs">
+              {euro(stake)} at risk is{' '}
+              <span className="text-foreground font-medium tabular-nums">
+                {(stake / Math.abs(plan.entry - plan.stop)).toFixed(2)} {current.id.replace(/USDT$/, '')}
+              </span>{' '}
+              here — {fmt(Math.abs(plan.entry - plan.stop))} of stop, so that many loses the stake
+              and nothing more if it is hit, and pays {euro(stake * plan.net)} net at the target.
+              Leverage only decides the margin that size needs, never what it risks.
+            </p>
+          )}
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
-          {!inIt && (
+          {!inIt ? (
             <p className="text-muted-foreground mt-2 text-xs">
               Nothing to press. When the desk endorses a setup it files itself on the Paper tab and
               is followed to its stop or its target — including the ones that appear while every
               device here is shut. Nothing is ever traded.
+            </p>
+          ) : held && (
+            /* The card knew the position was there — it draws its levels — and still read the paper
+               line at someone already in it. Nothing is inferred: same symbol off the same feed the
+               strip above uses, and the side is stated rather than assumed to be this one's. */
+            <p className="text-muted-foreground mt-2 text-xs">
+              You are in this one: {held.side} {held.size} from {fmt(held.entry)}
+              {held.side === side
+                ? ' — the side this card is describing'
+                : ', which is the other side of what this card reads'}. It files itself to the
+              record with the R it really did when it closes, wherever you close it.
             </p>
           )}
           {against && (
