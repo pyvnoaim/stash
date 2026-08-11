@@ -1065,11 +1065,30 @@ docker compose up -d --build                            # PROXY_NET names the pr
 docker compose logs stash                               # the first invite code is in the logs; the rest come from the menu
 ```
 
+No proxy network to join? `compose.standalone.yml` publishes the port on loopback instead — the
+same container behind whatever TLS you already run on the host, or plain `localhost:8787` to try
+it out:
+
+```sh
+docker compose -f compose.standalone.yml up -d --build
+```
+
+Every push to `main` here lands as a versioned GitHub release, so pin a tag if you would rather
+not track `main` live.
+
 One optional variable on the container: `STASH_TD_KEY` lets the hosted MCP route read the stocks
 — absent, they answer with what is missing, and everything else runs the same. The exchange keys
 are not the container's: each account sets its own in Settings → Markets.
 
-Data sits in one named volume; backing it up is copying one SQLite file. The push keypair is a row
+Data sits in one named volume; backing it up is copying one SQLite file — via `vacuum into`, since
+the live file is in WAL mode and a raw `cp` of it can catch a write half-landed:
+
+```sh
+docker compose exec stash node -e "require('fs').rmSync('/data/backup.db',{force:true}); new (require('node:sqlite').DatabaseSync)('/data/stash.db').exec(\"vacuum into '/data/backup.db'\")"
+docker compose cp stash:/data/backup.db .
+```
+
+The push keypair is a row
 in it, so restoring that file keeps every phone subscribed — a new keypair would quietly
 unsubscribe all of them. `STASH_PUSH_SUB` sets the address a push service would complain to;
 nothing is ever sent there, and the default is fine.

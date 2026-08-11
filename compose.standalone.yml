@@ -1,0 +1,23 @@
+# The no-proxy-network variant: same container, port published on loopback instead of joining a
+# docker network. For trying stash out on localhost, or fronting it with a TLS proxy that runs on
+# the host (Caddy, nginx, …) rather than in docker. HTTPS still matters beyond localhost — the
+# Secure cookie and the PWA install both want it — so this publishes to 127.0.0.1 only; widen it
+# to '8787:8787' knowingly, not by accident.
+#
+#   docker compose -f compose.standalone.yml up -d --build
+services:
+  stash:
+    build: .
+    restart: unless-stopped
+    environment:
+      STASH_TD_KEY: ${STASH_TD_KEY:-}
+    ports: ['127.0.0.1:8787:8787']
+    volumes: ['stash:/data']
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/api/me').then(r=>process.exit(r.status===401?0:1),()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  stash:

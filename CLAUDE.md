@@ -35,6 +35,9 @@ timestamp.
 That also makes it the way to check a deploy landed: if the webhook fired but Settings still shows
 the old version, Portainer re-cloned without rebuilding the image.
 
+`.github/workflows/release.yml` turns each pushed bump into a GitHub release automatically. Never
+push tags by hand: a tag push is a `push` event too, and the Portainer webhook would deploy twice.
+
 ## Don't commit lockfile churn
 
 `npm` rewrites `package-lock.json` when the local npm is a different version from the one that
