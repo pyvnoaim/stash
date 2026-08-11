@@ -30,7 +30,7 @@ import {
   clearDone, hotkey, resetDials, resetHotkeys, setApiKey, setChart, setDesk, setDial, setHotkey,
   setStake, useStash, type ChartStyle,
 } from '@/lib/store'
-import type { Dials as DialSet } from '@/lib/market'
+import { ASSETS, type Dials as DialSet } from '@/lib/market'
 import {
   calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
   links, linkUrl, logout, newFeed, restore, setCalendar, subscribeSync, updateAccount, versions,
@@ -386,19 +386,24 @@ function MarketsPanel() {
         </div>
       </Section>
 
+      {/* Only while there is something to spend it on. The stocks and the ETFs are out of the
+          asset list for now — this desk trades perpetuals — and a key field for a feed nothing
+          reads is a setting that fails silently. It comes back with them, list and all. */}
+      {ASSETS.some((a) => a.source === 'twelvedata') && (
       <Section
-        title="Stock data key"
-        hint="Free key from twelvedata.com — needed only for the stock feeds. Crypto and gold work
-          without it. Synced with your account, so typing it here is typing it everywhere."
-      >
-        {/* a key is checked against the one on a website, so it is the field most worth revealing */}
-        <PasswordInput
-          id="td-key"
-          placeholder="Twelve Data API key"
-          defaultValue={s.apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
-      </Section>
+          title="Stock data key"
+          hint="Free key from twelvedata.com — needed only for the stock feeds. Crypto and gold work
+            without it. Synced with your account, so typing it here is typing it everywhere."
+        >
+          {/* a key is checked against the one on a website, so it is the field most worth revealing */}
+          <PasswordInput
+            id="td-key"
+            placeholder="Twelve Data API key"
+            defaultValue={s.apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+        </Section>
+      )}
 
       <ExchangeSection />
     </>

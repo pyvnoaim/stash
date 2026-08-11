@@ -19,7 +19,9 @@ const sw = readFileSync('dist/sw.js', 'utf8')
    clientsClaim and skipWaiting in here and there is nothing left to offer, so the prompt would go
    quiet without a line of it changing. */
 assert(!sw.includes('clientsClaim'), 'worker claims clients — registerType is back to autoUpdate')
-const cachedBy = [...sw.matchAll(/registerRoute\((\/\^https[^,]+?\/),new e\.NetworkFirst/g)]
+// any regex literal, not only the ones starting ^https: the MEXC bars are relayed by this app's
+// own server (CORS), so one of the three candle routes is now a same-origin path
+const cachedBy = [...sw.matchAll(/registerRoute\((\/(?:[^/\\]|\\.)+\/),new e\.NetworkFirst/g)]
   .map((m) => new RegExp(m[1].slice(1, -1)))
 assert.equal(cachedBy.length, 3, 'expected the three candle routes in the built worker')
 
@@ -35,7 +37,7 @@ globalThis.fetch = ((url: string) => {
   seen.push(url)
   return Promise.resolve({ json: () => Promise.resolve([]) })
 }) as typeof fetch
-const { ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchStockHours, fetchTrending } = await import('./market.ts')
+const { ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchTrending } = await import('./market.ts')
 const asked = async (fn: () => Promise<unknown>) => {
   seen.length = 0
   await fn().catch(() => {})
@@ -43,36 +45,29 @@ const asked = async (fn: () => Promise<unknown>) => {
 }
 const cached = (url: string) => cachedBy.some((re) => re.test(url))
 const crypto = ASSETS.find((a) => a.id === 'BTCUSDT')!
-const gold = ASSETS.find((a) => a.source === 'bitget')!
-const stock = ASSETS.find((a) => a.id === 'NVDA')!
+const gold = ASSETS.find((a) => a.id === 'XAUUSDT')!
 
-// bars are cached, so the chart and every signal over it survive with no network
+/* Bars are cached, so the chart and every signal over it survive with no network — on both books,
+   since which one a reader gets is their key's business and offline must not depend on it. The
+   MEXC one is this app's own route rather than the venue's: see fetchMexc. */
 for (const url of [
   ...(await asked(() => fetchCandles(crypto, '1d', ''))),
   ...(await asked(() => fetchCandles(gold, '1d', ''))),
-  ...(await asked(() => fetchCandles(stock, '1d', 'KEY'))),
+  ...(await asked(() => fetchCandles(crypto, '1d', '', 'mexc'))),
 ]) assert.ok(cached(url), `candles should be cached: ${url}`)
-
-// a pinned Wednesday 15:00 UTC — the stock feeds rightly skip their calls off-hours, so with real
-// wall-clock time these assertions would go vacuous (or fail) every evening and weekend
-const OPEN = Date.parse('2026-01-07T15:00:00Z')
 
 // prices are not, on either feed, and must never quietly become so
 const priceUrls = [
   ...(await asked(() => fetchPrices([crypto.id], ''))),
   ...(await asked(() => fetchPrices([gold.id], ''))),
-  ...(await asked(() => fetchPrices([stock.id], 'KEY', OPEN))),
+  ...(await asked(() => fetchPrices([crypto.id], '', Date.now(), 'mexc'))),
 ]
-assert.ok(priceUrls.length >= 2, 'fetchPrices asked for nothing on one of the feeds')
+assert.ok(priceUrls.length >= 3, 'fetchPrices asked for nothing on one of the feeds')
 for (const url of priceUrls) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
 
-/* The stocks' mover sweep hits the same endpoint the candles do, and must land the other side of
-   that line: it is a live reading, and served from cache it announces an hour that is over to
-   someone offline who has no way to check. The two are told apart by outputsize, which is exactly
-   the sort of arrangement that rots silently — hence this. */
-const hourUrls = await asked(() => fetchStockHours([stock.id], 'KEY', OPEN))
-assert.ok(hourUrls.length, 'fetchStockHours asked for nothing')
-for (const url of hourUrls) assert.ok(!cached(url), `the hour sweep must never be cached: ${url}`)
+/* The MEXC price relay and its candle relay are two paths on this app's own origin, and only the
+   candles may be cached — the same line the venues' own endpoints are held to above. */
+assert.ok(priceUrls.some((u) => u.includes('/api/mexc/price')), 'the MEXC relay is not being asked for prices')
 
 /* Trending pools are on the same footing as the ticker, and for the same reason: the bell alerts
    off this list. A cached one would announce a launch that already happened and a mover that has

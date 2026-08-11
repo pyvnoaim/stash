@@ -18,7 +18,12 @@
 /** `v` is volume — optional, since not every feed sends it and every signal that uses it can sit out. */
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v?: number }
 
-export type Source = 'binance' | 'bitget' | 'twelvedata'
+/* No Binance and no spot. Every desk here trades perpetuals on Bitget or MEXC, so those are the
+   two books the app reads — a level is only worth what it is on the book the order rests on, and
+   Binance's spot price was neither of them. `twelvedata` stays in the union with no asset on it:
+   the stocks are out for now (see ASSETS) and their fetcher is left where it is, so putting them
+   back is a list again rather than a feed again. */
+export type Source = 'bitget' | 'mexc' | 'twelvedata'
 export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
 
 /* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
@@ -28,36 +33,26 @@ export type Asset = { id: string; label: string; source: Source; group: string; 
    nowhere to be found. */
 const logo = (name: string) => `/logos/${name}.png`
 
-// Crypto rides Binance and gold rides Bitget — both keyless and 24/7. Stocks ride Twelve Data
-// (needs a free key). The two keyless feeds are interchangeable everywhere the code says "not a
-// stock"; only the batch calls that quote a dozen symbols at once are Binance's alone.
+/* Bitget's USDT-margined perpetuals, all of them, because that feed is keyless, CORS-open and the
+   book half the desks here actually trade. A reader whose key is MEXC is served the same contracts
+   off MEXC instead — see feedOf. Every row is a USDT perpetual, gold included: one kind of
+   instrument, one quote currency, and a symbol that means the same thing on either venue.
+   Stocks and ETFs are out for now: this desk is a futures desk, the stock feed needed a key, a
+   market calendar and half the special cases in this file, and nobody was trading them. */
 export const ASSETS: Asset[] = [
   // the perpetual, not the token: the id is the symbol Bitget's own order book and position feed
   // use, so a trade on it lands on this chart with no mapping in between
   { id: 'XAUUSDT', label: 'Gold', source: 'bitget', group: 'Metals', logo: logo('xaut') },
-  { id: 'BTCUSDT', label: 'Bitcoin', source: 'binance', group: 'Crypto', logo: logo('btc') },
-  { id: 'ETHUSDT', label: 'Ethereum', source: 'binance', group: 'Crypto', logo: logo('eth') },
-  { id: 'SOLUSDT', label: 'Solana', source: 'binance', group: 'Crypto', logo: logo('sol') },
-  { id: 'XRPUSDT', label: 'XRP', source: 'binance', group: 'Crypto', logo: logo('xrp') },
-  { id: 'DOGEUSDT', label: 'Dogecoin', source: 'binance', group: 'Crypto', logo: logo('doge') },
-  { id: 'ADAUSDT', label: 'Cardano', source: 'binance', group: 'Crypto', logo: logo('ada') },
-  { id: 'AVAXUSDT', label: 'Avalanche', source: 'binance', group: 'Crypto', logo: logo('avax') },
-  { id: 'LINKUSDT', label: 'Chainlink', source: 'binance', group: 'Crypto', logo: logo('link') },
-  { id: 'ALGOUSDT', label: 'Algorand', source: 'binance', group: 'Crypto', logo: logo('algo') },
-  { id: 'HBARUSDT', label: 'HBAR', source: 'binance', group: 'Crypto', logo: logo('hbar') },
-  { id: 'NVDA', label: 'Nvidia', source: 'twelvedata', group: 'Stocks', logo: logo('nvidia') },
-  { id: 'TSLA', label: 'Tesla', source: 'twelvedata', group: 'Stocks', logo: logo('tesla') },
-  { id: 'AAPL', label: 'Apple', source: 'twelvedata', group: 'Stocks', logo: logo('apple') },
-  { id: 'AMD', label: 'AMD', source: 'twelvedata', group: 'Stocks', logo: logo('amd') },
-  { id: 'META', label: 'Meta', source: 'twelvedata', group: 'Stocks', logo: logo('meta') },
-  { id: 'AMZN', label: 'Amazon', source: 'twelvedata', group: 'Stocks', logo: logo('amazon') },
-  { id: 'MSFT', label: 'Microsoft', source: 'twelvedata', group: 'Stocks', logo: logo('microsoft') },
-  { id: 'GOOGL', label: 'Alphabet', source: 'twelvedata', group: 'Stocks', logo: logo('google') },
-  // the three big index ETFs — their own group, which also keeps them out of the movers sweep:
-  // that batch call pays one credit per symbol and the stocks already spend all 8 of a minute
-  { id: 'SPY', label: 'S&P 500', source: 'twelvedata', group: 'ETFs', logo: logo('spy') },
-  { id: 'QQQ', label: 'Nasdaq 100', source: 'twelvedata', group: 'ETFs', logo: logo('qqq') },
-  { id: 'DIA', label: 'Dow Jones', source: 'twelvedata', group: 'ETFs', logo: logo('dia') },
+  { id: 'BTCUSDT', label: 'Bitcoin', source: 'bitget', group: 'Crypto', logo: logo('btc') },
+  { id: 'ETHUSDT', label: 'Ethereum', source: 'bitget', group: 'Crypto', logo: logo('eth') },
+  { id: 'SOLUSDT', label: 'Solana', source: 'bitget', group: 'Crypto', logo: logo('sol') },
+  { id: 'XRPUSDT', label: 'XRP', source: 'bitget', group: 'Crypto', logo: logo('xrp') },
+  { id: 'DOGEUSDT', label: 'Dogecoin', source: 'bitget', group: 'Crypto', logo: logo('doge') },
+  { id: 'ADAUSDT', label: 'Cardano', source: 'bitget', group: 'Crypto', logo: logo('ada') },
+  { id: 'AVAXUSDT', label: 'Avalanche', source: 'bitget', group: 'Crypto', logo: logo('avax') },
+  { id: 'LINKUSDT', label: 'Chainlink', source: 'bitget', group: 'Crypto', logo: logo('link') },
+  { id: 'ALGOUSDT', label: 'Algorand', source: 'bitget', group: 'Crypto', logo: logo('algo') },
+  { id: 'HBARUSDT', label: 'HBAR', source: 'bitget', group: 'Crypto', logo: logo('hbar') },
 ]
 
 export const INTERVALS = ['5m', '15m', '1h', '4h', '1d', '1w'] as const
@@ -67,11 +62,39 @@ export type Interval = (typeof INTERVALS)[number]
 const TD_INTERVAL: Record<Interval, string> = { '5m': '5min', '15m': '15min', '1h': '1h', '4h': '4h', '1d': '1day', '1w': '1week' }
 // and Bitget capitalises everything from the hour up
 const BG_INTERVAL: Record<Interval, string> = { '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W' }
+// MEXC spells them out, and counts the hour in minutes
+export const MX_INTERVAL: Record<Interval, string> = { '5m': 'Min5', '15m': 'Min15', '1h': 'Min60', '4h': 'Hour4', '1d': 'Day1', '1w': 'Week1' }
+/** MEXC's contracts are the same pairs with a bar in them: SOLUSDT is SOL_USDT on that book. */
+export const mxSymbol = (id: string) => id.replace(/USDT$/, '_USDT')
+
+/** The exchange whose key the reader has set, where the app knows of one. Not a preference and not
+ *  a setting: it is where their orders actually rest, which is the only reason a feed should move. */
+export type Venue = 'bitget' | 'mexc' | null
+
+/**
+ * Which book an asset is read off. Two rules, in this order:
+ *
+ * The reader's own venue wins, because a level is only worth what it is on the book the order sits
+ * on. Bitget's SOLUSDT low and Binance's differ by a few cents — a quarter of a 15m ATR on Solana —
+ * and a trigger computed on one and placed on the other fires early every time.
+ *
+ * Everything else is the futures contract, never spot. The whole desk is written for perps: the
+ * funding line, the liquidation price, the leverage on the record. Reading spot to trade a perp was
+ * a basis-sized error in every level, and the bigger of the two gaps this fixes.
+ *
+ * ponytail: MEXC falls through to Binance's futures rather than its own — contract.mexc.com quotes
+ * SOL_USDT in column arrays, a fetcher and two mappings for a venue nobody here has yet, and
+ * perp-to-perp basis is cents where spot-to-perp was tens of them. Add it when someone sets that key.
+ */
+const feedOf = (a: Asset, venue: Venue): Asset['source'] =>
+  // every id here is the same USDT perpetual on both books — SOLUSDT is SOL_USDT, gold included
+  // (MEXC lists XAU_USDT), so nothing is pinned to one venue and the whole list moves together
+  a.source === 'twelvedata' ? a.source : venue === 'mexc' ? 'mexc' : 'bitget'
 
 /** Routes to the right feed. All three return candles oldest → newest. Stocks need the key. */
-export function fetchCandles(asset: Asset, interval: Interval, apiKey: string): Promise<Candle[]> {
+export function fetchCandles(asset: Asset, interval: Interval, apiKey: string, venue: Venue = null): Promise<Candle[]> {
   if (asset.source === 'twelvedata') return fetchTwelve(asset.id, interval, apiKey)
-  return asset.source === 'bitget' ? fetchBitget(asset.id, interval) : fetchBinance(asset.id, interval)
+  return feedOf(asset, venue) === 'mexc' ? fetchMexc(asset.id, interval) : fetchBitget(asset.id, interval)
 }
 
 /**
@@ -93,21 +116,24 @@ export const usMarketOpen = (now = Date.now()) => {
   return d.getUTCDay() >= 1 && d.getUTCDay() <= 5 && h >= 13 && h <= 21.5
 }
 
-export async function fetchPrices(ids: string[], apiKey: string, now = Date.now()): Promise<Record<string, number>> {
+export async function fetchPrices(
+  ids: string[], apiKey: string, now = Date.now(), venue: Venue = null,
+): Promise<Record<string, number>> {
   const assets = ids.map((id) => ASSETS.find((a) => a.id === id)).filter((a): a is Asset => !!a)
-  const bn = assets.filter((a) => a.source === 'binance').map((a) => a.id)
-  const bg = assets.filter((a) => a.source === 'bitget').map((a) => a.id)
+  // the same routing the candles take — an alert fired off a price from a book the chart never
+  // showed is the level being wrong twice
+  const mx = assets.filter((a) => feedOf(a, venue) === 'mexc').map((a) => a.id)
+  const bg = assets.filter((a) => feedOf(a, venue) === 'bitget').map((a) => a.id)
   const td = assets.filter((a) => a.source === 'twelvedata').map((a) => a.id)
   const out: Record<string, number> = {}
   const put = (id: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) out[id] = n }
 
   const jobs: Promise<void>[] = []
-  if (bn.length) jobs.push(
-    fetch(`https://api.binance.com/api/v3/ticker/price?symbols=${encodeURIComponent(JSON.stringify(bn))}`)
+  // through the server for the same CORS reason the candles are — see fetchMexc
+  for (const id of mx) jobs.push(
+    fetch(`/api/mexc/price?symbol=${mxSymbol(id)}`)
       .then((r) => r.json())
-      .then((rows: { symbol: string; price: string }[]) => {
-        if (Array.isArray(rows)) for (const r of rows) put(r.symbol, r.price)
-      }),
+      .then((j: { data?: { lastPrice?: number } }) => put(id, j?.data?.lastPrice)),
   )
   /* One call per symbol here rather than one for the lot: Bitget's batch ticker is every contract
      it lists, a couple of hundred KB to be told about gold. The desk has one symbol on this feed. */
@@ -184,13 +210,22 @@ export function fetchStockHours(ids: string[], apiKey: string, now = Date.now())
   return fetch(url).then((r) => r.json()).then((j) => parseStockHours(j, ids, now)).catch(() => [])
 }
 
-async function fetchBinance(symbol: string, interval: Interval): Promise<Candle[]> {
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=1000`
-  const rows = await fetch(url).then((r) => r.json())
-  // a bad symbol comes back as { code, msg }, not an array — surface the message
-  if (!Array.isArray(rows)) throw new Error(rows?.msg || 'No data for this symbol')
-  // each kline is [openTime, open, high, low, close, volume, …]
-  return rows.map((k: (string | number)[]) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }))
+/**
+ * MEXC's perpetuals, through this app's own server rather than from the browser: contract.mexc.com
+ * answers a cross-origin GET with no access-control-allow-origin at all, so the fetch that works
+ * from a terminal is blocked in the tab. The route is a thin proxy — see /api/mexc/candles — and
+ * this is the only feed here that needs one.
+ *
+ * Columns, not rows: the venue sends parallel arrays and stamps its times in seconds.
+ */
+async function fetchMexc(symbol: string, interval: Interval): Promise<Candle[]> {
+  const url = `/api/mexc/candles?symbol=${mxSymbol(symbol)}&interval=${MX_INTERVAL[interval]}`
+  const j = await fetch(url).then((r) => r.json())
+  const d = j?.data
+  if (!d || !Array.isArray(d.time)) throw new Error(j?.error || j?.msg || 'No data for this symbol')
+  return d.time.map((t: number, i: number) => ({
+    t: t * 1000, o: +d.open[i], h: +d.high[i], l: +d.low[i], c: +d.close[i], v: +d.vol[i],
+  }))
 }
 
 /** Bitget's USDT-margined futures, keyless and CORS-open like Binance's. A thousand bars is the
@@ -205,6 +240,56 @@ async function fetchBitget(symbol: string, interval: Interval): Promise<Candle[]
   // [openTime, open, high, low, close, baseVolume, quoteVolume], oldest first
   return j.data.map((k: string[]) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }))
 }
+
+/** One asset's last day of hourly bars — what both movers sweeps and the Overview tiles are built
+ *  from. `c` is oldest → newest, up to twenty-five bars: the day, plus the one in progress. */
+export type Hours = { a: Asset; c: Candle[] }
+
+/** One asset's move over a window the movers sweep reads: the hour just gone or the four behind it.
+ *  `open` is where the window started, `last` where it is now, and the high/low are the day's —
+ *  the shape moverAlerts already takes. */
+export type Move = { id: string; label: string; hours: number; open: number; last: number; high: number; low: number }
+
+/**
+ * The day in hourly bars, per asset. Binance quoted 1h, 4h and 24h windows for a dozen symbols in
+ * three batch calls and neither book here has an equivalent, so the windows are measured off bars
+ * instead — one call per asset rather than three for the lot, and the same bars draw the sparkline
+ * the Overview used to fetch a second time.
+ *
+ * The windows are clock-aligned now rather than rolling: "an hour" is the hour bar in progress, not
+ * the last sixty minutes. Five past the hour it therefore measures five minutes, which understates
+ * — it can miss a move, never invent one — and it matches what the sweep already did with the
+ * result, since the knock is deduplicated by clock hour and always was.
+ *
+ * ponytail: a dozen small calls a minute against a keyless public feed, where it used to be three.
+ * They are ~2KB each and both venues rate-limit an order of magnitude above that. If the asset list
+ * grows past a couple of dozen, either lengthen the poll or read the venue's all-symbol ticker for
+ * the day's number and keep the candles for the hour's.
+ */
+export async function fetchHours(assets: Asset[], venue: Venue = null): Promise<Hours[]> {
+  const rows = await Promise.all(assets.map(async (a): Promise<Hours[]> => {
+    const c = await fetchCandles(a, '1h', '', venue).then((x) => x.slice(-25)).catch(() => [])
+    return c.length ? [{ a, c }] : [] // a feed that is down says nothing, rather than guessing
+  }))
+  return rows.flat()
+}
+
+/** The two windows, off those bars. A window the feed has no bars for is absent rather than
+ *  defaulted: a missing open reads as a hundred-percent move, which is the one way this could
+ *  shout about nothing. */
+export function movesOf(rows: Hours[]): Move[] {
+  return rows.flatMap(({ a, c }) => {
+    const last = c.at(-1)!.c
+    const high = Math.max(...c.map((x) => x.h))
+    const low = Math.min(...c.map((x) => x.l))
+    return [1, 4].flatMap((hours) => {
+      const from = c.at(-hours)
+      return from ? [{ id: a.id, label: a.label, hours, open: from.o, last, high, low }] : []
+    })
+  })
+}
+
+export const fetchMoves = (assets: Asset[], venue: Venue = null) => fetchHours(assets, venue).then(movesOf)
 
 async function fetchTwelve(symbol: string, interval: Interval, apiKey: string): Promise<Candle[]> {
   if (!apiKey) throw new Error('Add a free Twelve Data key to load stocks')
@@ -2427,9 +2512,9 @@ export type ScanRow = {
 /** Every interval's bars for one asset, which is the only part of a scan that touches a network.
  *  Split from the reading below because the push server runs the same scan for everyone: the bars
  *  are fetched once a pass and then read once per document, against that person's own dials. */
-export async function scanBars(a: Asset, apiKey = ''): Promise<Record<Interval, Candle[]>> {
+export async function scanBars(a: Asset, apiKey = '', venue: Venue = null): Promise<Record<Interval, Candle[]>> {
   const pairs = await Promise.all(INTERVALS.map(async (iv) =>
-    [iv, await fetchCandles(a, iv, apiKey).catch(() => [] as Candle[])] as const))
+    [iv, await fetchCandles(a, iv, apiKey, venue).catch(() => [] as Candle[])] as const))
   return Object.fromEntries(pairs) as Record<Interval, Candle[]>
 }
 

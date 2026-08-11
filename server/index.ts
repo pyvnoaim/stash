@@ -32,7 +32,16 @@ import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
+import { MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
+
+/* What the MEXC relay below will accept, built off the same map the client asks with so the two
+   cannot drift into a 400 nobody can read. The seconds are what "a thousand bars back" means on
+   each one — that venue takes a start time where every other feed here takes a limit. */
+const MEXC_INTERVALS = new Set(Object.values(MX_INTERVAL))
+const MEXC_STEP: Record<string, number> = {
+  Min5: 300, Min15: 900, Min60: 3_600, Hour4: 14_400, Day1: 86_400, Week1: 604_800,
+}
 import { createPaper } from './paper.ts'
 
 /** The whole document, not an upload endpoint. */
@@ -1030,6 +1039,40 @@ export function start({
       return send(res, 200, { alerts: push.alerts(user.id, tz) })
     }
 
+    /* MEXC's public market data, relayed. Bitget's own feed is CORS-open and the browser reads it
+       straight; contract.mexc.com answers a cross-origin GET with no allow-origin header at all, so
+       a MEXC reader's charts would simply be empty without this. Nothing is signed here — it is the
+       same public candles anyone can curl — and it is behind a session anyway, because a MEXC feed
+       is only ever wanted by an account that has set a MEXC key.
+
+       The symbol and interval are matched, not forwarded: a proxy that passes a caller's string
+       into a URL is an open relay to whatever else that host serves, and this one has exactly two
+       shapes to accept. */
+    const mexcFeed = /^\/api\/mexc\/(candles|price)$/.exec(path)?.[1]
+    if (mexcFeed && req.method === 'GET') {
+      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
+      const q = new URL(req.url ?? '/', 'http://x').searchParams
+      const symbol = q.get('symbol') ?? ''
+      const interval = q.get('interval') ?? ''
+      if (!/^[A-Z0-9]{2,20}_USDT$/.test(symbol)) return send(res, 400, { error: 'not a contract symbol' })
+      if (mexcFeed === 'candles' && !MEXC_INTERVALS.has(interval)) return send(res, 400, { error: 'not an interval' })
+      /* A thousand bars, the same window every other feed here hands over, asked for by time
+         because this venue counts back from `start` rather than taking a limit. */
+      const url = mexcFeed === 'price'
+        ? `https://contract.mexc.com/api/v1/contract/ticker?symbol=${symbol}`
+        : `https://contract.mexc.com/api/v1/contract/kline/${symbol}?interval=${interval}`
+          + `&start=${Math.floor((Date.now() - 1000 * MEXC_STEP[interval]) / 1000)}`
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+        if (!r.ok) return send(res, 502, { error: `MEXC answered ${r.status}` })
+        // cached briefly: the desk polls a forming bar every few seconds and every reader of the
+        // same symbol would otherwise be one call each against a venue that rate-limits by IP
+        return send(res, 200, await r.json(), { 'cache-control': 'private, max-age=5' })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
+    }
+
     /* Each account's own exchange key, kept here because it signs requests — a browser holding it
        would be a browser that can be read. It never travels back out: GET answers only whether one
        is set. Stored as given rather than hashed, since signing needs it back — which is exactly
@@ -1682,7 +1725,9 @@ export function start({
         ...(ext === 'html' && {
           'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
             + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            + "connect-src 'self' https://api.binance.com https://api.bitget.com "
+            // MEXC is absent on purpose: its contract API sends no allow-origin header, so those
+            // bars come through this server's own relay and ride 'self'
+            + "connect-src 'self' https://api.bitget.com "
             + 'https://api.twelvedata.com https://api.geckoterminal.com; '
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',

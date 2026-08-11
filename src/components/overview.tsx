@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
 import { cn, MONEY_IN } from '@/lib/utils'
+import { fetchHours } from '@/lib/market'
 import { addDays, dayLabel, today } from '@/lib/parse'
 import { inProject, MARKET, monthlyCost, setMarketAsset, SUBS, tagCounts, useStash, type Item } from '@/lib/store'
 import { ASSETS, fmtPrice } from '@/lib/market'
@@ -16,7 +17,7 @@ const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
 // each for the sparkline. Stocks sit it out: they need the Twelve Data key, and a tile that's empty
 // until you've pasted one is worse than a tile that isn't there.
 const MOVERS = 4
-const CANDIDATES = ASSETS.filter((a) => a.source === 'binance')
+const CANDIDATES = ASSETS.filter((a) => a.source !== 'twelvedata')
 /* How often the tiles re-read. They were fetched once on mount and left there, so a tab open since
    the morning showed the morning's market under a percentage still labelled 24h — the one thing
    this app is careful about everywhere else. Five requests a minute at most, and only while
@@ -78,28 +79,22 @@ function Markets({ onOpen }: { onOpen: (asset: string) => void }) {
   useEffect(() => {
     let live = true
     if (!drawn.current) setState('loading')
-    const syms = encodeURIComponent(JSON.stringify(CANDIDATES.map((a) => a.id)))
-    fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${syms}`)
-      .then((r) => r.json())
-      .then(async (tick: { symbol: string; lastPrice: string; priceChangePercent: string }[]) => {
-        if (!Array.isArray(tick)) throw new Error('no prices')
+    /* One read for both halves of a tile. It used to be a batch 24h ticker for the ranking and
+       then a klines call each for the four lines that won — the same hourly bars twice, off a
+       venue nobody here trades. The day's move is now measured off the same twenty-five bars the
+       sparkline is drawn from. */
+    fetchHours(CANDIDATES)
+      .then((bars) => {
+        if (!bars.length) throw new Error('no prices')
         // biggest move either way — a 6% drop is as much news as a 6% rally
-        const top = tick
-          .map((t) => ({ id: t.symbol, price: +t.lastPrice, change: +t.priceChangePercent }))
+        const withLines = bars
+          .map(({ a, c }) => ({
+            id: a.id, label: a.label, price: c.at(-1)!.c, closes: c.map((k) => k.c),
+            change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100,
+          }))
           .filter((t) => isFinite(t.change) && isFinite(t.price))
           .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
           .slice(0, MOVERS)
-        // sparklines after the ranking, so only the tiles actually shown cost a request.
-        // Per-symbol catch: one failed line must not blank the other tiles.
-        const withLines = await Promise.all(top.map(async (t) => {
-          const label = ASSETS.find((a) => a.id === t.id)?.label ?? t.id
-          try {
-            const ks = await fetch(`https://api.binance.com/api/v3/klines?symbol=${t.id}&interval=1h&limit=24`).then((r) => r.json())
-            return { ...t, label, closes: Array.isArray(ks) ? ks.map((k: (string | number)[]) => +k[4]) : [] }
-          } catch {
-            return { ...t, label, closes: [] }
-          }
-        }))
         if (live) {
           setRows(withLines)
           drawn.current = withLines.length > 0

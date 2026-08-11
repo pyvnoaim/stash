@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { ASSETS, fetchNew, fetchPrices, fetchStockHours, fetchTrending, type Trend } from '@/lib/market'
+import { ASSETS, fetchMoves, fetchNew, fetchPrices, fetchStockHours, fetchTrending, type Trend } from '@/lib/market'
+import { useVenue } from '@/lib/venue'
 import {
   alarmAlerts, alerts, moverAlerts, nakedAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
@@ -20,7 +21,8 @@ const DOT: Record<Alert['tone'], string> = {
 /* Everything on the desk that Binance quotes — crypto and gold. Keyless, and one call covers the
    lot, so there is no reason for this to be a shorter hand-kept list than the one the picker shows:
    the coin you are not watching is exactly the one whose move you would want telling about. */
-const MOVERS = ASSETS.filter((a) => a.source === 'binance')
+// every contract on the desk's own books — there is no third feed to leave out any more
+const MOVERS = ASSETS.filter((a) => a.source !== 'twelvedata')
 /* And the stocks, on their own timer. They were left out of this entirely, which meant the desk
    could tell you gold had moved and never that Nvidia had. Two things keep them apart from the
    sweep above rather than in it: the key, which lives in this browser and never reaches the push
@@ -61,33 +63,20 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
      Three calls: the hour that just went, the four hours behind it for the grind an hour cannot
      see, and the day both sit in for scale. All keyless, all take every symbol at once, so this is
      three requests a minute however long the desk's list grows. */
+  const feed = useVenue()
   useEffect(() => {
+    if (feed === undefined) return // which book to read is still being asked — see useVenue
     let live = true
-    const syms = encodeURIComponent(JSON.stringify(MOVERS.map((a) => a.id)))
-    const ticker = (q: string) =>
-      fetch(`https://api.binance.com/api/v3/ticker${q}&symbols=${syms}`).then((r) => r.json())
-    type Row = { symbol: string; openPrice: string; lastPrice: string; highPrice: string; lowPrice: string }
-    const tick = () => Promise.all([ticker('?windowSize=1h'), ticker('?windowSize=4h'), ticker('/24hr?')])
-      .then(([hour, four, day]: [Row[], Row[], Row[]]) => {
-        if (!live || !Array.isArray(day)) return
-        const rows = (win: Row[], hours: number) => !Array.isArray(win) ? [] : MOVERS.flatMap((a): Mover[] => {
-          const h = win.find((r) => r.symbol === a.id)
-          const d = day.find((r) => r.symbol === a.id)
-          // a symbol either feed left out is skipped, not defaulted — moverAlerts would read a
-          // missing open as a 100% move, which is the one way this could shout about nothing
-          if (!h || !d) return []
-          return [{
-            asset: a.id, label: a.label, hours,
-            open: +h.openPrice, last: +h.lastPrice, high: +d.highPrice, low: +d.lowPrice,
-          }]
-        })
-        setMovers([...rows(hour, 1), ...rows(four, 4)])
+    const tick = () => fetchMoves(MOVERS, feed)
+      .then((rows) => {
+        if (!live) return
+        setMovers(rows.map((m) => ({ asset: m.id, label: m.label, hours: m.hours, open: m.open, last: m.last, high: m.high, low: m.low })))
       })
       .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
     tick()
     const h = setInterval(tick, POLL)
     return () => { live = false; clearInterval(h) }
-  }, [])
+  }, [feed])
 
   /* The same reading for the stocks, on the slower timer their feed can afford. Their own state,
      not appended to the one above: the two arrive on different clocks, and one list written by two
@@ -116,14 +105,18 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   const assets = [...new Set([...s.watches.map((w) => w.asset), ...s.alarms.map((a) => a.asset)])].sort().join(',')
   useEffect(() => {
     if (!assets) { setLive({}); return }
+    // and which book to price them on, or a MEXC reader's alerts would sit on Bitget's numbers for
+    // the whole session: this effect's deps are the watched ids, so it never re-ran on the answer
+    if (feed === undefined) return
     let on = true
     // merged over the last answer: off-hours fetchPrices omits the stocks entirely (see
     // usMarketOpen), and a watched stock's closing price is still the true one to read it at
-    const tick = () => fetchPrices(assets.split(','), s.apiKey).then((p) => { if (on) setLive((prev) => ({ ...prev, ...p })) })
+    const tick = () => fetchPrices(assets.split(','), s.apiKey, Date.now(), feed)
+      .then((p) => { if (on) setLive((prev) => ({ ...prev, ...p })) })
     tick()
     const h = setInterval(tick, POLL)
     return () => { on = false; clearInterval(h) }
-  }, [assets, s.apiKey])
+  }, [assets, s.apiKey, feed])
   const setups = useMemo(() => watchAlerts(s.watches, live, s.stake, s.dials), [s.watches, live, s.stake, s.dials])
 
   /* The same prices, written down. A setup whose entry the price has really reached is marked as

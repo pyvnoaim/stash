@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, ChevronDown, CloudOff, Copy, Crosshair, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, Telescope, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
 import { Avatar } from '@/components/settings-dialog'
+import { useVenue, type VenueFeed } from '@/lib/venue'
 import { euro, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
@@ -164,6 +165,9 @@ export default function MarketPage() {
   const cfg = HORIZONS[horizon]
   // the exchange's word on what's held, for drawing the real position over whatever the plan says
   const exch = useExchangePositions()
+  /* Whose book to read. `undefined` means the answer is still coming, and every feed below waits
+     for it rather than loading Binance's bars and replacing them a beat later. */
+  const feed = useVenue()
 
   const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
@@ -177,12 +181,13 @@ export default function MarketPage() {
   const seq = useRef(0)
   useEffect(() => {
     if (needKey) { setCandles([]); setError(''); return } // no feed without the key; the prompt shows instead
+    if (feed === undefined) { setLoading(true); return } // which venue is still being asked — see useVenue
     const mine = ++seq.current // ignore a slow response once the user has moved on
     // drop the old asset's candles right away so a loading state shows instead of a stale chart
     // a new feed resets the view — a scroll position in 4h bars means nothing in 1w bars
     setLoading(true); setError(''); setHover(null); setCandles([]); setScroll(0); setWin(VISIBLE)
     nextRoll.current = 0
-    fetchCandles(current, interval, apiKey)
+    fetchCandles(current, interval, apiKey, feed)
       .then((c) => { if (mine === seq.current) { setCandles(c); setLoading(false) } })
       // offline the fetch fails on the browser's own message ("Load failed", "Failed to fetch"),
       // which reads as a bug rather than the plain fact that this view was never cached
@@ -191,7 +196,7 @@ export default function MarketPage() {
         setError(navigator.onLine ? e.message : 'Offline — no saved bars for this view')
         setCandles([]); setLoading(false)
       })
-  }, [asset, interval, nonce, apiKey, needKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asset, interval, nonce, apiKey, needKey, feed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The bigger picture, twice over. `higher` is the timeframe one step up and votes in the tally —
   // the "don't fight the bigger picture" card. `anchor` is the daily (the weekly, once you're on the
@@ -203,10 +208,10 @@ export default function MarketPage() {
   const [anchor, setAnchor] = useState<Signal | null>(null)
   useEffect(() => {
     setHigher(null); setAnchor(null)
-    if (needKey) return
+    if (needKey || feed === undefined) return
     let on = true
     const lean = (iv?: Interval) => (iv
-      ? fetchCandles(current, iv, apiKey).then((c) => trendFilter(c, cfg.slow, iv)).catch(() => null)
+      ? fetchCandles(current, iv, apiKey, feed).then((c) => trendFilter(c, cfg.slow, iv)).catch(() => null)
       : Promise.resolve(null))
     const up = HIGHER[interval], anc = ANCHOR[interval]
     const upLean = lean(up)
@@ -216,7 +221,7 @@ export default function MarketPage() {
     upLean.then((s) => { if (on) setHigher(s) })
     ancLean.then((s) => { if (on) setAnchor(s) })
     return () => { on = false }
-  }, [asset, interval, nonce, apiKey, needKey, cfg.slow]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asset, interval, nonce, apiKey, needKey, cfg.slow, feed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The forming candle, kept alive off the last-price endpoint: its close follows the tick and its
   // high/low stretch to hold it, exactly as the real bar is doing on the exchange. One tiny request
@@ -231,7 +236,7 @@ export default function MarketPage() {
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
   useEffect(() => {
     setNotLive(false) // a new view has not probed yet, so it makes no claim either way
-    if (needKey || !live || !online) return // nothing to poll for with no feed to poll
+    if (needKey || !live || !online || feed === undefined) return // nothing to poll for with no feed to poll
     let on = true
     const tick = () => {
       const t = lastAt.current
@@ -246,12 +251,12 @@ export default function MarketPage() {
         // the same closed session over and over at a credit a call
         if (current.source === 'twelvedata' && !usMarketOpen()) return
         nextRoll.current = Date.now() + (current.source === 'twelvedata' ? ROLL_RETRY_SLOW : ROLL_RETRY)
-        fetchCandles(current, interval, apiKey)
+        fetchCandles(current, interval, apiKey, feed)
           .then((fresh) => { if (on && fresh.length) setCandles(fresh) })
           .catch(() => {})
         return
       }
-      fetchPrices([current.id], apiKey).then((pr) => {
+      fetchPrices([current.id], apiKey, Date.now(), feed).then((pr) => {
         const px = pr[current.id]
         if (!on) return
         // fetchPrices resolves either way and simply omits what it could not get, so an absent
@@ -2804,8 +2809,8 @@ function Desk({ live }: { live: boolean }) {
  *  line to draw — a hundred numbers a row is a payload it would carry for nobody. */
 type ScanCard = ScanRow & { closes: number[] }
 
-const scanOne = async (a: Asset, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number): Promise<ScanCard | null> => {
-  const bars = await scanBars(a)
+const scanOne = async (a: Asset, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number, feed: VenueFeed = null): Promise<ScanCard | null> => {
+  const bars = await scanBars(a, '', feed ?? null)
   const row = scanRead(a, bars, horizon, interval, orbMode, fee)
   // the last of them, not all: a weekly chart hands over a year and the line is 4rem wide
   return row && { ...row, closes: (bars[interval] ?? []).slice(-60).map((c) => c.c) }
@@ -2828,15 +2833,16 @@ function SetupsButton({ orbMode, interval, onPick }: {
 }) {
   const { marketHorizon: horizon, dials } = useStash()
   const fee = dials.fee
+  const feed = useVenue()
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<ScanCard[] | null>(null)
 
   useEffect(() => {
-    if (!open) return
+    if (!open || feed === undefined) return
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee).catch(() => null)),
+      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee, feed).catch(() => null)),
     ).then((r) => {
       if (!on) return
       /* A plan and a tier the desk stands behind. Tier 0 and 1 are "there is a shape here but do
@@ -2846,7 +2852,7 @@ function SetupsButton({ orbMode, interval, onPick }: {
         .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
     })
     return () => { on = false }
-  }, [open, horizon, interval, orbMode, fee])
+  }, [open, horizon, interval, orbMode, fee, feed])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -2854,7 +2860,7 @@ function SetupsButton({ orbMode, interval, onPick }: {
         <PopoverTrigger asChild>
           <Button size="icon" variant={open ? 'secondary' : 'ghost'} aria-label="Setups on every asset"
             className={cn('size-7', !open && 'text-muted-foreground')}>
-            <Crosshair className="size-3.5" />
+            <Telescope className="size-3.5" />
           </Button>
         </PopoverTrigger>
       </Hint>
@@ -2940,6 +2946,7 @@ function Scan({ orbMode, interval, onPick }: {
 }) {
   const { marketHorizon: horizon, dials } = useStash()
   const fee = dials.fee
+  const feed = useVenue()
   const cfg = HORIZONS[horizon]
   const [rows, setRows] = useState<ScanCard[] | null>(null)
   const [nonce, setNonce] = useState(0)
@@ -2947,10 +2954,11 @@ function Scan({ orbMode, interval, onPick }: {
   const online = useOnline()
 
   useEffect(() => {
+    if (feed === undefined) return
     let on = true
     setRows(null)
     void Promise.all(
-      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee).catch(() => null)),
+      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee, feed).catch(() => null)),
     ).then((r) => {
       if (!on) return
       // ranked on the net R:R, not the gross one — the whole point of the column is which of these
@@ -2964,7 +2972,7 @@ function Scan({ orbMode, interval, onPick }: {
           || y.tier - x.tier || y.agree - x.agree || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
     })
     return () => { on = false }
-  }, [horizon, nonce, orbMode, interval, fee])
+  }, [horizon, nonce, orbMode, interval, fee, feed])
 
   return (
     <Card className="py-3">

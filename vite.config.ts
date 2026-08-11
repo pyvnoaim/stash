@@ -61,10 +61,10 @@ export default defineConfig({
            alerts in notification-bell against a number that isn't true any more, and the watcher
            is written so a *missing* price fires nothing. Missing is the honest answer offline. */
         runtimeCaching: [{
-          urlPattern: /^https:\/\/api\.binance\.com\/api\/v3\/klines/,
+          urlPattern: /\/api\/mexc\/candles/,
           handler: 'NetworkFirst',
           options: {
-            cacheName: 'candles-binance',
+            cacheName: 'candles-mexc',
             networkTimeoutSeconds: 10,
             cacheableResponse: { statuses: [200] },
             expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
