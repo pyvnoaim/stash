@@ -2991,6 +2991,10 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
  */
 function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void }) {
   const [rows, setRows] = useState<DeskRow[]>([])
+  /* Whether anyone has answered yet. Without it the empty state below is shown to a full desk for
+     as long as the request takes — "nobody else has switched their desk on" is a claim, and making
+     it before asking is the same pop-in as an empty book that fills a second later. */
+  const [asked, setAsked] = useState(false)
   const { user } = useSyncExternalStore(subscribeSync, getSync)
 
   /* Only while the tab is the one on screen. A hidden tab stays mounted here — throwing its rows
@@ -3000,7 +3004,9 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
   useEffect(() => {
     if (!live) return
     const load = () => {
-      void deskRows().then((ds) => setRows(ds.map((d) => ({ ...d, results: oneEach(d.results) }))))
+      void deskRows()
+        .then((ds) => setRows(ds.map((d) => ({ ...d, results: oneEach(d.results) }))))
+        .finally(() => setAsked(true))
     }
     load()
     const h = window.setInterval(load, 60_000)
@@ -3008,6 +3014,16 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
   }, [user?.name, live])
 
   const people = rows.filter((p) => p.results.length || p.open.length)
+  if (!people.length && live && !asked) {
+    return (
+      <Card className="py-3">
+        <CardContent className="grid gap-2 px-3">
+          <Skeleton className="h-6 w-40" />
+          <Skeleton className="h-4 w-full" />
+        </CardContent>
+      </Card>
+    )
+  }
   if (!people.length) {
     return (
       <Card className="py-3">

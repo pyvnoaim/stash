@@ -476,7 +476,7 @@ export default function App() {
           )}
 
           {/* it draws its own bars now, so there is nothing heavy left to split off */}
-          {page === OVERVIEW && <Overview onTag={(t) => addTerm('#' + t)} onNavigate={goTo} />}
+          {page === OVERVIEW && <Overview onNavigate={goTo} />}
 
           {page === CALENDAR && <CalendarPage onOpen={jumpTo} />}
 

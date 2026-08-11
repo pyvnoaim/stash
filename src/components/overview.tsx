@@ -5,7 +5,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn, MONEY_IN } from '@/lib/utils'
 import { fetchHours } from '@/lib/market'
 import { addDays, dayLabel, today } from '@/lib/parse'
-import { inProject, MARKET, monthlyCost, setMarketAsset, SUBS, tagCounts, useStash, type Item } from '@/lib/store'
+import { MARKET, monthlyCost, setMarketAsset, SUBS, useStash } from '@/lib/store'
 import { ASSETS, fmtPrice } from '@/lib/market'
 import { ExchangePositions } from '@/components/market-page'
 import { treemap } from '@/lib/treemap'
@@ -117,7 +117,9 @@ function Markets({ onOpen }: { onOpen: (asset: string) => void }) {
   }, [])
   if (state === 'error') {
     return (
-      <div className="text-muted-foreground flex flex-col items-center gap-2 py-8 text-sm">
+      // the tile row's own height, so a feed that fails after the skeletons doesn't collapse the
+      // panel and pull the page up under the cursor
+      <div className="text-muted-foreground flex min-h-31 flex-col items-center justify-center gap-2 text-sm">
         <p>Prices are not loading — the exchange feed didn't answer.</p>
         <button type="button" onClick={() => setNonce((n) => n + 1)}
           className="text-foreground hover:bg-accent rounded-md border px-2.5 py-1 text-xs">Try again</button>
@@ -157,7 +159,6 @@ const euro = (n: number) =>
 
 const BACK = 30
 const AHEAD = 14
-const TAGS = 8
 const stamp = (ms: number) => new Date(ms).toLocaleDateString('sv')
 
 /** A run of days from `t + offset`, one entry each, so a gap reads as a gap and not as no data. */
@@ -190,33 +191,6 @@ function Stat({ label, value, sub, onOpen, valueClass }: {
         </CardContent>
       </Card>
     </button>
-  )
-}
-
-/** Every bar is directly labelled, so it needs no hover layer. */
-function BarRow({ name, n, max, onClick }: {
-  name: string
-  n: number
-  max: number
-  onClick?: () => void
-}) {
-  return (
-    <div
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onClick={onClick}
-      onKeyDown={(e) => { if (onClick && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onClick() } }}
-      className={cn('group flex items-center gap-3', onClick && 'cursor-pointer')}
-    >
-      <span className={cn('w-28 shrink-0 truncate text-xs', onClick && 'group-hover:underline')}>{name}</span>
-      <div className="bg-muted h-2 flex-1 overflow-hidden rounded-full">
-        <div
-          className="bg-foreground h-full rounded-full transition-[width] duration-300"
-          style={{ width: `${max ? (n / max) * 100 : 0}%` }}
-        />
-      </div>
-      <span className="text-muted-foreground w-6 shrink-0 text-right font-mono text-xs tabular-nums">{n}</span>
-    </div>
   )
 }
 
@@ -322,7 +296,10 @@ function Spend({ items, total, onOpen }: {
   // the same at every size but the type inside it doesn't, which is how a phone ended up with labels
   // spilling out of tiles that were "big enough" on a desktop
   const [px, setPx] = useState(0)
+  // measured in the ref callback, which React runs before the browser paints — the observer below
+  // only answers after it, and a first frame at px=0 is every tile drawn label-less and then filled
   const [box, setBox] = useState<HTMLDivElement | null>(null)
+  const measure = (el: HTMLDivElement | null) => { setBox(el); if (el) setPx(el.offsetWidth) }
   useEffect(() => {
     if (!box) return
     const ro = new ResizeObserver(([e]) => setPx(e.contentRect.width))
@@ -336,7 +313,7 @@ function Spend({ items, total, onOpen }: {
   const tiles = treemap(items, (d) => d.v, W, H)
   const scale = px ? px / W : 0 // css px per layout unit
   return (
-    <div ref={setBox} className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
+    <div ref={measure} className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
       {tiles.map(({ item, x, y, w, h }) => {
         const wp = (w / W) * 100
         const hp = (h / H) * 100
@@ -381,10 +358,7 @@ function Spend({ items, total, onOpen }: {
   )
 }
 
-export default function Overview({ onTag, onNavigate }: {
-  onTag: (tag: string) => void
-  onNavigate: (id: string) => void
-}) {
+export default function Overview({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
   const t = today()
 
@@ -396,10 +370,6 @@ export default function Overview({ onTag, onNavigate }: {
       dueToday: open.filter((i) => i.due === t).length,
       overdue: open.filter((i) => i.due && i.due < t).length,
       doneWeek: s.items.filter((i) => i.done && (i.doneAt ?? 0) >= week).length,
-      types: (['task', 'idea', 'note'] as const).map((type) => ({
-        type,
-        n: open.filter((i: Item) => i.type === type).length,
-      })),
     }
   }, [s.items, t])
 
@@ -440,26 +410,9 @@ export default function Overview({ onTag, onNavigate }: {
     return run(t, -(BACK - 1), BACK, (d) => counts.get(d) ?? 0)
   }, [s.items, t])
 
-  const byProject = useMemo(() => {
-    const open = s.items.filter((i) => !i.done)
-    // a parent's bar counts its sub-projects' work, the same as its list does
-    const rows = s.projects.map((p) => ({ id: p.id, name: p.name, n: open.filter(inProject(s, p.id)).length }))
-    rows.push({ id: 'inbox', name: 'Quick notes', n: open.filter((i) => !i.pid).length })
-    return rows.filter((r) => r.n > 0).sort((a, b) => b.n - a.n)
-  }, [s.items, s.projects]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // the busiest handful, since a tag list is long and flat and the tail says nothing. The panel
-  // is open work, so a tag with none left is not in it — the sidebar is where those still show.
-  const tags = useMemo(
-    () => tagCounts(s).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, TAGS),
-    [s.items], // eslint-disable-line react-hooks/exhaustive-deps
-  )
-
   const finished = back.reduce((n, d) => n + d.n, 0)
   const captured = made.reduce((n, d) => n + d.n, 0)
   const coming = ahead.reduce((n, d) => n + d.n, 0)
-  const maxProject = Math.max(...byProject.map((r) => r.n), 1)
-  const maxTag = Math.max(...tags.map(([, n]) => n), 1)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
@@ -532,36 +485,11 @@ export default function Overview({ onTag, onNavigate }: {
         <Trend data={made} label={(d) => short(d)} />
       </Panel>
 
-      <div className={cn('grid gap-4', tags.length ? 'lg:grid-cols-3' : 'lg:grid-cols-2')}>
-        <Panel title="Open by project" sub="Where the unfinished work sits">
-          {byProject.length ? (
-            byProject.map((r) => (
-              <BarRow key={r.id} name={r.name} n={r.n} max={maxProject} onClick={() => onNavigate(r.id)} />
-            ))
-          ) : (
-            <p className="text-muted-foreground text-sm">Nothing open anywhere.</p>
-          )}
-        </Panel>
-
-        {tags.length > 0 && (
-          <Panel title="Open by tag" sub={`The busiest ${tags.length === 1 ? 'one' : tags.length}`}>
-            {tags.map(([tag, n]) => (
-              <BarRow key={tag} name={'#' + tag} n={n} max={maxTag} onClick={() => onTag(tag)} />
-            ))}
-          </Panel>
-        )}
-
-        <Panel title="Open by kind" sub="Tasks to finish, ideas and notes to keep">
-          {stats.types.map(({ type, n }) => (
-            <BarRow
-              key={type}
-              name={type[0].toUpperCase() + type.slice(1)}
-              n={n}
-              max={Math.max(...stats.types.map((x) => x.n), 1)}
-            />
-          ))}
-        </Panel>
-      </div>
+      {/* Open by project / by tag / by kind used to sit here as three panels of bars. Everything
+          they counted is single digits, and a bar drawn to a max of 5 encodes nothing the number
+          beside it didn't already say — while the sidebar lists the same projects and the same tags
+          with the same counts, permanently, one click closer. `git log` has them if the shape of the
+          work ever needs a picture again. */}
     </div>
   )
 }
