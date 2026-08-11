@@ -198,19 +198,23 @@ const KEEP_RESULTS = 50
  * id is all the dedupe below can see, and the same trade lands twice: same money, two Rs, because
  * the two paths measure risk off different things (see fileClosed in market-page.tsx).
  *
- * The asset, the side, the venue's own average entry and an hour of each other. Two real trades
- * do not share all four — an average fill price agreeing to the sixth digit is one fill.
+ * The asset, the side, an hour of each other, and then either of the two things a venue cannot
+ * hand two different trades: the same average fill price, or the same settled money. Either alone
+ * is enough — the book and the history do not always average an entry the same way, and a row the
+ * diff path filed before the history answered carries no money at all.
  *
  * Both sides have to be the exchange filer's own row, whose id is `venue-symbol-when` (see isReal).
  * A plan you watched and a trade you took on the same asset at the same price *are* two rows, and
  * this must never quietly eat one of them: only the filer writes one close down twice.
  */
-type Filed = { id: string; asset: string; dir: string; entry: number; closedAt: number }
+type Filed = { id: string; asset: string; dir: string; entry: number; closedAt: number; cash?: number }
 function twice(a: Filed, b: Filed) {
+  const price = b.entry > 0 && Math.abs(a.entry - b.entry) <= b.entry * 1e-6
+  const money = a.cash != null && a.cash === b.cash
   return a.id.includes('-') && b.id.includes('-')
     && a.asset === b.asset && a.dir === b.dir
-    && b.entry > 0 && Math.abs(a.entry - b.entry) <= b.entry * 1e-6
     && Math.abs(a.closedAt - b.closedAt) < 3600_000
+    && (price || money)
 }
 
 /** A price and which way through it counts — decided from where price stood when it was set. */

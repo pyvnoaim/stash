@@ -1938,7 +1938,8 @@ function useExchangePositions() {
  * someone else's does not, because the server reads their size to price the trade and never sends
  * the number itself. Everything a row has no answer for is simply left out.
  */
-function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, size, r, meta = [] }: {
+function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, size, r,
+  stop, target, liq, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
@@ -1957,11 +1958,36 @@ function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, s
   /** How much of it, in whatever unit the caller counts in. Absent where that is nobody's business. */
   size?: string | null
   r: number | null
+  /** The three levels, as numbers rather than phrases: the tile draws them and then says them. */
+  stop?: number | null
+  target?: number | null
+  liq?: number | null
   /** The quiet line under the fold, already phrased; falsy entries drop out. */
   meta?: (string | false | null)[]
 }) {
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
-  const line = meta.filter(Boolean).join(' · ')
+  /* Where price stands between the level that ends the trade against you and the one that ends it
+     for you. Six prices in a row of prose is the one thing on this tile nobody was reading, and
+     "how far to each end" is what every one of them was being asked. The losing end is the resting
+     stop, or the liquidation where nobody rested one — the honest answer either way.
+     ponytail: no bar without both ends. A half-drawn scale is a scale that lies about the half it
+     left out, and the line below still prints every level it has. */
+  const lose = stop ?? liq ?? null
+  const at = (v: number) => Math.max(0, Math.min(1, (v - lose!) / (target! - lose!)))
+  const bar = lose != null && target != null && now != null && lose !== target
+    ? { now: at(now), from: at(from), lose, stopped: stop != null }
+    : null
+  const level = (name: string, v: number) =>
+    `${name} ${fmtPrice(v)}${now != null ? ` (${away(v, now)})` : ''}`
+  /* The levels lead the line, and the bar takes its two ends out of it — the same numbers said
+     twice is what made the line long enough to stop being read. */
+  const line = [
+    !bar && stop != null && level('stop', stop),
+    !bar && target != null && level('target', target),
+    // the liq only where the bar is not already standing on it — a stopless position's losing end
+    liq != null && !(bar && !bar.stopped) && level('liq', liq),
+    ...meta,
+  ].filter(Boolean).join(' · ')
   return (
     <div className="grid gap-1 rounded-md border px-2.5 py-2">
       <div className="flex items-center gap-2">
@@ -1982,6 +2008,30 @@ function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, s
         {now != null && <span>now <span className="text-foreground">{fmtPrice(now)}</span></span>}
         {r != null && <span className={cn('ml-auto font-mono', good)}>{rLabel(r)}</span>}
       </div>
+      {bar && (
+        <div className="mt-0.5 grid gap-1">
+          <div className="bg-muted relative h-1 rounded-full">
+            {/* how far it has travelled from the entry, and which way — the fill is the trade */}
+            <div className={cn('absolute inset-y-0 rounded-full', up ? 'bg-emerald-500' : 'bg-destructive')}
+              style={{ left: `${Math.min(bar.from, bar.now) * 100}%`,
+                width: `${Math.abs(bar.now - bar.from) * 100}%` }} />
+            {/* the entry as a tick standing proud of the track: it is where the money went in, and
+                the fill's own edge said that too quietly to find on a losing trade */}
+            <span className="bg-foreground/60 absolute -top-0.5 -bottom-0.5 w-px"
+              style={{ left: `${bar.from * 100}%` }} />
+          </div>
+          <div className="flex justify-between text-[10px] tabular-nums">
+            <span className="text-destructive">
+              {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
+              {now != null && <span className="text-muted-foreground"> {away(bar.lose, now)}</span>}
+            </span>
+            <span className="text-emerald-600 dark:text-emerald-400">
+              target {fmtPrice(target!)}
+              {now != null && <span className="text-muted-foreground"> {away(target!, now)}</span>}
+            </span>
+          </div>
+        </div>
+      )}
       {line && <p className="text-muted-foreground border-t pt-1 text-xs">{line}</p>}
     </div>
   )
@@ -2083,6 +2133,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
                 ? `${p.pnl != null ? `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · ` : ''}${up ? '+' : ''}${p.pct.toFixed(2)}%`
                 : null}
               from={p.entry} now={p.mark} size={String(p.size)} r={r}
+              stop={p.stop} target={p.target} liq={p.liq}
               /* ponytail: no share button here. A card of a position still running is a number that
                  has changed by the time anyone opens it, and the trade it brags about can still end
                  red — the Record's rows are the ones with an answer on them. */
@@ -2102,9 +2153,6 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
                    actually felt in. pct stays the price move it has always been; this is that times
                    the multiplier, and it only appears where the venue said what the multiplier is. */
                 p.pct != null && p.lev != null && `${p.pct * p.lev >= 0 ? '+' : ''}${(p.pct * p.lev).toFixed(1)}% on margin`,
-                p.stop != null && `stop ${fmtPrice(p.stop)} ${p.mark != null ? `(${away(p.stop, p.mark)})` : ''}`.trim(),
-                p.target != null && `target ${fmtPrice(p.target)} ${p.mark != null ? `(${away(p.target, p.mark)})` : ''}`.trim(),
-                p.liq != null && `liq ${fmtPrice(p.liq)} ${p.mark != null ? `(${away(p.liq, p.mark)})` : ''}`.trim(),
                 p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
                 p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
                   day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -2760,6 +2808,22 @@ const deskTally = (rs: DeskRow['results']) => ({
 })
 
 /**
+ * Somebody else's record with one close counted once.
+ *
+ * The exchange filer reaches a finished trade two ways and, at a venue that stamps its history
+ * differently from its book, files it under two ids — one lot of money, two Rs (see `twice` in
+ * store.ts). That is fixed where the rows are written, but a desk is somebody else's document: it
+ * arrives as they saved it, and every record written before the fix already holds the pairs.
+ *
+ * The venue's own settled money and its own close stamp, which the pairs agree on to the cent and
+ * the millisecond. The entry price the app's own dedupe leans on is not on this route's allowlist,
+ * and a row with no money at all is left alone rather than guessed at — better a double in their
+ * log than a trade of theirs quietly deleted from it.
+ */
+const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => r.cash == null || !rs.slice(0, i)
+  .some((x) => x.label === r.label && x.dir === r.dir && x.cash === r.cash && x.closedAt === r.closedAt))
+
+/**
  * One desk's finished trades, behind a press.
  *
  * The row above already says how many there were and what share of them hit; this is what those
@@ -2794,7 +2858,12 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{p.name}&rsquo;s log</DialogTitle>
+          {/* the same face the row outside carries, so the window says whose book it is the way
+              the tile you pressed did */}
+          <DialogTitle className="flex items-center gap-2">
+            <Avatar name={p.name} avatar={p.avatar} className="size-6 text-[11px]" />
+            {p.name}&rsquo;s log
+          </DialogTitle>
           <DialogDescription>
             Every trade they were really in, newest first. Paid is what the exchange settled it for;
             a trade they sized by hand prices itself off a stake that never leaves their device, so
@@ -2892,7 +2961,9 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
      the tab asks again on the spot, which is the same thing the poll was for. */
   useEffect(() => {
     if (!live) return
-    const load = () => { void deskRows().then(setRows) }
+    const load = () => {
+      void deskRows().then((ds) => setRows(ds.map((d) => ({ ...d, results: oneEach(d.results) }))))
+    }
     load()
     const h = window.setInterval(load, 60_000)
     return () => window.clearInterval(h)
@@ -2976,13 +3047,11 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
                           r != null && rLabel(r),
                         ].filter(Boolean).join(' · ') || null}
                         from={w.entry} now={w.mark} r={null}
+                        stop={w.stop} target={w.target} liq={w.liq}
                         // the same line the own book prints, minus the funding nobody else's rate is known for
                         meta={[
                           w.value != null && `worth $${w.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
                           pct != null && w.lev != null && `${pct * w.lev >= 0 ? '+' : ''}${(pct * w.lev).toFixed(1)}% on margin`,
-                          w.stop != null && `stop ${fmtPrice(w.stop)} ${w.mark != null ? `(${away(w.stop, w.mark)})` : ''}`.trim(),
-                          w.target != null && `target ${fmtPrice(w.target)} ${w.mark != null ? `(${away(w.target, w.mark)})` : ''}`.trim(),
-                          w.liq != null && `liq ${fmtPrice(w.liq)} ${w.mark != null ? `(${away(w.liq, w.mark)})` : ''}`.trim(),
                           w.entryAt
                             ? `opened ${new Date(w.entryAt).toLocaleString(undefined, {
                                 day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',

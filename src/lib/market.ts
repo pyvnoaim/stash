@@ -2455,7 +2455,7 @@ export function openPlay(c: Candle[], at = Date.now()): Play | null {
     where: r.where, tone: thin ? 'wait' : 'go',
     say: thin
       ? `Price is through ${r.where}'s ${up ? 'high' : 'low'} at ${fmtPrice(up ? r.high : r.low)}, but ${thin} — this is the break that usually gets given back.`
-      : `Price has cleared ${r.where}'s ${up ? 'high' : 'low'} at ${fmtPrice(up ? r.high : r.low)} — the ${up ? 'long' : 'short'} is the side this play takes. The setup below has the entry, the stop and the target.`,
+      : `Price has cleared ${r.where}'s ${up ? 'high' : 'low'} at ${fmtPrice(up ? r.high : r.low)} — the ${up ? 'long' : 'short'} is the side this play takes. The setup card has the entry, the stop and the target.`,
   }
 }
 
