@@ -185,6 +185,9 @@ assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that o
 assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1', 'mexc-BTCUSDT-7'],
   'a plan she never took is not her record, and one her venue closed is')
 assert.equal(seen[0].results[0].r, 2)
+// the venue's settled dollars ride along; a row she sized herself has none to send
+assert.equal(seen[0].results[0].cash, null, 'no venue closed it, so there is no settled figure')
+assert.equal(seen[0].results[1].cash, 12.4, 'what her exchange settled it for')
 assert.deepEqual(seen[0].open.map((w: any) => w.id), ['w1'], 'nor is a plan she is only watching')
 assert.equal(seen[0].open[0].mark, null, 'a document row carries no live price')
 // the filter reads size and leverage to decide, and neither one is what it sends

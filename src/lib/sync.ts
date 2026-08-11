@@ -435,6 +435,8 @@ export interface DeskRow {
   results: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
     level: 'target' | 'stop', r: number, closedAt: number,
+    /** What the venue settled it for, in dollars. Null on a row nobody's exchange closed. */
+    cash: number | null,
   }[]
   open: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',

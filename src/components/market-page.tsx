@@ -2708,7 +2708,11 @@ const deskNow = (w: DeskRow['open'][number]) => {
   }
 }
 
-const DESK_LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4rem,1fr)_minmax(4rem,9rem)_4.5rem_3.5rem]'
+const DESK_LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4rem,1fr)_minmax(4rem,8rem)_4.5rem_3.5rem_5rem]'
+
+/** A settled figure as the desk prints it: the venue's dollars, or nothing where there are none. */
+const deskPaid = (cash: number | null) =>
+  cash === null ? '' : `${cash >= 0 ? '+' : '−'}$${Math.abs(cash).toFixed(2)}`
 
 /**
  * One desk's finished trades, behind a press.
@@ -2718,17 +2722,23 @@ const DESK_LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4rem,1fr)_m
  * ten desks with twenty trades each unrolled is a page nobody reaches the bottom of, and the
  * summary is what you read first anyway.
  *
- * The same table the Log tab draws for your own record, short two columns. The money is one: the
- * server never sends anyone's size, so nothing here can say what a desk is up in euros, which is
- * the whole point of the payload's shape. The other is when the trade opened — `/api/desk` sends
- * `closedAt` and not `entryAt`, so the Ran column has one end of its range and is left off rather
- * than half-drawn. Putting `entryAt` on that allowlist is a one-line change to the route and a
- * decision about what the desk switch promises, so it is not one to make from the page that
- * happens to want it.
+ * The same table the Log tab draws for your own record, short one column: when the trade opened.
+ * `/api/desk` sends `closedAt` and not `entryAt`, so the Ran column has one end of its range and is
+ * left off rather than half-drawn. Putting `entryAt` on that allowlist is a one-line change to the
+ * route and a decision about what the desk switch promises, so it is not one to make from the page
+ * that happens to want it.
+ *
+ * The money is the venue's own settled dollars and only that. A trade someone sized by hand prices
+ * itself off their stake and their funding dial, neither of which leaves their device — those rows
+ * print their R and an empty Paid, and the footer's total counts only the ones a venue settled, so
+ * it is never half a sum passed off as a whole one.
  */
 function DeskLog({ p, won }: { p: DeskRow, won: number }) {
   const rows = useMemo(() => [...p.results].sort((a, b) => b.closedAt - a.closedAt), [p.results])
   const total = rows.reduce((n, r) => n + r.r, 0)
+  // dollars only over the rows that have them; null when no venue closed any of it
+  const usd = rows.some((r) => r.cash != null)
+    ? rows.reduce((n, r) => n + (r.cash ?? 0), 0) : null
 
   return (
     <Dialog>
@@ -2742,8 +2752,9 @@ function DeskLog({ p, won }: { p: DeskRow, won: number }) {
         <DialogHeader>
           <DialogTitle>{p.name}&rsquo;s log</DialogTitle>
           <DialogDescription>
-            Every trade they were really in, newest first. In R and never in euros — the server does
-            not send anyone&rsquo;s size, so this cannot say what they are up in money.
+            Every trade they were really in, newest first. Paid is what the exchange settled it for;
+            a trade they sized by hand prices itself off a stake that never leaves their device, so
+            those rows say it in R alone.
           </DialogDescription>
         </DialogHeader>
         {/* no horizontal padding on the scroller: the header below is sticky, and a container
@@ -2754,6 +2765,7 @@ function DeskLog({ p, won }: { p: DeskRow, won: number }) {
             <span>Side</span>
             <span className="text-right">Ended</span>
             <span className="text-right">R</span>
+            <span className="text-right">Paid</span>
           </div>
           {rows.map((r, i) => {
             const hit = r.level === 'target'
@@ -2771,6 +2783,10 @@ function DeskLog({ p, won }: { p: DeskRow, won: number }) {
                   {hit ? 'target' : 'stopped'}
                 </span>
                 <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+                <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
+                  (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {deskPaid(r.cash)}
+                </span>
               </div>
             )
           })}
@@ -2779,10 +2795,19 @@ function DeskLog({ p, won }: { p: DeskRow, won: number }) {
           <span className="text-muted-foreground text-xs">
             {rows.length} finished · {won} hit target
           </span>
+          {/* Both, side by side, never summed into one: the R is over every finished trade and the
+              dollars only over the ones a venue settled. A desk can be down in R and up in money on
+              the same list, so each is coloured by itself rather than by the other. */}
           <span className={cn('ml-auto font-mono tabular-nums',
             total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
             {rLabel(total)}
           </span>
+          {usd !== null && (
+            <span className={cn('font-mono tabular-nums',
+              usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {deskPaid(usd)}
+            </span>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -2791,8 +2816,9 @@ function DeskLog({ p, won }: { p: DeskRow, won: number }) {
 
 /**
  * Everyone else on this server who has switched their desk on: how their trades went, and what they
- * are in right now. In R and never in euros — the server does not send their size, so this cannot
- * say what anyone is up in money, which is the point.
+ * are in right now. Money only where an exchange settled or is marking it — a position's running
+ * dollars, a finished trade's settled ones. What somebody typed a size for stays in R: that figure
+ * is worked out from a stake and a funding rate this server never receives.
  *
  * Trades they were really in, and only those: the server drops watched plans before sending, so a
  * hit rate here is a claim about how someone trades rather than about how their untaken ideas would

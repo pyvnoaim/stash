@@ -1385,7 +1385,12 @@ export function start({
             id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
             dir: r?.dir === 'short' ? 'short' : 'long',
             level: r?.level === 'target' ? 'target' : 'stop',
-            r: num(r?.r), closedAt: num(r?.closedAt) ?? 0,
+            /* The venue's settled dollars where the trade had them — fees and funding already in
+               it. The same money the open list already sends as `pnl`, one exit later, so it is
+               the switch's existing promise rather than a wider one. A row priced off their own
+               stake carries none: that figure is this app's arithmetic over a size they typed,
+               and it is not sent. */
+            r: num(r?.r), cash: num(r?.cash), closedAt: num(r?.closedAt) ?? 0,
           })).filter((r: any) => r.r !== null),
           open: arr(s.watches).filter(taken).map((w: any) => ({
             id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),
