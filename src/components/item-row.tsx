@@ -40,7 +40,7 @@ const shareItem = (it: Item) =>
     ].filter(Boolean).join('\n\n'),
   }).catch(() => {})
 
-function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete }: {
+function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete, onRestore }: {
   it: Item
   selected: boolean
   /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
@@ -60,6 +60,9 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   onWho: (name: string) => void
   onProject: (pid: string) => void
   onDelete: () => void
+  /** Only in the trash, and its presence is what says so: a deleted row is put back or it is
+   *  gone, and the editing half of the menu would be offering writes that land on nothing. */
+  onRestore?: () => void
 }) {
   const [over, setOver] = useState<'above' | 'below' | null>(null)
   const [lifting, setLifting] = useState(false)
@@ -144,13 +147,20 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           {/* always centred on the title's line box, so the icon sits beside the title rather than
               floating in the middle once a note makes the row two lines tall */}
           <span className="flex h-5 shrink-0 items-center">
-            {it.type === 'task' ? (
+            {/* A deleted row wears its kind, not a checkbox: it is not in `items`, so ticking it
+                reaches nothing — a control that answers by snapping back is worse than no control.
+                Restore it and the box is there again. */}
+            {it.type === 'task' && !onRestore ? (
               <Checkbox
                 checked={it.done}
                 aria-label="Done"
                 onClick={(e) => e.stopPropagation()}
                 onCheckedChange={() => toggleDone(it.id)}
               />
+            ) : it.type === 'task' ? (
+              <span className="text-muted-foreground flex size-4 items-center justify-center">
+                <ListTodo className="size-3.5" />
+              </span>
             ) : (
               <span className="text-muted-foreground flex size-4 items-center justify-center">
                 {it.type === 'idea' ? <Lightbulb className="size-3.5" /> : <StickyNote className="size-3.5" />}
@@ -259,6 +269,25 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
       </ContextMenuTrigger>
 
       <ContextMenuContent className="w-56">
+        {onRestore ? (
+          <>
+            <ContextMenuItem onSelect={onRestore}>
+              <RotateCcw />
+              Restore
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => navigator.clipboard?.writeText(it.text)}>
+              <Copy />
+              Copy text
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={onDelete}>
+              <Trash2 />
+              Delete for good
+              <ContextMenuShortcut>⌘⌫</ContextMenuShortcut>
+            </ContextMenuItem>
+          </>
+        ) : (
+        <>
         {it.type === 'task' && (
           <ContextMenuItem onSelect={() => toggleDone(it.id)}>
             {it.done ? <RotateCcw /> : <Check />}
@@ -374,6 +403,8 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           Delete
           <ContextMenuShortcut>⌘⌫</ContextMenuShortcut>
         </ContextMenuItem>
+        </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

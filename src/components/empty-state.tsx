@@ -1,10 +1,11 @@
 import {
-  CalendarClock, CalendarDays, CheckCheck, Flag, FolderOpen, Inbox, Layers, SearchX,
+  CalendarClock, CalendarDays, CheckCheck, Flag, FolderOpen, Inbox, Layers, SearchX, Trash2,
 } from 'lucide-react'
 import {
   Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
 } from '@/components/ui/empty'
 import { Button } from '@/components/ui/button'
+import { TRASH_DAYS } from '@/lib/store'
 
 type Copy = { icon: React.ElementType; title: string; body: string }
 
@@ -39,6 +40,11 @@ const BY_VIEW: Record<string, Copy> = {
     title: 'Nothing finished yet',
     body: 'Tick a task off and it moves here, kept for good.',
   },
+  trash: {
+    icon: Trash2,
+    title: 'The trash is empty',
+    body: `Deleted items wait here for ${TRASH_DAYS} days, and ⇧⌘⌫ skips the wait.`,
+  },
 }
 
 const PROJECT: Copy = {
@@ -64,7 +70,8 @@ export function EmptyState({ view, query, onCapture }: {
         <EmptyTitle className="font-heading text-sm font-normal">{copy.title}</EmptyTitle>
         <EmptyDescription>{copy.body}</EmptyDescription>
       </EmptyHeader>
-      {!query && (
+      {/* nothing to capture into the trash — the one empty list that is not waiting for a first row */}
+      {!query && view !== 'trash' && (
         <EmptyContent>
           <Button variant="outline" size="sm" onClick={onCapture}>
             Capture something

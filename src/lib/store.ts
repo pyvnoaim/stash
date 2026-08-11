@@ -43,6 +43,18 @@ export interface Item {
   who?: string
 }
 
+/**
+ * A deleted item, waiting out its fortnight. It keeps everything it was — restoring is putting the
+ * same row back, not rebuilding one — plus the moment it was deleted, which is what the sweep reads.
+ *
+ * Deliberately its own list rather than a `deleted` flag on Item: every count, every view, the
+ * calendar, the bell, the ICS feed, the push server and Claude all read `items`, and a flag would
+ * have to be remembered in each of them. Out of that array is out of sight, everywhere, at once.
+ */
+export interface Trashed extends Item {
+  delAt: number
+}
+
 /* Who is signed in, as far as the store is concerned. sync.ts owns the session and pushes the
    name in — the store cannot import it back without a cycle, the same reason setOnPersist exists. */
 let me: string | null = null
@@ -338,6 +350,8 @@ export interface State {
   v: 1
   projects: Project[]
   items: Item[]
+  /** Deleted, and still recoverable — see Trashed and TRASH_DAYS. */
+  trash: Trashed[]
   subs: Sub[]
   sel: string
   focus: string | null
@@ -442,7 +456,14 @@ export const VIEWS = {
   flagged: { name: 'Flagged', filter: (i: Item) => !i.done && i.flag },
   all: { name: 'Everything', filter: (i: Item) => !i.done },
   done: { name: 'Done', filter: (i: Item) => i.done },
+  /* The one view whose rows are not in `items` at all: `visible` answers it out of `trash` before
+     it ever reaches a filter, and this one is here so the sidebar, the URL and ⌘K get it for free.
+     It says false rather than throwing, because the counters do run it over every item. */
+  trash: { name: 'Recently deleted', filter: () => false },
 } as const
+
+/** `sel` for the trash, which is a view id like any other — but the rows come from `s.trash`. */
+export const TRASH = 'trash'
 
 export type ViewId = keyof typeof VIEWS
 export const isView = (id: string): id is ViewId => id in VIEWS
@@ -481,7 +502,7 @@ export const KEY = 'stash.v1'
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
-  v: 1, projects: [], items: [], subs: [], sel: 'today', focus: null, theme: 'auto',
+  v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
   subSort: 'recent', subView: 'expense', calView: 'month',
   watches: [], alarms: [], results: [], stake: 0, desk: false,
@@ -491,34 +512,18 @@ const blank = (): State => ({
   dials: { ...DIALS }, dismissed: {},
 })
 
-// Every way data enters — localStorage, an imported backup — comes through here.
-export function load(data: unknown): State {
-  const raw = (data && typeof data === 'object' ? data : {}) as Partial<State>
-  const st = { ...blank(), ...raw }
+/** How long a deleted item is kept before it goes for good. */
+export const TRASH_DAYS = 14
 
-  // a duplicate id makes patch/remove/move act on two rows at once — the same guard items get below
-  const pseen = new Set<string>()
-  st.projects = (Array.isArray(st.projects) ? st.projects : [])
-    .filter((p) => p && p.id && !pseen.has(String(p.id)) && pseen.add(String(p.id)))
-    .map((p) => ({
-      id: String(p.id),
-      name: String(p.name || 'Project'),
-      color: cleanColor(p.color),
-      parent: typeof p.parent === 'string' ? p.parent : null,
-      ...(p.share && typeof p.share === 'object' && typeof p.share.by === 'string'
-        && { share: { by: String(p.share.by), edit: !!p.share.edit } }),
-    }))
-
-  /* A parent has to exist, cannot be the project itself, and cannot have a parent of its own.
-     That last rule is what keeps the depth at two without walking a chain looking for cycles —
-     a backup naming a grandparent, or two projects naming each other, simply comes back flat. */
-  const tops = new Set(st.projects.filter((p) => !p.parent || p.parent === p.id).map((p) => p.id))
-  st.projects = st.projects.map((p) => (
-    p.parent && p.parent !== p.id && tops.has(p.parent) ? p : { ...p, parent: null }
-  ))
-
+/**
+ * The one shape an item is allowed to have, whichever list it is in. `items` and `trash` both come
+ * through it: the trash holds rows a hand-edited backup can have written anything into, and a
+ * restore puts one straight back on the list — so it is validated as what it will be, not as an
+ * archive nobody reads. Fields it does not name ride through on `...i`, which is how `delAt` keeps.
+ */
+function cleanItems(list: unknown, projects: Project[]): Item[] {
   const seen = new Set<string>()
-  st.items = (Array.isArray(st.items) ? st.items : [])
+  return (Array.isArray(list) ? list : [])
     .filter((i) => i && i.id)
     .map((i) => {
       const type = (['task', 'idea', 'note'] as const).includes(i.type) ? i.type : 'task'
@@ -553,11 +558,54 @@ export function load(data: unknown): State {
         // a name, cut to the length the server lets one be — the same reason as the two above
         who: typeof i.who === 'string' && i.who ? i.who.slice(0, 32) : undefined,
         // orphans land in Quick notes rather than becoming invisible
-        pid: st.projects.some((p) => p.id === i.pid) ? i.pid : null,
+        pid: projects.some((p) => p.id === i.pid) ? i.pid : null,
       }
     })
     // a duplicate id makes patch and removeItem act on two rows at once — keep the first, drop the rest
     .filter((i) => !seen.has(i.id) && seen.add(i.id))
+}
+
+// Every way data enters — localStorage, an imported backup — comes through here.
+export function load(data: unknown): State {
+  const raw = (data && typeof data === 'object' ? data : {}) as Partial<State>
+  const st = { ...blank(), ...raw }
+
+  // a duplicate id makes patch/remove/move act on two rows at once — the same guard items get below
+  const pseen = new Set<string>()
+  st.projects = (Array.isArray(st.projects) ? st.projects : [])
+    .filter((p) => p && p.id && !pseen.has(String(p.id)) && pseen.add(String(p.id)))
+    .map((p) => ({
+      id: String(p.id),
+      name: String(p.name || 'Project'),
+      color: cleanColor(p.color),
+      parent: typeof p.parent === 'string' ? p.parent : null,
+      ...(p.share && typeof p.share === 'object' && typeof p.share.by === 'string'
+        && { share: { by: String(p.share.by), edit: !!p.share.edit } }),
+    }))
+
+  /* A parent has to exist, cannot be the project itself, and cannot have a parent of its own.
+     That last rule is what keeps the depth at two without walking a chain looking for cycles —
+     a backup naming a grandparent, or two projects naming each other, simply comes back flat. */
+  const tops = new Set(st.projects.filter((p) => !p.parent || p.parent === p.id).map((p) => p.id))
+  st.projects = st.projects.map((p) => (
+    p.parent && p.parent !== p.id && tops.has(p.parent) ? p : { ...p, parent: null }
+  ))
+
+  st.items = cleanItems(st.items, st.projects)
+
+  /* The trash comes in by the same door — it is items, and a hand-edited backup can put anything in
+     it — and then loses whatever has run out its fortnight. Swept here rather than on a timer: this
+     runs on every load, on every adopted document and on every imported backup, which is every
+     moment the list is looked at afresh. A session left open past midnight sweeps on its next pull.
+
+     An id that is somehow in both lists is dropped from the trash: `items` is what the app shows,
+     and restoring the other copy would put a second row with the same id beside the first. */
+  const live = new Set(st.items.map((i) => i.id))
+  const cutoff = Date.now() - TRASH_DAYS * 86400_000
+  st.trash = cleanItems(st.trash, st.projects)
+    .filter((i) => !live.has(i.id))
+    .map((i) => ({ ...i, delAt: typeof (i as Trashed).delAt === 'number' ? (i as Trashed).delAt : Date.now() }))
+    .filter((i) => i.delAt > cutoff)
 
   // same duplicate-id and shape guards the items get: a hand-edited backup shouldn't take the
   // Subscriptions tool down or write NaN totals back to disk
@@ -773,8 +821,11 @@ export function set(next: State | ((s: State) => State)) {
   const now = Date.now()
   const value = typeof next === 'function' ? next(prev) : next
 
-  // only the data goes on the stack: which view you are in and what is focused are not edits
-  if (prev.items !== value.items || prev.projects !== value.projects || prev.subs !== value.subs) {
+  // only the data goes on the stack: which view you are in and what is focused are not edits.
+  // The trash counts as data: a delete moves a row from one list to the other, and walking back
+  // only the half that left would put the row on the list and leave its copy in the trash.
+  if (prev.items !== value.items || prev.projects !== value.projects || prev.subs !== value.subs
+    || prev.trash !== value.trash) {
     // a run of edits is one step — a typed letter, and the five patches one ⌘K command fires
     if (now - edited > 500) past.push(prev)
     if (past.length > 50) past.shift()
@@ -786,7 +837,8 @@ export function set(next: State | ((s: State) => State)) {
 
 // only the two data fields travel — a snapshot also holds the theme and the view, and walking
 // those back would undo a setting you changed after the edit
-const rewind = (to: State) => ({ ...state, items: to.items, projects: to.projects, subs: to.subs })
+const rewind = (to: State) =>
+  ({ ...state, items: to.items, projects: to.projects, subs: to.subs, trash: to.trash })
 
 /** Both return false when there is nothing left to walk back to, so the caller can stay quiet. */
 export function undo() {
@@ -839,10 +891,15 @@ export function adoptShared(pid: string, slice: unknown, share?: { by: string, e
     const localIds = new Set([pid, ...s.projects.filter((p) => p.parent === pid).map((p) => p.id)])
 
     if (slice === null && share === null) {
+      /* It stopped being shared with you, so it leaves this device — the trash included. Their
+         rows sitting in your trash would otherwise be their writing in your synced document for
+         the rest of the fortnight, and a Restore would file work you can no longer read into your
+         own Quick notes. "Leaving takes nothing with it" has to mean nothing. */
       return {
         ...s,
         projects: s.projects.filter((p) => !localIds.has(p.id)),
         items: s.items.filter((i) => !(i.pid && localIds.has(i.pid))),
+        trash: s.trash.filter((i) => !(i.pid && localIds.has(i.pid))),
         sel: localIds.has(s.sel) ? 'today' : s.sel,
       }
     }
@@ -873,6 +930,12 @@ export function adoptShared(pid: string, slice: unknown, share?: { by: string, e
         .map((p) => p),
       ...incoming,
     ]
+    /* The trash follows the same two rules the items above do, because `load`'s guard against a
+       row being in both lists does not run on an adopted slice: a sub-project dropped from the
+       share takes its deleted rows with it, and a row the owner still has — because they had not
+       pulled our delete yet — comes back as a live item, so our copy of it stops being trash.
+       Without that second rule, restoring it would put a second row with the same id on the list. */
+    const back = new Set(clean.items.map((i) => i.id))
     return {
       ...s,
       projects,
@@ -880,6 +943,7 @@ export function adoptShared(pid: string, slice: unknown, share?: { by: string, e
         ...clean.items,
         ...s.items.filter((i) => !(i.pid && (ids.has(i.pid) || gone.includes(i.pid)))),
       ],
+      trash: s.trash.filter((i) => !back.has(i.id) && !(i.pid && gone.includes(i.pid))),
       sel: gone.includes(s.sel) ? 'today' : s.sel,
     }
   })
@@ -1039,7 +1103,7 @@ export const openIn = (s: State, id: string) => s.items.filter((i) => !i.done &&
 export const TYPE_RANK: Record<ItemType, number> = { task: 0, idea: 1, note: 2 }
 
 /** Views that impose their own order. Dragging a row onto another can't reorder anything here. */
-export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done' || s.sel === 'all'
+export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done' || s.sel === 'all' || s.sel === TRASH
 
 /**
  * A search is any number of #tag and @project narrowings plus whatever text is left over, in any
@@ -1048,6 +1112,17 @@ export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done' || s.sel 
  */
 export function visible(s: State, query: string): Item[] {
   const q = query.trim().toLowerCase()
+  /* The trash first: what is deleted is out of every other list and out of every search, so this
+     view answers out of its own array. A search typed while you are in it still narrows what is
+     drawn — plain text over the words, since a #tag or an @project search means "find me this
+     work", and deleted work is not work. Newest first: the thing you just deleted is the thing
+     you came here to get back. */
+  if (s.sel === TRASH) {
+    const rows = [...s.trash].sort((a, b) => b.delAt - a.delAt)
+    return q
+      ? rows.filter((i) => `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(q))
+      : rows
+  }
   if (q) {
     const text: string[] = []
     let list = s.items
@@ -1110,8 +1185,15 @@ export const readOnly = (s: State, pid: string | null | undefined): boolean => {
 }
 const frozen = (s: State, id: string) => readOnly(s, s.items.find((i) => i.id === id)?.pid)
 
+/* An id that names no row is not an edit. Without the `some` check this still handed back a fresh
+   `items` array, which `set` reads as a change: it pushed an undo step over nothing and marked the
+   document dirty, so a key pressed on a row the store does not have — every row in the trash, or
+   one a sync adopted away mid-keystroke — quietly ate the 50-step history and pushed a document
+   identical to the one already on the server. One guard here rather than at each of the callers. */
 const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => (
-  frozen(s, id) ? s : { ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)) }
+  frozen(s, id) || !s.items.some((i) => i.id === id)
+    ? s
+    : { ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)) }
 )
 
 // every edit routes through here, which is the one place that can hold the rules: a repeat needs
@@ -1290,26 +1372,81 @@ export function toggleDone(id: string) {
   })
 }
 
-/** Returns the removed item and its index so the caller can offer an undo. */
-export function removeItem(id: string) {
+/**
+ * Deletes an item into the trash, where it waits out TRASH_DAYS and can be put back.
+ *
+ * `hard` skips the trash and takes the row out for good — ⇧⌘⌫, and the trash's own delete, which
+ * would otherwise be a delete that files the row in the place it is being deleted from. Either way
+ * the removed item and its index come back, so the caller can offer the undo it always did, and
+ * ⌘Z still walks the whole thing back: this is one `set`, so both lists move as one step.
+ */
+export function removeItem(id: string, hard = false) {
   const at = state.items.findIndex((i) => i.id === id)
   if (at < 0 || frozen(state, id)) return null
   const it = state.items[at]
   set((s) => ({
     ...s,
     items: s.items.filter((i) => i.id !== id),
+    // newest first, which is the order the view reads in
+    trash: hard ? s.trash : [{ ...it, delAt: Date.now() }, ...s.trash],
     focus: s.focus === id ? null : s.focus,
   }))
   return { it, at }
 }
 
+/** The undo the toast offers: the row goes back where it was, and out of the trash it landed in. */
 export function restoreItem(undo: { it: Item; at: number } | null) {
   if (!undo || state.items.some((i) => i.id === undo.it.id)) return
   set((s) => {
     const items = [...s.items]
     items.splice(undo.at, 0, undo.it)
-    return { ...s, items }
+    return { ...s, items, trash: s.trash.filter((i) => i.id !== undo.it.id) }
   })
+}
+
+/**
+ * Put deleted rows back on the list. They go to the end — the trash keeps the index nothing else
+ * does, and after a fortnight the row it sat above may not be there any more. A project that was
+ * deleted in the meantime is not one to file into, so those land in Quick notes, the same landing
+ * `load` gives an orphan. Read-only shares are refused the same way every other write is.
+ */
+export function restoreTrash(ids: string[]) {
+  // never onto a row that is already on the list: two rows with one id make patch and removeItem
+  // act on both at once, and the one you delete leaves its twin behind. `restoreItem` refuses the
+  // same thing, and an adopted slice can put a deleted row back in `items` behind our backs.
+  const live = new Set(state.items.map((i) => i.id))
+  const back = state.trash.filter((i) => ids.includes(i.id) && !live.has(i.id) && !readOnly(state, i.pid))
+  if (!back.length) return 0
+  const taken = new Set(back.map((i) => i.id))
+  set((s) => ({
+    ...s,
+    items: [...s.items, ...back.map(({ delAt: _delAt, ...it }) => ({
+      ...it,
+      pid: s.projects.some((p) => p.id === it.pid) ? it.pid : null,
+    }))],
+    trash: s.trash.filter((i) => !taken.has(i.id)),
+  }))
+  return back.length
+}
+
+/** Empty the trash, or only the rows named. Returns the count and an undo, the same as clearDone. */
+export function emptyTrash(ids?: string[]) {
+  const gone = ids ? state.trash.filter((i) => ids.includes(i.id)) : state.trash
+  if (!gone.length) return null
+  const taken = new Set(gone.map((i) => i.id))
+  set((s) => ({ ...s, trash: s.trash.filter((i) => !taken.has(i.id)) }))
+  /* Back in at the front: the trash sorts itself by when each row was deleted, so where they sat
+     in the array was never what put them in order. Only the ones that are not already back —
+     ⌘Z rewinds the trash too now, so undoing the empty and then pressing the toast's Undo would
+     otherwise file every row a second time. */
+  return {
+    n: gone.length,
+    undo: () => set((s) => {
+      const here = new Set(s.trash.map((i) => i.id))
+      const missing = gone.filter((i) => !here.has(i.id))
+      return missing.length ? { ...s, trash: [...missing, ...s.trash] } : s
+    }),
+  }
 }
 
 /** Every row wearing the old tag wears the new one instead — and one already wearing both keeps a
@@ -1322,7 +1459,13 @@ export const renameTag = (from: string, to: string) => set((s) => ({
     : i)),
 }))
 
-/** Returns the cleared items so the caller can offer an undo, or null if there were none. */
+/**
+ * Returns the cleared items so the caller can offer an undo, or null if there were none.
+ *
+ * They go to the trash like any other delete. The toast is one press and one reload from gone,
+ * and the trash view promises on screen that what you deleted is there for a fortnight — a sweep
+ * of a hundred finished rows is exactly the press you would want that promise to cover.
+ */
 export function clearDone() {
   const gone = state.items.filter((i) => i.done && !readOnly(state, i.pid))
   if (!gone.length) return null
@@ -1330,9 +1473,23 @@ export function clearDone() {
   // shared read-only is swept off this device by a broom that never picked it up — and the undo,
   // which only holds what `gone` collected, cannot put it back
   const ids = new Set(gone.map((i) => i.id))
-  set((s) => ({ ...s, items: s.items.filter((i) => !ids.has(i.id)) }))
-  // put back by appending: finished items sink in every view anyway, so position was never meaningful
-  return { n: gone.length, undo: () => set((s) => ({ ...s, items: [...s.items, ...gone] })) }
+  const at = Date.now()
+  set((s) => ({
+    ...s,
+    items: s.items.filter((i) => !ids.has(i.id)),
+    trash: [...gone.map((i) => ({ ...i, delAt: at })), ...s.trash],
+  }))
+  /* Put back by appending: finished items sink in every view anyway, so position was never
+     meaningful — and out of the trash on the way, or the undo would leave every row in both lists.
+     Only the ones that are not already back, the same rule emptyTrash's undo holds to. */
+  return {
+    n: gone.length,
+    undo: () => set((s) => {
+      const here = new Set(s.items.map((i) => i.id))
+      const missing = gone.filter((i) => !here.has(i.id))
+      return { ...s, items: [...s.items, ...missing], trash: s.trash.filter((i) => !ids.has(i.id)) }
+    }),
+  }
 }
 
 /** Pull one out of a list and drop it back beside another. Rows and projects both do this. */

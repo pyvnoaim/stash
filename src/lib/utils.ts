@@ -49,3 +49,19 @@ export function revealTheme(theme: Theme, x = innerWidth / 2, y = innerHeight / 
  * know a project is passing over it and refuse a drop it could not honour.
  */
 export const PROJECT_DRAG = 'application/x-stash-project'
+
+/**
+ * A field at rest, down a list. Rows of bordered boxes are a spreadsheet, and a list's job is
+ * reading — so the chrome waits to be wanted: the border and the fill arrive on hover, on focus,
+ * or on a keyboard walking into the row, and until then the row is a line of text. Nothing about
+ * editing changes, and the caret still lands where it was clicked.
+ *
+ * Both halves of the chrome and both themes. The base field is `bg-transparent` in light and
+ * `dark:bg-input/30` in dark, so quieting it means turning off the dark fill as well as the border
+ * — and putting each back exactly as the design system has it, rather than inventing a light-mode
+ * fill that exists nowhere else in the app.
+ */
+export const QUIET = 'border-transparent bg-transparent dark:bg-transparent'
+  + ' hover:border-input dark:hover:bg-input/30'
+  + ' focus-visible:border-ring dark:focus-visible:bg-input/30'
+  + ' aria-expanded:border-input dark:aria-expanded:bg-input/30'

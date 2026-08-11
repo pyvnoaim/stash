@@ -13,7 +13,7 @@ const {
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
   openWatch, closeWatch, clearResults, dismissAlerts, tagsFor,
-  readHash,
+  readHash, emptyTrash, restoreTrash, restoreItem,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -926,4 +926,153 @@ console.log('store: ok')
   assert.deepEqual(tagsFor(st, null), ['bug', 'audio', 'website'])
   // and what the row already carries is not offered back to it
   assert.deepEqual(tagsFor(st, 'sub', ['bug', 'audio']), ['website'])
+}
+
+/* ---------- the trash: what a delete means, and what the fortnight takes ---------- */
+{
+  wipe()
+  // the wipes above filled it; start from an empty one so the counts below are this block's
+  emptyTrash()
+
+  addItem(item({ id: 'gone', text: 'deleted' }))
+  const undoIt = removeItem('gone')
+  assert.deepEqual(getState().items.map((i) => i.id), [], 'off the list')
+  assert.deepEqual(getState().trash.map((i) => i.id), ['gone'], 'and into the trash')
+  assert.ok(getState().trash[0].delAt > 0, 'stamped with when it went')
+
+  // the toast's undo takes it off both lists' worth of bookkeeping, not just the one it left
+  restoreItem(undoIt)
+  assert.deepEqual(getState().items.map((i) => i.id), ['gone'])
+  assert.deepEqual(getState().trash, [], 'no ghost left behind')
+
+  // ⌘Z after a delete has to do the same, or the row is on the list and in the trash at once.
+  // A beat first: a run of edits inside half a second is deliberately one step, and this delete
+  // has to be a step of its own for the undo to be the one being tested here.
+  await beat()
+  removeItem('gone')
+  undo()
+  assert.deepEqual(getState().items.map((i) => i.id), ['gone'])
+  assert.deepEqual(getState().trash, [], 'the undo walked both lists back')
+
+  // ⇧⌘⌫ never files it
+  removeItem('gone', true)
+  assert.deepEqual(getState().items, [])
+  assert.deepEqual(getState().trash, [], 'hard delete skips the trash')
+
+  // restoring puts it back on the list, and out of a project that has since been deleted
+  addProject('Kova')
+  const pid = getState().projects[0].id
+  addItem(item({ id: 'filed', pid }))
+  removeItem('filed')
+  removeProject(pid)
+  assert.equal(restoreTrash(['filed']), 1)
+  assert.equal(getState().items.find((i) => i.id === 'filed')?.pid, null, 'an orphan lands in Quick notes')
+  assert.deepEqual(getState().trash, [])
+
+  // deleting the named rows, and then all of them, each with its undo
+  addItem(item({ id: 'a' }))
+  addItem(item({ id: 'b' }))
+  removeItem('a')
+  removeItem('b')
+  const one = emptyTrash(['a'])
+  assert.equal(one?.n, 1)
+  assert.deepEqual(getState().trash.map((i) => i.id), ['b'], 'only the one named')
+  one?.undo()
+  assert.equal(getState().trash.length, 2, 'and back again')
+  assert.equal(emptyTrash()?.n, 2)
+  assert.deepEqual(getState().trash, [])
+  assert.equal(emptyTrash(), null, 'an empty trash has nothing to report')
+
+  // the sweep: load is where the fortnight is counted, so it runs on every start and every pull
+  const day = 864e5
+  const swept = load({
+    items: [item({ id: 'live' })],
+    trash: [
+      { ...item({ id: 'fresh' }), delAt: Date.now() - 13 * day },
+      { ...item({ id: 'stale' }), delAt: Date.now() - 15 * day },
+      // no stamp at all — a hand-edited backup — starts its fortnight now rather than never ending
+      { ...item({ id: 'undated' }) },
+      // and a row that is somehow on both lists is not kept twice over
+      { ...item({ id: 'live' }), delAt: Date.now() },
+    ],
+  })
+  assert.deepEqual(swept.trash.map((i) => i.id), ['fresh', 'undated'])
+  assert.deepEqual(swept.items.map((i) => i.id), ['live'])
+
+  // and the view reads the trash newest-first, whatever order the array is in
+  const seen = visible({ ...swept, sel: 'trash' }, '')
+  assert.deepEqual(seen.map((i) => i.id), ['undated', 'fresh'])
+}
+
+/* ---------- what the review found: the trash has to hold at the seams too ---------- */
+{
+  wipe()
+  emptyTrash()
+
+  // a share that is revoked takes its deleted rows with it, or somebody else's writing lives on
+  // in this document — and a Restore would file work you can no longer read into your own list
+  adoptShared('p',
+    { projects: [{ id: 'p', name: 'Kova', parent: null }], items: [item({ id: 'theirs', pid: 'p' })] },
+    { by: 'mia', edit: true })
+  removeItem('theirs')
+  assert.deepEqual(getState().trash.map((i) => i.id), ['theirs'])
+  adoptShared('p', null, null)
+  assert.deepEqual(getState().trash, [], 'leaving took it with it')
+  assert.deepEqual(getState().items, [])
+
+  // and a row the owner still has comes back as a live item, so our copy stops being trash:
+  // restoring it would otherwise put a second row with the same id on the list
+  const slice = { projects: [{ id: 'q', name: 'Site', parent: null }], items: [item({ id: 'x', pid: 'q' })] }
+  adoptShared('q', slice, { by: 'mia', edit: true })
+  removeItem('x')
+  adoptShared('q', slice, { by: 'mia', edit: true })   // they had not pulled our delete yet
+  assert.deepEqual(getState().items.map((i) => i.id), ['x'])
+  assert.deepEqual(getState().trash, [], 'the trash copy went when the live one came back')
+
+  // restore refuses a row that is already on the list, whatever put it there
+  wipe(); emptyTrash()
+  addItem(item({ id: 'dup' }))
+  removeItem('dup')
+  addItem(item({ id: 'dup' }))                  // as an adopted slice would
+  assert.equal(restoreTrash(['dup']), 0)
+  assert.equal(getState().items.filter((i) => i.id === 'dup').length, 1, 'one row, one id')
+
+  // clear finished files into the trash like every other delete, and its undo takes it back out
+  wipe(); emptyTrash()
+  addItem(item({ id: 'fin', done: true }))
+  const swept = clearDone()
+  assert.equal(swept?.n, 1)
+  assert.deepEqual(getState().trash.map((i) => i.id), ['fin'], 'recoverable, the way the view promises')
+  swept?.undo()
+  assert.deepEqual(getState().items.map((i) => i.id), ['fin'])
+  assert.deepEqual(getState().trash, [], 'and not left in both')
+
+  // ⌘Z after emptying the trash, then the toast's Undo, must not file every row twice
+  wipe(); emptyTrash()
+  addItem(item({ id: 'twice' }))
+  removeItem('twice')
+  await beat()
+  const emptied = emptyTrash()
+  undo()                                        // the rows are already back
+  emptied?.undo()
+  assert.deepEqual(getState().trash.map((i) => i.id), ['twice'], 'one copy, not two')
+
+  // an id that names no row is not an edit: no undo step, nothing to push
+  wipe(); emptyTrash()
+  addItem(item({ id: 'here' }))
+  await beat()
+  const before = getState()
+  patch('nobody', { flag: true })
+  assert.equal(getState(), before, 'the state itself, not a copy of it')
+
+  // a search in the trash narrows the trash rather than reading past it
+  // stamped just now, or the fortnight sweep in load() would take them before the search does
+  const st = load({
+    trash: [
+      { ...item({ id: 'a', text: 'pay the rent' }), delAt: Date.now() },
+      { ...item({ id: 'b', text: 'call the bank' }), delAt: Date.now() - 1000 },
+    ],
+  })
+  assert.deepEqual(visible({ ...st, sel: 'trash' }, 'bank').map((i) => i.id), ['b'])
+  assert.deepEqual(visible({ ...st, sel: 'trash' }, '').map((i) => i.id), ['a', 'b'])
 }

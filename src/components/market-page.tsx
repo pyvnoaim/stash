@@ -725,7 +725,7 @@ export default function MarketPage() {
             somewhere in the middle. First in the toolbar rather than on a row of its own: which
             page you are on is read before which asset it is about, and a row holding four pills
             was a whole line of blank to the right of them. */}
-        <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+        <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
           {/* No tooltip: these are the four pages, and a page you can see the name of does not need
               a paragraph explaining it — it needs clicking. The same two states every other group in
               this row has: secondary for the one that is on, muted ghost for the rest. */}
@@ -747,10 +747,10 @@ export default function MarketPage() {
               same height and radius sitting between them read as a third one. This is the thing the
               whole row is *about*, so it says so with the logo and its name and nothing else —
               borderless, narrower, and quiet until you go near it. */}
-          {/* 36px, the height of a tray: a h-7 button in p-1. Written as the data-variant because
+          {/* 32px, the height of a tray: a h-7 button in p-0.5. Written as the data-variant because
               SelectTrigger's own `data-[size=default]:h-8` is an attribute selector and outranks a
               plain `h-9` — which is why every attempt to match this row left it a size short. */}
-          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none data-[size=default]:h-9 focus-visible:ring-0 [&_svg]:size-3.5">
+          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
             <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
           </SelectTrigger>
           <SelectContent position="popper">
@@ -770,7 +770,7 @@ export default function MarketPage() {
             the bar size move with it, but so does the rule those numbers feed: accumulation on one
             side, a fixed-2R day trade on the other. Opening range pins 15m, so there the interval is
             left alone. */}
-        <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+        <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
           {(Object.keys(HORIZONS) as Horizon[]).map((h) => (
             <Hint key={h} label={`${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule.`}>
               <Button size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
@@ -783,21 +783,34 @@ export default function MarketPage() {
         </div>
         {/* what you're looking at, then how you're looking at it. No divider between these two:
             the row wraps here on most windows, and a rule at the end of a line separates a cluster
-            from nothing at all. The one after the tabs stays, because that one never wraps. */}
-        <div className="flex flex-wrap items-center gap-2">
+            from nothing at all. The one after the tabs stays, because that one never wraps.
+
+            Flat, not nested: a flex item cannot be split across lines, so wrapping these four trays
+            in one div meant they all dropped to a second row together the moment the last of them
+            did not fit — a whole line of blank to the right of the first row, and a whole line of
+            blank to the right of the second. Loose in the same flex, they fill the width they have
+            and only what is actually over the edge goes down. */}
           {/* opening range pins 15m, so the interval picker only shows in Standard */}
           {preset === 'standard' && (
-            <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
-              {/* and no tooltip here either: "one candle is 15m" is what the button already says */}
-              {INTERVALS.map((iv) => (
-                <Button key={iv} size="sm" variant={interval === iv ? 'secondary' : 'ghost'}
-                  className={cn('h-7', interval !== iv && 'text-muted-foreground')} onClick={() => setInterval(iv)}>
-                  {iv}
-                </Button>
-              ))}
-            </div>
+            /* A dropdown, like the asset: six pills is the widest thing in this bar and five of
+               them are always the wrong answer. The trigger wears the tray's own fill so the row
+               still reads as one set of controls rather than a switch and a form field. */
+            <Select value={interval} onValueChange={(v) => setInterval(v as Interval)}>
+              <Hint label="Bar size — how much time one candle covers. Every reading below is measured on these bars.">
+                <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
+                  {/* the value written out, the way the asset trigger does it — this file never
+                      imported SelectValue and does not need it for a string */}
+                  <span>{interval}</span>
+                </SelectTrigger>
+              </Hint>
+              <SelectContent position="popper">
+                {INTERVALS.map((iv) => (
+                  <SelectItem key={iv} value={iv} className="tabular-nums">{iv}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
-          <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+          <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
             {PRESETS.map((p) => (
               <Hint key={p.id} label={p.id === 'standard'
                 ? 'The moving-average read: pull-backs to the fast MA, with the range and the trend filter around it'
@@ -810,7 +823,7 @@ export default function MarketPage() {
             ))}
           </div>
           {/* the panel under the price — the readings that were voting while invisible */}
-          <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+          <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
             {/* No "None" button: the one that is on turns itself off. Three pills instead of four,
                 and the way out of a panel is the thing you clicked to get into it. */}
             {([
@@ -841,7 +854,7 @@ export default function MarketPage() {
           </div>
           {/* the controls that are not about the chart in front of you: whether the feed is
               updating, and asking it to update now */}
-          <div className="bg-muted/50 flex items-center gap-1 rounded-lg p-1">
+          <div className="bg-muted/50 flex items-center gap-1 rounded-lg p-0.5">
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
           <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
             : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
@@ -857,7 +870,6 @@ export default function MarketPage() {
             </Button>
           </Hint>
           </div>
-        </div>
       </div>
 
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it

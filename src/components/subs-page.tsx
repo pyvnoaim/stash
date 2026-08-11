@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/select'
 import { Hint } from '@/components/ui/tooltip'
 import { DueField } from '@/components/due-field'
-import { cn, MONEY_IN } from '@/lib/utils'
+import { cn, MONEY_IN, QUIET } from '@/lib/utils'
 import {
   addSub, CYCLES, monthlyCost, nextCharge, patchSub, removeSub, restoreSub, setSubSort, setSubView,
   useStash, yearlyCost, type Cycle, type Kind, type Sub,
@@ -52,32 +52,25 @@ const num = (v: string) => { const n = parseFloat(v.replace(',', '.')); return i
 const costStr = (n: number) =>
   n.toLocaleString(undefined, { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-/* A field on a saved row, at rest. Eleven rows of four bordered boxes is a spreadsheet, and the
-   page's actual job is reading: what leaves the account, and when. So the chrome waits to be
-   wanted — the border and the fill arrive on hover, on focus, or on a keyboard walking through the
-   row, and until then the row is a line of text. Nothing about editing changes: the same single
-   click into the same field, and the caret lands where it was clicked. */
-/* Both halves of the chrome and both themes. The base field is `bg-transparent` in light and
-   `dark:bg-input/30` in dark, so quieting it means turning off the dark fill as well as the border
-   — and putting each back exactly as the design system has it, rather than inventing a light-mode
-   fill that exists nowhere else in the app. */
-const QUIET = 'border-transparent bg-transparent dark:bg-transparent'
-  + ' hover:border-input dark:hover:bg-input/30'
-  + ' focus-visible:border-ring dark:focus-visible:bg-input/30'
-  + ' aria-expanded:border-input dark:aria-expanded:bg-input/30'
-
-// text, not number: it takes a comma and shows no spinner arrows. Validation lives in num().
+/* text, not number: it takes a comma and shows no spinner arrows. Validation lives in num().
+   The € stays, on every row: the per-month total at the right end is printed only where it says
+   something new, so on a monthly row — which is most of them — dropping both left a bare number
+   in a page that is entirely about money. Quiet, and muted, but there. */
 const Cost = ({ className, quiet, ...props }: React.ComponentProps<typeof Input> & { quiet?: boolean }) => (
-  <div className="relative w-28 shrink-0">
+  <div className="relative w-24 shrink-0">
     <span className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-sm">€</span>
     <Input type="text" inputMode="decimal" {...props}
       className={cn('pr-2.5 pl-6 text-right tabular-nums', quiet && QUIET, className)} />
   </div>
 )
 
+/* The chevron goes with the border: at rest the cycle is a word in the row, and the thing that
+   says it can be changed is the same thing that says it about every other field here. */
 const CyclePicker = ({ value, onChange, quiet }: { value: Cycle; onChange: (c: Cycle) => void; quiet?: boolean }) => (
   <Select value={value} onValueChange={(v) => onChange(v as Cycle)}>
-    <SelectTrigger className={cn('h-8 w-32 shrink-0', quiet && QUIET)}>
+    <SelectTrigger className={cn('h-8 w-28 shrink-0', quiet && [QUIET,
+      'text-muted-foreground [&>svg]:opacity-0 group-hover:text-foreground group-hover:[&>svg]:opacity-100',
+      'focus-visible:text-foreground focus-visible:[&>svg]:opacity-100 aria-expanded:[&>svg]:opacity-100'])}>
       <SelectValue />
     </SelectTrigger>
     <SelectContent>
@@ -135,8 +128,6 @@ export default function SubsPage() {
   const active = filter !== 'all' && used.includes(filter) ? filter : 'all'
   const shown = sortSubs(active === 'all' ? list : list.filter((x) => x.cycle === active), sort, charge)
   const shownM = shown.reduce((n, x) => n + monthlyCost(x), 0)
-  // the biggest monthly drain on screen, which every row's bar is drawn against
-  const peak = shown.reduce((n, x) => Math.max(n, monthlyCost(x)), 0)
 
   const income = view === 'income'
   const add = () => {
@@ -167,20 +158,66 @@ export default function SubsPage() {
           sub={`covers ${money(totals.reserve * 12)} / year in yearly & quarterly bills`} />
       </div>
 
-      {/* which side you're editing. The header above always shows both. */}
-      <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-1">
-        {(['expense', 'income'] as const).map((k) => (
-          <Button
-            key={k}
-            size="sm"
-            variant={view === k ? 'secondary' : 'ghost'}
-            className={cn('h-7', view !== k && 'text-muted-foreground')}
-            onClick={() => switchView(k)}
-          >
-            {k === 'expense' ? 'Expenses' : 'Income'}
-            <span className="ml-1 tabular-nums opacity-60">{counts[k]}</span>
-          </Button>
-        ))}
+      {/* One line for what is on screen: which side you are editing, which cycles of it, what that
+          comes to, and the order. They were three questions about the same list stacked into two
+          rows — and the second was mostly the empty space either side of the total. Still wrapping,
+          so a phone gets its rows back rather than a squeeze. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {/* p-0.5 around h-7 buttons is 32px of tray — the same height as the chips and the sort
+            beside it. At p-1 it stood 4px taller than everything on the row. */}
+        <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-0.5">
+          {(['expense', 'income'] as const).map((k) => (
+            <Button
+              key={k}
+              size="sm"
+              variant={view === k ? 'secondary' : 'ghost'}
+              className={cn('h-7', view !== k && 'text-muted-foreground')}
+              onClick={() => switchView(k)}
+            >
+              {k === 'expense' ? 'Expenses' : 'Income'}
+              <span className="ml-1 tabular-nums opacity-60">{counts[k]}</span>
+            </Button>
+          ))}
+        </div>
+
+        {/* cycle filter (only once there's more than one cycle) + sort, with the visible subtotal */}
+        {list.length > 0 && (
+          <>
+            {used.length > 1 && (['all', ...used] as const).map((c) => (
+              <Button
+                key={c}
+                size="sm"
+                // sm is h-7; the row is 32px, and a chip is the only thing on it that would not be
+                variant={active === c ? 'secondary' : 'ghost'}
+                className="h-8"
+                onClick={() => setFilter(c)}
+              >
+                {c === 'all' ? 'All' : CYCLE_LABEL[c]}
+                <span className="text-muted-foreground ml-1 tabular-nums">
+                  {c === 'all' ? list.length : list.filter((x) => x.cycle === c).length}
+                </span>
+              </Button>
+            ))}
+            {/* With everything on screen this is the "Expenses / month" card again, four inches
+                lower — so it only appears once a filter has narrowed the list to something the
+                cards above do not already add up. */}
+            {active !== 'all' && (
+              <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+                {money(shownM)}/mo · {shown.length} shown
+              </span>
+            )}
+            <Select value={sort} onValueChange={(v) => setSort(v as SortId)}>
+              {/* the subtotal carries the ml-auto when it is there; with no filter up, the sort is
+                  the only thing left to hold the right edge */}
+              <SelectTrigger className={cn('h-8 w-32 shrink-0', active === 'all' && 'ml-auto')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SORTS.map((o) => <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </>
+        )}
       </div>
 
       {/* add row — name, cost, cycle. Enter anywhere in it commits. Date is set per row afterwards. */}
@@ -207,36 +244,6 @@ export default function SubsPage() {
         </CardContent>
       </Card>
 
-      {/* cycle filter (only once there's more than one cycle) + sort, with the visible subtotal */}
-      {list.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {used.length > 1 && (['all', ...used] as const).map((c) => (
-            <Button
-              key={c}
-              size="sm"
-              variant={active === c ? 'secondary' : 'ghost'}
-              onClick={() => setFilter(c)}
-            >
-              {c === 'all' ? 'All' : CYCLE_LABEL[c]}
-              <span className="text-muted-foreground ml-1 tabular-nums">
-                {c === 'all' ? list.length : list.filter((x) => x.cycle === c).length}
-              </span>
-            </Button>
-          ))}
-          <span className="text-muted-foreground ml-auto text-xs tabular-nums">
-            {money(shownM)}/mo{active !== 'all' && ` · ${shown.length} shown`}
-          </span>
-          <Select value={sort} onValueChange={(v) => setSort(v as SortId)}>
-            <SelectTrigger className="h-8 w-32 shrink-0">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORTS.map((o) => <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
       {list.length === 0 ? (
         <p className="text-muted-foreground px-1 py-8 text-center text-sm">
           {income
@@ -253,15 +260,8 @@ export default function SubsPage() {
         <Card className="gap-0 overflow-hidden py-0">
           {shown.map((sub) => {
             const per = monthlyCost(sub)
-            /* Share of the biggest thing on the list, drawn along the bottom edge. Rows of identical
-               boxes say nothing about where the money actually goes — €250 to Mom and €10.99 to
-               Spotify read the same. Against the peak rather than the total, because the question
-               this answers is "which of these is the big one", and shares of a total are slivers
-               nobody can compare by eye. Monthly-normalised, so a yearly bill is measured the way it
-               is actually felt. Run together down one sheet they read as a single falling shape. */
-            const share = peak > 0 ? per / peak : 0
             return (
-              <div key={sub.id} className="group relative border-b last:border-0">
+              <div key={sub.id} className="group border-b last:border-0">
                 <div className="flex flex-wrap items-center gap-2 px-3 py-2">
                   {/* uncontrolled name/cost: keyed by id, so editing never fights the store's own value.
                       ponytail: a cross-tab edit won't refresh these fields; reopen the tab if it matters */}
@@ -275,20 +275,29 @@ export default function SubsPage() {
                     onChange={(e) => patchSub(sub.id, { cost: num(e.target.value) })}
                   />
                   <CyclePicker quiet value={sub.cycle} onChange={(c) => patchSub(sub.id, { cycle: c })} />
-                  {/* the app's own date picker — the next charge / payday */}
-                  <div className="w-52 shrink-0">
+                  {/* the app's own date picker — the next charge / payday. An undated row says so
+                      once, quietly: eleven bordered "No date" boxes were the loudest thing on a
+                      page whose numbers are the point. */}
+                  <div className="w-40 shrink-0">
                     <DueField
+                      quiet
                       due={charge.get(sub.id) ?? null}
                       placeholder={income ? 'No payday' : 'No date'}
                       onPick={(v) => patchSub(sub.id, { due: v })}
                     />
                   </div>
-                  {/* The number the row is actually for: every cycle in one unit, which is the only
-                      way a yearly 98,99 and a monthly 10,99 can be compared at all. */}
+                  {/* Every cycle in one unit, which is the only way a yearly 98,99 and a monthly
+                      10,99 can be compared at all — and so, on a monthly row, the same number the
+                      field two columns left already shows. Printing it twice is what made the list
+                      read as a form, so the monthly rows keep the space and say nothing. */}
                   <span className={cn('ml-auto w-24 shrink-0 text-right text-sm tabular-nums',
                     income ? MONEY_IN : 'text-foreground')}>
-                    {money(per)}
-                    <span className="text-muted-foreground text-xs">/mo</span>
+                    {sub.cycle !== 'monthly' && (
+                      <>
+                        {money(per)}
+                        <span className="text-muted-foreground text-xs">/mo</span>
+                      </>
+                    )}
                   </span>
                   {/* Shown on hover, and to a keyboard the moment it reaches the row — a column of
                       standing red icons is a page that looks like it is mostly for deleting things. */}
@@ -306,9 +315,6 @@ export default function SubsPage() {
                     </Button>
                   </Hint>
                 </div>
-                <div aria-hidden className={cn('absolute inset-x-0 bottom-0 h-0.5',
-                  income ? 'bg-emerald-500/50' : 'bg-foreground/25')}
-                  style={{ width: `${Math.max(share * 100, 1)}%` }} />
               </div>
             )
           })}

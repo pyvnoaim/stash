@@ -190,7 +190,11 @@ const tools: Record<string, {
     run: async (a) => {
       const s = await pull()
       const view = String(a.view ?? 'all')
-      if (!store.isView(view)) throw new Error(`no such view: ${view}`)
+      /* The enum above is a hint to the model, not a gate — nothing validates arguments against
+         the schema, so the only guard is this line. The trash is a view like any other as far as
+         `isView` is concerned, and a note deleted precisely so it would stop being read is not one
+         to hand back here: what is deleted is out of every list, and out of this one too. */
+      if (!store.isView(view) || view === store.TRASH) throw new Error(`no such view: ${view}`)
       store.select(view)
       const items = store.visible(store.getState(), String(a.query ?? ''))
       const limit = Number(a.limit ?? 200)

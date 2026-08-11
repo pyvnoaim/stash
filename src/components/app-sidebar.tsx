@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
@@ -35,8 +35,8 @@ import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
   addProject, CALENDAR, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
-  canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, useStash,
-  VIEWS, type Item, type Project, type ProjectSort,
+  canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, TRASH,
+  useStash, VIEWS, type Item, type Project, type ProjectSort, type ViewId,
 } from '@/lib/store'
 
 const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
@@ -49,17 +49,31 @@ const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
 ]
 
 
+/** How long the open waits for a second click. Comfortably inside the platform's own
+ *  double-click window, and short enough that a plain click still feels like one. */
+const DOUBLE_CLICK = 220
+
 /** The tags group's fold, kept in `collapsed` beside the project ids — none of which it can be. */
 const TAGS_FOLD = '__tags__'
 
-const VIEW_ICONS = {
+/* One heading, one count, written once: four groups and three kinds of badge were each carrying
+   their own copy of these, which is how a sidebar drifts into four sizes of the same thing.
+   The heading sits back from the rows it names — it is furniture, and at the rows' own weight it
+   read as one more thing to click. */
+const GROUP = 'font-heading text-[10px] tracking-wider uppercase text-sidebar-foreground/45'
+/** Counts are read down a column, so they are mono and tabular and they never shout. */
+const COUNT = 'text-muted-foreground font-mono text-[11px] font-normal'
+
+/** Every view, or it will not compile — see the note on the palette's copy of this. */
+const VIEW_ICONS: Record<ViewId, React.ElementType> = {
   today: CalendarDays,
   upcoming: CalendarClock,
   flagged: Flag,
   inbox: Inbox,
   all: Layers,
   done: CheckCheck,
-} as const
+  trash: Trash2,
+}
 
 export function AppSidebar({ tag, onTag, onNavigate }: {
   /** the tag being searched for, so the one you clicked stays lit */
@@ -97,7 +111,10 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   // reading custom MIME types during dragover is the flakiest corner of the drag API
   const dragging = useRef<string | null>(null)
 
-  const go = (id: string) => { onNavigate(id); setOpenMobile(false) }
+  /* Every navigation in this sidebar goes through here, which makes it the one place that can
+     call off a project row's pending open: clicking Today inside that 220ms window used to land
+     on Today and then get yanked to the project a fifth of a second later. */
+  const go = (id: string) => { clearTimeout(openTimer.current); onNavigate(id); setOpenMobile(false) }
 
   // dropping a row on a destination is the whole point of the sidebar being a drop target.
   // Only where the drop means something — Upcoming, Everything and Done have nothing to set.
@@ -210,6 +227,11 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   const doomed = project(s, confirmDelete)
 
   const tags = tagCounts(s)
+  const tagsOpen = !s.collapsed.includes(TAGS_FOLD)
+  /* The wait a foldable project's row gives the second click. Cleared on unmount, or a row folded
+     and navigated away from would still open the project a fifth of a second later. */
+  const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(openTimer.current), [])
 
   /** one project row. holds = how many sit under it (0 for a leaf/child); shut = its fold state. */
   // `holds` is how many children the row has (whether it folds at all); `folded` is how many are
@@ -223,9 +245,18 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             className={cn('select-none', p.parent && 'pl-6')}
             /* One click goes to the project — that is what a project row is for, and folding it on
                the way meant you could not open a parent twice without shutting it. Folding moved to
-               the double click, and to the mark on the left, which has said `>` all along. */
-            onClick={() => go(p.id)}
-            onDoubleClick={holds ? () => toggleCollapsed(p.id) : undefined}
+               the double click, and to the mark on the left, which has said `>` all along.
+
+               A double click is two clicks first, so on a row that folds the open is held back a
+               beat and the second click calls it off: double-clicking to fold used to navigate on
+               the way past, which is the one thing it plainly does not mean. Only where there is
+               something to fold — a childless project opens on the click itself, with no wait. */
+            onClick={() => {
+              if (!holds) { go(p.id); return }
+              clearTimeout(openTimer.current)
+              openTimer.current = setTimeout(() => go(p.id), DOUBLE_CLICK)
+            }}
+            onDoubleClick={holds ? () => { clearTimeout(openTimer.current); toggleCollapsed(p.id) } : undefined}
           >
             {/* the project's mark turns into a grip on hover: same spot, same size,
                 so the row says it can be dragged without moving anything to say it.
@@ -260,7 +291,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           {/* a shut parent says how much is folded under it — same badge as the tag counts,
               faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
           {folded > 0 && shut && (
-            <SidebarMenuBadge className="transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">{folded}</SidebarMenuBadge>
+            <SidebarMenuBadge className={cn(COUNT, 'transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0')}>{folded}</SidebarMenuBadge>
           )}
           {/* right-7 clears the trash beside it: an action is w-5 pinned at right-1.
               The context menu has these too, but nothing on the row said it existed */}
@@ -348,19 +379,21 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup>
-          <SidebarGroupLabel className="font-heading tracking-wider uppercase">Lists</SidebarGroupLabel>
+          <SidebarGroupLabel className={GROUP}>Lists</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {Object.entries(VIEWS).map(([id, v]) => {
-                const Icon = VIEW_ICONS[id as keyof typeof VIEW_ICONS]
-                const n = id === 'done' ? 0 : s.items.filter(v.filter).length
+                const Icon = VIEW_ICONS[id as ViewId]
+                // Done and the trash carry no badge: neither is work waiting to be done, and a
+                // number beside them is a number nobody is meant to act on
+                const n = id === 'done' || id === TRASH ? 0 : s.items.filter(v.filter).length
                 return (
                   <SidebarMenuItem key={id} {...dropOn(id)}>
                     <SidebarMenuButton isActive={s.sel === id} onClick={() => go(id)}>
                       <Icon />
                       <span>{v.name}</span>
                     </SidebarMenuButton>
-                    {n > 0 && <SidebarMenuBadge>{n}</SidebarMenuBadge>}
+                    {n > 0 && <SidebarMenuBadge className={COUNT}>{n}</SidebarMenuBadge>}
                   </SidebarMenuItem>
                 )
               })}
@@ -369,7 +402,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         </SidebarGroup>
 
         <SidebarGroup className="group/projects">
-          <SidebarGroupLabel className="font-heading tracking-wider uppercase">Projects</SidebarGroupLabel>
+          <SidebarGroupLabel className={GROUP}>Projects</SidebarGroupLabel>
           <Hint label="New project">
             <SidebarGroupAction aria-label="New project" onClick={() => setDialog({})}>
               <Plus />
@@ -457,13 +490,22 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             {/* the heading folds the list, and the fold rides in `collapsed` beside the project
                 folds — the sentinel can never collide with a project id, and the synced document
                 is what makes the choice hold across reloads and devices alike */}
-            <SidebarGroupLabel asChild className="font-heading tracking-wider uppercase">
-              <button type="button" aria-expanded={!s.collapsed.includes(TAGS_FOLD)} className="w-full cursor-pointer" onClick={() => toggleCollapsed(TAGS_FOLD)}>
+            <SidebarGroupLabel asChild className={GROUP}>
+              <button type="button" aria-expanded={tagsOpen} className="w-full cursor-pointer" onClick={() => toggleCollapsed(TAGS_FOLD)}>
                 Tags
-                <ChevronRight className={cn('ml-auto size-3.5 transition-transform', !s.collapsed.includes(TAGS_FOLD) && 'rotate-90')} />
+                <ChevronRight className={cn('ml-auto size-3.5 transition-transform duration-200 ease-out', tagsOpen && 'rotate-90')} />
               </button>
             </SidebarGroupLabel>
-            {!s.collapsed.includes(TAGS_FOLD) && (
+            {/* It slides rather than blinking out: the same 0fr→1fr grid the sub-projects fold
+                with, which measures nothing and needs no height. Kept mounted so there is
+                something to animate, `inert` so a folded tag is off the tab order all the same. */}
+            <div
+              className={cn('grid transition-[grid-template-rows] duration-200 ease-out',
+                tagsOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}
+            >
+            <div inert={!tagsOpen} className={cn('min-h-0 overflow-hidden transition-opacity duration-200 ease-out',
+              tagsOpen ? 'opacity-100' : 'opacity-0')}
+            >
             <SidebarGroupContent>
               <SidebarMenu>
                 {tags.map(([t, n]) => (
@@ -478,7 +520,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                           <span className="truncate">{t}</span>
                         </SidebarMenuButton>
                         {/* nothing open under it any more, but the tag and its finished work remain */}
-                        <SidebarMenuBadge className={cn(!n && 'opacity-40')}>{n}</SidebarMenuBadge>
+                        <SidebarMenuBadge className={cn(COUNT, !n && 'opacity-40')}>{n}</SidebarMenuBadge>
                       </SidebarMenuItem>
                     </ContextMenuTrigger>
                     <ContextMenuContent>
@@ -490,13 +532,14 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                 ))}
               </SidebarMenu>
             </SidebarGroupContent>
-            )}
+            </div>
+            </div>
           </SidebarGroup>
         )}
         {/* neither of these is a list of items — one is a dashboard and one is a document editor,
             so they sit apart from the views rather than being mistaken for two more of them */}
         <SidebarGroup>
-          <SidebarGroupLabel className="font-heading tracking-wider uppercase">Tools</SidebarGroupLabel>
+          <SidebarGroupLabel className={GROUP}>Tools</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>

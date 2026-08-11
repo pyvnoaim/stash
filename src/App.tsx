@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Loader2, Search } from 'lucide-react'
+import { ChevronDown, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
 import { NotificationBell } from '@/components/notification-bell'
@@ -28,9 +28,9 @@ import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { hit } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
-  openIn, readHash, redo, removeItem, restoreItem, select, tagCounts, toggleDone, undo, useStash,
-  viewName, VIEWS, visible, type Item, type ItemType,
+  addProject, CALENDAR, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
+  openIn, readHash, redo, removeItem, restoreItem, restoreTrash, select, tagCounts, toggleDone,
+  TRASH, TRASH_DAYS, undo, useStash, viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
 
 // the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
@@ -113,8 +113,12 @@ export default function App() {
     return []
   }, [query, s])
 
-  /** What a key or a command acts on: the marked rows, or the focused one when nothing is marked. */
-  const chosen = marked.length ? marked : selected ? [selected.id] : []
+  /** Whether the list on screen is the trash, where every row action means something else. */
+  const inTrash = s.sel === TRASH
+  /** What a key or a command acts on: the marked rows, or the focused one when nothing is marked.
+   *  A deleted row is not in `items`, so the focused one is looked up in the list actually drawn. */
+  const focused = selected ?? (inTrash ? items.find((i) => i.id === s.focus) : undefined)
+  const chosen = marked.length ? marked : focused ? [focused.id] : []
 
   /* clicking #wsh while searching @kova narrows to both rather than throwing the project away —
      the search ANDs its terms, so the only sensible thing a second click can do is add one */
@@ -219,12 +223,35 @@ export default function App() {
   // and recompute when the content itself changes, without tearing the observer down each time
   useEffect(checkMore, [items])
 
-  const drop = (ids: string[]) => {
+  /* Deleting from a list files the rows in the trash; ⇧⌘⌫ takes them out for good. Both still
+     offer the undo, because the difference between the two is where the row waits, not whether
+     the last press can be taken back. */
+  const drop = (ids: string[], hard = false) => {
     // each undo holds the index the row had when it left, so they go back in the reverse order
-    const undos = ids.map((id) => removeItem(id))
+    const undos = ids.map((id) => removeItem(id, hard))
     setMarked([])
-    toast(ids.length > 1 ? `${ids.length} items deleted` : 'Item deleted', {
+    const what = ids.length > 1 ? `${ids.length} items` : 'Item'
+    toast(hard ? `${what} deleted for good` : `${what} moved to the trash`, {
       action: { label: 'Undo', onClick: () => undos.reverse().forEach(restoreItem) },
+    })
+  }
+
+  /** Out of the trash: back on the list, or gone for good. Both act on the rows in hand. */
+  const putBack = (ids: string[]) => {
+    const n = restoreTrash(ids)
+    setMarked([])
+    /* What actually went back, not what was asked for: a row whose project has since been shared
+       with you read-only cannot be restored, and a silent nothing reads as a broken button. */
+    if (n === ids.length) toast(n > 1 ? `${n} items restored` : 'Item restored')
+    else if (n) toast(`${n} of ${ids.length} restored — the rest are in projects you can only read`)
+    else toast(ids.length > 1 ? 'Those are in projects you can only read' : 'That is in a project you can only read')
+  }
+  const purge = (ids?: string[]) => {
+    const gone = emptyTrash(ids)
+    setMarked([])
+    if (!gone) return
+    toast(gone.n > 1 ? `${gone.n} items deleted for good` : 'Item deleted for good', {
+      action: { label: 'Undo', onClick: gone.undo },
     })
   }
 
@@ -286,11 +313,15 @@ export default function App() {
         return
       }
       if (typingIn(e.target)) return
-      // ⌘⌫, not a bare ⌫: reaching for the search field past a focused row should not wipe it
+      /* ⌘⌫, not a bare ⌫: reaching for the search field past a focused row should not wipe it.
+         ⇧⌘⌫ skips the trash — `comboOf` ignores shift, so the binding is the same one and the
+         modifier is read here. In the trash there is nowhere further to file a row, so both
+         spellings mean the same thing: this one is gone. */
       if (k('remove')) {
         if ((!query && isPage(s.sel)) || !chosen.length) return
         e.preventDefault()
-        drop(chosen)
+        if (inTrash) purge(chosen)
+        else drop(chosen, e.shiftKey)
         return
       }
       /* ⌘A with nothing focused is the document's, and the document is the sidebar and the header
@@ -321,7 +352,9 @@ export default function App() {
          `items` rather than trusting s.focus, which survives a search that filtered its row away and
          would otherwise open a page for something this view no longer shows. */
       if (e.key === 'Enter') {
-        const one = chosen.length === 1 ? items.find((i) => i.id === chosen[0]) : undefined
+        // and not in the trash: a deleted row has no page, and `openPage` on an id that is not
+        // in `items` renders nothing while every list shortcut hides behind the phantom page
+        const one = chosen.length === 1 && !inTrash ? items.find((i) => i.id === chosen[0]) : undefined
         if (!one) return
         e.preventDefault()
         setMarked([])
@@ -517,6 +550,30 @@ export default function App() {
                 beside the name, where it has something to sit next to */}
             {!query && openProject && <ProjectHeader p={openProject} />}
 
+            {/* The trash says its own rule, since a list that empties itself has to. The two row
+                buttons appear once there is something in hand — a selection here means restore or
+                delete, and there is nothing else to do with a deleted row. */}
+            {inTrash && items.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 px-3 pb-1">
+                <p className="text-muted-foreground mr-auto text-xs">
+                  Deleted items are cleared after {TRASH_DAYS} days.
+                </p>
+                {chosen.length > 0 && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => putBack(chosen)}>
+                      <RotateCcw />
+                      Restore{chosen.length > 1 ? ` ${chosen.length}` : ''}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => purge(chosen)}>
+                      <Trash2 />
+                      Delete{chosen.length > 1 ? ` ${chosen.length}` : ''}
+                    </Button>
+                  </>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => purge()}>Empty trash</Button>
+              </div>
+            )}
+
             {/* scrollbars are hidden app-wide, so this is the only sign the list runs on; it
                 pages down on click and hides once there is nothing left below */}
             {moreBelow && (
@@ -572,13 +629,18 @@ export default function App() {
                         onSelect={(range) => pick(it.id, range)}
                         // focus it too: coming back out of the page should leave the row you were on
                         // under the cursor, not wherever the selection happened to be before
-                        onOpen={() => { focus(it.id); setMarked([]); openPage(it.id) }}
+                        // no page for a deleted row: `paged` looks the id up in `items`, so it
+                        // would open nothing and leave every list shortcut behind a phantom page
+                        onOpen={() => { focus(it.id); setMarked([]); if (!inTrash) openPage(it.id) }}
                         onTag={(t) => addTerm('#' + t)}
                         onWho={(w) => addTerm('+' + w)}
                         // the same landing the palette does: drop the search, or the project you
                         // just opened would still be showing search results
                         onProject={(pid) => { setQuery(''); select(pid) }}
-                        onDelete={() => drop([it.id])}
+                        // in the trash the row's own menu is the pair this list has: put it back,
+                        // or take it out for good. Delete there cannot mean "move to the trash".
+                        onDelete={() => (inTrash ? purge([it.id]) : drop([it.id]))}
+                        onRestore={inTrash ? () => putBack([it.id]) : undefined}
                       />
                     </div>
                   )
@@ -593,9 +655,11 @@ export default function App() {
             animated by width like the left sidebar, so it slides shut too — the last panel is kept
             during the close (via panelRef) so it slides out with content rather than blanking first. */}
         {(() => {
-          // the full-page editor already holds the item, so the side panel steps aside for it
-          const open = !page && !paged && (marked.length > 1 || !!selected)
-          const panel = page || paged ? null : marked.length > 1
+          /* the full-page editor already holds the item, so the side panel steps aside for it —
+             and so does the trash, where the rows are not in `items` and there is nothing to edit
+             on one anyway: a deleted item is restored or it is gone. */
+          const open = !page && !paged && !inTrash && (marked.length > 1 || !!selected)
+          const panel = page || paged || inTrash ? null : marked.length > 1
             ? <Selection ids={marked} onDelete={() => drop(marked)} />
             : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} onOpenItem={openPage} /> : null
           if (panel) panelRef.current = panel

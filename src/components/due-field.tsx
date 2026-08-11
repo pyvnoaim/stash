@@ -5,7 +5,7 @@ import { Calendar } from '@/components/ui/calendar'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
-import { cn } from '@/lib/utils'
+import { cn, QUIET } from '@/lib/utils'
 import { addDays, dayLabel, today } from '@/lib/parse'
 
 /** Stash stores dates as local 'YYYY-MM-DD'; the calendar speaks Date. */
@@ -14,11 +14,15 @@ const toStamp = (d: Date) => d.toLocaleDateString('sv')
 
 const shift = (n: number) => addDays(today(), n)
 
-export function DueField({ id, due, at, placeholder, onPick, onTime }: {
+export function DueField({ id, due, at, placeholder, quiet, onPick, onTime }: {
   id?: string
   due: string | null
   /** what no date reads as, for a selection whose rows disagree rather than share one */
   placeholder?: string
+  /** Down a list, where a bordered box on every row is a column of boxes rather than a column of
+   *  dates. The border arrives on hover, on focus and while the picker is open — the same bargain
+   *  the fields beside it make. */
+  quiet?: boolean
   onPick: (due: string | null) => void
   /** The hour on that day. Only where one means something — a subscription bills on a date, not
    *  at a quarter past — so the field appears with the handler and not otherwise. */
@@ -37,7 +41,8 @@ export function DueField({ id, due, at, placeholder, onPick, onTime }: {
           variant="outline"
           // shrink: the button base says shrink-0, and a w-full flex child that cannot shrink
           // pushes the clock past the panel's edge — this button gives room, the clock never does
-          className={cn('w-full shrink justify-start overflow-hidden font-normal', !due && 'text-muted-foreground')}
+          className={cn('w-full shrink justify-start overflow-hidden font-normal',
+            !due && 'text-muted-foreground', quiet && QUIET)}
         >
           <CalendarIcon className="size-3.5 shrink-0" />
           {due ? (

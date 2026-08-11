@@ -26,7 +26,7 @@ npm run build && npm run preview
 | --- | --- |
 | `npm run dev` | dev server with HMR |
 | `npm run build` | typecheck + production build to `dist/` |
-| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, markdown and what a [[link]] resolves to, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the picture sniffer and the sweep that spares what is still referenced, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
+| `npm test` | plain `assert` scripts on node over the DOM-free logic: parser, store and load validator, what a delete files in the trash and what the fortnight sweeps out of it, markdown and what a [[link]] resolves to, treemap, market signals, alerts, PDF ops, the subscribed-calendar reader and the guard on what it may fetch, the picture sniffer and the sweep that spares what is still referenced, the sync engine against the real server, the MCP server against it too, and the server itself — the calendar feed and a signed push against a socket standing in for a push service |
 | `npm run lint` | oxlint |
 
 ## Capture
@@ -116,7 +116,8 @@ repeat, since finishing is what brings the next one round.
 | `⇧↑` `⇧↓` / `⇧J` `⇧K` | take the next row with you, and go back over one to leave it behind |
 | `t` `s` | due today, or pushed to tomorrow |
 | `space` | finish or reopen a task |
-| `⌘⌫` | delete, with an undo in the toast |
+| `⌘⌫` | delete — into the trash, with an undo in the toast |
+| `⇧⌘⌫` | delete for good, straight past the trash |
 | `⌥↑` `⌥↓` | move the selected row up or down, where the order is yours to set |
 | `esc` | drop the selection, then the focus |
 
@@ -230,7 +231,9 @@ dead control is worse than plain text.
 
 **Overview** sits on top on its own, since it is the home dashboard rather than one more list.
 Under it the lists come in the order work moves through them — **Quick notes**, **Today**,
-**Upcoming**, **Flagged**, **Everything**, **Done** — then your projects, then your tags. Calendar,
+**Upcoming**, **Flagged**, **Everything**, **Done**, **Recently deleted** — then your projects,
+then your tags. Neither of the last two lists carries a count: what is finished and what is
+deleted are not work waiting to be done. Calendar,
 Subscriptions, Markets and PDF sit apart at the bottom under **Tools**: none of them is a list of
 items.
 
@@ -281,6 +284,36 @@ looking at. Inside a text field `⌘Z` is the browser's own undo, which is the o
 
 Another window writing — the dock app while a tab is open — drops the history rather than offer
 you a step back onto a snapshot from before their change.
+
+## The trash
+
+`⌘⌫` deletes into **Recently deleted**, at the bottom of the lists, where what you deleted waits
+**14 days** and then goes for good. The toast's **Undo** and `⌘Z` both still take the press back
+whole — a delete moves the row from one list to the other in a single step, so walking it back
+never leaves a copy behind in either.
+
+The trash is a list like the others: the rows read the same, `↑` `↓` walk them, and shift-click
+takes a run. What you can do with one is the pair a deleted row has — **Restore**, which puts it
+back on the list, and **Delete for good**, which is what `⌘⌫` means in here. Both are on the row's
+own right-click menu and on the bar above the list, which acts on everything you have selected;
+**Empty trash** beside them clears the lot. Every one of those has an undo in its toast.
+
+`⇧⌘⌫` skips the trash from any list — for the row you are certain about, where filing it somewhere
+to be deleted again in a fortnight is a step you did not want.
+
+Restoring puts a row back at the end of the list rather than the place it left: after a fortnight
+the row it sat above may not be there any more. One filed in a project that has since been deleted
+lands in **Quick notes**, the same place `load` puts any orphan.
+
+**Clear finished** goes through here too. It is one press that can take a hundred rows, and a
+toast is one reload from gone — the fortnight is exactly the promise that press wants behind it.
+
+The trash rides in the synced document, so deleting on the phone fills the trash on the desktop
+too, and the fortnight is counted wherever the document is next read. A shared project's slice
+never carries it: what you deleted is out of everyone else's copy the moment it leaves your list,
+and your trash is yours. It is also out of Claude's reach — `stash_read` refuses the view, so a
+note deleted to stop being read stops being read. A project that stops being shared with you takes
+its rows out of your trash on the way out, the same as it takes them off your lists.
 
 Drag a row onto a project in the sidebar to move it, onto **Quick notes** to unfile it, or onto
 **Today** to make it due today. The target you are over is outlined.
@@ -421,6 +454,13 @@ month, so a date in the past rolls forward instead of reading as overdue. Charge
 anchor rather than off the previous result, so the 31st stays the 31st — Jan 31 → Feb 28 → Mar 31,
 never drifting. A charge landing on a Saturday or Sunday clears on the Monday, the way a bank
 debits. There is no bank-holiday calendar; that is a per-country dataset.
+
+A row is a line of text until you reach for it: the name, the cost, the cycle and the date are all
+live fields, but the borders and fills wait for a hover, a focus or a keyboard walking into the
+row. The number at the right end is the cost in one unit — what a yearly 98,99 works out to a
+month, which is the only way it can be compared with a monthly 10,99 at all — and it is printed
+only where it says something the row does not already: a monthly row would just be repeating its
+own cost back at itself.
 
 Deleting gives the same undo toast every other delete in the app does.
 

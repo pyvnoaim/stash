@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
-  Plus, StickyNote, Upload, Wallet,
+  Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -13,17 +13,22 @@ import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
   CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
-  SUBS, useStash, viewName, VIEWS, visible, type Item, type State,
+  SUBS, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
 
-const VIEW_ICONS = {
+/* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
+   VIEWS, so a view added there and forgotten here rendered `<undefined />` — which is not a missing
+   icon, it is React unmounting the whole app behind the dialog. The Record makes that a compile
+   error instead. The sidebar's copy is held to the same rule. */
+const VIEW_ICONS: Record<ViewId, React.ElementType> = {
   today: CalendarDays,
   upcoming: CalendarClock,
   flagged: Flag,
   inbox: Inbox,
   all: Layers,
   done: CheckCheck,
-} as const
+  trash: Trash2,
+}
 
 const PAGES = [
   { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
@@ -152,7 +157,7 @@ export function CommandPalette({
 
           <CommandGroup heading="Views">
             {Object.entries(VIEWS).map(([id, v]) => {
-              const Icon = VIEW_ICONS[id as keyof typeof VIEW_ICONS]
+              const Icon = VIEW_ICONS[id as ViewId]
               const n = viewCounts[id]
               return (
                 <CommandItem key={id} value={`view ${v.name}`} onSelect={run(() => select(id))}>

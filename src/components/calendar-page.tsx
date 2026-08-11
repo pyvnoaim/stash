@@ -542,7 +542,13 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
             })}
           </div>
 
-          <div className="grid auto-rows-min gap-px overflow-y-auto">
+          {/* auto rows, not min-content ones: a grid of min-content tracks stops at the height of
+              what is in it, and on a tall window the hours ended at 21:00 with the rest of the
+              column left as a slab of the border colour showing through. Auto tracks are the ones
+              `align-content: stretch` — the default — shares the spare height between, so the last
+              hour reaches the bottom. The cells keep their min-h-10 floor, so a week with a busy
+              hour in it still scrolls rather than squeezing the others. */}
+          <div className="grid auto-rows-auto gap-px overflow-y-auto">
             {hours.map((h) => (
               // relative for the now line, which sits inside the hour it falls in
               <div key={h} className="relative grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] gap-px">
