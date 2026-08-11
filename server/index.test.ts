@@ -28,6 +28,9 @@ const post = (path: string, body: unknown, cookie = '') =>
   fetch(url + path, { method: 'POST', headers: { cookie }, body: JSON.stringify(body) })
 const get = (path: string, cookie = '') => fetch(url + path, { headers: { cookie } })
 
+// a fresh boot with no users cuts the bootstrap invite itself (it lands in the container logs)
+assert.equal((db.prepare('select count(*) as n from invites where used is null').get() as { n: number }).n, 1)
+
 // the door is shut without a session
 assert.equal((await get('/state')).status, 401)
 assert.equal((await get('/api/me')).status, 401)

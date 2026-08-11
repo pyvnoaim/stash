@@ -1062,7 +1062,7 @@ the app's own responses, so nothing else needs configuring in the proxy.
 
 ```sh
 docker compose up -d --build                            # PROXY_NET names the proxy's network if not npm_default
-docker compose exec stash node server/index.ts invite   # the first code; the rest come from the menu
+docker compose logs stash                               # the first invite code is in the logs; the rest come from the menu
 ```
 
 One optional variable on the container: `STASH_TD_KEY` lets the hosted MCP route read the stocks

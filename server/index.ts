@@ -16,9 +16,10 @@
  * copied database file (a backup, a snapshot) contains nothing that logs anyone in. They idle out
  * after 30 days unused and die at 180 regardless.
  *
- * Signup is invite-only and the first account is the admin. Invites, the user list, deleting a
- * user and promotion are admin-gated; `node server/index.ts invite` still works from the CLI for
- * bootstrapping. No email, no reset flow — at this scale a forgotten password is the admin
+ * Signup is invite-only and the first account is the admin. A fresh boot with no users logs its
+ * own first code, so setup is compose up and read the logs. Invites, the user list, deleting a
+ * user and promotion are admin-gated; `node server/index.ts invite` still works from the CLI.
+ * No email, no reset flow — at this scale a forgotten password is the admin
  * deleting the row and cutting a new invite.
  */
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
@@ -664,6 +665,12 @@ export function start({
     return code
   }
   const inviteFloor = () => Date.now() - INVITE_DAYS * 86400_000
+
+  // a fresh instance cuts its own first code into the logs, so setup is compose up and nothing
+  // else; guarded on an open code so restarts before the first signup don't mint a pile
+  if (!q.anyUser.get() && !q.openInvites.all(inviteFloor()).length) {
+    console.log(`first invite: ${invite()}`)
+  }
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0]
