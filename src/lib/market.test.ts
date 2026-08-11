@@ -826,6 +826,8 @@ assert.deepEqual(parseTrending(null), [])
 // priceDigits: the desk's own range is untouched, and memecoin prices stop collapsing to 0.000000
 assert.equal(priceDigits(65000), 2)
 assert.equal(priceDigits(0.17), 4)
+assert.equal(fmtPrice(1.0054), '1.0054')  // not 1.01 — the exchange's own figure, not a rounding of it
+assert.equal(fmtPrice(150.23), '150.23')  // ten up, two decimals as before
 assert.equal(priceDigits(0.0001), 6)     // the boundary still belongs to the fixed ladder
 assert.equal(priceDigits(0.0000004), 9)  // three significant figures, not six zeroes
 // the digit survives instead of rounding away; the trailing zeros are minimumFractionDigits padding

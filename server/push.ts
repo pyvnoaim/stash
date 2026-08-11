@@ -48,7 +48,9 @@ export interface Alert { key: string, title: string, body: string, target: strin
 
 const b64u = (b: Buffer) => b.toString('base64url')
 const euro = (n: number) => '€' + n.toFixed(2)
-const price = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+/* No local `price` here: it was a second ladder at two decimals, which turned a 1.0054 entry into
+   1.01 in the knock while the card it points at read 1.0054. The rest of this file already called
+   fmtPrice — these levels go out over `fmtPrice` too. */
 
 /** The day and the hour where the phone is, from the offset it told us when it subscribed. */
 const localDay = (tz: number, at = Date.now()) => new Date(at + tz * 60_000).toISOString().slice(0, 10)
@@ -152,7 +154,7 @@ export function alertsOf(
       out.push({
         key: `watch-${w.id}-liq`,
         title: `${who} liquidated`,
-        body: `${price(p)} — past the estimated ${side} liquidation ${price(liq!)}, the ${euro(Number(w.size))} margin is gone`,
+        body: `${fmtPrice(p)} — past the estimated ${side} liquidation ${fmtPrice(liq!)}, the ${euro(Number(w.size))} margin is gone`,
         target: 'market',
       })
       continue
@@ -181,9 +183,9 @@ export function alertsOf(
     out.push({
       key: `watch-${w.id}-${hit}`,
       title: hit === 'entry' ? `${who} at entry` : hit === 'target' ? `${who} hit target` : `${who} setup broken`,
-      body: (hit === 'entry' ? `${price(p)} — the ${side} entry ${price(w.entry)} is here`
-        : hit === 'target' ? `${price(p)} — the ${side} target ${price(w.target)} is reached`
-          : `${price(p)} — through the ${side} stop ${price(w.stop)}`) + paid,
+      body: (hit === 'entry' ? `${fmtPrice(p)} — the ${side} entry ${fmtPrice(w.entry)} is here`
+        : hit === 'target' ? `${fmtPrice(p)} — the ${side} target ${fmtPrice(w.target)} is reached`
+          : `${fmtPrice(p)} — through the ${side} stop ${fmtPrice(w.stop)}`) + paid,
       target: 'market',
     })
   }

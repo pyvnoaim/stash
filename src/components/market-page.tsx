@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, Telescope, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -813,13 +813,9 @@ export default function MarketPage() {
             </Button>
           </Hint>
           </div>
-          {/* the controls that are not about the chart in front of you, in one tray of their own:
-              whether the feed is updating, asking it to update now, and the one glance at every
-              other asset. Not a tray of its own for the last of those — the row already had enough
-              of them, and "not this chart" is a real thing for three buttons to have in common. */}
+          {/* the controls that are not about the chart in front of you: whether the feed is
+              updating, and asking it to update now */}
           <div className="bg-muted/50 flex items-center gap-1 rounded-lg p-1">
-          <SetupsButton orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
-            onPick={(id) => { setAsset(id); setTab('chart') }} />
           {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
           <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
             : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
@@ -842,6 +838,10 @@ export default function MarketPage() {
           is the one row here that is fact rather than reading. Absent unless the server has a key
           and a venue reports something open. */}
       <div className={cn('flex flex-col gap-4', tab !== 'chart' && 'hidden')}>
+      {/* what else is worth pressing, before the answer for this chart — it is the one line here
+          that can send you somewhere other than where you already are */}
+      <SetupsNow orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
+        current={current.id} onPick={(id) => { setAsset(id); setTab('chart') }} />
       <ExchangePositions />
 
       {needKey ? <KeyPrompt label={current.label} /> : (
@@ -2403,6 +2403,16 @@ function PaperDesk() {
                   </span>
                   <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r ?? 0)}</span>
                   <span className="text-muted-foreground hidden truncate text-right text-xs sm:block">{r.rule}</span>
+                  {/* The plan it was filed on, and where it actually came out — a row that says
+                      "+5.59R, target" names neither the trade nor the price it would have been
+                      taken at. Its own line across the grid: four prices do not fit in a column
+                      on a phone, and truncating them is the same as not printing them. */}
+                  <span className="text-muted-foreground col-span-full flex flex-wrap gap-x-2 font-mono text-[10px] tabular-nums">
+                    <span>entry <span className="text-sky-600 dark:text-sky-400">{fmtPrice(r.entry)}</span></span>
+                    <span>stop <span className="text-destructive">{fmtPrice(r.stop)}</span></span>
+                    <span>target <span className="text-emerald-600 dark:text-emerald-400">{fmtPrice(r.target)}</span></span>
+                    {r.exit != null && <span>out at <span className="text-foreground">{fmtPrice(r.exit)}</span></span>}
+                  </span>
                 </div>
               )
             })}
@@ -2823,107 +2833,100 @@ function Desk({ live }: { live: boolean }) {
  *  line to draw — a hundred numbers a row is a payload it would carry for nobody. */
 type ScanCard = ScanRow & { closes: number[] }
 
-const scanOne = async (a: Asset, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number, feed: VenueFeed = null): Promise<ScanCard | null> => {
-  const bars = await scanBars(a, '', feed ?? null)
-  const row = scanRead(a, bars, horizon, interval, orbMode, fee)
+/** One asset's bars, and what the desk reads off them. Split for the same reason `market.ts`
+ *  splits `scanBars` from `scanRead`: only the venue decides what is fetched. The horizon, the
+ *  interval, the preset and the fee are all read-side — poking the interval pills used to run the
+ *  whole eleven-asset sweep again for numbers already in hand. */
+type ScanFeed = { a: Asset; bars: Record<Interval, Candle[]> }
+
+const scanCard = (
+  { a, bars }: ScanFeed, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number,
+): ScanCard | null => {
+  /* The reads used to sit behind a per-asset catch because each was its own promise. They are a
+     render now, and one asset's bad bars must not take the page down with them. */
+  let row: ScanRow | null = null
+  try { row = scanRead(a, bars, horizon, interval, orbMode, fee) } catch { return null }
   // the last of them, not all: a weekly chart hands over a year and the line is 4rem wide
   return row && { ...row, closes: (bars[interval] ?? []).slice(-60).map((c) => c.c) }
 }
 
 /**
- * Which *other* asset has a setup, without leaving the chart. The Scan tab below is this same
- * sweep at full width, ranked, with every timeframe's lean on it; this is the glance version —
- * only the rows the desk would act on, and only the three numbers you would act with.
+ * One sweep of klines for every keyless asset, shared by the strip above the chart and the Scan
+ * tab below it — the only part of a scan that touches a network.
  *
- * ponytail: fetched when the popover opens, never on mount, and thrown away when it closes. It is
- * eleven assets × five intervals of klines a pass, and the chart must not spend that on someone
- * who never asks. Re-opening refetches, which is also how you refresh it — no button for that.
- * A shared per-(asset, interval) cache is the lever if this and the Scan tab ever run together.
+ * ponytail: one sweep per mount and per `nonce`, not a cache with a clock. Two mounts still fetch
+ * twice; a per-(asset, venue) memo is the lever if that ever shows up in the network tab.
  */
-function SetupsButton({ orbMode, interval, onPick }: {
+function useScanBars(feed: VenueFeed, nonce = 0) {
+  const [feeds, setFeeds] = useState<ScanFeed[] | null>(null)
+  useEffect(() => {
+    if (feed === undefined) return
+    let on = true
+    setFeeds(null)
+    void Promise.all(ASSETS.filter((a) => a.source !== 'twelvedata')
+      .map(async (a) => ({ a, bars: await scanBars(a, '', feed).catch(() => null) })))
+      .then((r) => { if (on) setFeeds(r.filter((x): x is ScanFeed => !!x.bars)) })
+    return () => { on = false }
+  }, [feed, nonce])
+  return feeds
+}
+
+/**
+ * Which *other* asset has a setup, on the page rather than behind a button. The Scan tab below is
+ * this same sweep at full width, ranked, with every timeframe's lean on it; this is the glance
+ * version — only the rows the desk would act on, one chip each, click to go there.
+ *
+ * It was a popover on a telescope button, which meant the answer to "is anything else worth
+ * pressing" cost a click and a wait every time you wanted it — and a glance you have to ask for
+ * is not a glance. So it reads on mount and sits above the chart instead. That sweep is the price
+ * of the glance: eleven assets × five intervals of klines, once per load.
+ */
+function SetupsNow({ orbMode, interval, current, onPick }: {
   orbMode: boolean
   interval: Interval
+  current: string
   onPick: (asset: string) => void
 }) {
   const { marketHorizon: horizon, dials } = useStash()
   const fee = dials.fee
   const feed = useVenue()
-  const [open, setOpen] = useState(false)
-  const [rows, setRows] = useState<ScanCard[] | null>(null)
+  const feeds = useScanBars(feed)
 
-  useEffect(() => {
-    if (!open || feed === undefined) return
-    let on = true
-    setRows(null)
-    void Promise.all(
-      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee, feed).catch(() => null)),
-    ).then((r) => {
-      if (!on) return
-      /* A plan and a tier the desk stands behind. Tier 0 and 1 are "there is a shape here but do
-         not press it" — worth a paragraph on the Scan tab, and noise in a list this size. Ranked
-         on the net R:R, the fee already taken off, because that is the order to look in. */
-      setRows(r.filter((x): x is ScanCard => !!x && !!x.plan && x.tier >= 2)
-        .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
-    })
-    return () => { on = false }
-  }, [open, horizon, interval, orbMode, fee, feed])
+  /* A plan and a tier the desk stands behind. Tier 0 and 1 are "there is a shape here but do not
+     press it" — worth a paragraph on the Scan tab, and noise in a list this size. Ranked on the
+     net R:R, the fee already taken off, because that is the order to look in. */
+  const rows = useMemo(() => feeds?.map((f) => scanCard(f, horizon, interval, orbMode, fee))
+    .filter((x): x is ScanCard => !!x?.plan && x.tier >= 2)
+    .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null,
+  [feeds, horizon, interval, orbMode, fee])
+
+  // the chart you are already looking at says all of this in full, right underneath
+  const others = rows?.filter((r) => r.a.id !== current)
+
+  if (rows === null) return <p className="text-muted-foreground text-xs">Reading every other chart…</p>
+  if (!others?.length) return <p className="text-muted-foreground text-xs">Nothing to press on any other chart. Waiting is the position.</p>
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <Hint label="Every other chart's setup — entry, stop and target, for the ones worth pressing">
-        <PopoverTrigger asChild>
-          <Button size="icon" variant={open ? 'secondary' : 'ghost'} aria-label="Setups on every asset"
-            className={cn('size-7', !open && 'text-muted-foreground')}>
-            <Telescope className="size-3.5" />
-          </Button>
-        </PopoverTrigger>
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Hint label={`Every other chart's setup on the ${orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read — the entry, and what it pays net of the fee. Click one to open it.`}>
+        <span className="text-muted-foreground text-xs">Setups now</span>
       </Hint>
-      <PopoverContent align="end" className="w-80 p-2">
-        <p className="px-1 text-sm font-medium">Setups now</p>
-        <p className="text-muted-foreground mb-2 px-1 text-xs">
-          every keyless chart on the {orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read · click to open one
-        </p>
-        {rows === null && <p className="text-muted-foreground px-1 py-3 text-sm">Reading every chart…</p>}
-        {rows?.length === 0 && (
-          <p className="text-muted-foreground px-1 py-3 text-sm">
-            Nothing to press on any of them. Waiting is the position.
-          </p>
-        )}
-        {!!rows?.length && (
-          <div className="text-muted-foreground grid grid-cols-[1fr_3.5rem_3.5rem_3.5rem] gap-x-2 px-1 text-[10px]">
-            <span /><span className="text-right">entry</span><span className="text-right">stop</span><span className="text-right">target</span>
-          </div>
-        )}
-        {rows?.map((r) => (
-          <button key={r.a.id} type="button" onClick={() => { onPick(r.a.id); setOpen(false) }}
-            className="hover:bg-accent border-border/40 -mx-1 w-[calc(100%+0.5rem)] rounded-md border-b px-2 py-1.5 text-left last:border-0">
-            <span className="grid grid-cols-[1fr_3.5rem_3.5rem_3.5rem] items-baseline gap-x-2">
-              <span className="flex items-center gap-1.5 truncate">
-                <AssetLogo src={r.a.logo} />
-                <span className="truncate text-sm font-medium">{r.a.label}</span>
-              </span>
-              {/* the three numbers keep the colours they have on the chart and in the verdict card:
-                  the line you are waiting on, the one that ends it, the one that pays */}
-              <span className="text-right font-mono text-xs tabular-nums text-sky-600 dark:text-sky-400">{fmtPrice(r.plan!.entry)}</span>
-              <span className="text-destructive text-right font-mono text-xs tabular-nums">{fmtPrice(r.plan!.stop)}</span>
-              <span className="text-right font-mono text-xs tabular-nums text-emerald-600 dark:text-emerald-400">{fmtPrice(r.plan!.target)}</span>
-            </span>
-            {/* which way, and what it pays after the fee — the row is four prices otherwise, and a
-                price column says nothing about the side it belongs to */}
-            <span className="text-muted-foreground mt-0.5 flex items-baseline gap-1.5 text-xs">
-              <span className={cn('font-medium',
-                r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {r.dir === 'long' ? 'Long' : 'Short'}
-              </span>
-              <span className={cn('font-mono tabular-nums', r.plan!.thin && 'text-amber-600 dark:text-amber-500')}>
-                {r.plan!.net.toFixed(1)}×
-              </span>
-              <span className="truncate">{r.say}</span>
-            </span>
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
+      {others.map((r) => (
+        <button key={r.a.id} type="button" onClick={() => onPick(r.a.id)}
+          className="bg-muted/50 hover:bg-accent flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1.5 text-xs">
+          <AssetLogo src={r.a.logo} />
+          <span className="font-medium">{r.a.label}</span>
+          <span className={cn('font-medium', r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+            {r.dir === 'long' ? 'Long' : 'Short'}
+          </span>
+          {/* the entry keeps the colour it has on the chart — the line you are waiting on */}
+          <span className="font-mono tabular-nums text-sky-600 dark:text-sky-400">{fmtPrice(r.plan!.entry)}</span>
+          <span className={cn('text-muted-foreground font-mono tabular-nums', r.plan!.thin && 'text-amber-600 dark:text-amber-500')}>
+            {r.plan!.net.toFixed(1)}×
+          </span>
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -2962,31 +2965,22 @@ function Scan({ orbMode, interval, onPick }: {
   const fee = dials.fee
   const feed = useVenue()
   const cfg = HORIZONS[horizon]
-  const [rows, setRows] = useState<ScanCard[] | null>(null)
   const [nonce, setNonce] = useState(0)
   // the worker answers these routes from cache offline — rows drawn from old bars must say so
   const online = useOnline()
+  const feeds = useScanBars(feed, nonce)
 
-  useEffect(() => {
-    if (feed === undefined) return
-    let on = true
-    setRows(null)
-    void Promise.all(
-      ASSETS.filter((a) => a.source !== 'twelvedata').map((a) => scanOne(a, horizon, interval, orbMode, fee, feed).catch(() => null)),
-    ).then((r) => {
-      if (!on) return
-      // ranked on the net R:R, not the gross one — the whole point of the column is which of these
-      // to look at first, and the fee is exactly what reorders the close ones
-      setRows(r.filter((x): x is ScanCard => !!x)
-        /* the completed cascade first — three timeframes in sequence is a better answer than any
-           single chart's grade, which is the whole reason it is computed. Then the desk's own
-           tier, then how many timeframes agree: between two setups of the same grade, the one the
-           slower charts are also behind is the one to look at first. */
-        .sort((x, y) => (y.cascade.stage === 3 ? 1 : 0) - (x.cascade.stage === 3 ? 1 : 0)
-          || y.tier - x.tier || y.agree - x.agree || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)))
-    })
-    return () => { on = false }
-  }, [horizon, nonce, orbMode, interval, fee, feed])
+  // ranked on the net R:R, not the gross one — the whole point of the column is which of these
+  // to look at first, and the fee is exactly what reorders the close ones
+  const rows = useMemo(() => feeds?.map((f) => scanCard(f, horizon, interval, orbMode, fee))
+    .filter((x): x is ScanCard => !!x)
+    /* the completed cascade first — three timeframes in sequence is a better answer than any
+       single chart's grade, which is the whole reason it is computed. Then the desk's own
+       tier, then how many timeframes agree: between two setups of the same grade, the one the
+       slower charts are also behind is the one to look at first. */
+    .sort((x, y) => (y.cascade.stage === 3 ? 1 : 0) - (x.cascade.stage === 3 ? 1 : 0)
+      || y.tier - x.tier || y.agree - x.agree || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null,
+  [feeds, horizon, interval, orbMode, fee])
 
   return (
     <Card className="py-3">
