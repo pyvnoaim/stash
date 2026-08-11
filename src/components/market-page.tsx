@@ -1973,9 +1973,11 @@ function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, s
      ponytail: no bar without both ends. A half-drawn scale is a scale that lies about the half it
      left out, and the line below still prints every level it has. */
   const lose = stop ?? liq ?? null
-  const at = (v: number) => Math.max(0, Math.min(1, (v - lose!) / (target! - lose!)))
   const bar = lose != null && target != null && now != null && lose !== target
-    ? { now: at(now), from: at(from), lose, stopped: stop != null }
+    ? (() => {
+        const at = (v: number) => Math.max(0, Math.min(1, (v - lose) / (target - lose)))
+        return { now: at(now), from: at(from), lose, win: target, mark: now, stopped: stop != null }
+      })()
     : null
   const level = (name: string, v: number) =>
     `${name} ${fmtPrice(v)}${now != null ? ` (${away(v, now)})` : ''}`
@@ -2023,11 +2025,11 @@ function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, s
           <div className="flex justify-between text-[10px] tabular-nums">
             <span className="text-destructive">
               {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
-              {now != null && <span className="text-muted-foreground"> {away(bar.lose, now)}</span>}
+              <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
             </span>
             <span className="text-emerald-600 dark:text-emerald-400">
-              target {fmtPrice(target!)}
-              {now != null && <span className="text-muted-foreground"> {away(target!, now)}</span>}
+              target {fmtPrice(bar.win)}
+              <span className="text-muted-foreground"> {away(bar.win, bar.mark)}</span>
             </span>
           </div>
         </div>
@@ -2817,10 +2819,11 @@ const deskTally = (rs: DeskRow['results']) => ({
  *
  * The venue's own settled money and its own close stamp, which the pairs agree on to the cent and
  * the millisecond. The entry price the app's own dedupe leans on is not on this route's allowlist,
- * and a row with no money at all is left alone rather than guessed at — better a double in their
- * log than a trade of theirs quietly deleted from it.
+ * and a row with no money — or with none of it, a scratch at $0.00 being the one figure two real
+ * trades do share — is left alone rather than guessed at: better a double in somebody's log than a
+ * trade of theirs quietly deleted from it.
  */
-const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => r.cash == null || !rs.slice(0, i)
+const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => !r.cash || !rs.slice(0, i)
   .some((x) => x.label === r.label && x.dir === r.dir && x.cash === r.cash && x.closedAt === r.closedAt))
 
 /**

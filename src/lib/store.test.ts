@@ -683,6 +683,12 @@ assert.equal(pos({}).size, undefined)                     // a plain watched pla
   closeWatch({ ...done, id: 'mexc-SOLUSDT-later', asset: 'SOLUSDT', closedAt: 5000 + 5400_000, r: -1.4 },
     5000 + 5400_000)
   assert.equal(getState().results.length, 2)
+  /* Two trades that both settled at nothing are two trades: a scratch is the one figure real ones
+     share, so the money identifies a pair only when there is some of it. */
+  clearResults()
+  closeWatch({ ...done, id: 'mexc-ADAUSDT-a', asset: 'ADAUSDT', entry: 1, cash: 0, r: 0 }, 5000)
+  closeWatch({ ...done, id: 'mexc-ADAUSDT-b', asset: 'ADAUSDT', entry: 2, cash: 0, r: -0.2 }, 5000)
+  assert.equal(getState().results.length, 2)
   clearResults()
   closeWatch(done, 5000)
 

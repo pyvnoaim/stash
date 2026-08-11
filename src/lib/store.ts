@@ -203,6 +203,9 @@ const KEEP_RESULTS = 50
  * is enough — the book and the history do not always average an entry the same way, and a row the
  * diff path filed before the history answered carries no money at all.
  *
+ * A scratch is not a fingerprint: $0.00 is the one figure two different trades really do share, so
+ * the money only identifies a pair when there is some.
+ *
  * Both sides have to be the exchange filer's own row, whose id is `venue-symbol-when` (see isReal).
  * A plan you watched and a trade you took on the same asset at the same price *are* two rows, and
  * this must never quietly eat one of them: only the filer writes one close down twice.
@@ -210,7 +213,7 @@ const KEEP_RESULTS = 50
 type Filed = { id: string; asset: string; dir: string; entry: number; closedAt: number; cash?: number }
 function twice(a: Filed, b: Filed) {
   const price = b.entry > 0 && Math.abs(a.entry - b.entry) <= b.entry * 1e-6
-  const money = a.cash != null && a.cash === b.cash
+  const money = a.cash != null && a.cash !== 0 && a.cash === b.cash
   return a.id.includes('-') && b.id.includes('-')
     && a.asset === b.asset && a.dir === b.dir
     && Math.abs(a.closedAt - b.closedAt) < 3600_000
