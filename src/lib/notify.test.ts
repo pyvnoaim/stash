@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, nakedAlerts, openRisk, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, nakedAlerts, openRisk, riskOf, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
@@ -408,3 +408,25 @@ assert.equal(bad.stopless, 1)      // and the unpriceable one is named, like a m
 assert.ok(isFinite(openRisk([{ symbol: 'BTCUSDT', entry: 1, stop: null, size: 1 }], [], 10).exch))
 
 console.log('open risk ok')
+
+/* ---------- a stop that is no longer a risk ---------- */
+
+/* The real stops a plan rests are tenths of a percent away and price normally. */
+assert.equal(riskOf('long', 100, 95), 5)
+assert.equal(riskOf('short', 100, 105), 5)
+assert.equal(riskOf('long', 64062.2, 63980), 82.19999999999709)   // 0.13%, the paper desk's tightest
+
+/* The one that printed +1161R: a $64k long with its stop trailed to twenty cents under the entry.
+   R is a multiple of the risk taken, and there is none of it left to divide by. */
+assert.equal(riskOf('long', 64062.2, 64062), null)
+// nor exactly on the entry, nor trailed past it into profit — the same comparison catches all three
+assert.equal(riskOf('long', 100, 100), null)
+assert.equal(riskOf('long', 100, 101), null)
+assert.equal(riskOf('short', 100, 99), null)
+// and nothing to read it against at all
+assert.equal(riskOf('long', 100, null), null)
+assert.equal(riskOf('long', 100, undefined), null)
+assert.equal(riskOf('long', 100, NaN), null)
+assert.equal(riskOf('long', 0, 95), null)
+
+console.log('risk ok')

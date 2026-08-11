@@ -149,6 +149,38 @@ export const rOf = (w: Watch, exit: number) => (w.dir === 'long'
   ? (exit - w.entry) / (w.entry - w.stop)
   : (w.entry - exit) / (w.stop - w.entry))
 
+/** Under this share of the entry price, a stop is not the risk somebody took. */
+const REAL_RISK = 0.0005
+
+/**
+ * The distance a position is really risking, or null when there is nothing to divide by.
+ *
+ * For the stops this app did not write. A plan's own stop comes out of `priced`, which refuses a
+ * geometry with no risk in it, so `rOf` above can divide and never think about it. A stop read off
+ * an exchange is the stop resting *now* — and the ordinary thing a person does with a winner is
+ * pull it up to break-even, which leaves R, a multiple of the risk taken at the entry, with a
+ * denominator of nearly nothing.
+ *
+ * A BTC long entered at 64,062.20 with its stop trailed to 64,062.00 is twenty cents of risk on a
+ * sixty-four-thousand-dollar position. $232 of move printed +1161R: not a big number, a broken one.
+ * Every caller used to guard with `entry !== stop`, which is only the stop sitting exactly on the
+ * entry — the one arrangement nobody's trailing actually produces.
+ *
+ * Half a tenth of a percent is the line, and the gap it sits in is wide: a break-even stop is
+ * thousandths of a percent away or on the wrong side outright, while the tightest stop anyone here
+ * really rests is a few tenths (the paper desk's own run went 0.13% to 0.52%). Negative risk — a
+ * stop trailed past the entry into profit — falls out of the same comparison.
+ *
+ * ponytail: a threshold, because the stop resting now is the only one a venue reports. The real
+ * denominator is the stop the position opened with, which means writing it down the first time the
+ * book is read and carrying it — worth doing when R goes null on trades people care about.
+ */
+export const riskOf = (dir: 'long' | 'short', entry: number, stop: number | null | undefined) => {
+  if (stop == null || !isFinite(stop) || !(entry > 0)) return null
+  const risk = dir === 'long' ? entry - stop : stop - entry
+  return risk >= entry * REAL_RISK ? risk : null
+}
+
 export const rLabel = (r: number) => `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
 
 /** What that R would have paid at the stake you set, or null when you have not set one. */
