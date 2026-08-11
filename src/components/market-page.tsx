@@ -3,6 +3,9 @@ import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, M
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
@@ -10,7 +13,7 @@ import {
 import { GuideDialog } from '@/components/guide-dialog'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
-import { euro, liqOf, netOf, openRisk, rLabel, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
@@ -18,7 +21,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result, type Watch } from '@/lib/store'
+import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -1775,8 +1778,17 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
        is what was on the table, and −1R means it was lost. This used to skip a stopless row
        entirely, which quietly dropped every trade closed by hand at a venue that rests no stop.
        Neither number, and there is nothing to measure against: those still go unrecorded. */
-    const risk = p.stop ?? p.liq ?? null
-    if (risk == null || !(p.entry > 0) || p.entry === risk) continue
+    /* The stop first, the liq behind it, and the margin behind that — including when the stop is
+       there but is no longer a risk. A winner whose stop was pulled up to break-even still has a
+       real denominator in the liquidation price, and one in the margin the leverage implies where
+       the venue quotes no liq. Three deep because the alternative is dropping a finished trade out
+       of the record for having been managed well, and a trade that happened and is not written
+       down is the one failure this function exists to prevent. The last of them is the same
+       distance the history path below prices by: entry ÷ lev is where the money runs out. */
+    const risk = riskOf(p.side, p.entry, p.stop)
+      ?? riskOf(p.side, p.entry, p.liq)
+      ?? (p.lev && p.lev > 0 && p.entry > 0 ? p.entry / p.lev : null)
+    if (risk == null) continue
     /* the venue's own close for this very row: same book, same symbol, and the same open stamp
        where the history carries one — a symbol closed and reopened inside the week is two rows in
        here, and the newest is the wrong one to price the older by. */
@@ -1788,7 +1800,7 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
     if (hit) used.add(hit)
     const exit = hit?.exit ?? p.mark   // failing that, the last mark seen — the old behaviour
     if (exit == null) continue
-    const r = p.side === 'long' ? (exit - p.entry) / (p.entry - risk) : (p.entry - exit) / (risk - p.entry)
+    const r = (p.side === 'long' ? exit - p.entry : p.entry - exit) / risk
     const id = assetOf(p.symbol)
     closeWatch({
       // the open stamp is in the id, so closing and reopening the same symbol is two trades —
@@ -2025,9 +2037,11 @@ export function ExchangePositions() {
         <div className="mt-0.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {rows.map((p) => {
           // running R off the resting stop: the one number that says how the trade is going in
-          // its own risk unit. Absent without a stop — risk nobody defined can't be counted in.
-          const r = p.mark != null && p.stop != null && p.entry !== p.stop
-            ? (p.side === 'long' ? (p.mark - p.entry) / (p.entry - p.stop) : (p.entry - p.mark) / (p.stop - p.entry))
+          // its own risk unit. Absent without a stop — risk nobody defined can't be counted in,
+          // and a stop trailed to break-even is a stop that no longer defines one (see riskOf).
+          const risk = riskOf(p.side, p.entry, p.stop)
+          const r = p.mark != null && risk != null
+            ? (p.side === 'long' ? p.mark - p.entry : p.entry - p.mark) / risk
             : null
           const up = (p.pct ?? 0) >= 0
           return (
@@ -2682,12 +2696,98 @@ function Record() {
  * The percent is the move from the entry, not the return on their margin — the same thing your own
  * card shows, and for the same reason: leverage is theirs and the server never sent it.
  */
-const deskNow = (w: DeskRow['open'][number]) => ({
-  pct: w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null,
-  r: w.mark == null || w.stop == null || w.stop === w.entry
-    ? null
-    : rOf({ dir: w.dir, entry: w.entry, stop: w.stop } as Watch, w.mark),
-})
+const deskNow = (w: DeskRow['open'][number]) => {
+  // and no R on a stop that has been trailed up to break-even, which is not a risk any more — see
+  // riskOf. This is where +1161R came from: twenty cents of stop under a $64k entry.
+  const risk = riskOf(w.dir, w.entry, w.stop)
+  return {
+    pct: w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null,
+    r: w.mark == null || risk == null
+      ? null
+      : (w.dir === 'long' ? w.mark - w.entry : w.entry - w.mark) / risk,
+  }
+}
+
+const DESK_LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4rem,1fr)_minmax(4rem,9rem)_4.5rem_3.5rem]'
+
+/**
+ * One desk's finished trades, behind a press.
+ *
+ * The row above already says how many there were and what share of them hit; this is what those
+ * came from. Behind a press rather than on the page because the pane is a glance at everyone —
+ * ten desks with twenty trades each unrolled is a page nobody reaches the bottom of, and the
+ * summary is what you read first anyway.
+ *
+ * The same table the Log tab draws for your own record, short two columns. The money is one: the
+ * server never sends anyone's size, so nothing here can say what a desk is up in euros, which is
+ * the whole point of the payload's shape. The other is when the trade opened — `/api/desk` sends
+ * `closedAt` and not `entryAt`, so the Ran column has one end of its range and is left off rather
+ * than half-drawn. Putting `entryAt` on that allowlist is a one-line change to the route and a
+ * decision about what the desk switch promises, so it is not one to make from the page that
+ * happens to want it.
+ */
+function DeskLog({ p, won }: { p: DeskRow, won: number }) {
+  const rows = useMemo(() => [...p.results].sort((a, b) => b.closedAt - a.closedAt), [p.results])
+  const total = rows.reduce((n, r) => n + r.r, 0)
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="ghost" size="sm"
+          className="text-muted-foreground hover:text-foreground -my-1 h-6 px-1.5 text-xs tabular-nums">
+          {rows.length} finished · {Math.round((won / rows.length) * 100)}% hit
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{p.name}&rsquo;s log</DialogTitle>
+          <DialogDescription>
+            Every trade they were really in, newest first. In R and never in euros — the server does
+            not send anyone&rsquo;s size, so this cannot say what they are up in money.
+          </DialogDescription>
+        </DialogHeader>
+        {/* no horizontal padding on the scroller: the header below is sticky, and a container
+            padded at the sides leaves it two gaps for the rows to scroll up through */}
+        <div className="max-h-[60vh] overflow-y-auto">
+          <div className={cn(DESK_LOG_GRID, 'text-muted-foreground font-heading bg-background sticky top-0 border-b px-1.5 pt-1 pb-1 text-[10px] tracking-wider uppercase')}>
+            <span>Trade</span>
+            <span>Side</span>
+            <span className="text-right">Ended</span>
+            <span className="text-right">R</span>
+          </div>
+          {rows.map((r, i) => {
+            const hit = r.level === 'target'
+            return (
+              /* the position, not the id: these rows are someone else's document, and two results
+                 carrying one id — or none at all, which is what `String(r?.id ?? '')` leaves — is
+                 a thing their file is allowed to contain and this list must not break on. Nothing
+                 in a row holds state, so the index is a key with nothing to get wrong. */
+              <div key={i} className={cn(DESK_LOG_GRID, 'border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
+                <span className="truncate font-medium">{r.label}</span>
+                <span className="text-muted-foreground truncate text-xs">
+                  {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
+                </span>
+                <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {hit ? 'target' : 'stopped'}
+                </span>
+                <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+              </div>
+            )
+          })}
+        </div>
+        <div className="flex items-baseline gap-2 border-t pt-3 text-sm">
+          <span className="text-muted-foreground text-xs">
+            {rows.length} finished · {won} hit target
+          </span>
+          <span className={cn('ml-auto font-mono tabular-nums',
+            total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+            {rLabel(total)}
+          </span>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 /**
  * Everyone else on this server who has switched their desk on: how their trades went, and what they
@@ -2765,12 +2865,12 @@ function Desk({ live }: { live: boolean }) {
                   <Avatar name={p.name} avatar={null} className="size-6 text-[11px]" />
                   <span className="truncate text-sm font-medium">{p.name}</span>
                   {/* a desk with nothing finished says so: the empty stat slot read as a row that
-                      had failed to load its numbers rather than one with none to load */}
-                  <span className="text-muted-foreground text-xs tabular-nums">
-                    {p.results.length
-                      ? `${p.results.length} finished · ${Math.round((won / p.results.length) * 100)}% hit`
-                      : 'nothing finished yet'}
-                  </span>
+                      had failed to load its numbers rather than one with none to load — and with
+                      nothing behind it there is nothing to press, so it stays a word rather than
+                      becoming a button that opens an empty table */}
+                  {p.results.length
+                    ? <DeskLog p={p} won={won} />
+                    : <span className="text-muted-foreground text-xs">nothing finished yet</span>}
                   {!!p.results.length && (
                     <span className={cn('ml-auto font-mono text-sm tabular-nums',
                       total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
@@ -2872,14 +2972,20 @@ function useScanBars(feed: VenueFeed, nonce = 0) {
 }
 
 /**
- * Which *other* asset has a setup, on the page rather than behind a button. The Scan tab below is
- * this same sweep at full width, ranked, with every timeframe's lean on it; this is the glance
- * version — only the rows the desk would act on, one chip each, click to go there.
+ * Which asset has a setup, on the page rather than behind a button. The Scan tab below is this same
+ * sweep at full width, ranked, with every timeframe's lean on it; this is the glance version — only
+ * the rows the desk would act on, one chip each, click to go there.
  *
  * It was a popover on a telescope button, which meant the answer to "is anything else worth
  * pressing" cost a click and a wait every time you wanted it — and a glance you have to ask for
  * is not a glance. So it reads on mount and sits above the chart instead. That sweep is the price
  * of the glance: eleven assets × five intervals of klines, once per load.
+ *
+ * The whole list, including the chart already open. It used to drop that one on the grounds that
+ * the chart underneath says all of it in full — but the strip is also the count, and hiding a row
+ * from it turned "one setup, and it is the one you are on" into a strip that read like nothing was
+ * there at all. The open one keeps a ring instead, so the row stays a complete answer to "what is
+ * live right now" and still says which of them you are looking at.
  */
 function SetupsNow({ orbMode, interval, current, onPick }: {
   orbMode: boolean
@@ -2900,20 +3006,22 @@ function SetupsNow({ orbMode, interval, current, onPick }: {
     .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null,
   [feeds, horizon, interval, orbMode, fee])
 
-  // the chart you are already looking at says all of this in full, right underneath
-  const others = rows?.filter((r) => r.a.id !== current)
-
-  if (rows === null) return <p className="text-muted-foreground text-xs">Reading every other chart…</p>
-  if (!others?.length) return <p className="text-muted-foreground text-xs">Nothing to press on any other chart. Waiting is the position.</p>
+  if (rows === null) return <p className="text-muted-foreground text-xs">Reading every chart…</p>
+  if (!rows.length) return <p className="text-muted-foreground text-xs">Nothing to press on any chart. Waiting is the position.</p>
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <Hint label={`Every other chart's setup on the ${orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read — the entry, and what it pays net of the fee. Click one to open it.`}>
+      <Hint label={`Every chart's setup on the ${orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read — the entry, and what it pays net of the fee. Click one to open it.`}>
         <span className="text-muted-foreground text-xs">Setups now</span>
       </Hint>
-      {others.map((r) => (
+      {rows.map((r) => (
         <button key={r.a.id} type="button" onClick={() => onPick(r.a.id)}
-          className="bg-muted/50 hover:bg-accent flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1.5 text-xs">
+          className={cn(
+            'bg-muted/50 hover:bg-accent flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1.5 text-xs',
+            // the one you are already on, kept in the row rather than dropped from it: a list that
+            // hides a setup because you happen to be looking at it reads as "there is nothing here"
+            r.a.id === current && 'ring-border ring-1',
+          )}>
           <AssetLogo src={r.a.logo} />
           <span className="font-medium">{r.a.label}</span>
           <span className={cn('font-medium', r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
