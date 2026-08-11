@@ -2715,6 +2715,20 @@ const deskPaid = (cash: number | null) =>
   cash === null ? '' : `${cash >= 0 ? '+' : '−'}$${Math.abs(cash).toFixed(2)}`
 
 /**
+ * What a desk's finished trades add up to. One function for the row and the table behind it, so the
+ * summary and the footer under it can never disagree about the same list.
+ *
+ * The dollars are only over the rows a venue settled, and null when it settled none — a sum that
+ * quietly skipped half the list while sitting beside a count of all of it would read as the whole
+ * record's money. The R is over every row, because every row has one.
+ */
+const deskTally = (rs: DeskRow['results']) => ({
+  total: rs.reduce((n, r) => n + r.r, 0),
+  won: rs.filter((r) => r.level === 'target').length,
+  usd: rs.some((r) => r.cash != null) ? rs.reduce((n, r) => n + (r.cash ?? 0), 0) : null,
+})
+
+/**
  * One desk's finished trades, behind a press.
  *
  * The row above already says how many there were and what share of them hit; this is what those
@@ -2733,12 +2747,9 @@ const deskPaid = (cash: number | null) =>
  * print their R and an empty Paid, and the footer's total counts only the ones a venue settled, so
  * it is never half a sum passed off as a whole one.
  */
-function DeskLog({ p, won }: { p: DeskRow, won: number }) {
+function DeskLog({ p }: { p: DeskRow }) {
   const rows = useMemo(() => [...p.results].sort((a, b) => b.closedAt - a.closedAt), [p.results])
-  const total = rows.reduce((n, r) => n + r.r, 0)
-  // dollars only over the rows that have them; null when no venue closed any of it
-  const usd = rows.some((r) => r.cash != null)
-    ? rows.reduce((n, r) => n + (r.cash ?? 0), 0) : null
+  const { total, won, usd } = deskTally(rows)
 
   return (
     <Dialog>
@@ -2797,17 +2808,20 @@ function DeskLog({ p, won }: { p: DeskRow, won: number }) {
           </span>
           {/* Both, side by side, never summed into one: the R is over every finished trade and the
               dollars only over the ones a venue settled. A desk can be down in R and up in money on
-              the same list, so each is coloured by itself rather than by the other. */}
-          <span className={cn('ml-auto font-mono tabular-nums',
-            total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-            {rLabel(total)}
-          </span>
-          {usd !== null && (
-            <span className={cn('font-mono tabular-nums',
-              usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-              {deskPaid(usd)}
+              the same list, so each is coloured by itself rather than by the other — and the money
+              leads, with the R as the note under it, the same way a position tile reads. */}
+          <span className="ml-auto flex items-baseline gap-2 font-mono tabular-nums">
+            {usd !== null && (
+              <span className={cn('font-medium',
+                usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {deskPaid(usd)}
+              </span>
+            )}
+            <span className={cn('text-xs',
+              total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {rLabel(total)}
             </span>
-          )}
+          </span>
         </div>
       </DialogContent>
     </Dialog>
@@ -2875,8 +2889,7 @@ function Desk({ live }: { live: boolean }) {
             does the same separating with none of the weight. */}
         <div className="grid gap-3">
           {people.map((p) => {
-            const total = p.results.reduce((n, r) => n + r.r, 0)
-            const won = p.results.filter((r) => r.level === 'target').length
+            const { total, usd } = deskTally(p.results)
             return (
               <div key={p.name} className="border-t pt-3 first:border-t-0 first:pt-0">
                 <div className="flex items-center gap-2">
@@ -2891,18 +2904,34 @@ function Desk({ live }: { live: boolean }) {
                       nothing behind it there is nothing to press, so it stays a word rather than
                       becoming a button that opens an empty table */}
                   {p.results.length
-                    ? <DeskLog p={p} won={won} />
+                    ? <DeskLog p={p} />
                     : <span className="text-muted-foreground text-xs">nothing finished yet</span>}
                   {!!p.results.length && (
-                    <span className={cn('ml-auto font-mono text-sm tabular-nums',
-                      total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                      {rLabel(total)}
+                    /* The same two figures the log's own footer prints, and in the same order, so
+                       opening the table never changes the answer the row already gave. */
+                    <span className="ml-auto flex items-baseline gap-2 font-mono text-sm tabular-nums">
+                      {usd !== null && (
+                        <span className={cn('font-medium',
+                          usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                          {deskPaid(usd)}
+                        </span>
+                      )}
+                      <span className={cn('text-xs',
+                        total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                        {rLabel(total)}
+                      </span>
                     </span>
                   )}
                 </div>
+                {/* A flat desk says so, for the reason the empty stat slot did: a name with nothing
+                    under it reads as tiles that failed to arrive rather than as a book with none in
+                    it, and those are the two things this pane exists to tell apart. */}
+                {!p.open.length && (
+                  <p className="text-muted-foreground mt-1.5 text-xs">Nothing open right now</p>
+                )}
                 {/* someone watching thirty setups is a list nobody reads, and it would push every
                     other desk off the page — the count below says what was left out */}
-                <div className="mt-1.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                <div className="mt-1.5 grid gap-2 empty:hidden sm:grid-cols-2 xl:grid-cols-3">
                   {p.open.slice(0, 6).map((w) => {
                     /* how it is doing right now, off the venue's own book — the same tile as your
                        own, and now the same numbers on it: the money, the percent, the R where a
