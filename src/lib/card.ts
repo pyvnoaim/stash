@@ -64,10 +64,27 @@ const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleStri
 /** The card, as SVG. Pure string in, pure string out — which is what makes it testable. */
 export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null): string {
   const name = p.symbol
-  const up = (p.pct ?? 0) >= 0
-  // grey, not green, when the feed gave no mark: an unknown that wears the winning colour is a lie
-  const ink = p.pct == null ? '#a1a1aa' : up ? '#34d399' : '#f87171'
-  const pct = p.pct == null ? '—' : `${up ? '+' : ''}${p.pct.toFixed(2)}%`
+  /* The money is the headline and the price move is the note under it, which is the way round a
+     leveraged trade is actually read. A percent here has always been the move in the price, not
+     the return on the margin behind it — so a 50× position that paid a hundred euros announced
+     itself as "+0.69%", and the number a stranger's eye lands on was the one that understates what
+     happened by the whole leverage. Where there is no money to show — a plan that was watched
+     rather than taken — the percent keeps the headline, because a card with nothing big on it is
+     not a card. */
+  const headline = p.pnl != null ? money(p.pnl) : null
+  const up = (p.pnl ?? p.pct ?? 0) >= 0
+  /* grey, not green, when there is neither number: an unknown that wears the winning colour is a
+     lie. It follows whichever of them is the headline, and those two can disagree — funding is in
+     the money and not in the price, so a perp held through enough of it is green on the chart and
+     red in the pocket. The pocket is what the card is about. */
+  const ink = p.pnl == null && p.pct == null ? '#a1a1aa' : up ? '#34d399' : '#f87171'
+  // its own sign, not the headline's, for exactly that disagreement
+  const pct = p.pct == null ? '—' : `${p.pct >= 0 ? '+' : ''}${p.pct.toFixed(2)}%`
+  /* Money is longer than a percent — "−$123,456.78" is twelve characters where "+12.33%" was
+     seven — and at 156px the twelfth one walks off a 1200-wide card. Digits in this stack run
+     about 0.6em, so shrink until the line fits the 1040 between the margin and the right edge,
+     and never past the size the card was drawn at. */
+  const size = (s: string) => Math.min(156, Math.floor(1040 / (s.length * 0.6)))
   // the line under the headline: everything a reader needs to place the trade, in one sentence
   const facts = [
     `Entry ${num(p.entry)}`,
@@ -122,8 +139,8 @@ ${t(pic ? 1028 : 1120, 132, 30, '#a1a1aa', 500, who.name, ' text-anchor="end"')}
 ${dressing}
 ${t(80, 140, 68, '#fafafa', 600, name)}${byline}
 ${t(80, 190, 28, '#a1a1aa', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null].filter(Boolean).join('   ·   '))}
-${t(80, 400, 156, ink, 700, pct)}
-${t(80, 462, 34, '#fafafa', 500, `${p.pnl == null ? '' : money(p.pnl) + ' '}${p.closedAt ? 'realised' : 'unrealised'}`)}
+${t(80, 400, size(headline ?? pct), ink, 700, headline ?? pct)}
+${t(80, 462, 34, '#fafafa', 500, `${headline == null ? '' : pct + ' in the price · '}${p.closedAt ? 'realised' : 'unrealised'}`)}
 ${t(80, 560, 26, '#71717a', 400, facts)}
 ${t(1120, 560, 28, '#52525b', 600, 'stash', ' text-anchor="end"')}
 </svg>`

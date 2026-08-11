@@ -12,8 +12,9 @@ test('the card names the asset, the side and the profit', () => {
   assert.match(svg, /BTCUSDT/)
   assert.match(svg, /Long/)
   assert.match(svg, /Bitget/)
-  assert.match(svg, /\+12\.33%/)
-  assert.match(svg, /\+\$3,700\.00 unrealised/)
+  // the money is the headline and wears the trade's colour; the price move is the note under it
+  assert.match(svg, /font-size="156" fill="#34d399" font-weight="700">\+\$3,700\.00</)
+  assert.match(svg, /font-size="34" fill="#fafafa" font-weight="500">\+12\.33% in the price · unrealised</)
   assert.match(svg, /\+1\.84R/)
   assert.match(svg, /Entry 60,000/)
   assert.match(svg, /width="1200" height="630"/)
@@ -21,16 +22,32 @@ test('the card names the asset, the side and the profit', () => {
 
 test('a loss is red and signed, and green is kept for profit', () => {
   const red = cardSvg({ ...P, side: 'short', pct: -4.5, pnl: -1234.5 })
-  assert.match(red, /−\$1,234\.50 unrealised/)
-  assert.match(red, /-4\.50%/)
+  assert.match(red, />−\$1,234\.50</)
+  assert.match(red, /-4\.50% in the price · unrealised/)
   assert.match(red, /#f87171/)
   assert.doesNotMatch(red, /#34d399/)
   assert.match(cardSvg(P), /#34d399/)
 })
 
+test('the headline shrinks rather than running off the card', () => {
+  // twelve characters at 156px would reach past 1200; seven at that size never does
+  assert.match(cardSvg({ ...P, pnl: -123456.78 }), /font-size="144"[^>]*>−\$123,456\.78</)
+  assert.match(cardSvg({ ...P, pnl: 3700 }), /font-size="156"[^>]*>\+\$3,700\.00</)
+})
+
+test('a plan nobody took keeps the percent as its headline', () => {
+  // watched rather than taken: no size, so no money — and a card with nothing big on it is no card
+  const svg = cardSvg({ ...P, pnl: null })
+  assert.match(svg, /font-size="156" fill="#34d399" font-weight="700">\+12\.33%</)
+  // and the note under it does not say the percent twice
+  assert.match(svg, />unrealised</)
+  assert.doesNotMatch(svg, /in the price/)
+})
+
 test('a feed with no mark still makes a card, saying nothing it cannot', () => {
   const svg = cardSvg({ ...P, mark: null, pct: null, pnl: null, openedAt: null })
   assert.match(svg, />—</)
+  assert.match(svg, /#a1a1aa/)   // neither number: grey, not the winning colour
   assert.match(svg, />unrealised</)
   assert.doesNotMatch(svg, /Now /)
   assert.doesNotMatch(svg, /Opened/)
@@ -41,7 +58,8 @@ test('a finished trade says realised, and prints an exit rather than a mark', ()
     symbol: 'DOGEUSDT', side: 'short', entry: 0.1985, mark: 0.1909, pct: 3.83, pnl: 9.2,
     openedAt: '2026-08-09T10:00:00Z', closedAt: '2026-08-10T14:00:00Z', venue: 'VWAP pull-back',
   }, 2)
-  assert.match(svg, />\+\$9\.20 realised</)
+  assert.match(svg, />\+\$9\.20</)
+  assert.match(svg, /\+3\.83% in the price · realised</)
   assert.doesNotMatch(svg, /unrealised/)
   assert.match(svg, /Exit 0\.1909/)
   assert.doesNotMatch(svg, /Now 0\.1909/)
