@@ -1,7 +1,8 @@
 // npm test — the paper desk's arithmetic. If this is wrong the forward test reports a rule that
 // never ran, which is worse than reporting nothing.
 import assert from 'node:assert/strict'
-import { step, type Paper } from './paper.ts'
+import { DatabaseSync } from 'node:sqlite'
+import { createPaper, step, type Paper } from './paper.ts'
 
 const NOW = Date.UTC(2026, 0, 2, 12)
 const HOUR = 36e5
@@ -51,11 +52,19 @@ const lost = step(live, 95, NOW + 2 * HOUR)!
 assert.equal(lost.level, 'stop')
 assert.equal(lost.r, -1)
 
-/* The R is off the price actually seen, not off the level: a poll every minute lands past a level
-   as often as on it, and writing down the level would report a fill nobody got. */
+/* A poll every minute lands past a level as often as on it, and the two ends keep the overshoot
+   differently. A stop is a market exit and really pays it: */
 const gapped = step(live, 92, NOW + 2 * HOUR)!
 assert.equal(gapped.level, 'stop')
 assert.equal(gapped.r, -1.6)    // (92 − 100) / 5, the loss that really happened
+assert.equal(gapped.exit, 92)
+
+/* — a target is a limit order, and does not get paid for the distance past it. Priced at the
+   level however far through the poll caught it. */
+const overshot = step(live, 130, NOW + 2 * HOUR)!
+assert.equal(overshot.level, 'target')
+assert.equal(overshot.exit, 110)
+assert.equal(overshot.r, 2)     // the plan's 2R, not the 6R the tick happened to show
 
 /* A price through the stop of a long is also past its entry. Both could have happened on one tick,
    and the worse one is the one written down — the same order the app's own watcher reads them in. */
@@ -67,9 +76,42 @@ assert.equal(both.entryAt, NOW + HOUR)
 const shortLive: Paper = { ...short, entryAt: NOW + HOUR }
 assert.equal(step(shortLive, 90, NOW + 2 * HOUR)!.level, 'target')
 assert.equal(step(shortLive, 90, NOW + 2 * HOUR)!.r, 2)   // (100 − 90) / 5
+assert.equal(step(shortLive, 80, NOW + 2 * HOUR)!.exit, 90)   // and the same limit, the other way
 assert.equal(step(shortLive, 105, NOW + 2 * HOUR)!.level, 'stop')
 
 // a feed that says nothing usable says nothing at all, rather than filing a trade off a NaN
 assert.equal(step(live, NaN, NOW + 2 * HOUR), null)
+
+/* ---------- the record already written ---------- */
+
+/* Rows closed before the target was priced at its level. createPaper re-prices them on boot, and
+   has to leave everything else exactly as it found it — a stop's slippage is real and stays. */
+{
+  const db = new DatabaseSync(':memory:')
+  db.exec(`create table users (id integer primary key);
+           create table docs (user integer, v integer, json text);
+           insert into users (id) values (1);`)
+  const row = (id: string, dir: string, target: number, level: string, exit: number, r: number) =>
+    [id, 1, 'X', 'X', dir, 'r', '1h', 100, dir === 'long' ? 95 : 105, target, 1.8, NOW,
+      NOW, NOW, level, exit, r]
+
+  const desk = createPaper(db)
+  const ins = db.prepare(`insert into paper (id, user, asset, label, dir, rule, interval,
+    entry, stop, target, net, ts, entryAt, closedAt, level, exit, r)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run(...row('over', 'long', 110, 'target', 130, 6))     // the overshoot, booked as profit
+  ins.run(...row('shortover', 'short', 90, 'target', 80, 4))
+  ins.run(...row('slipped', 'long', 110, 'stop', 92, -1.6))  // a real cost, not to be touched
+  desk.stop()
+
+  createPaper(db)   // the boot that corrects it
+  const by = Object.fromEntries(desk.rows(1).map((p) => [p.id, p]))
+  assert.equal(by.over.exit, 110)
+  assert.equal(by.over.r, 2)
+  assert.equal(by.shortover.exit, 90)
+  assert.equal(by.shortover.r, 2)
+  assert.equal(by.slipped.exit, 92)      // untouched
+  assert.equal(by.slipped.r, -1.6)
+}
 
 console.log('paper ok')

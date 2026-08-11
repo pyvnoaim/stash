@@ -94,8 +94,18 @@ export function step(row: Paper, price: number, at: number): Partial<Paper> | nu
   if (!level) return row.entryAt == null ? opened : null
 
   const risk = Math.abs(row.entry - row.stop)
-  const r = risk > 0 ? (long ? price - row.entry : row.entry - price) / risk : 0
-  return { ...opened, closedAt: at, level, exit: price, r: Math.round(r * 100) / 100 }
+  /* The two ends are not symmetric, and pricing them the same was flattering the record.
+     A target is a limit order sitting at a level: it fills there, and the distance past it is not
+     yours. A stop is a market exit: it fills where the book is when it triggers, which on a fast
+     move is worse than the level. So the target is written at the level and the stop at the price
+     really seen — each one taking the side of the poll that a real fill would have taken.
+     It matters because the poll is a minute wide. XRP came back at 1.0071 against a target of
+     1.0155 and the overshoot was booked as profit: 5.59R for a plan that was worth 2.04. The
+     entry has always been priced this way — the pull-back is a limit too, and the fill is assumed
+     at `entry` rather than at whatever the tick that crossed it showed. */
+  const exit = level === 'target' ? row.target : price
+  const r = risk > 0 ? (long ? exit - row.entry : row.entry - exit) / risk : 0
+  return { ...opened, closedAt: at, level, exit, r: Math.round(r * 100) / 100 }
 }
 
 export function createPaper(db: DatabaseSync) {
@@ -123,6 +133,20 @@ export function createPaper(db: DatabaseSync) {
       primary key (id, user)
     );
     create index if not exists paper_user on paper (user, ts);
+  `)
+
+  /* The winners filed before the target was priced at its level still carry the overshoot the poll
+     happened to catch — XRP's 5.59R for a 2.04R plan, and every one like it. Re-priced here rather
+     than left alone: the expectancy under the table is an average over the whole record, and half
+     of it counting a fill nobody could have got drags that average somewhere the rule never went.
+     Idempotent, so it is safe on every boot — after the first it matches nothing. `entry <> stop`
+     only because a zero risk would divide to null and blank an R that is already written. */
+  db.exec(`
+    update paper set
+      exit = target,
+      r = round((case when dir = 'long' then target - entry else entry - target end)
+                / abs(entry - stop), 2)
+    where level = 'target' and entry <> stop and exit is not target
   `)
 
   const q = {
