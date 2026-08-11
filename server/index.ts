@@ -1342,7 +1342,8 @@ export function start({
        still read only to decide whether a row is real, and a hand-typed position carries no venue
        numbers at all, so it still leaves as levels and nothing else.
 
-       Real positions only, on both lists. A record keeps watched plans beside taken trades and
+       Real trades only, on both lists — sized by hand, or closed and settled by a venue, which is
+       the same test the Log applies to its own rows. A record keeps watched plans beside taken and
        prices them off a hypothetical stake, which is fine on your own page where the distinction is
        drawn — and is not fine here, where someone else reads a hit rate as a claim about how the
        person trades. Nobody scrolls a leaderboard thinking "some of these were never taken". The
@@ -1360,6 +1361,14 @@ export function start({
          here rather than imported, because this reads someone else's document: `size` arriving as
          the string "500" must not count, and NaN must not either. Both fall out of the typeof. */
       const taken = (w: any) => typeof w?.size === 'number' && w.size > 0 && typeof w?.lev === 'number' && w.lev > 0
+      /* A finished row is real the same three ways isReal counts them, and a venue's own close is
+         two of them: an exchange fills and settles without anyone typing a size, so `taken` alone
+         threw away every trade a desk let its venue close and left the whole log reading "nothing
+         finished yet". `cash` is the venue's settled figure and a hyphenated id is `venue-symbol-when`
+         — either one is a fill, whatever the document forgot to write down beside it. */
+      const real = (r: any) => taken(r)
+        || (typeof r?.cash === 'number' && isFinite(r.cash))
+        || String(r?.id ?? '').includes('-')
       const desk = []
       // whose desk each row is, kept beside the list rather than on it: the account id is ours
       const who: number[] = []
@@ -1372,7 +1381,7 @@ export function start({
           /* The name and nothing else of who they are: an avatar is up to 128 KB of data URI and
              the page draws none of them, so ten desks would have been a megabyte of picture. */
           name: row.name,
-          results: arr(s.results).filter(taken).map((r: any) => ({
+          results: arr(s.results).filter(real).map((r: any) => ({
             id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
             dir: r?.dir === 'short' ? 'short' : 'long',
             level: r?.level === 'target' ? 'target' : 'stop',

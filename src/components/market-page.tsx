@@ -2841,12 +2841,8 @@ function Desk({ live }: { live: boolean }) {
   return (
     <Card className="py-3">
       <CardContent className="px-3">
-        <div className="mb-2 flex items-baseline gap-2">
-          <span className="font-heading text-sm tracking-wide uppercase">The others</span>
-          <span className="text-muted-foreground text-xs">
-            {people.length === 1 ? 'one desk' : `${people.length} desks`}
-          </span>
-        </div>
+        {/* no count beside the heading: the desks are right underneath and countable on sight */}
+        <div className="mb-2 font-heading text-sm tracking-wide uppercase">The others</div>
         {/* A ruled list, not a stack of boxes. Each desk used to be a bordered card holding bordered
             tiles inside a bordered card — three nested rectangles for what is really a name and the
             positions under it, and at two desks the page read as packaging. The rule between people

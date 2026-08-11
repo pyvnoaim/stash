@@ -163,12 +163,16 @@ assert.deepEqual(await (await get('/api/users', mia)).json(), { users: ['kim', '
    paid anyone. Leon leaves his off, so mia's desk stays empty while his reads hers.
    Mia's document holds one of each kind on both lists: a trade she was really in, and a plan she
    only ever watched. Only the taken ones may leave the server — a hit rate someone else reads is a
-   claim about how she trades, and untaken ideas do not get to vouch for it. */
+   claim about how she trades, and untaken ideas do not get to vouch for it.
+   Her third result is the kind a venue closed for her: settled cash and a `venue-symbol-when` id,
+   and no size anywhere on it, because nobody typed one. Reading only size once emptied every desk
+   whose exchange does the closing — which is most of them. */
 await put(mia, (await (await get('/state', mia)).json()).version, {
   desk: true,
   results: [
     { id: 'r1', label: 'Bitcoin', horizon: 'Trading', dir: 'long', level: 'target', r: 2, closedAt: 5, size: 500, lev: 10 },
     { id: 'r2', label: 'Solana', horizon: 'Trading', dir: 'long', level: 'stop', r: -1, closedAt: 6 },
+    { id: 'mexc-BTCUSDT-7', label: 'Bitcoin', horizon: 'Trading', dir: 'short', level: 'target', r: 3, closedAt: 7, cash: 12.4 },
   ],
   watches: [
     { id: 'w1', label: 'Ether', horizon: 'Trading', dir: 'short', entry: 3, stop: 4, target: 1, size: 500, lev: 10 },
@@ -178,7 +182,8 @@ await put(mia, (await (await get('/state', mia)).json()).version, {
 assert.equal((await get('/api/desk')).status, 401)
 const seen = (await (await get('/api/desk', leon)).json()).desk
 assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that opted in')
-assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1'], 'a plan she never took is not her record')
+assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1', 'mexc-BTCUSDT-7'],
+  'a plan she never took is not her record, and one her venue closed is')
 assert.equal(seen[0].results[0].r, 2)
 assert.deepEqual(seen[0].open.map((w: any) => w.id), ['w1'], 'nor is a plan she is only watching')
 assert.equal(seen[0].open[0].mark, null, 'a document row carries no live price')
