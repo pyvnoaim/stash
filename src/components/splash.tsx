@@ -75,13 +75,15 @@ function paint(el: HTMLElement, word = 'stash') {
  * sheet over the top of it that leaves before anyone could have reached for anything, and it
  * never opens at all for someone who asked for less motion.
  *
+ * It plays when the app opens for you and only then — mounted beside App in main.tsx, so signing in
+ * is an entrance and the sign-in page is not. See the note on that branch.
+ *
  * Everything below hangs off the paint, not off the mount, and that is the whole point of it.
- * Sampling the matrix needs the face, and the face is fetched rather than present: the sheet opens
- * over the sync gate, which renders nothing at all, so at that moment no text on the page has
- * asked for Geist Pixel and nothing has gone to get it. Timed from the mount, a launch that waited
- * on that fetch ran its entire beat against an empty grid — and since the sheet is `bg-background`
- * over a gate that is also nothing, an opener that drew nothing and an opener that never opened
- * look exactly alike.
+ * Sampling the matrix needs the face, and the face is fetched rather than present: on a cold load
+ * the sheet goes up in the same frame App does, before a glyph of Geist Pixel has been asked for
+ * anywhere. Timed from the mount, a launch that waited on that fetch ran its entire beat against an
+ * empty grid — and since the sheet is `bg-background` over an app that has not painted either, an
+ * opener that drew nothing and an opener that never opened look exactly alike.
  */
 export function Splash() {
   const [gone, setGone] = useState(skip)

@@ -128,8 +128,14 @@ function Root() {
     )
   }
   if (status === 'init') return null
-  if (user) return <App />
-  return status === 'off' && hasLocal() ? <App /> : <LoginGate />
+  /* The opener belongs to the app, not to the page. Signing in is when the app opens for you, so
+     the sheet plays there — mounted alongside App, whether that is a fresh session answering 401
+     with a password or a reload that came back already known. The sign-in page gets none of it:
+     there is nothing to open yet, and a wordmark snapping together over a form someone is about to
+     type into is an interruption rather than an entrance. */
+  const app = <><Splash /><App /></>
+  if (user) return app
+  return status === 'off' && hasLocal() ? app : <LoginGate />
 }
 
 /* The toaster sits above the gate, not inside App: sonner drops anything published while no
@@ -140,9 +146,6 @@ function Root() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Toaster position="bottom-right" />
-    {/* over everything, including the blank the gate holds while the server answers: opening the
-        app should look like the app opening rather than like nothing having happened yet */}
-    <Splash />
     <Root />
   </StrictMode>,
 )
