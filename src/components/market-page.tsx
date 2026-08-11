@@ -3,6 +3,7 @@ import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, M
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog'
@@ -1886,6 +1887,9 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
 function useExchangePositions() {
   const [feed, setFeed] = useState<{ rows: ExchangePosition[]; orders: RestingOrder[]; equity: number | null }>(
     { rows: [], orders: [], equity: null })
+  /* Whether the first answer is still coming — the difference between "nothing is open" and
+     "nobody has said yet", which the empty state above cannot tell apart on its own. */
+  const [loading, setLoading] = useState(true)
   useEffect(() => {
     let dead = false
     let first = true
@@ -1909,11 +1913,19 @@ function useExchangePositions() {
           if (!dead) setFeed({ rows, orders: d.orders ?? [], equity: d.equity ?? null })
         })
         .catch(() => {})
+        // answered or not, the first round is over — a feed that is down must not hold a skeleton
+        // on screen forever
+        .finally(() => { if (!dead) setLoading(false) })
     load()
     const h = window.setInterval(load, 60_000)
     return () => { dead = true; window.clearInterval(h) }
   }, [])
-  return feed
+  return { ...feed, loading }
+}
+
+/** How many tiles the last look held — what to keep room for while this one is still being asked. */
+function lastOpenCount() {
+  try { return (JSON.parse(localStorage.getItem(LAST_OPEN) ?? '[]') as ExchangePosition[]).length } catch { return 0 }
 }
 
 /** Money the way every tile prints it: signed, two decimals, in the currency the venue quotes. */
@@ -2075,6 +2087,40 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   )
 }
 
+/** The card's own shape, pulsing, for as long as the exchanges take to answer — same header, same
+ *  grid, one tile per position the last look held. */
+function PositionsPlaceholder() {
+  const n = lastOpenCount()
+  if (!n) return null
+  return (
+    <Card className="py-3" aria-hidden>
+      <CardContent className="grid gap-1.5 px-3 text-sm">
+        <div className="flex items-baseline gap-2">
+          <Skeleton className="h-3 w-28" />
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="ml-auto h-3 w-24" />
+        </div>
+        <Skeleton className="h-3 w-64" />
+        <div className="mt-0.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: n }, (_, i) => (
+            <div key={i} className="grid gap-2 rounded-md border px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-14 rounded" />
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="ml-auto h-4 w-24" />
+              </div>
+              <Skeleton className="h-3 w-40" />
+              <Skeleton className="h-1 w-full rounded-full" />
+              <Skeleton className="h-2.5 w-full" />
+              <Skeleton className="h-3 w-52" />
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 /**
  * What the exchanges say is actually open — every venue with a key saved (Settings → Markets),
  * proxied through the server so the keys stay there. Renders nothing at all unless an exchange
@@ -2087,7 +2133,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
  * is entry-to-stop, which the resting stop defines.
  */
 export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void }) {
-  const { rows, orders, equity } = useExchangePositions()
+  const { rows, orders, equity, loading } = useExchangePositions()
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
@@ -2097,7 +2143,14 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
      the two is a number no rate ever produced. */
   const usd = (n: number) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const atRisk = [risk.exch > 0 && usd(risk.exch), risk.mine > 0 && euro(risk.mine)].filter(Boolean)
-  if (!rows.length && !orders.length) return null
+  /* Nothing yet. The book is a network call and the rest of the page is not, so this card used to
+     arrive a second late and shove everything under it down the screen. The last look is already
+     kept in localStorage (see fileClosed), so the shape of it is known before the answer is: hold
+     that many tiles' worth of room, pulsing, and the real rows land in the space already theirs.
+     Only the shape, never the numbers — a P&L from last night printed as if it were current is a
+     lie about money, and the whole point of the card is that it isn't. Nobody who has never held a
+     position gets a placeholder for one. */
+  if (!rows.length && !orders.length) return loading ? <PositionsPlaceholder /> : null
   /* The strip that answers "am I fine?" without opening a single row: how many are open, and the
      nearest liquidation as a distance — the worst number on the desk, said first. Only where a
      feed vouches for a liq price; an estimate has no place next to real money. */
