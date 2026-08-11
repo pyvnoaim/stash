@@ -1934,12 +1934,20 @@ function useExchangePositions() {
  * The same block for your own book and for everyone else's on the Desk — a position is a position,
  * and two layouts for one thing meant reading the other tab twice as slowly.
  *
+ * Every word on it is phrased here, off the raw numbers, rather than by whoever calls it: the two
+ * sides used to build their own headline and their own meta line, and drifted — the Desk put its R
+ * in the headline where your own book put it under the entry, and the same trade read differently
+ * depending on whose it was. A caller now hands over the row and nothing else.
+ *
  * What differs is only what each side has to hand: your own row knows the coins it is sized in, and
  * someone else's does not, because the server reads their size to price the trade and never sends
  * the number itself. Everything a row has no answer for is simply left out.
+ *
+ * ponytail: pct is computed here rather than taken from the venue — same formula, both exchange
+ * adapters (`bitget.ts`, `mexc.ts`) round the identical expression, and one of them is one too many.
  */
-function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, size, r,
-  stop, target, liq, meta = [] }: {
+function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, value,
+  stop, target, liq, funding, fundingRate, fundingAt, openedAt, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
@@ -1949,23 +1957,44 @@ function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, s
   /** The multiplier it is held at. Beside the side, because 10× short is the position and "short"
    *  on its own is half of it. */
   lev?: number | null
-  /** Which way the trade is going, for the one colour the whole tile is read in. */
-  up: boolean
-  /** The headline number on the right of the title row: money, percent, R — whatever this side has. */
-  lead: string | null
   from: number
   now: number | null
   /** How much of it, in whatever unit the caller counts in. Absent where that is nobody's business. */
   size?: string | null
-  r: number | null
+  /** Running money, the venue's arithmetic. Null on a row that came from someone's document. */
+  pnl?: number | null
+  /** What the position is worth at the mark. */
+  value?: number | null
   /** The three levels, as numbers rather than phrases: the tile draws them and then says them. */
   stop?: number | null
   target?: number | null
   liq?: number | null
-  /** The quiet line under the fold, already phrased; falsy entries drop out. */
+  /** What holding it has cost so far, and the next settlement — the venue's rate as a fraction,
+   *  signed their way (positive is longs paying), and when it is taken. */
+  funding?: number | null
+  fundingRate?: number | null
+  fundingAt?: number | null
+  /** When it filled, however the feed stamps it. Left out where the venue never said. */
+  openedAt?: number | string | null
+  /** Anything only one side of the desk can say, appended to the quiet line; falsy entries drop. */
   meta?: (string | false | null)[]
 }) {
+  /* The three readings every tile makes of the same four numbers. R is absent without a stop —
+     risk nobody defined can't be counted in, and a stop trailed to break-even is a stop that no
+     longer defines one (see riskOf). */
+  const pct = now != null && from > 0 ? (now / from - 1) * (side === 'long' ? 100 : -100) : null
+  const risk = riskOf(side, from, stop)
+  const r = now != null && risk != null
+    ? (side === 'long' ? now - from : from - now) / risk
+    : null
+  // whichever of them the row has: a document row has no money on it, and some venues rest no stop
+  const up = (pnl ?? pct ?? r ?? 0) >= 0
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
+  /* dollars and percent beside each other: same sign by construction, one colour carries both */
+  const lead = [
+    pnl != null && `${pnl >= 0 ? '+' : '−'}$${Math.abs(pnl).toFixed(2)}`,
+    pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
+  ].filter(Boolean).join(' · ') || null
   /* Where price stands between the level that ends the trade against you and the one that ends it
      for you. Six prices in a row of prose is the one thing on this tile nobody was reading, and
      "how far to each end" is what every one of them was being asked. The losing end is the resting
@@ -1988,6 +2017,24 @@ function PositionTile({ side, symbol, onPick, venue, lev, up, lead, from, now, s
     !bar && target != null && level('target', target),
     // the liq only where the bar is not already standing on it — a stopless position's losing end
     liq != null && !(bar && !bar.stopped) && level('liq', liq),
+    value != null && `worth $${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+    /* The next settlement, put the way it lands on this position: the venue signs its rate for a
+       long, so a short reads the same number the other way up. The one cost of holding that is
+       neither in the entry nor in the pnl — a trade can be right about the price and still bleed
+       out through this. */
+    fundingRate != null && (() => {
+      const mine = fundingRate * (side === 'long' ? 1 : -1)
+      const when = fundingAt != null && fundingAt > Date.now() ? ` in ${left(fundingAt - Date.now())}` : ''
+      return `${mine >= 0 ? 'pays' : 'earns'} ${Math.abs(mine * 100).toFixed(3)}%${when}`
+    })(),
+    /* what the price move did to the margin behind it — the number a leveraged trade is actually
+       felt in. pct stays the price move it has always been; this is that times the multiplier, and
+       it only appears where the venue said what the multiplier is. */
+    pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% on margin`,
+    funding != null && `funding ${funding >= 0 ? '' : '−'}$${Math.abs(funding).toFixed(2)}`,
+    openedAt != null && `opened ${new Date(openedAt).toLocaleString(undefined, {
+      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+    })}`,
     ...meta,
   ].filter(Boolean).join(' · ')
   return (
@@ -2118,50 +2165,17 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             a trade's numbers inside its own box, and two or three of them sit side by side instead
             of one per line. */}
         <div className="mt-0.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {rows.map((p) => {
-          // running R off the resting stop: the one number that says how the trade is going in
-          // its own risk unit. Absent without a stop — risk nobody defined can't be counted in,
-          // and a stop trailed to break-even is a stop that no longer defines one (see riskOf).
-          const risk = riskOf(p.side, p.entry, p.stop)
-          const r = p.mark != null && risk != null
-            ? (p.side === 'long' ? p.mark - p.entry : p.entry - p.mark) / risk
-            : null
-          const up = (p.pct ?? 0) >= 0
-          return (
-            <PositionTile key={`${p.venue ?? ''}-${p.symbol}`} side={p.side} symbol={p.symbol}
-              onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev} up={up}
-              /* dollars and R beside the percent: same sign by construction, one colour carries all */
-              lead={p.pct != null
-                ? `${p.pnl != null ? `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)} · ` : ''}${up ? '+' : ''}${p.pct.toFixed(2)}%`
-                : null}
-              from={p.entry} now={p.mark} size={String(p.size)} r={r}
-              stop={p.stop} target={p.target} liq={p.liq}
-              /* ponytail: no share button here. A card of a position still running is a number that
-                 has changed by the time anyone opens it, and the trade it brags about can still end
-                 red — the Record's rows are the ones with an answer on them. */
-              meta={[
-                p.value != null && `worth $${p.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-                /* The next settlement, put the way it lands on this position: the venue signs its
-                   rate for a long, so a short reads the same number the other way up. The one cost
-                   of holding that is neither in the entry nor in the pnl — a trade can be right
-                   about the price and still bleed out through this. */
-                p.fundingRate != null && (() => {
-                  const mine = p.fundingRate * (p.side === 'long' ? 1 : -1)
-                  const when = p.fundingAt != null && p.fundingAt > Date.now()
-                    ? ` in ${left(p.fundingAt - Date.now())}` : ''
-                  return `${mine >= 0 ? 'pays' : 'earns'} ${Math.abs(mine * 100).toFixed(3)}%${when}`
-                })(),
-                /* what the price move did to the margin behind it — the number a leveraged trade is
-                   actually felt in. pct stays the price move it has always been; this is that times
-                   the multiplier, and it only appears where the venue said what the multiplier is. */
-                p.pct != null && p.lev != null && `${p.pct * p.lev >= 0 ? '+' : ''}${(p.pct * p.lev).toFixed(1)}% on margin`,
-                p.funding != null && `funding ${p.funding >= 0 ? '' : '−'}$${Math.abs(p.funding).toFixed(2)}`,
-                p.openedAt != null && `opened ${new Date(p.openedAt).toLocaleString(undefined, {
-                  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                })}`,
-              ]} />
-          )
-        })}
+        {/* ponytail: no share button here. A card of a position still running is a number that has
+            changed by the time anyone opens it, and the trade it brags about can still end red —
+            the Record's rows are the ones with an answer on them. */}
+        {rows.map((p) => (
+          <PositionTile key={`${p.venue ?? ''}-${p.symbol}`} side={p.side} symbol={p.symbol}
+            onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev}
+            from={p.entry} now={p.mark} size={String(p.size)} pnl={p.pnl} value={p.value}
+            stop={p.stop} target={p.target} liq={p.liq}
+            funding={p.funding} fundingRate={p.fundingRate} fundingAt={p.fundingAt}
+            openedAt={p.openedAt} />
+        ))}
         </div>
         {/* Placed and waiting, which is neither a position nor a plan: the exchange is holding it,
             price has not come to it, and until this line existed the desk showed nothing at all
@@ -2768,27 +2782,6 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
   )
 }
 
-/**
- * Where a live position stands: the price move in the trade's own favour, and the same distance in
- * R where a stop says what the risk was. Null each where there is nothing to read it against — no
- * mark on a row that came from a document, and no R on a venue that carries no resting stop, which
- * is most of MEXC's book.
- *
- * The percent is the move from the entry, not the return on their margin — the same thing your own
- * card shows, and for the same reason: leverage is theirs and the server never sent it.
- */
-const deskNow = (w: DeskRow['open'][number]) => {
-  // and no R on a stop that has been trailed up to break-even, which is not a risk any more — see
-  // riskOf. This is where +1161R came from: twenty cents of stop under a $64k entry.
-  const risk = riskOf(w.dir, w.entry, w.stop)
-  return {
-    pct: w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null,
-    r: w.mark == null || risk == null
-      ? null
-      : (w.dir === 'long' ? w.mark - w.entry : w.entry - w.mark) / risk,
-  }
-}
-
 const DESK_LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4rem,1fr)_minmax(4rem,8rem)_4.5rem_3.5rem_5rem]'
 
 /** A settled figure as the desk prints it: the venue's dollars, or nothing where there are none. */
@@ -3036,33 +3029,17 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
                 {/* someone watching thirty setups is a list nobody reads, and it would push every
                     other desk off the page — the count below says what was left out */}
                 <div className="mt-1.5 grid gap-2 empty:hidden sm:grid-cols-2 xl:grid-cols-3">
-                  {p.open.slice(0, 6).map((w) => {
-                    /* how it is doing right now, off the venue's own book — the same tile as your
-                       own, and now the same numbers on it: the money, the percent, the R where a
-                       stop defines one. A row from someone's document has none of them. */
-                    const { pct, r } = deskNow(w)
-                    return (
-                      <PositionTile key={w.id} side={w.dir} symbol={w.label} onPick={onPick}
-                        venue={w.horizon || null} lev={w.lev} up={(w.pnl ?? pct ?? r ?? 0) >= 0}
-                        lead={[
-                          w.pnl != null && `${w.pnl >= 0 ? '+' : '−'}$${Math.abs(w.pnl).toFixed(2)}`,
-                          pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
-                          r != null && rLabel(r),
-                        ].filter(Boolean).join(' · ') || null}
-                        from={w.entry} now={w.mark} r={null}
-                        stop={w.stop} target={w.target} liq={w.liq}
-                        // the same line the own book prints, minus the funding nobody else's rate is known for
-                        meta={[
-                          w.value != null && `worth $${w.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-                          pct != null && w.lev != null && `${pct * w.lev >= 0 ? '+' : ''}${(pct * w.lev).toFixed(1)}% on margin`,
-                          w.entryAt
-                            ? `opened ${new Date(w.entryAt).toLocaleString(undefined, {
-                                day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                              })}`
-                            : 'waiting for the entry',
-                        ]} />
-                    )
-                  })}
+                  {/* the same tile as your own book, off the same numbers: the money, the percent
+                      and the R where a stop defines one, all read by the tile itself. A row from
+                      someone's document knows none of them, and says so by leaving them out. */}
+                  {p.open.slice(0, 6).map((w) => (
+                    <PositionTile key={w.id} side={w.dir} symbol={w.label} onPick={onPick}
+                      venue={w.horizon || null} lev={w.lev} pnl={w.pnl} value={w.value}
+                      from={w.entry} now={w.mark} stop={w.stop} target={w.target} liq={w.liq}
+                      openedAt={w.entryAt}
+                      // the one thing only this side can say: their row may be a plan, not a fill
+                      meta={[!w.entryAt && 'waiting for the entry']} />
+                  ))}
                 </div>
                 {p.open.length > 6 && (
                   <p className="text-muted-foreground pt-1.5 text-xs">
