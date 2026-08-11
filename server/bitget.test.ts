@@ -23,7 +23,6 @@ assert.deepEqual(rows[0], {
   // funding is signed: what holding it has cost is a negative, where a price at 0 means "none"
   funding: -0.42, lev: 10,
   // the next settlement is public and asked for per symbol held, not shaped off the row
-  fundingRate: null, fundingAt: null,
 })
 assert.equal(rows[1].pct, 5)
 assert.equal(rows[1].pnl, 20) // (190 − 200) × 2, flipped by the short side

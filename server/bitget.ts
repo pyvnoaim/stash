@@ -47,17 +47,6 @@ export type Position = {
    *  stays a price move — but it is the difference between a 2% drift and a margin call, so the
    *  card that shows one shows the other. */
   lev: number | null
-  /**
-   * The next funding settlement: the venue's rate as a fraction, and when it is taken, as epoch
-   * millis. Signed the venue's way — positive means longs pay shorts — so which side of it this
-   * position is on is the reader's arithmetic, not this file's.
-   *
-   * Off the public feed, so it costs no credential and is the same number for everyone. It is the
-   * one cost of holding that is not in `pnl` and not in the entry: a position can be right about
-   * the price and still bleed out through this.
-   */
-  fundingRate: number | null
-  fundingAt: number | null
 }
 
 export type Feed = { positions: Position[]; equity: number | null }
@@ -127,9 +116,6 @@ export function shape(rows: unknown[]): Position[] {
       // lets a negative through rather than the one that reads 0-or-less as "the feed said none"
       funding: signed(p.totalFee),
       lev: num(p.leverage),
-      // filled in by `positions` below, off the public feed and per symbol held
-      fundingRate: null as number | null,
-      fundingAt: null as number | null,
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.size) && p.size > 0)
 }
@@ -148,22 +134,6 @@ export function equityOf(accounts: unknown): number | null {
 // per key, since every account brings its own. ponytail: clear-all past 64 — the roster is ten people.
 const cached = new Map<string, { at: number; data: Feed }>()
 
-/** The public funding feed for one symbol: the rate that settles next, and when. No credential —
- *  it is the same number for every account on the venue. */
-async function funding(symbol: string): Promise<{ rate: number | null, at: number | null }> {
-  const pub = (path: string) =>
-    fetch(BASE + path, { signal: AbortSignal.timeout(10_000) }).then((r) => r.json()).catch(() => null)
-  const [rate, time] = await Promise.all([
-    pub(`/api/v2/mix/market/current-fund-rate?symbol=${symbol}&productType=USDT-FUTURES`),
-    pub(`/api/v2/mix/market/funding-time?symbol=${symbol}&productType=USDT-FUTURES`),
-  ])
-  const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : null }
-  return {
-    rate: n(rate?.data?.[0]?.fundingRate),
-    at: n(time?.data?.[0]?.nextFundingTime),
-  }
-}
-
 export async function positions(key: string, secret: string, pass: string): Promise<Feed> {
   const hit = cached.get(key)
   if (hit && Date.now() - hit.at < TTL) return hit.data
@@ -174,13 +144,6 @@ export async function positions(key: string, secret: string, pass: string): Prom
   ])
   if (open?.code !== '00000') throw new Error(String(open?.msg ?? 'the exchange did not answer'))
   const rows = shape(open.data ?? [])
-  /* the next funding, per symbol actually held — nobody holds thirty, and the whole lot rides the
-     same half-minute cache the positions do */
-  await Promise.all([...new Set(rows.map((p) => p.symbol))].map(async (symbol) => {
-    const f = await funding(symbol).catch(() => null)
-    if (!f) return
-    for (const p of rows) if (p.symbol === symbol) { p.fundingRate = f.rate; p.fundingAt = f.at }
-  }))
   const data = {
     positions: rows,
     equity: accounts?.code === '00000' ? equityOf(accounts.data) : null,

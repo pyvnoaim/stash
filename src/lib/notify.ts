@@ -183,6 +183,19 @@ export const riskOf = (dir: 'long' | 'short', entry: number, stop: number | null
 
 export const rLabel = (r: number) => `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
 
+/**
+ * What the trade pays if price reaches a level: the move from the entry times the coins on it,
+ * signed the trade's way, in whatever currency the position is priced in. Negative at the losing
+ * end and positive at the winning one, which is the whole point of printing it beside them — a
+ * distance in percent is not a number anybody feels.
+ *
+ * ponytail: the price move only, before fees and the funding a perp bleeds while it is held. Both
+ * are on the tile already as their own figures, and folding them in here would make a number that
+ * moves when nothing about the trade has.
+ */
+export const cashAt = (dir: 'long' | 'short', entry: number, level: number, qty: number) =>
+  (level - entry) * qty * (dir === 'long' ? 1 : -1)
+
 /** What that R would have paid at the stake you set, or null when you have not set one. */
 export const moneyOf = (r: number, stake: number) => (stake > 0 ? r * stake : null)
 

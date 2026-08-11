@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, nakedAlerts, openRisk, riskOf, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, cashAt, nakedAlerts, openRisk, riskOf, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
@@ -430,3 +430,14 @@ assert.equal(riskOf('long', 100, NaN), null)
 assert.equal(riskOf('long', 0, 95), null)
 
 console.log('risk ok')
+
+/* ---------- what each end of the bar is worth ---------- */
+
+// half a coin from 100: the stop 5 under loses 2.50, the target 20 over pays 10
+assert.equal(cashAt('long', 100, 95, 0.5), -2.5)
+assert.equal(cashAt('long', 100, 120, 0.5), 10)
+// a short reads the same distances the other way up — the losing end is above the entry
+assert.equal(cashAt('short', 100, 105, 0.5), -2.5)
+assert.equal(cashAt('short', 100, 80, 0.5), 10)
+
+console.log('cash at ok')

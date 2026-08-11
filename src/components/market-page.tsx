@@ -13,7 +13,7 @@ import {
 import { GuideDialog } from '@/components/guide-dialog'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
-import { euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
@@ -70,14 +70,6 @@ const TABS = [
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
-
-/** "4h 20m", "12m", "any moment" — a countdown nobody has to subtract two clock times to read. */
-const left = (ms: number) => {
-  if (ms <= 0) return 'any moment'
-  const m = Math.round(ms / 60_000)
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
 
 /* The service worker keeps the last candles it fetched, so the chart still draws with no network.
    Which means the page has to say so: bars that closed yesterday under a price that reads as live
@@ -573,7 +565,8 @@ export default function MarketPage() {
       ? {
           text: 'Nothing to do here', tone: 'wait' as const,
           why: plan.thin
-            ? `you'd put ${fmt(risk)} at risk to make ${fmt(reward)}, and the fee comes off both ends — more than half of these would have to win just to break even`
+            // the two figures it used to restate are the Risk to reward cell, an inch below it
+            ? `the fee comes off both ends — more than half of these have to win just to break even`
             : `the ${HIGHER[interval]} chart is going the other way, and that is the bigger tide`,
         }
     : Math.abs(plan.entry - last) <= (view?.atr ?? 0) * 0.25
@@ -1004,35 +997,33 @@ export default function MarketPage() {
               euros and the quote is USDT, taken as the same money; a €/$ rate for a number you
               typed yourself is precision the rest of this card doesn't have either. */}
           {!holding && stake > 0 && (
-            <p className="text-muted-foreground mt-2 text-xs">
-              {euro(stake)} at risk is{' '}
-              <span className="text-foreground font-medium tabular-nums">
-                {(stake / Math.abs(plan.entry - plan.stop)).toFixed(2)} {current.id.replace(/USDT$/, '')}
-              </span>{' '}
-              here — {fmt(Math.abs(plan.entry - plan.stop))} of stop, so that many loses the stake
-              and nothing more if it is hit, and pays {euro(stake * plan.net)} net at the target.
-              Leverage only decides the margin that size needs, never what it risks.
-            </p>
+            <Hint label={`${fmt(Math.abs(plan.entry - plan.stop))} of stop is what decides the size: that many units loses the stake and nothing more if it is hit. Leverage only decides the margin that size needs, never what it risks.`}>
+              <p className="text-muted-foreground mt-2 w-fit text-xs">
+                {euro(stake)} at risk is{' '}
+                <span className="text-foreground font-medium tabular-nums">
+                  {(stake / Math.abs(plan.entry - plan.stop)).toFixed(2)} {current.id.replace(/USDT$/, '')}
+                </span>{' '}
+                here · {euro(stake * plan.net)} net at the target
+              </p>
+            </Hint>
           )}
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
           {!inIt ? (
             <p className="text-muted-foreground mt-2 text-xs">
-              Nothing to press. When the desk endorses a setup it files itself on the Paper tab and
-              is followed to its stop or its target — including the ones that appear while every
-              device here is shut. Nothing is ever traded.
+              Nothing to press — the desk files what it endorses on the Paper tab, even with every
+              device here shut. Nothing is ever traded.
             </p>
           ) : held && (
             /* The card knew the position was there — it draws its levels — and still read the paper
                line at someone already in it. Nothing is inferred: same symbol off the same feed the
                strip above uses, and the side is stated rather than assumed to be this one's. */
-            <p className="text-muted-foreground mt-2 text-xs">
-              You are in this one: {held.side} {held.size} from {fmt(held.entry)}
-              {held.side === side
-                ? ' — the side this card is describing'
-                : ', which is the other side of what this card reads'}. It files itself to the
-              record with the R it really did when it closes, wherever you close it.
-            </p>
+            <Hint label="It files itself to the record with the R it really did when it closes, wherever you close it.">
+              <p className="text-muted-foreground mt-2 w-fit text-xs">
+                You are {held.side} {held.size} from {fmt(held.entry)}
+                {held.side === side ? ' — the side this card reads' : ' — the other side of this card'}
+              </p>
+            </Hint>
           )}
           {against && (
             <p className="text-amber-600 dark:text-amber-500 mt-2 text-xs">
@@ -1721,10 +1712,6 @@ type ExchangePosition = {
   stop: number | null; target: number | null; funding: number | null
   /** The multiplier the venue holds it at, where its row says. */
   lev?: number | null
-  /** The next funding settlement: the venue's rate as a fraction, and when it is taken. Signed the
-   *  venue's way — positive is longs paying shorts. */
-  fundingRate?: number | null
-  fundingAt?: number | null
   /** The exchange's own liquidation price, where its feed says one. */
   liq?: number | null
   venue?: string
@@ -1929,6 +1916,9 @@ function useExchangePositions() {
   return feed
 }
 
+/** Money the way every tile prints it: signed, two decimals, in the currency the venue quotes. */
+const cashLabel = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
+
 /**
  * One open trade, as a tile: who it is and which way, what it is doing, and the levels behind it.
  * The same block for your own book and for everyone else's on the Desk — a position is a position,
@@ -1947,7 +1937,7 @@ function useExchangePositions() {
  * adapters (`bitget.ts`, `mexc.ts`) round the identical expression, and one of them is one too many.
  */
 function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, value,
-  stop, target, liq, funding, fundingRate, fundingAt, openedAt, meta = [] }: {
+  stop, target, liq, funding, openedAt, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
@@ -1969,11 +1959,8 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   stop?: number | null
   target?: number | null
   liq?: number | null
-  /** What holding it has cost so far, and the next settlement — the venue's rate as a fraction,
-   *  signed their way (positive is longs paying), and when it is taken. */
+  /** What holding it has cost so far, as the venue signs it. */
   funding?: number | null
-  fundingRate?: number | null
-  fundingAt?: number | null
   /** When it filled, however the feed stamps it. Left out where the venue never said. */
   openedAt?: number | string | null
   /** Anything only one side of the desk can say, appended to the quiet line; falsy entries drop. */
@@ -1992,7 +1979,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
   /* dollars and percent beside each other: same sign by construction, one colour carries both */
   const lead = [
-    pnl != null && `${pnl >= 0 ? '+' : '−'}$${Math.abs(pnl).toFixed(2)}`,
+    pnl != null && cashLabel(pnl),
     pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
   ].filter(Boolean).join(' · ') || null
   /* Where price stands between the level that ends the trade against you and the one that ends it
@@ -2002,10 +1989,16 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
      ponytail: no bar without both ends. A half-drawn scale is a scale that lies about the half it
      left out, and the line below still prints every level it has. */
   const lose = stop ?? liq ?? null
+  /* The coins on it, taken back out of what the venue says it is worth — the two sides of the desk
+     count size in different units (contracts on one venue, coins on the other) and only one of them
+     sends a size at all, while both send the notional. */
+  const qty = value != null && now != null && now > 0 ? value / now : null
   const bar = lose != null && target != null && now != null && lose !== target
     ? (() => {
         const at = (v: number) => Math.max(0, Math.min(1, (v - lose) / (target - lose)))
-        return { now: at(now), from: at(from), lose, win: target, mark: now, stopped: stop != null }
+        const cash = (v: number) => (qty != null ? cashAt(side, from, v, qty) : null)
+        return { now: at(now), from: at(from), lose, win: target, mark: now, stopped: stop != null,
+          lost: cash(lose), won: cash(target) }
       })()
     : null
   const level = (name: string, v: number) =>
@@ -2018,20 +2011,11 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     // the liq only where the bar is not already standing on it — a stopless position's losing end
     liq != null && !(bar && !bar.stopped) && level('liq', liq),
     value != null && `worth $${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-    /* The next settlement, put the way it lands on this position: the venue signs its rate for a
-       long, so a short reads the same number the other way up. The one cost of holding that is
-       neither in the entry nor in the pnl — a trade can be right about the price and still bleed
-       out through this. */
-    fundingRate != null && (() => {
-      const mine = fundingRate * (side === 'long' ? 1 : -1)
-      const when = fundingAt != null && fundingAt > Date.now() ? ` in ${left(fundingAt - Date.now())}` : ''
-      return `${mine >= 0 ? 'pays' : 'earns'} ${Math.abs(mine * 100).toFixed(3)}%${when}`
-    })(),
     /* what the price move did to the margin behind it — the number a leveraged trade is actually
        felt in. pct stays the price move it has always been; this is that times the multiplier, and
        it only appears where the venue said what the multiplier is. */
     pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% on margin`,
-    funding != null && `funding ${funding >= 0 ? '' : '−'}$${Math.abs(funding).toFixed(2)}`,
+    funding != null && `funding ${cashLabel(funding)}`,
     openedAt != null && `opened ${new Date(openedAt).toLocaleString(undefined, {
       day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
     })}`,
@@ -2069,14 +2053,19 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
             <span className="bg-foreground/60 absolute -top-0.5 -bottom-0.5 w-px"
               style={{ left: `${bar.from * 100}%` }} />
           </div>
+          {/* what each end is worth from here, beside how far away it is: a percent is a distance
+              and money is the thing anybody actually decides on. Only where the venue prices the
+              position — a row from someone's document has no size to put a figure on. */}
           <div className="flex justify-between text-[10px] tabular-nums">
             <span className="text-destructive">
               {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
               <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
+              {bar.lost != null && <> {cashLabel(bar.lost)}</>}
             </span>
             <span className="text-emerald-600 dark:text-emerald-400">
               target {fmtPrice(bar.win)}
               <span className="text-muted-foreground"> {away(bar.win, bar.mark)}</span>
+              {bar.won != null && <> {cashLabel(bar.won)}</>}
             </span>
           </div>
         </div>
@@ -2173,7 +2162,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev}
             from={p.entry} now={p.mark} size={String(p.size)} pnl={p.pnl} value={p.value}
             stop={p.stop} target={p.target} liq={p.liq}
-            funding={p.funding} fundingRate={p.fundingRate} fundingAt={p.fundingAt}
+            funding={p.funding}
             openedAt={p.openedAt} />
         ))}
         </div>
