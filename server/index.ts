@@ -449,7 +449,7 @@ export function start({
        the exact shape JSON.stringify writes, and a note that happens to contain the same string
        only buys itself a parse that then turns it down. */
     everyone: db.prepare(`select * from (
-        select u.id, u.name,
+        select u.id, u.name, u.avatar,
           (select json from docs d where d.user = u.id order by d.v desc limit 1) as json
         from users u where u.id <> ?
       ) where json like '%"desk":true%' order by name`),
@@ -1353,7 +1353,8 @@ export function start({
     if (path === '/api/desk' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const rows = q.everyone.all(user.id) as { id: number, name: string, json: string | null }[]
+      const rows = q.everyone.all(user.id) as
+        { id: number, name: string, avatar: string | null, json: string | null }[]
       // another person's document is untrusted input to my page: numbers are numbers or the row goes
       const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
       const arr = (a: unknown) => (Array.isArray(a) ? a : [])
@@ -1378,9 +1379,11 @@ export function start({
         if (s?.desk !== true) continue
         who.push(row.id)
         desk.push({
-          /* The name and nothing else of who they are: an avatar is up to 128 KB of data URI and
-             the page draws none of them, so ten desks would have been a megabyte of picture. */
-          name: row.name,
+          /* Who they are: the name, and the picture the roster of a shared project already puts
+             beside it. The cap is 128 KB, but what the picker writes is a 128px JPEG — a few KB —
+             so a page of desks is kilobytes of picture rather than the megabyte this route once
+             assumed and left the faces out over. */
+          name: row.name, avatar: row.avatar,
           results: arr(s.results).filter(real).map((r: any) => ({
             id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
             dir: r?.dir === 'short' ? 'short' : 'long',

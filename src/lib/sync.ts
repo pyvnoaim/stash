@@ -432,6 +432,8 @@ export const roster = (): Promise<Face[]> =>
  */
 export interface DeskRow {
   name: string
+  /** Their picture, as they saved it — null for anyone who has not chosen one. */
+  avatar: string | null
   results: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',
     level: 'target' | 'stop', r: number, closedAt: number,

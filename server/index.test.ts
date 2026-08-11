@@ -167,6 +167,7 @@ assert.deepEqual(await (await get('/api/users', mia)).json(), { users: ['kim', '
    Her third result is the kind a venue closed for her: settled cash and a `venue-symbol-when` id,
    and no size anywhere on it, because nobody typed one. Reading only size once emptied every desk
    whose exchange does the closing — which is most of them. */
+await post('/api/account', { avatar: px }, mia)   // her face rides along with her desk
 await put(mia, (await (await get('/state', mia)).json()).version, {
   desk: true,
   results: [
@@ -182,6 +183,7 @@ await put(mia, (await (await get('/state', mia)).json()).version, {
 assert.equal((await get('/api/desk')).status, 401)
 const seen = (await (await get('/api/desk', leon)).json()).desk
 assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that opted in')
+assert.equal(seen[0].avatar, px, 'the face beside the name')
 assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1', 'mexc-BTCUSDT-7'],
   'a plan she never took is not her record, and one her venue closed is')
 assert.equal(seen[0].results[0].r, 2)

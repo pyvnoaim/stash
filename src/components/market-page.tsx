@@ -2893,11 +2893,7 @@ function Desk({ live }: { live: boolean }) {
             return (
               <div key={p.name} className="border-t pt-3 first:border-t-0 first:pt-0">
                 <div className="flex items-center gap-2">
-                  {/* ponytail: the initial, not their picture — /api/desk sends no avatar on
-                      purpose, since ten desks of data URI is a megabyte of image for a page that
-                      only needs to tell one row from the next. Put `avatar` on the desk payload if
-                      the faces ever earn it. */}
-                  <Avatar name={p.name} avatar={null} className="size-6 text-[11px]" />
+                  <Avatar name={p.name} avatar={p.avatar} className="size-6 text-[11px]" />
                   <span className="truncate text-sm font-medium">{p.name}</span>
                   {/* a desk with nothing finished says so: the empty stat slot read as a row that
                       had failed to load its numbers rather than one with none to load — and with
