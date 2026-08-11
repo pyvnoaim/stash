@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
@@ -296,12 +296,13 @@ function Spend({ items, total, onOpen }: {
   // the same at every size but the type inside it doesn't, which is how a phone ended up with labels
   // spilling out of tiles that were "big enough" on a desktop
   const [px, setPx] = useState(0)
-  // measured in the ref callback, which React runs before the browser paints — the observer below
-  // only answers after it, and a first frame at px=0 is every tile drawn label-less and then filled
   const [box, setBox] = useState<HTMLDivElement | null>(null)
-  const measure = (el: HTMLDivElement | null) => { setBox(el); if (el) setPx(el.offsetWidth) }
-  useEffect(() => {
+  /* Layout, not plain, effect: the observer below only answers after the frame is on screen, and a
+     first frame at px=0 is every tile drawn label-less and then filled in a beat later. Measuring
+     here runs before the browser paints, so the first frame anyone sees is the measured one. */
+  useLayoutEffect(() => {
     if (!box) return
+    setPx(box.offsetWidth)
     const ro = new ResizeObserver(([e]) => setPx(e.contentRect.width))
     ro.observe(box)
     return () => ro.disconnect()
@@ -313,7 +314,7 @@ function Spend({ items, total, onOpen }: {
   const tiles = treemap(items, (d) => d.v, W, H)
   const scale = px ? px / W : 0 // css px per layout unit
   return (
-    <div ref={measure} className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
+    <div ref={setBox} className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
       {tiles.map(({ item, x, y, w, h }) => {
         const wp = (w / W) * 100
         const hp = (h / H) * 100

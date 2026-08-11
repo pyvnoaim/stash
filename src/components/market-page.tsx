@@ -1923,9 +1923,14 @@ function useExchangePositions() {
   return { ...feed, loading }
 }
 
-/** How many tiles the last look held — what to keep room for while this one is still being asked. */
+/** How many tiles the last look held — what to keep room for while this one is still being asked.
+ *  Capped, and only trusting an array: the key is editable from the console like every other one,
+ *  and a placeholder is not worth a render loop over a number somebody typed in. */
 function lastOpenCount() {
-  try { return (JSON.parse(localStorage.getItem(LAST_OPEN) ?? '[]') as ExchangePosition[]).length } catch { return 0 }
+  try {
+    const prev: unknown = JSON.parse(localStorage.getItem(LAST_OPEN) ?? '[]')
+    return Array.isArray(prev) ? Math.min(prev.length, 12) : 0
+  } catch { return 0 }
 }
 
 /** Money the way every tile prints it: signed, two decimals, in the currency the venue quotes. */
@@ -2093,7 +2098,9 @@ function PositionsPlaceholder() {
   const n = lastOpenCount()
   if (!n) return null
   return (
-    <Card className="py-3" aria-hidden>
+    // a shape with no words in it still has to say what it is standing in for, or a reader hears
+    // the card appear out of nothing exactly as the eye used to see it
+    <Card className="py-3" role="status" aria-label="Loading open positions">
       <CardContent className="grid gap-1.5 px-3 text-sm">
         <div className="flex items-baseline gap-2">
           <Skeleton className="h-3 w-28" />
@@ -3016,7 +3023,7 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
   const people = rows.filter((p) => p.results.length || p.open.length)
   if (!people.length && live && !asked) {
     return (
-      <Card className="py-3">
+      <Card className="py-3" role="status" aria-label="Loading the other desks">
         <CardContent className="grid gap-2 px-3">
           <Skeleton className="h-6 w-40" />
           <Skeleton className="h-4 w-full" />
