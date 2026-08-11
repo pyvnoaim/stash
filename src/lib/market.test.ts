@@ -167,6 +167,16 @@ assert.equal(s2?.stop, 105) // near swing high
 assert.equal(s2?.target, 90) // far low
 assert.equal(tradePlan('short', 102, 100, band), null)
 assert.equal(tradePlan('flat', 102, 100, band), null)
+/* The entry is a band, not a line. A tick through the MA is noise on a card repriced every five
+   seconds, and the state on the other side of that line is "no clean setup" — the one sitting right
+   beside "Buy now". Inside a quarter-ATR either way the plan stands; past it, it is a real chase. */
+assert.equal(tradePlan('long', 99, 100, band, 8)?.entry, 100)   // 1 under, buffer 2 — still the plan
+assert.equal(tradePlan('long', 97, 100, band, 8), null)         // 3 under — past the buffer, a chase
+assert.equal(tradePlan('short', 101, 100, band, 8)?.entry, 100)
+assert.equal(tradePlan('short', 103, 100, band, 8), null)
+// and the day rule says the same, with the buffer off the ATR it is already sizing the stop with
+assert.equal(dayPlan('short', 101, 100, 8, 105).plan?.entry, 100)
+assert.equal(dayPlan('short', 103, 100, 8, 105).block, 'chase')
 assert.equal(tradePlan('long', 102, 100, { ...band, support: 105 }), null) // stop above entry → no risk
 assert.equal(tradePlan('long', 102, 100, { ...band, farHigh: 99 }), null) // target below entry → nothing to aim at
 /* Both at once, which is the case that catches a priced() that infers its side instead of being

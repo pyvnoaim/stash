@@ -1414,8 +1414,13 @@ export function tradePlan(
 ): Plan | null {
   if (dir === 'flat') return null
   const long = dir === 'long'
-  if (long ? entry > price : entry < price) return null // the pull-back already happened — chasing
   const buffer = (atrValue ?? 0) * 0.25
+  // The pull-back already happened — chasing. Measured with the same quarter-ATR the stop is bought
+  // with, so the entry is a band and not a line: without it the plan blinked out of existence the
+  // moment price stepped a tick through the MA, which is the state directly beside "Buy now" and is
+  // reached by ordinary noise. A card repriced every five seconds then read "Buy now" and "no clean
+  // setup" alternately while nothing had happened. Past the buffer it is a real move and a real chase.
+  if (long ? price < entry - buffer : price > entry + buffer) return null
   const stop = long ? levels.support - buffer : levels.resistance + buffer
   const target = long ? levels.farHigh : levels.farLow
   return priced(long, entry, stop, target, fee)
@@ -1499,7 +1504,9 @@ export function dayPlan(
 ): Setup {
   if (dir === 'flat') return { plan: null, block: 'flat' }
   const long = dir === 'long'
-  if (long ? entry > price : entry < price) return { plan: null, block: 'chase' }
+  // the same quarter-ATR band around the entry as tradePlan, and for the same reason — see there
+  const buffer = (atrValue ?? 0) * 0.25
+  if (long ? price < entry - buffer : price > entry + buffer) return { plan: null, block: 'chase' }
   // no ATR is no stop distance, and a day trade sized off a guess is the one this rule refuses
   if (!atrValue) return { plan: null, block: 'quiet' }
   // the gate. Null vwap is a feed without volume or a daily bar — no gate to fail, so it passes
