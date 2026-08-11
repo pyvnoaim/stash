@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowLeft, Bold, Code, Eye, Heading, Image, Italic, Link2, Pencil, Quote, Strikethrough, Underline,
 } from 'lucide-react'
@@ -144,6 +144,18 @@ export function NotePage({ it, onBack, onOpen }: {
       .slice(0, 6)
   })()
 
+  /* Height follows content, measured rather than guessed: scrollHeight is the only number that
+     knows where this font wrapped. Reset to auto first or it can only ever grow — a deleted line
+     would leave its row behind. Layout effect, so the box is the right size in the frame the text
+     lands in and never one where it is visibly wrong. */
+  const titleRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = titleRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [it.text, it.id])
+
   /** Finish the `[[` being typed with a whole title, and put the caret past the closing brackets. */
   const pickWiki = (target: Item) => {
     const ta = taRef.current
@@ -216,12 +228,19 @@ export function NotePage({ it, onBack, onOpen }: {
       </div>
 
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-3 px-6 py-6">
-        <input
+        {/* A textarea, not an input: a title long enough to matter — a person, a company and what
+            was done for them — ran off the right edge of a single line and took its own beginning
+            with it as you typed. It wraps and grows instead. Enter is still not a newline; a title
+            is one line of text however many it takes to show, and the body is where prose goes. */}
+        <textarea
+          ref={titleRef}
+          rows={1}
           value={it.text}
           onChange={(e) => patch(it.id, { text: e.target.value })}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); taRef.current?.focus() } }}
           placeholder="Untitled"
           aria-label="Title"
-          className="placeholder:text-muted-foreground shrink-0 bg-transparent text-2xl font-medium outline-none"
+          className="placeholder:text-muted-foreground shrink-0 resize-none overflow-hidden bg-transparent text-2xl font-medium outline-none"
         />
         {editing ? (
           <div className="relative flex min-h-0 flex-1 flex-col">

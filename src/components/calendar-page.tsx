@@ -481,8 +481,13 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
         /* The week: an hour column down the left, seven days across, and an all-day strip above the
            grid for everything that named a day but no time. The header and the strip stay put while
            the hours scroll, so the day you are reading is always labelled. */
-        <div className="bg-border grid min-h-0 flex-1 grid-rows-[auto_auto_1fr] gap-px overflow-hidden rounded-lg border">
-          <div className="grid grid-cols-[3.25rem_repeat(7,1fr)] gap-px">
+        /* Seven days plus the hour column is wider than a phone, and the days were simply cut off
+           at Friday with nothing to drag — a week view that hides the weekend. It scrolls sideways
+           now, with a floor under the day columns so they stay readable rather than shrinking to
+           three letters each. */
+        <div className="min-h-0 flex-1 overflow-x-auto">
+        <div className="bg-border grid h-full min-w-[44rem] grid-rows-[auto_auto_1fr] gap-px overflow-hidden rounded-lg border">
+          <div className="grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] gap-px">
             <div className="bg-background" />
             {days.map((d) => {
               const key = stamp(d)
@@ -509,7 +514,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
 
           {/* All day: the untimed items, the charges, and any event the feed gave no hour. Dropping
               a row here is how one that named a time gives it back up. */}
-          <div className="grid grid-cols-[3.25rem_repeat(7,1fr)] gap-px">
+          <div className="grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] gap-px">
             <div className="bg-background text-muted-foreground font-heading flex items-start justify-end px-1.5 py-1 text-[10px] tracking-wider uppercase">
               All day
             </div>
@@ -540,7 +545,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
           <div className="grid auto-rows-min gap-px overflow-y-auto">
             {hours.map((h) => (
               // relative for the now line, which sits inside the hour it falls in
-              <div key={h} className="relative grid grid-cols-[3.25rem_repeat(7,1fr)] gap-px">
+              <div key={h} className="relative grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] gap-px">
                 <div className="bg-background text-muted-foreground flex items-start justify-end px-1.5 py-1 font-mono text-[10px] tabular-nums sm:text-xs">
                   {hhmm(h)}
                 </div>
@@ -587,6 +592,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
               </div>
             ))}
           </div>
+        </div>
         </div>
       )}
     </div>

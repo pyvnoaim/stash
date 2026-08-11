@@ -2211,7 +2211,16 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
 
 /** One grid for the row and its header, so the columns line up by construction rather than by two
  *  sets of hand-matched widths. The last track is the two icons, which are outside the row button. */
-const LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4.5rem,10rem)_1fr_4.5rem_3.5rem_5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_5rem]'
+/* Two tables share this: the record, whose last column is what a trade paid, and the paper log,
+   whose last column is which rule it came from. On a wide window the track is 8rem, because 5rem
+   cut every rule off mid-word — "VWAP pull-b…" and "Trend accum…" name nothing, on the one column
+   whose whole job is naming.
+
+   On a phone it stays narrow, and the paper log drops the column instead (see the rule under the
+   trade's name there). The fixed tracks plus the gaps already came to more than a phone is wide,
+   so the flexible one — the side — was being squeezed to nothing: a Side heading with no side
+   under it, and the money sliding out under the share button. */
+const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,10rem)_1fr_4rem_3.5rem_4.5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_8rem]'
 
 /** How the record is stacked. Newest is the default because a log is read from the top down; the
  *  other two are the question "what actually paid, and what actually cost" asked directly. */
@@ -2371,13 +2380,18 @@ function PaperDesk() {
               <span className="hidden sm:block">Ran</span>
               <span className="text-right">Ended</span>
               <span className="text-right">R</span>
-              <span className="text-right">Rule</span>
+              <span className="hidden text-right sm:block">Rule</span>
             </div>
             {done.map((r) => {
               const hit = r.level === 'target'
               return (
                 <div key={r.id} className={cn(LOG_GRID, 'hover:bg-muted/40 border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
-                  <span className="truncate font-medium">{r.label}</span>
+                  {/* the rule rides under the name on a phone, where its own column does not fit
+                      and a truncated one names nothing */}
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{r.label}</span>
+                    <span className="text-muted-foreground block truncate text-[10px] sm:hidden">{r.rule}</span>
+                  </span>
                   <span className="text-muted-foreground truncate text-xs">
                     {r.dir === 'long' ? 'Long' : 'Short'} · {r.interval}
                   </span>
@@ -2388,7 +2402,7 @@ function PaperDesk() {
                     {hit ? 'target' : 'stopped'}
                   </span>
                   <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r ?? 0)}</span>
-                  <span className="text-muted-foreground truncate text-right text-xs">{r.rule}</span>
+                  <span className="text-muted-foreground hidden truncate text-right text-xs sm:block">{r.rule}</span>
                 </div>
               )
             })}
@@ -2398,7 +2412,7 @@ function PaperDesk() {
 
       <p className="text-muted-foreground px-1 text-xs">
         Filed by the server off the same read the Scan card shows, a few times an hour, whether or
-        not this app is open. Nothing is ordered and nothing is money — the entry is the plan\'s
+        not this app is open. Nothing is ordered and nothing is money — the entry is the plan's
         entry, the exit is the price that was actually polled when a level was reached, and a setup
         whose entry never came round is counted separately rather than as a loss.
       </p>
@@ -2996,6 +3010,12 @@ function Scan({ orbMode, interval, onPick }: {
             <CloudOff className="size-3.5" /> Offline — these reads are as old as the bars the cache had.
           </p>
         )}
+        {/* Seven columns of it, six of them fixed: on a phone the last two ran off the right edge
+            with nothing to drag. The heading and the rows scroll together inside one box, so a
+            column and its label can never come apart, and the padding is pulled out and put back
+            so the scrolled edge is the card's edge rather than a stripe inside it. */}
+        <div className="-mx-1.5 overflow-x-auto px-1.5">
+        <div className="min-w-[30rem]">
         {/* the strip's heading, once — five arrows a row with no scale on them is a puzzle. The
             desk's own timeframe is marked, since that is the one the phrase and the plan belong to */}
         {!!rows?.length && (
@@ -3077,6 +3097,8 @@ function Scan({ orbMode, interval, onPick }: {
             )}
           </button>
         ))}
+        </div>
+        </div>
         {/* Three different things used to be one paragraph in a narrow column under a very wide
             table: what the glyphs mean, how to read a row, and why the stocks are missing. Capping
             it kept the line length honest and made the shape wrong instead — six short lines of
@@ -3094,7 +3116,6 @@ function Scan({ orbMode, interval, onPick }: {
             <span className="opacity-50">↳</span> 4h → 15m → 5m<span className="opacity-70"> · green when all three land</span>
           </span>
           <span className="opacity-70">A side every chart agrees on beats one only the fastest sees.</span>
-          <span className="opacity-70">Stocks need your own key — open one from the picker.</span>
         </div>
       </CardContent>
     </Card>
