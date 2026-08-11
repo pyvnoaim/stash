@@ -91,11 +91,21 @@ const feedOf = (a: Asset, venue: Venue): Asset['source'] =>
   // (MEXC lists XAU_USDT), so nothing is pinned to one venue and the whole list moves together
   a.source === 'twelvedata' ? a.source : venue === 'mexc' ? 'mexc' : 'bitget'
 
-/** Routes to the right feed. All three return candles oldest → newest. Stocks need the key. */
-export function fetchCandles(asset: Asset, interval: Interval, apiKey: string, venue: Venue = null): Promise<Candle[]> {
+/** Routes to the right feed. All three return candles oldest → newest. Stocks need the key.
+ *  `bars` is how many are wanted: a chart takes the venue's ceiling, the movers sweep takes a day
+ *  of them — asking for a thousand and keeping the last twenty-five is fifty times the bytes, once
+ *  a minute, per asset. */
+export function fetchCandles(
+  asset: Asset, interval: Interval, apiKey: string, venue: Venue = null, bars = BARS,
+): Promise<Candle[]> {
   if (asset.source === 'twelvedata') return fetchTwelve(asset.id, interval, apiKey)
-  return feedOf(asset, venue) === 'mexc' ? fetchMexc(asset.id, interval) : fetchBitget(asset.id, interval)
+  return feedOf(asset, venue) === 'mexc'
+    ? fetchMexc(asset.id, interval, bars)
+    : fetchBitget(asset.id, interval, bars)
 }
+
+/** The window a chart reads, and every venue's own ceiling for one call. */
+export const BARS = 1000
 
 /**
  * Last price only, for the ids given — what the alert watcher polls, so it has to stay cheap beside
@@ -218,8 +228,8 @@ export function fetchStockHours(ids: string[], apiKey: string, now = Date.now())
  *
  * Columns, not rows: the venue sends parallel arrays and stamps its times in seconds.
  */
-async function fetchMexc(symbol: string, interval: Interval): Promise<Candle[]> {
-  const url = `/api/mexc/candles?symbol=${mxSymbol(symbol)}&interval=${MX_INTERVAL[interval]}`
+async function fetchMexc(symbol: string, interval: Interval, bars = BARS): Promise<Candle[]> {
+  const url = `/api/mexc/candles?symbol=${mxSymbol(symbol)}&interval=${MX_INTERVAL[interval]}&bars=${bars}`
   const j = await fetch(url).then((r) => r.json())
   const d = j?.data
   if (!d || !Array.isArray(d.time)) throw new Error(j?.error || j?.msg || 'No data for this symbol')
@@ -231,9 +241,9 @@ async function fetchMexc(symbol: string, interval: Interval): Promise<Candle[]> 
 /** Bitget's USDT-margined futures, keyless and CORS-open like Binance's. A thousand bars is the
  *  endpoint's ceiling and the contract's history may be shorter than that — a symbol listed this
  *  year simply has fewer, which the callers already handle: an MA with no window returns null. */
-async function fetchBitget(symbol: string, interval: Interval): Promise<Candle[]> {
+async function fetchBitget(symbol: string, interval: Interval, bars = BARS): Promise<Candle[]> {
   const url = `https://api.bitget.com/api/v2/mix/market/candles?symbol=${symbol}`
-    + `&productType=USDT-FUTURES&granularity=${BG_INTERVAL[interval]}&limit=1000`
+    + `&productType=USDT-FUTURES&granularity=${BG_INTERVAL[interval]}&limit=${bars}`
   const j = await fetch(url).then((r) => r.json())
   // the venue reports its own errors in the body, with its success code on the good ones
   if (j?.code !== '00000' || !Array.isArray(j.data)) throw new Error(j?.msg || 'No data for this symbol')
@@ -268,7 +278,7 @@ export type Move = { id: string; label: string; hours: number; open: number; las
  */
 export async function fetchHours(assets: Asset[], venue: Venue = null): Promise<Hours[]> {
   const rows = await Promise.all(assets.map(async (a): Promise<Hours[]> => {
-    const c = await fetchCandles(a, '1h', '', venue).then((x) => x.slice(-25)).catch(() => [])
+    const c = await fetchCandles(a, '1h', '', venue, 25).catch(() => [])
     return c.length ? [{ a, c }] : [] // a feed that is down says nothing, rather than guessing
   }))
   return rows.flat()

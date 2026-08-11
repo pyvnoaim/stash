@@ -3015,7 +3015,7 @@ function Scan({ orbMode, interval, onPick }: {
             column and its label can never come apart, and the padding is pulled out and put back
             so the scrolled edge is the card's edge rather than a stripe inside it. */}
         <div className="-mx-1.5 overflow-x-auto px-1.5">
-        <div className="min-w-[30rem]">
+        <div className="min-w-[34rem]">
         {/* the strip's heading, once — five arrows a row with no scale on them is a puzzle. The
             desk's own timeframe is marked, since that is the one the phrase and the plan belong to */}
         {!!rows?.length && (

@@ -32,7 +32,7 @@ import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
-import { MX_INTERVAL } from '../src/lib/market.ts'
+import { BARS, MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
 
 /* What the MEXC relay below will accept, built off the same map the client asks with so the two
@@ -1056,12 +1056,14 @@ export function start({
       const interval = q.get('interval') ?? ''
       if (!/^[A-Z0-9]{2,20}_USDT$/.test(symbol)) return send(res, 400, { error: 'not a contract symbol' })
       if (mexcFeed === 'candles' && !MEXC_INTERVALS.has(interval)) return send(res, 400, { error: 'not an interval' })
-      /* A thousand bars, the same window every other feed here hands over, asked for by time
-         because this venue counts back from `start` rather than taking a limit. */
+      /* How many bars back, asked for by time: this venue counts from a `start` where every other
+         feed here takes a limit. Clamped rather than trusted — the number goes into a URL, and a
+         caller's own arithmetic is not something to hand an upstream. */
+      const bars = Math.min(Math.max(Math.floor(Number(q.get('bars') ?? BARS)) || BARS, 1), BARS)
       const url = mexcFeed === 'price'
         ? `https://contract.mexc.com/api/v1/contract/ticker?symbol=${symbol}`
         : `https://contract.mexc.com/api/v1/contract/kline/${symbol}?interval=${interval}`
-          + `&start=${Math.floor((Date.now() - 1000 * MEXC_STEP[interval]) / 1000)}`
+          + `&start=${Math.floor((Date.now() - bars * 1000 * MEXC_STEP[interval]) / 1000)}`
       try {
         const r = await fetch(url, { signal: AbortSignal.timeout(10_000) })
         if (!r.ok) return send(res, 502, { error: `MEXC answered ${r.status}` })
