@@ -191,9 +191,13 @@ export type Closed = {
 /** Bitget's closed positions into that shape. Rows with no usable close price are dropped: a
  *  history row that cannot say where it ended is not an improvement on the last mark. */
 export function shapeClosed(rows: unknown[], venue = 'bitget'): Closed[] {
+  /* Six places, not two. This is the numerator of the R the record scores the trade in now, and
+     rounding it to the cent first is a rounding of the R: a trade that netted 0.0062 on 1.84 of
+     margin is +0.003R, and through a cent it reads +0.005R — near enough double. The column that
+     prints it still says $0.01; the arithmetic behind it no longer has to. */
   const signed = (v: unknown) => {
     const n = Number(v)
-    return v === '' || v == null || !isFinite(n) ? null : Math.round(n * 100) / 100
+    return v === '' || v == null || !isFinite(n) ? null : Math.round(n * 1e6) / 1e6
   }
   const pos = (v: unknown) => { const n = Number(v); return isFinite(n) && n > 0 ? n : null }
   return (rows as Record<string, unknown>[]).map((p) => {

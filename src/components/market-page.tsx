@@ -1916,13 +1916,25 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
       label: ASSETS.find((a) => a.id === id)?.label ?? p.symbol,
       // the record names the venue the trade really ran on, now that there is more than one
       horizon: venueName(p.venue),
-      dir: p.side, entry: p.entry, stop: risk,
+      /* The price the risk above is measured to, not the distance to it. `riskOf` answers in a
+         distance and this field is a level, and the two were being crossed: a short filed here got
+         a stop *below* its entry, which is not a short — store.ts holds the record to the same
+         geometry the live list is held to, so every short this path ever filed was dropped on the
+         next read. A long survived it with a stop of about zero and a target of about twice the
+         entry, which is a trade nobody took. Written back through the entry, it is the resting stop
+         again where there was one, and the liquidation or the margin where there was not. */
+      dir: p.side, entry: p.entry,
+      stop: p.side === 'long' ? p.entry - risk : p.entry + risk,
       /* A target on the right side of the entry, always. It used to fall back to the exit price,
          and a losing trade's exit is on the *wrong* side — which loaded as a long aiming below its
          own entry, and store.ts drops that row on the next read as a setup that could never have
          been. So the fallback is one R away instead: no venue said it, and it is the only placement
-         that cannot silently delete the trade it belongs to. */
-      target: p.target ?? (p.side === 'long' ? p.entry + (p.entry - risk) : p.entry - (risk - p.entry)),
+         that cannot silently delete the trade it belongs to. The venue's own target is held to the
+         same side test on the way in, for the same reason — a resting take-profit on the wrong side
+         of the entry is a row that deletes itself, and one R away is always readable. */
+      target: (p.target != null && (p.side === 'long' ? p.target > p.entry : p.target < p.entry))
+        ? p.target
+        : (p.side === 'long' ? p.entry + risk : p.entry - risk),
       ts: opened, entryAt: opened, closedAt: hit?.closedAt ?? Date.now(),
       /* ponytail: a hand-close between the levels still lands in one of the record's two boxes —
          in profit files as 'target', at a loss as 'stopped'. The record has no third word, and the

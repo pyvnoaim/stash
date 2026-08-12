@@ -613,6 +613,15 @@ assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
 assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
 assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
 
+/* The record is held to it too, and that is not decoration: the exchange filer measures risk as a
+   distance and writes a level, and for a while it wrote the distance — every short it filed had a
+   stop of 5 against an entry of 100 and was dropped here, silently, on the next read. */
+const finGeometry = (dir: string, stop: number) =>
+  load({ results: [{ id: 'r', asset: 'BTCUSDT', dir, entry: 100, stop, target: dir === 'short' ? 90 : 110, entryAt: 1, closedAt: 2, exit: 99, r: 1 }] }).results.length
+assert.equal(finGeometry('short', 105), 1)        // the stop as a price, which is what the field is
+assert.equal(finGeometry('short', 5), 0)          // the distance to it, which is not a short at all
+assert.equal(finGeometry('long', 95), 1)
+
 /* Gold moved from Binance's XAUT token to Bitget's XAUUSDT perpetual, and every row already
    written names the old one. An id on no asset list prices at nothing — the alarm never fires and
    the chart falls back to Bitcoin — so the rows come across on load rather than going quiet. */

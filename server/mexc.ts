@@ -116,9 +116,10 @@ export function shapeStops(rows: unknown[]): Map<string, { stop: number | null, 
 
 /** MEXC's closed positions, in the shape bitget.ts declares for them. */
 export function shapeClosed(rows: unknown[]): Closed[] {
+  // six places, for the reason bitget.ts's copy of this gives: the R is counted off this figure
   const signed = (v: unknown) => {
     const n = Number(v)
-    return v === '' || v == null || !isFinite(n) ? null : Math.round(n * 100) / 100
+    return v === '' || v == null || !isFinite(n) ? null : Math.round(n * 1e6) / 1e6
   }
   return (rows as Record<string, unknown>[]).map((p) => {
     const at = Number(p.updateTime)
