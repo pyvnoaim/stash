@@ -1485,7 +1485,7 @@ export function priced(long: boolean, entry: number, stop: number, target: numbe
  * wants prices in it and only the card knows how many decimals this asset prints to. Null means the
  * strategy produced a plan.
  */
-export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'below' | 'unconfirmed' | 'geometry'
+export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'warmup' | 'below' | 'unconfirmed' | 'geometry'
 export type Setup = { plan: Plan | null; block: Block | null }
 
 /**
@@ -1557,7 +1557,7 @@ export function holdPlan(
   price: number, fast: number | null, slow: number | null,
   levels: Levels, fee = 0,
 ): Setup {
-  if (fast == null || slow == null) return { plan: null, block: 'quiet' }
+  if (fast == null || slow == null) return { plan: null, block: 'warmup' }
   // out of the regime: below the line there is no position, and no amount of oversold changes that
   if (price < slow) return { plan: null, block: 'below' }
   // above the 200 but the 50 has not caught up — the recovery has not confirmed, and an add here
@@ -1593,8 +1593,18 @@ export function strategyPlan(h: Horizon, i: {
 }): Setup {
   return h === 'long'
     ? holdPlan(i.price, i.fast, i.slow, i.levels, i.fee)
-    : i.fast == null
-      ? { plan: null, block: 'quiet' }
+    /* Both averages, not just the entry one. The slow MA is what the trend card votes on and what
+       the MA cross is measured against, so a read taken before it has warmed up is not a cautious
+       version of this rule — it is a different one, decided by whichever cards happened to have
+       enough bars. That is not hypothetical: Bitget returns 13 weekly candles, so every 1w read ran
+       with no 21-MA, no MACD (it wants 35), no higher timeframe above it and — since sessionVwap
+       has no session inside a weekly bar — no VWAP gate either. Four of the rule's five inputs
+       missing, and it still filed shorts, because `dir` only ever needed a majority of whatever
+       showed up. holdPlan has always refused this; there was no reason for the trading side not to.
+       ponytail: a null check, not a bar count. If a feed ever returns just enough bars to warm the
+       average and no more, the read is still thin — require slow + a margin then. */
+    : i.fast == null || i.slow == null
+      ? { plan: null, block: 'warmup' }
       : dayPlan(i.dir, i.price, i.fast, i.atr, i.vwap, i.fee)
 }
 
@@ -2689,6 +2699,7 @@ export function scanRead(
     : block === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
     : block === 'vwap' ? [0, `wrong side of the VWAP for a ${dir}`]
     : block === 'quiet' ? [0, 'no ATR yet — no stop to size']
+    : block === 'warmup' ? [0, 'not enough bars to warm the averages this read is made of']
     : !plan ? [0, 'no clean setup — price already ran']
     : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
     : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']

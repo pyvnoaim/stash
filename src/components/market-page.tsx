@@ -601,6 +601,11 @@ export default function MarketPage() {
           text: 'No stop to size', tone: 'wait' as const,
           why: 'there is no ATR off these bars yet — without a normal bar\'s travel to measure, the stop would be a guess',
         }
+    : block === 'warmup'
+      ? {
+          text: 'Not enough bars', tone: 'wait' as const,
+          why: `the feed returned too few ${interval} candles to warm the ${cfg.slow}-MA this read is measured against — the cards that do have their bars would decide it on their own, which is a different rule wearing this one's name`,
+        }
     : !plan
       ? {
           text: 'No clean setup', tone: 'wait' as const,

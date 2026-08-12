@@ -454,6 +454,7 @@ const tools: Record<string, {
         chase: `No clean setup — price is already past the ${cfg.fast}-MA, and entering there is chasing`,
         vwap: `Wrong side of the session VWAP for a ${dir} — this rule will not take one against the average paid since the open`,
         quiet: 'No ATR off these bars yet, so there is no stop to size',
+        warmup: `Too few ${interval} bars came back to warm the ${cfg.slow}-MA — the read would be decided by whichever cards had enough bars, which is not this rule`,
         below: `Out — price is under the ${cfg.slow}-MA, and below that line there is nothing to hold`,
         unconfirmed: `Out — back above the ${cfg.slow}-MA but the ${cfg.fast} has not crossed it, so the recovery is unconfirmed`,
         geometry: 'The levels do not make a trade — the stop or the target lands the wrong side of the entry',

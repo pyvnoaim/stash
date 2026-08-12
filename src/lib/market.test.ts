@@ -293,7 +293,7 @@ assert.deepEqual(holdPlan(75, 100, 80, band), { plan: null, block: 'below' })
 // stop above its entry, which priced() would refuse anyway
 assert.deepEqual(holdPlan(85, 78, 80, band), { plan: null, block: 'unconfirmed' })
 // not enough bars for the slow MA to exist yet
-assert.deepEqual(holdPlan(120, 100, null, band), { plan: null, block: 'quiet' })
+assert.deepEqual(holdPlan(120, 100, null, band), { plan: null, block: 'warmup' })
 // thin is computed and never enforced here — a wide regime stop against a near trim reads as thin,
 // and the card shows it as context rather than declining the position on it
 assert.equal(holdPlan(120, 100, 80, { ...band, farHigh: 105 }).plan?.thin, true)
@@ -305,6 +305,21 @@ assert.equal(strategyPlan('long', { dir: 'short', price: 120, fast: 100, slow: 8
 const sameChart = { dir: 'long' as const, price: 98, fast: 100, slow: 80, levels: band, atr: 5, vwap: 97 }
 assert.equal(strategyPlan('short', sameChart).block, 'chase')
 assert.equal(strategyPlan('long', sameChart).plan?.entry, 98)
+
+/* Neither rule trades on averages that have not warmed up. Bitget returns 13 weekly candles, so a
+   1w read has no 21-MA, no MACD, no timeframe above it and no session inside a bar to take a VWAP
+   from — and it was still filing shorts off whichever cards had their bars. */
+assert.equal(strategyPlan('short', { ...sameChart, slow: null }).block, 'warmup')
+assert.equal(strategyPlan('short', { ...sameChart, fast: null }).block, 'warmup')
+assert.equal(strategyPlan('long', { ...sameChart, slow: null }).block, 'warmup')
+const weekly = Array.from({ length: 13 }, (_, i) => ({ t: i * 6.05e8, o: 100 - i, h: 101 - i, l: 98 - i, c: 99 - i }))
+const thin = signals(weekly, HORIZONS.short)
+assert.equal(thin.smaSlow.at(-1), null) // 13 bars, 21-MA — the input the rule votes on never existed
+assert.equal(strategyPlan('short', {
+  dir: tally(deskSignals(null, null, sessionVwap(weekly), thin.signals)).dir,
+  price: weekly.at(-1)!.c, fast: thin.smaFast.at(-1) ?? null, slow: thin.smaSlow.at(-1) ?? null,
+  levels: thin.levels, atr: thin.atr, vwap: sessionVwap(weekly)?.vwap ?? null,
+}).plan, null)
 
 // ema: seeded on the first window's mean, then weighted to the newest bar
 const e = ema([1, 2, 3, 4, 5], 3)
