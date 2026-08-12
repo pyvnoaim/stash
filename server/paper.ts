@@ -34,13 +34,16 @@ const BARS_EVERY = 15 * 60_000
 const EXPIRE_BARS = 12
 /** Rows kept per person. The desk files a handful a day; this is a season of them. */
 const KEEP = 400
-/** How long an asset and side is left alone after a stop, in bars of its own interval. The other
- *  guard only blocks a second row while the first is still open, so a range that keeps re-arming
- *  the same read files it again the moment it loses: Dogecoin went long at 0.07192, 0.07190,
- *  0.07214 and 0.07224 on 12 Aug and was stopped all four times. That is one idea losing once and
- *  reporting as four — a real bleed live, and four correlated rows in an expectancy that reads as
- *  though it had four independent trades to say it with. Eight bars is two hours on the 15m the
- *  desk trades, which is past the chop that re-armed those four.
+/** How long an asset, side and interval is left alone after a stop, in bars of that interval. The
+ *  other guard only blocks a second row while the first is still open, so a range that keeps
+ *  re-arming the same read files it again the moment it loses: Dogecoin went long at 0.07192,
+ *  0.07190, 0.07214 and 0.07224 on 12 Aug and was stopped all four times. That is one idea losing
+ *  once and reporting as four — a real bleed live, and four correlated rows in an expectancy that
+ *  reads as though it had four independent trades to say it with. Eight bars is two hours on the
+ *  15m the desk trades, which is past the chop that re-armed those four.
+ *  The interval is part of the key and not just the clock: an hourly long and a weekly one on the
+ *  same coin are two different trades, which is the rule the saved setups keep too (store.ts). A
+ *  cooldown blind to it would have a stopped day trade shut an accumulation out for eight weeks.
  *  ponytail: a flat bar count, and the blunt half of the right idea — what actually says the
  *  setup is new again is structure, not the clock. Swap it for a re-entry that waits on a fresh
  *  swing if two hours proves either too long or too short. */
@@ -217,7 +220,7 @@ export function createPaper(db: DatabaseSync) {
     open: db.prepare('select * from paper where closedAt is null'),
     live: db.prepare('select 1 from paper where user = ? and asset = ? and dir = ? and closedAt is null'),
     lastStop: db.prepare(`select max(closedAt) as at from paper
-      where user = ? and asset = ? and dir = ? and level = 'stop'`),
+      where user = ? and asset = ? and dir = ? and interval = ? and level = 'stop'`),
     mine: db.prepare('select * from paper where user = ? order by ts desc limit ?'),
     fill: db.prepare('update paper set entryAt = ? where id = ? and user = ?'),
     close: db.prepare('update paper set entryAt = ?, closedAt = ?, level = ?, exit = ?, r = ? where id = ? and user = ?'),
@@ -295,7 +298,7 @@ export function createPaper(db: DatabaseSync) {
         // one idea, and two rows would double-count it in every number below
         if (q.live.get(user, p.asset, p.dir)) continue
         // and not straight back into the one that just stopped — see COOL_BARS
-        const beaten = (q.lastStop.get(user, p.asset, p.dir) as { at: number | null }).at
+        const beaten = (q.lastStop.get(user, p.asset, p.dir, p.interval) as { at: number | null }).at
         if (cooling(beaten, p.interval, at)) continue
         q.add.run(p.id, user, p.asset, p.label, p.dir, p.rule, p.interval,
           p.entry, p.stop, p.target, p.net, p.ts)
