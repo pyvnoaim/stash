@@ -338,15 +338,18 @@ function Spend({ items, total, onOpen }: {
               style={{ left: `${(x / W) * 100}%`, top: `${(y / H) * 100}%`, width: `${wp}%`, height: `${hp}%` }}
               className="group absolute p-[1px] transition-[z-index] group-hover:z-10 hover:z-10"
             >
-              {/* brightness can't lift a black (or white) fill — it's a no-op on monochrome — so the
-                  hover cue is a scale + an inset ring in the surface colour, which reads in both themes.
-                  The fill is the foreground in both themes on purpose: black tiles on a light page,
-                  white on a dark one. Stepping dark mode down to the mid grey was tried and looked
-                  washed out — the tiles stopped reading as ink and started reading as another
-                  surface, which is the one thing a treemap tile must not do. */}
-              <span className={cn('bg-foreground text-background ring-background relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
+              {/* The tile goes with the page, not against it: light tiles on a light page, dark on a
+                  dark one. Inverted it was a slab of white light on a 0.145 page — half a card of
+                  it, and the first thing you saw was the chart rather than anything on the page you
+                  came to read. The thin bars and dots elsewhere keep the full-contrast foreground,
+                  where it is a few pixels and reads as ink rather than as a lamp.
+                  Muted rather than the card's own colour so a tile still reads as a tile, with a
+                  border to hold its edge against its neighbour across the 1px gap. Brightness can't
+                  lift a flat fill far, so the hover cue stays a scale + an inset ring, now in the
+                  foreground since that is the tone the fill is no longer wearing. */}
+              <span className={cn('bg-muted text-foreground ring-foreground relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm border text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
                 {/* a faint diagonal sheen off the top-left corner, so a flat fill reads as a surface */}
-                <span aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-br from-background/15 via-transparent to-transparent transition-opacity duration-150 group-hover:from-background/22" />
+                <span aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-br from-foreground/10 via-transparent to-transparent transition-opacity duration-150 group-hover:from-foreground/15" />
                 {mid && (
                   <>
                     {big && <span className={cn('relative max-w-full truncate font-medium leading-tight', huge ? 'text-base' : 'text-xs')}>{item.name}</span>}
