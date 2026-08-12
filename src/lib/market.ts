@@ -2109,7 +2109,7 @@ export const HORIZONS = {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
     strategy: 'VWAP pull-back',
     rule: 'Both sides, but only on your side of the session VWAP. Entry at the 9-MA, stop one ATR past it, target two — a fixed 2R. Flat by the session end.',
-    measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing *before* costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything.',
+    measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing before costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything.',
   },
 /* `measured` is what the rule actually did when it was walked over its own filed setups, and it
    sits beside `rule` deliberately: the sentence describing a strategy and the sentence saying

@@ -4,6 +4,7 @@
    drifting apart is the failure nobody would notice. */
 import assert from 'node:assert/strict'
 import { alertsOf, chargeAt, intervalOf, newsFirst, nextCharge, type Alert } from './push.ts'
+import { readInterval } from '../src/lib/market.ts'
 
 /** Midday UTC on the day everything below is written against, so a timezone can't move the date. */
 const NOON = Date.parse('2026-08-03T12:00:00Z')
@@ -224,6 +225,14 @@ assert.equal(intervalOf({}, 'long'), '1d', 'and Investing the day')
 for (const junk of [null, undefined, 7, '3m', '', 'toString']) {
   assert.equal(intervalOf({ marketInterval: junk }, 'short'), '1h', `${String(junk)} is not an interval`)
 }
+/* The opening range is a 15m play and the preset that turns it on is stored apart from the horizon,
+   so orb + Investing read a 200-day regime line off 15m bars — the one route into that bug which
+   never went through intervalOf, because this branch is a literal. Both scan callers now put the
+   whole expression through readInterval; this is the shape they have to keep. */
+const orbInterval = (doc: unknown, horizon: 'long' | 'short', orbMode: boolean) =>
+  readInterval(horizon, orbMode ? '15m' : intervalOf(doc, horizon))
+assert.equal(orbInterval({ marketInterval: '1h' }, 'short', true), '15m')
+assert.equal(orbInterval({ marketInterval: '1h' }, 'long', true), '1d')
 
 /* ---------- junk in ---------- */
 

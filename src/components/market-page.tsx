@@ -506,11 +506,14 @@ export default function MarketPage() {
   const entryMA = view?.smaFast.at(-1) ?? null
   const slowMA = view?.smaSlow.at(-1) ?? null
   const last = candles.at(-1)?.c
+  // memoised for the reason vwap and the swings above are: the crosshair sets state, so everything
+  // in this body runs again on every mouse move, and this one sorts two hundred bars to find a median
+  const tollR = useMemo(() => toll(candles, dials.fee), [candles, dials.fee])
   const { plan, block } = view && last != null
     ? strategyPlan(horizon, {
         dir, price: last, fast: entryMA, slow: slowMA,
         levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
-        toll: toll(candles, dials.fee), fee: dials.fee,
+        toll: tollR, fee: dials.fee,
       })
     : { plan: null, block: null }
   const holding = horizon === 'long' // the accumulation rule, which answers in positions not trades
@@ -938,7 +941,7 @@ export default function MarketPage() {
       <div className={cn('flex flex-col gap-4', tab !== 'chart' && 'hidden')}>
       {/* what else is worth pressing, before the answer for this chart — it is the one line here
           that can send you somewhere other than where you already are */}
-      <SetupsNow orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
+      <SetupsNow orbMode={preset === 'orb'} interval={readInterval(horizon, preset === 'orb' ? '15m' : interval)}
         current={current.id} onPick={(id) => { setAsset(id); setTab('chart') }} />
       <ExchangePositions onOpen={setAsset} />
 
@@ -1672,7 +1675,7 @@ export default function MarketPage() {
         <div className={cn('flex flex-col gap-4', tab !== 'scan' && 'hidden')}>
           {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
               or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
-          <Scan orbMode={preset === 'orb'} interval={preset === 'orb' ? '15m' : interval}
+          <Scan orbMode={preset === 'orb'} interval={readInterval(horizon, preset === 'orb' ? '15m' : interval)}
             onPick={(id) => { setAsset(id); setTab('chart') }} />
           <Trending />
         </div>

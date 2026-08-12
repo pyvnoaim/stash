@@ -19,7 +19,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  ASSETS, dialsOf, fetchPrices, HORIZONS, scanBars, scanRead,
+  ASSETS, dialsOf, fetchPrices, HORIZONS, readInterval, scanBars, scanRead,
   type Candle, type Interval,
 } from '../src/lib/market.ts'
 import { intervalOf, lastBarOff } from './push.ts'
@@ -251,7 +251,10 @@ export function createPaper(db: DatabaseSync) {
     const d = dialsOf(doc)
     const horizon = doc?.marketHorizon === 'long' ? 'long' as const : 'short' as const
     const orbMode = doc?.marketPreset === 'orb'
-    const interval = orbMode ? '15m' as const : intervalOf(doc, horizon)
+    /* Through readInterval, like the plain path: the opening range is a 15m play, but the preset
+       is stored separately from the horizon, so orb + Investing was reading a 200-day regime line
+       off 15m bars — the one case intervalOf could not see, because this branch never called it. */
+    const interval = readInterval(horizon, orbMode ? '15m' as const : intervalOf(doc, horizon))
     const out: Omit<Paper, 'entryAt' | 'closedAt' | 'level' | 'exit' | 'r'>[] = []
     for (const a of MINE) {
       const b = bars.by.get(a.id)
