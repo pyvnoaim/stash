@@ -102,10 +102,13 @@ assert.equal(step(live, NaN, NOW + 2 * HOUR), null)
   ins.run(...row('over', 'long', 110, 'target', 130, 6))     // the overshoot, booked as profit
   ins.run(...row('shortover', 'short', 90, 'target', 80, 4))
   ins.run(...row('slipped', 'long', 110, 'stop', 92, -1.6))  // a real cost, not to be touched
+  // an accumulation plan filed under a bearish tally: short, stop below its own entry, never a trade
+  ins.run('backwards', 1, 'X', 'X', 'short', 'r', '4h', 100, 90, 120, 1.8, NOW, NOW, NOW, 'stop', 100, 0)
   desk.stop()
 
   createPaper(db)   // the boot that corrects it
   const by = Object.fromEntries(desk.rows(1).map((p) => [p.id, p]))
+  assert.equal(by.backwards, undefined)
   assert.equal(by.over.exit, 110)
   assert.equal(by.over.r, 2)
   assert.equal(by.shortover.exit, 90)

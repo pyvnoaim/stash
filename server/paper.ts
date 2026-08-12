@@ -149,6 +149,15 @@ export function createPaper(db: DatabaseSync) {
     where level = 'target' and entry <> stop and exit is not target
   `)
 
+  /* And the rows filed backwards before found() read the side off the plan — a short with its stop
+     under its own entry, which is not a position. Deleted rather than re-sided: every one of them
+     was closed on its first tick against a level it was already through, so there is no result to
+     keep, only a 0R in the average. Idempotent: no honest row can match it. */
+  db.exec(`
+    delete from paper
+    where (dir = 'short' and stop < entry) or (dir = 'long' and stop > entry)
+  `)
+
   const q = {
     users: db.prepare('select distinct user from docs'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
@@ -193,15 +202,23 @@ export function createPaper(db: DatabaseSync) {
       const b = bars.by.get(a.id)
       if (!b) continue
       const row = scanRead(a, b, horizon, interval, orbMode, d.fee)
-      if (!row || row.tier !== 3 || !row.plan || row.dir === 'flat') continue
+      if (!row || row.tier !== 3 || !row.plan) continue
+      /* The side of the *plan*, not of the tally — the same correction the card makes (`side` in
+         market-page.tsx). Accumulation is long only whatever the 4h leans, so a bearish tally used
+         to file its long geometry as a short: stop below the entry, target above, and step() then
+         read the stop as already reached the moment it filled. Cardano filed at 0.1855 with a stop
+         at 0.1741 and closed stopped for +0.00R the same tick, a trade nobody could have taken and
+         a zero in the expectancy under the table. `priced()` guarantees `long === stop < entry` for
+         every non-null plan, which is what makes the geometry the authority here. */
+      const dir = row.plan.stop < row.plan.entry ? 'long' as const : 'short' as const
       if (row.agree < d.setupAgree) continue
       const bar = b[interval]?.at(-1)
       if (!bar) continue
       const was = scanRead(a, lastBarOff(b), horizon, interval, orbMode, d.fee)
       if (was?.tier === 3 && was.dir === row.dir) continue
       out.push({
-        id: `${a.id}-${row.dir}-${bar.t}`,
-        asset: a.id, label: a.label, dir: row.dir,
+        id: `${a.id}-${dir}-${bar.t}`,
+        asset: a.id, label: a.label, dir,
         rule: HORIZONS[horizon].strategy, interval,
         entry: row.plan.entry, stop: row.plan.stop, target: row.plan.target,
         net: row.plan.net, ts: at,
