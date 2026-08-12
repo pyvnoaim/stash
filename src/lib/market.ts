@@ -486,7 +486,10 @@ export const priceDigits = (ref: number) => {
   // the single-digit prices are the other end of the same problem: XRP at 1.0054 reads back as
   // 1.01 on two decimals, half a percent of price thrown away and the exchange's own figure
   // contradicted. Two only earns its keep from ten up, where the third digit is already there.
-  return a >= 10 ? 2 : a >= 0.1 ? 4 : a >= 0.01 ? 5 : a > 0 ? 6 : 2
+  // Three is the ceiling, though: a fourth decimal on a price you can read is precision the book
+  // does not quote, and it only ever showed up as a column that no longer fits. Below a tenth it
+  // is not precision any more but the number itself, so the ladder keeps climbing there.
+  return a >= 10 ? 2 : a >= 0.1 ? 3 : a >= 0.01 ? 5 : a > 0 ? 6 : 2
 }
 
 /** Locale-formatted price at the precision `ref` deserves. `ref` defaults to the value itself. */
