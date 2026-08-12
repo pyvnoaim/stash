@@ -461,19 +461,19 @@ export function createPush(db: DatabaseSync) {
 
   /**
    * The setups worth waking someone for: the desk's own read, run over every listed chart, kept to
-   * the rows where the entry is actually here — "Buy now", "Sell now", "Accumulate". Everything
+   * the rows where the entry is actually here — "Buy now", "Sell now", "Own it". Everything
    * softer than that is a thing to go and look at, and the Markets page is where you look.
    *
    * This is the one alert about something nobody saved. The saved-setup knocks above answer "did
    * the level I chose get hit"; this answers the question that comes before it, which the app could
    * only ever answer with a tab open on the Scan card.
    *
-   * Only where it has just arrived. "Buy now" is an event and "Accumulate" is a state — price under
-   * the 50-MA on a chart above its 200-MA can be true for a fortnight — so the same read is run a
-   * bar back and a setup that was already here says nothing. Without that the investing horizon
-   * knocked about six assets an hour for as long as a dip lasted, which is the shape of thing that
-   * gets notifications switched off altogether. The bar is also in the key, so the two guards cover
-   * each other: one stops it repeating within a bar, the other across them.
+   * Only where it has just arrived. "Buy now" is an event and "Own it" is a state — a chart above
+   * its 200-MA can be that for a year — so the same read is run a bar back and a setup that was
+   * already here says nothing. Without that the investing horizon knocked about six assets an hour
+   * for as long as the regime held, which is the shape of thing that gets notifications switched off
+   * altogether. The bar is also in the key, so the two guards cover each other: one stops it
+   * repeating within a bar, the other across them.
    *
    * Subject to the quiet hours like anything else — an entry nobody asked to be told about is not
    * worth a phone going off in the dark.
@@ -497,24 +497,32 @@ export function createPush(db: DatabaseSync) {
 
     const out: Alert[] = []
     for (const a of MOVERS) {
-      const bars = scan.bars.get(a.id)
-      if (!bars) continue
+      const all = scan.bars.get(a.id)
+      if (!all) continue
+      // the regime rule turns on at a close, and the desk files it off one — so this knock is about
+      // the same bar the record is, and not about an intraday poke through the line. See found()
+      const bars = horizon === 'long' ? lastBarOff(all) : all
       const row = scanRead(a, bars, horizon, interval, orbMode, d.fee)
       if (!row || row.tier !== 3 || !row.plan) continue
       // how many of the six charts lean this way, against the floor they set
       if (row.agree < d.setupAgree) continue
       const bar = bars[interval]?.at(-1)
       if (!bar) continue
-      // the same read one bar back, on the same side: news is the arriving, not the standing
+      /* the same read one bar back: news is the arriving, not the standing. On the same side too,
+         except on the regime rule, which is long whatever the tally leans — comparing sides there
+         would knock about a holding that has been on for a month on the day the cards flipped. */
       const was = scanRead(a, lastBarOff(bars), horizon, interval, orbMode, d.fee)
-      if (was?.tier === 3 && was.dir === row.dir) continue
+      if (was?.tier === 3 && (horizon === 'long' || was.dir === row.dir)) continue
       const p = row.plan
       out.push({
         key: `setup-${a.id}-${row.dir}-${bar.t}`,
         title: `${a.label} — ${row.say}`,
-        // the three levels and what the geometry pays, which is what the card would have said
-        body: `${fmtPrice(bar.c)} — stop ${fmtPrice(p.stop)}, target ${fmtPrice(p.target)}`
-          + ` · ${p.net.toFixed(2)}R net · ${row.agree}/${INTERVALS.length} timeframes agree`,
+        // the levels and what the geometry pays, which is what the card would have said. The regime
+        // rule has one level and no ratio: it leaves on a close under the line and nowhere else
+        body: `${fmtPrice(bar.c)} — ${horizon === 'long'
+          ? `out on a close under ${fmtPrice(p.stop)}`
+          : `stop ${fmtPrice(p.stop)}, target ${fmtPrice(p.target)} · ${p.net.toFixed(2)}R net`}`
+          + ` · ${row.agree}/${INTERVALS.length} timeframes agree`,
         target: 'market',
       })
     }

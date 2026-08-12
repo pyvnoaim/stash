@@ -173,9 +173,9 @@ export default function MarketPage() {
     chart, apiKey, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
     marketInterval: chosenInterval, marketPreset: preset,
   } = useStash()
-  /* Accumulation is read on days whatever the selector was left on — its timeframe is part of the
-     rule, and the server derives the desk's from the same function, so the chart, the card and the
-     row the phone gets cannot drift apart. See readInterval. */
+  /* The regime rule is read on days whatever the selector was left on — its timeframe is part of
+     the rule, and the server derives the desk's from the same function, so the chart, the card and
+     the row the phone gets cannot drift apart. See readInterval. */
   const interval = readInterval(horizon, chosenInterval)
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload. So do the picker and the
@@ -500,7 +500,7 @@ export default function MarketPage() {
       : { label: 'Flat', cls: 'bg-muted text-muted-foreground', Icon: Minus }
 
   /* The setup, from whichever strategy the horizon is on — Trading takes the VWAP pull-back at a
-     fixed 2R, Investing accumulates the trend and exits on the regime. Both hand back a Plan, so
+     fixed 2R, Investing owns the trend while it is over the 200-MA. Both hand back a Plan, so
      everything below this line (the levels card, the alert, the chart lines, the position) does not
      care which rule made it; only the verdict language does. */
   const entryMA = view?.smaFast.at(-1) ?? null
@@ -516,13 +516,10 @@ export default function MarketPage() {
         toll: tollR, fee: dials.fee,
       })
     : { plan: null, block: null }
-  const holding = horizon === 'long' // the accumulation rule, which answers in positions not trades
-  // in the accumulation band: price has already come under the 50-MA, so the add is here rather
-  // than lower. The trading rule calls that same shape a chase and declines it — see holdPlan.
-  const inBand = holding && !!plan && entryMA != null && last != null && last <= entryMA
-  /* The side the plan is actually on. Accumulation is long by construction whatever the cards lean
-     — see holdPlan — and this is the side the alert and the record get saved under, so a bearish
-     tally on the daily can no longer file a long-only position as a short. */
+  const holding = horizon === 'long' // the regime rule, which answers in positions not trades
+  /* The side the plan is actually on. The regime rule is long by construction whatever the cards
+     lean — see holdPlan — and this is the side the alert and the record get saved under, so a
+     bearish tally on the daily can no longer file a long-only position as a short. */
   const side = holding ? ('long' as const) : dir
   // taking a long while the timeframe above leans down is the trade guides tell you to skip
   const fights = (s: Signal | null) => !!s && ((dir === 'long' && s.tone === 'bear') || (dir === 'short' && s.tone === 'bull'))
@@ -552,31 +549,24 @@ export default function MarketPage() {
      an answer — Out is a position — so this side never renders the "nothing found" shape. */
   const verdict = !view || last == null ? null
     : holding
-    // INVESTING — accumulate / hold / out. No thin check: a holding with no deadline is not judged
-    // on R:R, and no higher-timeframe gate either, since the 200-MA already is the trend filter.
+    /* INVESTING — own it, or don't. Two rungs, because the regime is on or it is off and there is
+       no waiting rung once the entry is the price: the dip to the 50-MA that used to be one cost 48
+       of the 67 points the additions to this rule were worth (see HORIZONS). No thin check either —
+       a holding with no deadline is not judged on R:R — and no higher-timeframe gate, since the
+       200-MA already is the trend filter. */
     ? block === 'below'
       ? {
           text: 'Out', tone: 'wait' as const,
           why: `price is under the ${cfg.slow}-MA${slowMA != null ? ` at ${fmt(slowMA)}` : ''} — below that line the dips keep getting cheaper, and there is nothing here to hold`,
-        }
-    : block === 'unconfirmed'
-      ? {
-          text: 'Out', tone: 'wait' as const,
-          why: `back above the ${cfg.slow}-MA, but the ${cfg.fast} has not crossed over it yet — the recovery has not confirmed, and buying it early is the trade this rule exists to skip`,
         }
     : !plan
       ? {
           text: 'Not enough history', tone: 'wait' as const,
           why: `the ${cfg.slow}-MA needs ${cfg.slow} bars before it means anything — this feed has not given that many yet`,
         }
-    : inBand
-      ? {
-          text: 'Accumulate', tone: 'go' as const,
-          why: `price is in the band between the ${cfg.fast}- and ${cfg.slow}-MA — buy here, add on each further dip, and out if it closes under ${fmt(plan.stop)}${plan.target > last ? ` · trim into ${fmt(plan.target)}` : ''}`,
-        }
       : {
-          text: 'Hold', tone: 'hold' as const,
-          why: `the trend is intact — hold what you have and add at the ${cfg.fast}-MA, ${fmt(plan.entry)} (${Math.abs(((plan.entry - last) / last) * 100).toFixed(1)}% below) · out on a close under ${fmt(plan.stop)}`,
+          text: 'Own it', tone: 'go' as const,
+          why: `price is over the ${cfg.slow}-MA, so the position is on — buy it here, not on a dip that may not come, and out on a daily close under ${fmt(plan.stop)} (${Math.abs(((plan.stop - last) / last) * 100).toFixed(1)}% below)${plan.target > last ? ` · trim into ${fmt(plan.target)} if you want one` : ''}`,
         }
     /* TRADING — but first: the trade may already be on. Every rung below this one answers "should I
        enter", and that is not the question once the entry is behind you — the card was reading
@@ -1006,7 +996,7 @@ export default function MarketPage() {
               {holding ? 'Position' : side === 'long' ? 'Long setup' : 'Short setup'}
               <span className="text-muted-foreground font-normal">
                 {' · '}{holding
-                  ? `add on dips into the ${cfg.fast}-MA while price holds the ${cfg.slow}`
+                  ? `own it while price holds the ${cfg.slow}-MA, out on a daily close under it`
                   : `${side === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, ${side === 'long' ? 'above' : 'below'} the session VWAP`}
               </span>
             </span>
@@ -1024,34 +1014,42 @@ export default function MarketPage() {
                 target's are from the entry, which is what they are risk and reward against. Two
                 reference points, so each tooltip names its own. */}
             {([
-              [holding ? 'Add at' : 'Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400', price != null ? away(plan.entry, price) : null,
+              // no distance-from-here on the holding side: the entry *is* here, and "+0.0%" under
+              // every reading is a number that never says anything
+              [holding ? 'Buy at' : 'Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400',
+                holding || price == null ? null : away(plan.entry, price),
                 holding
-                  ? `The ${cfg.fast}-MA, or the price itself once it has come under it — a dip inside the band is where you add, not somewhere to wait out. ${inBand ? 'Price is in the band now.' : `${price != null ? away(plan.entry, price) : ''} from here.`}`
+                  ? `The price. The regime being on is the whole signal, so there is nothing to wait for — and waiting for the ${cfg.fast}-MA instead is the single most expensive thing this rule ever did, worth 48 points of a 67-point hole over five years of daily bars.`
                   : `The ${cfg.fast}-MA: wait for price to come back ${side === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`,
                 plain(plan.entry)],
               [holding ? 'Out under' : 'Stop', fmt(plan.stop), 'text-destructive', away(plan.stop, plan.entry),
                 holding
-                  ? `The ${cfg.slow}-MA — the line the whole thesis rests on. A daily close back under it ends the position; anything above it is weather. Deliberately far (${away(plan.stop, plan.entry)} from the add), because a holding stopped out by an ugly week was never a holding.`
+                  ? `The ${cfg.slow}-MA — the line the whole thesis rests on, and the line as it stands rather than as it stood when you bought: it climbs under a position that is working. A daily *close* back under it ends the holding; a wick through and back is weather, and being taken out by one costs 12 points of the same hole. Deliberately far, ${away(plan.stop, plan.entry)} from here.`
                   : `One ATR past the entry — a normal bar's travel, so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} away. Broken, the idea was wrong.`,
                 plain(plan.stop)],
-              [holding ? 'Trim into' : 'Target', fmt(plan.target), 'text-emerald-600 dark:text-emerald-400', away(plan.target, plan.entry),
+              [holding ? 'Trim into' : 'Target', plan.target > plan.entry || !holding ? fmt(plan.target) : '—',
+                'text-emerald-600 dark:text-emerald-400', plan.target > plan.entry || !holding ? away(plan.target, plan.entry) : null,
                 holding
-                  ? `The wide high, ${away(plan.target, plan.entry)} from the add. A trim, not a deadline — the position ends on the regime, not here, and taking something off into the highs is optional.`
+                  ? plan.target > plan.entry
+                    ? `The wide high, ${away(plan.target, plan.entry)} from here. A trim if you want one, never an exit — the position ends on the regime and nowhere else, and aiming at this level instead cost 22 points of the 67 the old rule gave away.`
+                    : `Price is above every high of the last ${cfg.srWindow * 3} bars, so there is no level above to trim into. That is the regime working, not a reason to be flat — this rule has no target to miss.`
                   : `Two ATR — a fixed 2R off the stop, so the payoff is the same shape every time instead of wherever the last swing happened to land. ${away(plan.target, plan.entry)} from the entry.`,
-                plain(plan.target)],
+                // nothing to copy where there is no level: an em dash is not a price
+                plan.target > plan.entry || !holding ? plain(plan.target) : null],
               /* Net first, gross in brackets behind it. The gross ratio is the one every guide and
                  every other chart tool quotes, so dropping it would look like a different number
                  for the same trade — but it is not the one that decides anything, and shown alone
                  it flatters: the fee comes off the winner and is added to the loser, so a 1.15×
                  that reads as "win 47% and you're ahead" really needs 50%. */
-              ['Risk to reward', `${fmt(risk)} → ${fmt(reward)}`,
+              ['Risk to reward', `${fmt(risk)} → ${!holding || plan.target > plan.entry ? fmt(reward) : '—'}`,
                 plan.thin && !holding ? 'text-amber-600 dark:text-amber-500' : '',
-                `${plan.net.toFixed(2)}× net${dials.fee > 0 ? ` (${plan.rr.toFixed(2)}× gross)` : ''}`,
+                holding && plan.target <= plan.entry ? 'no level above'
+                  : `${plan.net.toFixed(2)}× net${dials.fee > 0 ? ` (${plan.rr.toFixed(2)}× gross)` : ''}`,
                 holding
                   // shown, not enforced: see holdPlan. A ratio measured to a trim level is not what
                   // decides whether to own something, and dressing it up as a pass/fail would be
                   // the trading rule's question asked about a position that has no deadline.
-                  ? `From the add down to the ${cfg.slow}-MA against the add up to the wide high. Context only — this side does not decline a position on its ratio, because the trim is not where the holding ends and the regime line is not a stop you get taken out at on a bad Tuesday.`
+                  ? `From here down to the ${cfg.slow}-MA against here up to the wide high. Context only — this side does not decline a position on its ratio, because the trim is not where the holding ends and the regime line is not a stop you get taken out at on a bad Tuesday.`
                   : plan.thin
                   ? `More than half of these have to win just to break even — ${(plan.breakEven * 100).toFixed(0)}%, with the ${dials.fee}%-a-side fee on the way in and the way out. Right idea, maths that does not pay. Guides pass on these.`
                   : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`,
@@ -1546,9 +1544,11 @@ export default function MarketPage() {
                   legend describing a line nobody can find, which is the exact thing the MAs' "off
                   frame ↑" exists to prevent. */}
               {plan && ([
-                ['setup entry', plan.entry, 'stroke-sky-500', '5 3'],
-                ['setup stop', plan.stop, 'stroke-muted-foreground/60', '2 4'],
-                ['setup target', plan.target, 'stroke-muted-foreground/60', '2 4'],
+                [holding ? 'buy at' : 'setup entry', plan.entry, 'stroke-sky-500', '5 3'],
+                [holding ? 'regime line' : 'setup stop', plan.stop, 'stroke-muted-foreground/60', '2 4'],
+                // named for what it is on each side: a level the trade leaves at, or one it may take
+                // something off into. Same line, and calling the trim a target is how it gets traded
+                [holding ? 'trim' : 'setup target', plan.target, 'stroke-muted-foreground/60', '2 4'],
               ] as const).filter(([, lvl]) => lvl >= lo && lvl <= hi).map(([label, , cls, dash]) => (
                 <span key={label} className="opacity-80">
                   <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">

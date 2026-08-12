@@ -2,10 +2,12 @@
 // never ran, which is worse than reporting nothing.
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
+import { HORIZONS } from '../src/lib/market.ts'
 import { cooling, createPaper, step, type Paper } from './paper.ts'
 
 const NOW = Date.UTC(2026, 0, 2, 12)
 const HOUR = 36e5
+const DAY = 24 * HOUR
 
 /** A long: entry 100 on a pull-back, stop 95, target 110. Risk is 5. */
 const plan: Paper = {
@@ -86,6 +88,29 @@ assert.equal(step(shortLive, 120, NOW + 2 * HOUR)!.r, -1.01)
 
 // a feed that says nothing usable says nothing at all, rather than filing a trade off a NaN
 assert.equal(step(live, NaN, NOW + 2 * HOUR), null)
+
+/* ---------- the regime hold, which ends one way only ---------- */
+
+/* Bought at 100 with the 200-MA at 80 the day it was filed. The three things it does not do are the
+   whole rule — see HORIZONS — and two of them are these: nothing takes it off intraday, and the
+   trim is not somewhere it leaves. */
+const own: Paper = {
+  ...plan, id: 'BTCUSDT-long-2', rule: HORIZONS.long.strategy, interval: '1d',
+  entry: 100, stop: 80, target: 130, entryAt: NOW,
+}
+assert.equal(step(own, 79, NOW + DAY), null)    // through the entry-day line intraday: still held
+assert.equal(step(own, 130, NOW + DAY), null)   // and the trim is a trim, not an exit
+assert.equal(step(own, 60, NOW + DAY), null)    // however far it goes, without a close under the line
+
+/* What ends it is the close tick() reads off today's bars, at today's line — 88 here, well above the
+   80 the row was filed against. R is measured on the risk it was taken with, not on the distance to
+   a line that has been climbing under it for months: (88 − 100) / 20. */
+const ended = step(own, 91, NOW + DAY, 88)!
+assert.equal(ended.level, 'stop')
+assert.equal(ended.exit, 88)      // the close that broke it, not the price the poll happened to see
+assert.equal(ended.r, -0.6)
+// and a hold that ran a long way pays in the same unit, off the same denominator: (260 − 100) / 20
+assert.equal(step(own, 260, NOW + DAY, 260)!.r, 8)
 
 /* ---------- the same idea, refiled ---------- */
 

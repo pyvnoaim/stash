@@ -1504,10 +1504,18 @@ export function tradePlan(
  * A non-null plan still satisfies `long === stop < entry`, since risk > 0 forces it — which is what
  * lets backtest read the side back off the geometry rather than being told it twice.
  */
-export function priced(long: boolean, entry: number, stop: number, target: number, fee = 0): Plan | null {
+export function priced(
+  long: boolean, entry: number, stop: number, target: number, fee = 0,
+  /** The target is a trim rather than where the rule leaves, so it is allowed to sit behind price:
+   *  a holding at the top of its own window has no level above to take something off into, and that
+   *  is the regime working rather than a reason to have no position. Only holdPlan passes it. The
+   *  ratio then comes out at or below zero, which is the honest reading — and it is shown, never
+   *  enforced, on the one side that has no deadline. */
+  trim = false,
+): Plan | null {
   const risk = long ? entry - stop : stop - entry
   const reward = long ? target - entry : entry - target
-  if (risk <= 0 || reward <= 0) return null
+  if (risk <= 0 || (reward <= 0 && !trim)) return null
   /* Paid twice, on the notional each side is worth: once at the entry and once at whichever exit
      arrives. So a winner and a loser cost different amounts, and the loser costs *more than 1R* —
      which is the half a bare R:R never shows. Leverage cancels out and is deliberately absent:
@@ -1531,7 +1539,7 @@ export function priced(long: boolean, entry: number, stop: number, target: numbe
  * wants prices in it and only the card knows how many decimals this asset prints to. Null means the
  * strategy produced a plan.
  */
-export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'warmup' | 'toll' | 'below' | 'unconfirmed' | 'geometry'
+export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'warmup' | 'toll' | 'below' | 'geometry'
 export type Setup = { plan: Plan | null; block: Block | null }
 
 /**
@@ -1580,40 +1588,41 @@ export function dayPlan(
 }
 
 /**
- * INVESTING — trend accumulation, exited on the regime and not on a wiggle.
+ * INVESTING — own it while it is above the 200-MA, leave on a daily close back under.
  *
  * Long only, and that is a claim about the instrument rather than a simplification: buying dips in
  * an uptrend and shorting rallies are different trades with different holding periods, and the
- * second one is not investing. The regime is the 200-MA. Above it there is a position to hold and
- * dips are where you add; below it there is nothing to own, which is an answer, not a missing setup.
+ * second one is not investing. The regime is the 200-MA. Above it there is a position to hold;
+ * below it there is nothing to own, which is an answer, not a missing setup.
  *
- * The 50-MA is the add level, and price already under it is the add happening now rather than a
- * chase — the opposite of the trading rule, and the reason this could not stay a retune of it.
- * tradePlan declines exactly this case, so under the old shared rule the single best moment to buy a
- * long-term position read as "no clean setup".
+ * Nothing else. That is the whole rule, and each of the three things missing from it used to be here
+ * and was measured out: waiting for a dip to the 50-MA, aiming at the wide high, and stopping
+ * intrabar at the regime line. Walked over 2000 daily bars on eight perps, the version with all
+ * three returned −52% over the period against −49% for simply holding, and this one +15% — the note
+ * above HORIZONS has the ladder between them. The additions were the loss, and each was defensible on its own,
+ * which is why they are named there rather than quietly deleted here.
  *
- * The stop is the 200-MA itself: the position ends when the trend does, not when the week is ugly.
- * The target is the wide high, and it is a trim rather than an exit — a position that pays does not
- * need somewhere to be sold, which is why `thin` is computed here but not enforced. R:R is the wrong
- * question about a holding whose whole thesis is that it has no deadline.
+ * So the entry is the price: if the regime is on, the position is on. The stop is the 200-MA itself,
+ * and it is a level to close under rather than a line to be taken out at — the position ends when
+ * the trend does, not when a Tuesday wick clips it. The target is the wide high and it is a trim,
+ * which is why `thin` is computed here and never enforced: R:R is the wrong question about a holding
+ * whose whole thesis is that it has no deadline, and at a new high there is no level above at all.
+ *
+ * Two of those three live in whoever walks this plan forward, because a Plan is three numbers and
+ * cannot say "not intrabar" or "not an exit" on its own: paper.ts holds the position against the
+ * line as it stands today and takes it off on a close, and it never leaves at the trim. See step().
  * ponytail: no fundamentals, no valuation and no position sizing — this reads price only. The exit
- * is a close through the line with no buffer, so a wick under the 200-MA and back reads as a regime
- * break for one bar; if that whipsaws in practice, a close-based confirmation over 2–3 bars is the
- * upgrade, and it belongs here rather than in the caller.
+ * is a close through the line with no buffer, so a close under the 200-MA and straight back over
+ * costs a round trip; if that whipsaws in practice, a 2–3 bar confirmation is the upgrade, and it
+ * belongs beside the exit in paper.ts rather than here.
  */
-export function holdPlan(
-  price: number, fast: number | null, slow: number | null,
-  levels: Levels, fee = 0,
-): Setup {
-  if (fast == null || slow == null) return { plan: null, block: 'warmup' }
+export function holdPlan(price: number, slow: number | null, levels: Levels, fee = 0): Setup {
+  if (slow == null) return { plan: null, block: 'warmup' }
   // out of the regime: below the line there is no position, and no amount of oversold changes that
   if (price < slow) return { plan: null, block: 'below' }
-  // above the 200 but the 50 has not caught up — the recovery has not confirmed, and an add here
-  // would have its stop above its entry, which is not a position, it is a hope with a price on it
-  if (fast <= slow) return { plan: null, block: 'unconfirmed' }
-  // already under the 50-MA and still over the 200 is the accumulation band — buy here, not lower
-  const entry = Math.min(fast, price)
-  const plan = priced(true, entry, slow, levels.farHigh, fee)
+  // at market, because the regime being on is the whole signal — see above. The trim is priced as a
+  // trim, so a position at the top of its own window is still a position
+  const plan = priced(true, price, slow, levels.farHigh, fee, true)
   return { plan, block: plan ? null : 'geometry' }
 }
 
@@ -1644,7 +1653,7 @@ export function strategyPlan(h: Horizon, i: {
   fee?: number
 }): Setup {
   return h === 'long'
-    ? holdPlan(i.price, i.fast, i.slow, i.levels, i.fee)
+    ? holdPlan(i.price, i.slow, i.levels, i.fee)
     /* Both averages, not just the entry one. The slow MA is what the trend card votes on and what
        the MA cross is measured against, so a read taken before it has warmed up is not a cautious
        version of this rule — it is a different one, decided by whichever cards happened to have
@@ -1836,7 +1845,13 @@ export function backtest(
   /** Which strategy to walk — the horizon, not its numbers. It used to take the four MA settings and
    *  always walk the swing rule, which was fine while both horizons ran that same rule and became a
    *  quiet lie the moment they stopped: the card would report the accumulation rule's numbers under
-   *  a walk of a day-trading one. See strategyPlan. */
+   *  a walk of a day-trading one. See strategyPlan.
+   *  ponytail: `long` is the exception now, and it is a real one. This walks a plan through fill()
+   *  and hold(), which stop intrabar and leave at the target — the two things the regime rule does
+   *  not do, and which live in step() precisely because a Plan cannot say them. So a `long` walk
+   *  here measures the −19% variant in the note above HORIZONS, not what ships. Nothing in the app
+   *  calls it; the rule's own numbers came from a rig that walked closes. Give hold() a soft stop
+   *  before pointing this at the long horizon again. */
   horizon: Horizon = 'long',
   /** `drop` silences those cards in the tally. The point of owning a backtest at all is being able
    *  to ask whether a reading earns its vote, and that question is unanswerable from outside — the
@@ -2101,9 +2116,13 @@ export function amdBacktest(c: Candle[], opts: AmdOpts = {}): AmdRun {
 export const HORIZONS = {
   long: {
     label: 'Investing', fast: 50, slow: 200, srWindow: 60, interval: '1d',
-    strategy: 'Trend accumulation',
-    rule: 'Long only, above the 200-MA. Add on dips to the 50-MA, out on a daily close back under the 200. The wide high is a trim, not a deadline.',
-    measured: 'Walked now, on 2000 daily bars from MEXC — eight perps, five and a half years, costs in — and it loses: −52% compounded per asset over the period, against −49% for simply holding. Do not run it. Bitget keeps only 90 daily bars so it cannot fire there at all, which is the one thing that has been protecting this rule; pointing it at a venue with the history would start it filing. What the walk also shows is that the idea underneath is sound and the additions are what break it: owning the asset while price is above the 200-MA and leaving on a close back below returns +15% over the same window and beats holding on six of the eight. Waiting for the dip to the 50-MA costs about 48 points of that, aiming at a 180-day high another 22, and stopping intrabar at the regime line a further 12. The replacement is this rule with those three removed — see the note above HORIZONS.',
+    /* Renamed with the rule, and not only for the copy: the paper desk stores this string on every
+       row it files and `step()` reads it back to know which exit to run. The accumulation rows
+       already on the desk keep the old name and go on being walked to their old target and their
+       entry-day stop, which is the rule they were filed under. Two rules, two names, one record. */
+    strategy: 'Regime hold',
+    rule: 'Long only. Own it at market while price is above the 200-MA, out on a daily close back under. No pull-back to wait for, no target, and nothing takes you out intraday. The wide high is a trim if you want one.',
+    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget keeps only 90 daily bars, so a 200-MA cannot exist there and the card says warmup rather than reading a faster chart.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
@@ -2111,34 +2130,37 @@ export const HORIZONS = {
     rule: 'Both sides, but only on your side of the session VWAP. Entry at the 9-MA, stop one ATR past it, target two — a fixed 2R. Flat by the session end.',
     measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing before costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything.',
   },
-/* THE REPLACEMENT FOR THE ACCUMULATION RULE, measured but not built — the numbers are here so it
-   gets built as it was tested rather than as it is remembered.
+/* WHAT THE REGIME RULE COST TO GET WRONG, kept because the three things it does not do are the
+   whole of it, and each one is the sort of thing that gets added back by someone improving it.
 
    Own the asset while price is above the 200-MA on daily bars; leave on a daily close back under
-   it. Nothing else: no waiting for a pull-back, no target, no intrabar stop. Eight perps, 2000
-   daily bars from MEXC, 0.05% a side, compounded per asset and averaged:
+   it. Nothing else. Eight perps, 2000 daily bars from MEXC, 0.05% a side, compounded per asset
+   and averaged:
 
-       as it ships    dip + target + stop at line     −52%    199 trades
+       what shipped   dip + target + stop at line     −52%    199 trades
        ·              dip entry only                  −33%    127
        ·              no dip, target, stop at line    −19%    545
        ·              no dip, no target, stop at line  +3%    306
        the rule       none of the three               +15%    205
        buy and hold                                   −49%
 
-   Split in half it holds: +28% against −34% for holding in 2021-09 → 2024-02, +3% against −23% in
-   2024-02 → 2026-08, beating holding on 6 then 8 of the eight. It is in the market 40% of the time,
-   and most of what it earns is the drawdown it sits out rather than a return it finds — which is
-   worth having and is not the same claim.
+   Each addition is defensible alone and they are worth 67 points together. Note the third row: the
+   dip entry is the one that reads most like discipline, and dropping it while keeping the target is
+   still −19%. There is no half of this change worth shipping.
 
-   Three things have to change together, and the third is the one that is easy to miss:
-     1. Enter at market while in the regime, not at a pull-back to the 50-MA. holdPlan's entry.
-     2. No target exit. Plan.target is `number` and the paper table's column is `not null`, so
-        either it goes nullable (about 30 sites and a migration) or `step()` skips the target for
-        rows whose rule is this one and the level is shown as a trim.
-     3. The stop must be the 200-MA *as it stands*, not as it stood when the row was filed. The
-        walk exits at the current line; a filed row keeps the entry-day one, and over a hold of
-        months those are different rules. paper.ts would have to refresh it each pass.
-   Ship 1 without 2 and the measured result is −19%, which is worse than leaving it alone. */
+   Where the three live now, since only the first is expressible as a Plan:
+     1. Entry at market — holdPlan, which no longer reads the 50-MA at all.
+     2. No target exit — `step()` in paper.ts, which never leaves at the trim for a row filed under
+        this rule. `Plan.target` stays `number` and the desk's column stays `not null`: making it
+        nullable is ~30 sites and a migration to describe a level that is still worth showing.
+     3. No intrabar stop, and the line as it stands rather than as it stood — also `step()`, which
+        reads the 200-MA off today's bars and takes the position off on a close under it. The row's
+        own `stop` is left at the entry-day line, because that is the risk the position was taken
+        with and so the only honest denominator for its R.
+   The measured rule enters on a close as well as leaving on one, so the desk reads this horizon one
+   bar back and books the entry at that close — see found(). Read live it would file on any intraday
+   poke through the line, and every cross that failed to hold into the close would be a round trip
+   the walk never took. */
 
 /* `measured` is what the rule actually did when it was walked over its own filed setups, and it
    sits beside `rule` deliberately: the sentence describing a strategy and the sentence saying
@@ -2805,11 +2827,13 @@ export function scanRead(
   // the verdict ladder from the card above, compressed to a phrase — same branches, same order, and
   // the same split by strategy, or a row would grade an asset by a rule the card it opens doesn't use
   const [tier, say]: [ScanRow['tier'], string] = holding
+    /* Two rungs, not three: the regime is on or it is not, and there is no waiting rung left now
+       that the entry is the price. Every bar of a trend that holds is a 3, which would file a row a
+       quarter of an hour for months — what stops that is found(), which only files a read that was
+       not already there on the bar before. */
     ? block === 'below' ? [0, `under the ${cfg.slow}-MA — out`]
-      : block === 'unconfirmed' ? [0, 'recovery not confirmed']
       : !plan ? [0, 'not enough history']
-      : entryMA != null && price <= entryMA ? [3, 'Accumulate']
-      : [2, `hold — add at ${fmtPrice(plan.entry, price)}`]
+      : [3, 'Own it']
     : block === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
     : block === 'vwap' ? [0, `wrong side of the VWAP for a ${dir}`]
     : block === 'quiet' ? [0, 'no ATR yet — no stop to size']

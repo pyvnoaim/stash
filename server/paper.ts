@@ -19,10 +19,15 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  ASSETS, dialsOf, fetchPrices, HORIZONS, readInterval, scanBars, scanRead,
+  ASSETS, dialsOf, fetchPrices, HORIZONS, readInterval, scanBars, scanRead, sma,
   type Candle, type Interval,
 } from '../src/lib/market.ts'
 import { intervalOf, lastBarOff } from './push.ts'
+
+/** The rule name the regime rows are filed under, and the switch every exception below turns on.
+ *  Off the horizon rather than spelled out, so renaming the strategy cannot leave these behind —
+ *  and the rows filed under the old accumulation rule keep that name and its exits. */
+const REGIME = HORIZONS.long.strategy
 
 /** How often the open rows are re-priced. One ticker call for every asset anyone holds. */
 const TICK = 60_000
@@ -109,9 +114,24 @@ export type Paper = {
  * stop of a long is also past its entry, and between two things one tick could have done, the
  * worse one is the one to write down.
  */
-export function step(row: Paper, price: number, at: number): Partial<Paper> | null {
+export function step(row: Paper, price: number, at: number, broke: number | null = null): Partial<Paper> | null {
   if (!isFinite(price)) return null
   const long = row.dir === 'long'
+  /* The regime rule ends one way only: a daily close back under the 200-MA *as it stands today*,
+     which tick() reads off the bars and hands over here as the close that broke it. Neither of the
+     two exits below applies to it — a wick through the line does not end a holding and the trim is
+     not somewhere it leaves — and those, with the pull-back entry, are the three additions the walk
+     priced at 67 points. See the note above HORIZONS.
+     R is against the risk the position was *taken* with, which is why the row's own `stop` is left
+     at the entry-day line rather than refreshed: the 200-MA has been climbing under a winner the
+     whole time it was held, and dividing by the distance to today's line would report a year of
+     trend as a fraction of an R. */
+  if (row.rule === REGIME) {
+    if (broke == null) return null
+    const risk = Math.abs(row.entry - row.stop)
+    const r = risk > 0 ? (broke - row.entry) / risk : 0
+    return { closedAt: at, level: 'stop' as const, exit: broke, r: Math.round(r * 100) / 100 }
+  }
   const reached = (lvl: number) => (long ? price <= lvl : price >= lvl)
 
   const entryAt = row.entryAt ?? (reached(row.entry) ? at : null)
@@ -215,8 +235,8 @@ export function createPaper(db: DatabaseSync) {
     users: db.prepare('select distinct user from docs'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
     add: db.prepare(`insert or ignore into paper
-      (id, user, asset, label, dir, rule, interval, entry, stop, target, net, ts)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      (id, user, asset, label, dir, rule, interval, entry, stop, target, net, ts, entryAt)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     open: db.prepare('select * from paper where closedAt is null'),
     live: db.prepare('select 1 from paper where user = ? and asset = ? and dir = ? and closedAt is null'),
     lastStop: db.prepare(`select max(closedAt) as at from paper
@@ -239,6 +259,28 @@ export function createPaper(db: DatabaseSync) {
   }
 
   /**
+   * The close that ended a regime hold, or null while the trend is intact. Null for every other
+   * rule — they end at their own levels, which `step()` reads off the price alone.
+   *
+   * The line is measured now rather than remembered: the row's `stop` is the 200-MA of the day it
+   * was filed, and a position held for months exits at the line as it stands, not where it stood.
+   * That difference is the third of the three things the walk paid for — see the note above
+   * HORIZONS — and it is the one that is easy to miss, because the wrong version still exits.
+   *
+   * Off closed bars at both ends: the forming day has not closed under anything yet, and a line that
+   * counted it would move with every tick of the bar being tested against it.
+   */
+  function broke(row: Paper): number | null {
+    if (row.rule !== REGIME) return null
+    const c = bars?.by.get(row.asset)?.[HORIZONS.long.interval]
+    if (!c?.length) return null
+    const closed = c.slice(0, -1)
+    const line = sma(closed.map((x) => x.c), HORIZONS.long.slow).at(-1)
+    const last = closed.at(-1)
+    return line != null && last && last.c < line ? last.c : null
+  }
+
+  /**
    * The setups one document's desk would have taken, right now.
    *
    * Tier 3 only — the rows the Scan card prints in green, the ones the desk says to take rather
@@ -255,10 +297,15 @@ export function createPaper(db: DatabaseSync) {
        is stored separately from the horizon, so orb + Investing was reading a 200-day regime line
        off 15m bars — the one case intervalOf could not see, because this branch never called it. */
     const interval = readInterval(horizon, orbMode ? '15m' as const : intervalOf(doc, horizon))
-    const out: Omit<Paper, 'entryAt' | 'closedAt' | 'level' | 'exit' | 'r'>[] = []
+    const out: Omit<Paper, 'closedAt' | 'level' | 'exit' | 'r'>[] = []
     for (const a of MINE) {
-      const b = bars.by.get(a.id)
-      if (!b) continue
+      const all = bars.by.get(a.id)
+      if (!all) continue
+      /* The regime rule enters on a close as well as leaving on one, so this horizon is read a bar
+         back and the entry is booked at that close. Read live it would file on any intraday poke
+         through the 200-MA, and every cross that failed to hold into the close would be a round
+         trip the walk it was measured on never took. */
+      const b = horizon === 'long' ? lastBarOff(all) : all
       const row = scanRead(a, b, horizon, interval, orbMode, d.fee)
       if (!row || row.tier !== 3 || !row.plan) continue
       /* The side of the *plan*, not of the tally — the same correction the card makes (`side` in
@@ -273,13 +320,19 @@ export function createPaper(db: DatabaseSync) {
       const bar = b[interval]?.at(-1)
       if (!bar) continue
       const was = scanRead(a, lastBarOff(b), horizon, interval, orbMode, d.fee)
-      if (was?.tier === 3 && was.dir === row.dir) continue
+      /* Not on the side, on the regime side: the tally is the *trading* rule's direction, and the
+         regime rule is long whatever it leans. Comparing sides there would call a holding that has
+         been on for a month "new" on the day the cards happened to flip bearish under it. */
+      if (was?.tier === 3 && (horizon === 'long' || was.dir === row.dir)) continue
       out.push({
         id: `${a.id}-${dir}-${bar.t}`,
         asset: a.id, label: a.label, dir,
         rule: HORIZONS[horizon].strategy, interval,
         entry: row.plan.entry, stop: row.plan.stop, target: row.plan.target,
         net: row.plan.net, ts: at,
+        // a market entry is filled the moment it is filed. Left null it would sit as a limit at a
+        // close that has already gone, and expire unfilled twelve bars later as a trade nobody took
+        entryAt: horizon === 'long' ? at : null,
       })
     }
     return out
@@ -300,11 +353,14 @@ export function createPaper(db: DatabaseSync) {
         // one open trade per asset and side: the desk saying the same thing twice in a morning is
         // one idea, and two rows would double-count it in every number below
         if (q.live.get(user, p.asset, p.dir)) continue
-        // and not straight back into the one that just stopped — see COOL_BARS
+        /* and not straight back into the one that just stopped — see COOL_BARS. The regime rule is
+           exempt: what re-arms it is a daily close back over the 200-MA, which is a scarcer event
+           than any bar count, and eight days of cooldown on top of it would sit out the re-entry
+           the walk gets most of its return from. */
         const beaten = (q.lastStop.get(user, p.asset, p.dir, p.interval) as { at: number | null }).at
-        if (cooling(beaten, p.interval, at)) continue
+        if (p.rule !== REGIME && cooling(beaten, p.interval, at)) continue
         q.add.run(p.id, user, p.asset, p.label, p.dir, p.rule, p.interval,
-          p.entry, p.stop, p.target, p.net, p.ts)
+          p.entry, p.stop, p.target, p.net, p.ts, p.entryAt)
       }
       q.prune.run(user, user, KEEP)
     }
@@ -317,7 +373,7 @@ export function createPaper(db: DatabaseSync) {
     for (const p of live as (Paper & { user: number })[]) {
       const price = prices[p.asset]
       if (typeof price !== 'number') continue
-      const next = step(p, price, at)
+      const next = step(p, price, at, broke(p))
       if (!next) continue
       if (next.closedAt != null) {
         q.close.run(next.entryAt ?? p.entryAt, next.closedAt, next.level ?? null, next.exit ?? null, next.r ?? null, p.id, p.user)

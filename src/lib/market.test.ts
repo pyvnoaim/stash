@@ -275,33 +275,42 @@ const dayFee = dayPlan('long', 102, 100, 5, 99, 1).plan!
 assert.equal(dayFee.rr, 2)
 assert.ok(dayFee.breakEven < 0.5 && dayFee.thin === false)
 
-// INVESTING — accumulate above the 200-MA, out below it, and the regime line is the stop.
-// price 120 above both MAs: hold, and the add sits back at the 50-MA
-const held = holdPlan(120, 100, 80, band)
-assert.equal(held.plan?.entry, 100) // the 50-MA
+/* INVESTING — own it above the 200-MA, out below it, and nothing else. The three things this rule
+   does *not* do are the whole of it: no pull-back to wait for, no target, no intrabar stop. The
+   first is here; the other two are step()'s, since a Plan cannot say them. See HORIZONS. */
+// price 120, over the line: the entry is the price, because being in the regime is the whole signal
+const held = holdPlan(120, 80, band)
+assert.equal(held.plan?.entry, 120)
 assert.equal(held.plan?.stop, 80)   // the 200-MA — the position ends with the trend, not on a wick
 assert.equal(held.plan?.target, 110) // the wide high, a trim
-/* The case the two rules genuinely disagree on, and the reason this could not stay a retune. Price
-   has come *under* the 50-MA while still holding the 200: tradePlan calls that a chase and declines
-   it, so under the old shared rule the single best moment to add to a long-term position rendered as
-   "no clean setup". Here it is the add, at the price itself. */
+// the 50-MA is not an input any more — and the trading rule still declines this same price as a
+// chase, which is the disagreement that made these two separate rules in the first place
 assert.equal(tradePlan('long', 98, 100, band), null)
-assert.equal(holdPlan(98, 100, 80, band).plan?.entry, 98)
+assert.equal(holdPlan(98, 80, band).plan?.entry, 98)
 // below the regime there is nothing to own, however oversold — an answer, not a missing setup
-assert.deepEqual(holdPlan(75, 100, 80, band), { plan: null, block: 'below' })
-// above the 200 but the 50 hasn't crossed back over it: unconfirmed, and an add here would put its
-// stop above its entry, which priced() would refuse anyway
-assert.deepEqual(holdPlan(85, 78, 80, band), { plan: null, block: 'unconfirmed' })
+assert.deepEqual(holdPlan(75, 80, band), { plan: null, block: 'below' })
+/* Back over the 200 with the 50 still under it used to be declined as an unconfirmed recovery. It is
+   a position now: the walk's rule is the line and only the line, and waiting for the averages to
+   agree is the same 48-point mistake as waiting for the dip, one bar later. */
+assert.equal(holdPlan(85, 80, band).plan?.entry, 85)
 // not enough bars for the slow MA to exist yet
-assert.deepEqual(holdPlan(120, 100, null, band), { plan: null, block: 'warmup' })
+assert.deepEqual(holdPlan(120, null, band), { plan: null, block: 'warmup' })
 // thin is computed and never enforced here — a wide regime stop against a near trim reads as thin,
 // and the card shows it as context rather than declining the position on it
-assert.equal(holdPlan(120, 100, 80, { ...band, farHigh: 105 }).plan?.thin, true)
-// long-only: a bearish tally cannot turn accumulation into a short, because dir never reaches it
+assert.equal(holdPlan(120, 80, { ...band, farHigh: 105 }).plan?.thin, true)
+/* And a trim *behind* price is still a position. priced() refuses a reward that is not above the
+   entry, rightly, for the rules whose target is where they leave — this one never leaves there, so
+   at the top of its own window it has no level to trim into and the holding stands anyway. That
+   case is reachable on any new high: farHigh comes off bars that include the one price is making. */
+const peak = holdPlan(120, 80, { ...band, farHigh: 115 })
+assert.equal(peak.plan?.entry, 120)
+assert.ok(peak.plan!.rr < 0 && peak.plan!.thin)
+assert.equal(peak.block, null)
+// long-only: a bearish tally cannot turn the regime rule into a short, because dir never reaches it
 assert.equal(strategyPlan('long', { dir: 'short', price: 120, fast: 100, slow: 80, levels: band, atr: 5, vwap: null }).plan?.stop, 80)
 
 // the switch itself: the same chart, one horizon apart, answering differently — Trading declines the
-// dip under the fast MA as a chase while Investing calls it the add
+// dip under the fast MA as a chase, Investing buys it because the regime is on
 const sameChart = { dir: 'long' as const, price: 98, fast: 100, slow: 80, levels: band, atr: 5, vwap: 97 }
 assert.equal(strategyPlan('short', sameChart).block, 'chase')
 assert.equal(strategyPlan('long', sameChart).plan?.entry, 98)

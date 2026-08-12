@@ -458,7 +458,6 @@ const tools: Record<string, {
         warmup: `Too few ${interval} bars came back to warm the ${cfg.slow}-MA — the read would be decided by whichever cards had enough bars, which is not this rule`,
         toll: `A normal ${interval} bar is small enough that crossing the book twice at ${s.dials.fee}% a side costs over a quarter of the risk — this rule stops one ATR away, so the fee would be most of the trade. Walked, these came out break-even gross and −0.30R net`,
         below: `Out — price is under the ${cfg.slow}-MA, and below that line there is nothing to hold`,
-        unconfirmed: `Out — back above the ${cfg.slow}-MA but the ${cfg.fast} has not crossed it, so the recovery is unconfirmed`,
         geometry: 'The levels do not make a trade — the stop or the target lands the wrong side of the entry',
       }
 
@@ -476,7 +475,7 @@ const tools: Record<string, {
           ...plan,
           side: holding ? 'long' : dir,
           how: holding
-            ? `add on dips into the ${cfg.fast}-MA while price holds the ${cfg.slow}; out on a daily close under it, trim into the wide high`
+            ? `buy it here while price holds the ${cfg.slow}-MA; out on a daily close back under that line as it stands then, and nothing else — no pull-back to wait for, no target, and no intraday stop. The wide high is a trim if you want one`
             : `${dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, stop one ATR past it and target two`,
           // a list, because a setup can be both thin and against the tide, and dropping either one
           // of those on the floor is dropping the half of the answer that says don't. `thin` is not
