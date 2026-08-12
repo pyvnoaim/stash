@@ -2103,7 +2103,7 @@ export const HORIZONS = {
     label: 'Investing', fast: 50, slow: 200, srWindow: 60, interval: '1d',
     strategy: 'Trend accumulation',
     rule: 'Long only, above the 200-MA. Add on dips to the 50-MA, out on a daily close back under the 200. The wide high is a trim, not a deadline.',
-    measured: 'Not walked. It needs 200 daily bars to have a regime line at all, and until the venue supplies them there is nothing to measure — Bitget keeps 90, MEXC 2000. Treat it as untested rather than as the safer of the two.',
+    measured: 'Walked now, on 2000 daily bars from MEXC — eight perps, five and a half years, costs in — and it loses: −52% compounded per asset over the period, against −49% for simply holding. Do not run it. Bitget keeps only 90 daily bars so it cannot fire there at all, which is the one thing that has been protecting this rule; pointing it at a venue with the history would start it filing. What the walk also shows is that the idea underneath is sound and the additions are what break it: owning the asset while price is above the 200-MA and leaving on a close back below returns +15% over the same window and beats holding on six of the eight. Waiting for the dip to the 50-MA costs about 48 points of that, aiming at a 180-day high another 22, and stopping intrabar at the regime line a further 12. The replacement is this rule with those three removed — see the note above HORIZONS.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
@@ -2111,6 +2111,35 @@ export const HORIZONS = {
     rule: 'Both sides, but only on your side of the session VWAP. Entry at the 9-MA, stop one ATR past it, target two — a fixed 2R. Flat by the session end.',
     measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing before costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything.',
   },
+/* THE REPLACEMENT FOR THE ACCUMULATION RULE, measured but not built — the numbers are here so it
+   gets built as it was tested rather than as it is remembered.
+
+   Own the asset while price is above the 200-MA on daily bars; leave on a daily close back under
+   it. Nothing else: no waiting for a pull-back, no target, no intrabar stop. Eight perps, 2000
+   daily bars from MEXC, 0.05% a side, compounded per asset and averaged:
+
+       as it ships    dip + target + stop at line     −52%    199 trades
+       ·              dip entry only                  −33%    127
+       ·              no dip, target, stop at line    −19%    545
+       ·              no dip, no target, stop at line  +3%    306
+       the rule       none of the three               +15%    205
+       buy and hold                                   −49%
+
+   Split in half it holds: +28% against −34% for holding in 2021-09 → 2024-02, +3% against −23% in
+   2024-02 → 2026-08, beating holding on 6 then 8 of the eight. It is in the market 40% of the time,
+   and most of what it earns is the drawdown it sits out rather than a return it finds — which is
+   worth having and is not the same claim.
+
+   Three things have to change together, and the third is the one that is easy to miss:
+     1. Enter at market while in the regime, not at a pull-back to the 50-MA. holdPlan's entry.
+     2. No target exit. Plan.target is `number` and the paper table's column is `not null`, so
+        either it goes nullable (about 30 sites and a migration) or `step()` skips the target for
+        rows whose rule is this one and the level is shown as a trim.
+     3. The stop must be the 200-MA *as it stands*, not as it stood when the row was filed. The
+        walk exits at the current line; a filed row keeps the entry-day one, and over a hold of
+        months those are different rules. paper.ts would have to refresh it each pass.
+   Ship 1 without 2 and the measured result is −19%, which is worse than leaving it alone. */
+
 /* `measured` is what the rule actually did when it was walked over its own filed setups, and it
    sits beside `rule` deliberately: the sentence describing a strategy and the sentence saying
    whether it pays should not live in different files, or the first one gets read alone. Both are
