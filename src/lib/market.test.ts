@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen } = await import('./market.ts')
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen,
+  heikin, heikinRun } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -45,6 +46,35 @@ const hammer = candlePatterns([
   { t: 1, o: 9.8, h: 10, l: 8, c: 9.9 }, // body 0.1, lower wick 1.8, upper wick 0.1
 ]).map((s) => s.label)
 assert.ok(hammer.includes('Hammer'))
+
+/* Heikin Ashi. The close is the bar's own mean, the open the midpoint of the previous *smoothed*
+   bar — not the previous raw one, which is the mistake that makes it look right and drift. */
+const haBars = heikin([
+  { t: 0, o: 10, h: 12, l: 8, c: 10 },  // seed: close (10+12+8+10)/4 = 10, open (10+10)/2 = 10
+  { t: 1, o: 11, h: 14, l: 10, c: 13 }, // close 12, open (10+10)/2 = 10, high max(14,10,12), low min(10,10,12)
+])
+assert.deepEqual(haBars[0], { t: 0, o: 10, h: 12, l: 8, c: 10 })
+assert.deepEqual(haBars[1], { t: 1, o: 10, h: 14, l: 10, c: 12 })
+
+// a red bar inside a climb comes out green once averaged — the whole point of the transform
+const haClimb = [
+  { t: 0, o: 100, h: 102, l: 99, c: 101 },
+  { t: 1, o: 101, h: 104, l: 100, c: 103 },
+  { t: 2, o: 103, h: 104, l: 101, c: 102 }, // red on the raw chart
+  { t: 3, o: 102, h: 106, l: 102, c: 105 },
+]
+assert.ok(haClimb.some((b) => b.c < b.o))
+assert.ok(heikin(haClimb).every((b) => b.c >= b.o))
+assert.deepEqual(heikinRun(haClimb)?.label, 'Heikin Ashi up 4')
+// flat-toned, so it describes the tape without moving the verdict — see heikinRun
+assert.equal(heikinRun(haClimb)?.tone, 'flat')
+assert.equal(tally([heikinRun(haClimb)!]).dir, 'flat')
+assert.equal(heikinRun(haClimb.slice(0, 2)), null) // two bars is a coincidence, not a run
+assert.equal(heikinRun([]), null)
+// and the run ends the bar the colour does
+const haTurn = [...haClimb, { t: 4, o: 105, h: 105, l: 98, c: 99 }, { t: 5, o: 99, h: 100, l: 94, c: 95 },
+  { t: 6, o: 95, h: 96, l: 90, c: 91 }]
+assert.equal(heikinRun(haTurn)?.label, 'Heikin Ashi down 3')
 
 // a live feed's last bar is still forming — seconds in, its body is nothing and it would read as a
 // doji every bar; the pattern signals wait for the close
@@ -395,6 +425,11 @@ assert.ok(atr(DEMOS.atr.candles)! > 3) // the loud half of the fixture dominates
 assert.ok(squeeze(closesOf(DEMOS.squeeze), 10, 40)!.rank <= 0.15)
 assert.ok(volumeSurge(DEMOS.volume.candles, 12)! >= 1.8)
 assert.ok(candlePatterns(DEMOS.candle.candles).some((s) => s.label === 'Bullish engulfing'))
+// the Heikin Ashi fixture only illustrates anything if the raw bars it is drawn from disagree with
+// the smoothed ones: red bars on the chart nobody sees, one unbroken run on the chart they do
+assert.ok(DEMOS.heikin.candles.some((b) => b.c < b.o))
+assert.ok(heikin(DEMOS.heikin.candles).every((b) => b.c >= b.o))
+assert.ok(heikinRun(DEMOS.heikin.candles)?.label.startsWith('Heikin Ashi up'))
 assert.equal(trend(DEMOS.htf.candles, 12), 'up')
 // the structure demo has to actually change character: a downtrend's swing high, closed back above
 const sb = structureBreak(DEMOS.structure.candles)

@@ -1,7 +1,7 @@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import {
-  DEMO_MACD, DEMO_RSI, DEMOS, GUIDES, macd, mirrorDemo, rsi, sma, type Demo, type Signal,
+  DEMO_MACD, DEMO_RSI, DEMOS, GUIDES, heikin, macd, mirrorDemo, rsi, sma, type Demo, type Signal,
 } from '@/lib/market'
 
 /* The guide for a reading, with a worked example above the words. The example is drawn from DEMOS
@@ -24,7 +24,9 @@ const path = (v: (number | null)[], lo: number, hi: number, n: number) => {
 }
 
 function DemoChart({ demo }: { demo: Demo }) {
-  const { candles, ma, band, panel, mark, rsiPeriod } = demo
+  const { ma, band, panel, mark, rsiPeriod } = demo
+  // the one guide whose subject is the drawing rather than a line over it
+  const candles = demo.ha ? heikin(demo.candles) : demo.candles
   const n = candles.length
   const closes = candles.map((c) => c.c)
   const fast = ma ? sma(closes, ma[0]) : []
@@ -115,12 +117,13 @@ function DemoChart({ demo }: { demo: Demo }) {
         </svg>
       )}
       <p className="text-muted-foreground mt-1 text-center text-[10px]">
-        {panel === 'rsi' ? 'an example — price, with RSI beneath; the dashed lines are 30 and 70'
-          : panel === 'macd' ? 'an example — the MACD line (blue) crossing its signal line (amber); the flat line is zero'
-            : panel === 'volume' ? 'an example — price, with the volume traded per bar beneath'
-              : ma ? 'an example — price, with the fast (blue) and slow (amber) averages'
-                : band ? 'an example — price, with the band the guide describes'
-                  : 'an example, not live data'}
+        {demo.ha ? 'an example — a climb the raw chart printed red bars in, drawn as Heikin Ashi'
+          : panel === 'rsi' ? 'an example — price, with RSI beneath; the dashed lines are 30 and 70'
+            : panel === 'macd' ? 'an example — the MACD line (blue) crossing its signal line (amber); the flat line is zero'
+              : panel === 'volume' ? 'an example — price, with the volume traded per bar beneath'
+                : ma ? 'an example — price, with the fast (blue) and slow (amber) averages'
+                  : band ? 'an example — price, with the band the guide describes'
+                    : 'an example, not live data'}
       </p>
     </div>
   )

@@ -1185,6 +1185,8 @@ export type Demo = {
   rsiPeriod?: number
   /** Bars to spotlight — the engulfing pair, the opening hour. */
   mark?: [number, number]
+  /** Draw the fixture smoothed. Only the Heikin Ashi guide, whose subject is the drawing itself. */
+  ha?: true
 }
 
 export const DEMOS: Record<GuideKey, Demo> = {
@@ -1272,6 +1274,10 @@ export const DEMOS: Record<GuideKey, Demo> = {
     ]),
     mark: [0, 2], // the three bars that make the gap
   },
+  /* A climb noisy enough that the raw chart prints red bars all the way up it. Drawn smoothed, so
+     the picture is the point of the transform rather than a description of it: those red bars are
+     averaged into their neighbours and the run comes out one colour. */
+  heikin: { candles: walk(wave(20, 100, 1.1, 3.6)), ha: true },
 }
 
 /** The same fixture upside down, mirrored through the middle of its own range: a rally becomes a
@@ -1287,6 +1293,7 @@ export const mirrorDemo = (d: Demo): Demo => {
 export type GuideKey =
   | 'ma-cross' | 'trend' | 'rsi' | 'sr' | 'divergence' | 'macd'
   | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap' | 'structure' | 'fvg'
+  | 'heikin'
 
 /** How far price stands from a gap's box, and 0 when it is inside it. */
 export const gapAway = (g: Gap, p: number) => (p > g.top ? p - g.top : p < g.bottom ? g.bottom - p : 0)
@@ -1365,6 +1372,8 @@ export const GUIDES: Record<GuideKey, string> = {
   structure:
     'Market structure is the sequence of swing highs and swing lows — a swing being a bar whose high or low stands past its neighbours on both sides, which means it only exists in hindsight, a couple of bars after it happened. An uptrend is higher highs and higher lows; when price closes through the last swing low, that sequence has broken. A break against the standing direction is called a change of character (CHoCH) — the earliest structural sign of a turn. A break that extends the standing direction is a break of structure (BOS) — plain continuation, and deliberately quieter news. Two honest caveats: swings confirm bars after the fact, so this label always arrives late by construction; and a move in the trend\'s own direction, however violent, prints no character change at all — a huge drop inside a downtrend is the trend working, not the trend turning.',
   htf: 'The trend on the timeframe one step above the one you are looking at. A cross on the hourly means something different depending on whether the daily is climbing or falling, and trades taken against the bigger timeframe need to be right about timing as well as direction. It is the oldest filter there is and the one most often skipped.',
+  heikin:
+    'Heikin Ashi — "average bar" in Japanese — redraws the chart with each candle averaged into the one before it: the close becomes that bar\'s own mean of open, high, low and close, and the open is the midpoint of the previous drawn bar rather than a real one. The effect is that a trend which alternates red and green comes out as one unbroken run of colour, and the count of that run is the whole reading: it says a direction has held without a break, and the wick says whether anything traded back against it inside the last bar. Now the parts people get hurt by. The prices on these bars are not prices — no exchange ever quoted that open, so an entry, a stop or a backtest filled against one is measuring arithmetic, which is why everything else here is priced off the raw candles. The smoothing is a lag: the bar you are looking at is partly yesterday\'s, so the run is at its longest and cleanest just as the move is ending, and you hand back a piece of it on every turn. It also swallows gaps — the hole where price jumped is averaged into a tidy bar, so stop distances read closer than they are. And in a range it flips colour constantly, which is the same chop the raw chart shows, only slower. Read it as a trend filter and a trailing hold — "am I still in this" — never as the reason to be in it.',
   fvg: 'A fair value gap is a stretch of prices the market jumped over without trading in. Take three bars: if the first one\'s high never reaches the third one\'s low, the middle bar ran so hard that everything between those two prices went unsold — an imbalance, in the jargon. The claim is that the book has unfinished business there and price tends to come back and trade it, which makes an unfilled gap a level worth knowing about and a filled one a decent explanation of where a move already turned around. Two honest caveats, and they matter. The first is that the same box gets read in opposite directions: this desk treats it as a magnet, because "nobody traded here, so someone will" is the part that follows from the mechanics, while the SMC crowd more often treats an unfilled bullish gap under price as demand to buy the retrace into — and those two readings disagree about which way it pulls. The second is that gaps are common. A thousand bars will hold a couple of hundred of them and almost all get filled quickly, so the only ones drawn here are the ones still open, and the only one that votes is the nearest, and only when it is within one ATR — a gap eight percent away is a fact about the chart rather than a reason to do anything today.',
 }
 
@@ -2151,6 +2160,12 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     })
   }
 
+  /* The smoothed chart's standing run. Off the closed bars like the reads below it: the forming
+     bar's HA colour flips with every tick, and a run that grows and shrinks inside one bar is a
+     number about the poll, not the tape. See heikinRun for why it doesn't vote. */
+  const ha = heikinRun(closed)
+  if (ha) out.push(ha)
+
   // The three below describe conditions rather than direction, so they carry a flat tone and stay
   // out of the bull/bear tally — a volatility reading isn't a vote for either side.
   /* Off the closed bars, like the volume read below and for the same reason. ATR is the only
@@ -2256,6 +2271,67 @@ export function candlePatterns(c: Candle[]): Signal[] {
     out.push({ label: 'Doji', tone: 'flat', kind: 'candle' as const, detail: 'open ≈ close — indecision, guides wait for the next bar' })
 
   return out
+}
+
+/**
+ * Heikin Ashi bars — every candle averaged into the one before it. The close becomes the bar's own
+ * mean price, the open the midpoint of the previous *smoothed* bar, and the high and low stretch to
+ * cover both. That recursion drags a slow average through the series, so a trend that alternates
+ * red and green on the raw chart comes out as one unbroken run of colour.
+ *
+ * These are not prices. No fill, stop, target or R anywhere in this file may come off them — an
+ * HA open is a number no exchange ever quoted, and a backtest filled against one is measuring its
+ * own arithmetic. `fill()` and `hold()` read the raw bars deliberately. This is here to be looked
+ * at, and to answer "was this a trend" without three sentences about a moving average.
+ */
+export function heikin(c: Candle[]): Candle[] {
+  const out: Candle[] = []
+  for (const b of c) {
+    const close = (b.o + b.h + b.l + b.c) / 4
+    const prev = out.at(-1)
+    /* The first bar has no previous smoothed bar to open from, so it seeds off its own open and
+       close. That makes the first few bars approximate until the recursion has averaged the seed
+       away — irrelevant at the 1000 bars the chart fetches, worth knowing at the two dozen a demo
+       fixture holds. ponytail: no warmup is dropped; slice the head off if a short series ever
+       reads this for anything but a picture. */
+    const open = prev ? (prev.o + prev.c) / 2 : (b.o + b.c) / 2
+    out.push({ ...b, o: open, c: close, h: Math.max(b.h, open, close), l: Math.min(b.l, open, close) })
+  }
+  return out
+}
+
+/** How many same-coloured smoothed bars make a run worth naming. Two in a row is a coincidence. */
+const HA_RUN = 3
+
+/**
+ * The standing run of Heikin Ashi colour: how many bars the smoothed chart has closed the same way,
+ * and whether the last of them wicked back against it.
+ *
+ * Flat-toned on purpose, so it stays out of the tally. It is a trend read, and the trend already
+ * has a vote two cards above it — counting the same direction twice would let one reading move the
+ * verdict on its own, which is exactly what the smoothing is worst at: the transform lags by
+ * construction, so the run is longest right as it is about to end. What it adds that the MA does
+ * not is the wick, which is the only thing here measured *inside* a bar: an up bar whose smoothed
+ * low equals its body never traded below the run while it was forming.
+ */
+export function heikinRun(c: Candle[]): Signal | null {
+  const ha = heikin(c)
+  const last = ha.at(-1)
+  if (!last) return null
+  const up = last.c >= last.o
+  let n = 0
+  while (n < ha.length && (ha[ha.length - 1 - n].c >= ha[ha.length - 1 - n].o) === up) n++
+  if (n < HA_RUN) return null
+  // the smoothed low is min(raw low, open, close), so "no wick" is that low sitting on the body
+  const clean = up ? last.l >= Math.min(last.o, last.c) : last.h <= Math.max(last.o, last.c)
+  return {
+    label: `Heikin Ashi ${up ? 'up' : 'down'} ${n}`,
+    tone: 'flat',
+    kind: 'heikin' as const,
+    detail: `${n} bars of unbroken ${up ? 'green' : 'red'} on the smoothed chart, the last one ${
+      clean ? `with no ${up ? 'lower' : 'upper'} wick — nothing traded back against the run inside it`
+        : 'wicking against the run — the smoothing is showing the pullback rather than hiding it'}`,
+  }
 }
 
 /** Opening-range breakout — the "first 15 minutes" trick. Marks the high/low of the 00:00-UTC 15m
