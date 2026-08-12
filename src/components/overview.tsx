@@ -339,8 +339,13 @@ function Spend({ items, total, onOpen }: {
               className="group absolute p-[1px] transition-[z-index] group-hover:z-10 hover:z-10"
             >
               {/* brightness can't lift a black (or white) fill — it's a no-op on monochrome — so the
-                  hover cue is a scale + an inset ring in the surface colour, which reads in both themes */}
-              <span className={cn('bg-foreground text-background ring-background relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
+                  hover cue is a scale + an inset ring in the surface colour, which reads in both themes.
+                  Dark mode steps the fill down to the mid grey rather than inverting all the way to
+                  the foreground: these tiles are the one place a fill covers half a card, and at
+                  0.985 that is a slab of white light on a 0.145 page. The thin bars and dots
+                  elsewhere keep the full-contrast foreground, where it is a few pixels and reads as
+                  ink rather than as a lamp. */}
+              <span className={cn('bg-foreground dark:bg-muted-foreground text-background ring-background relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
                 {/* a faint diagonal sheen off the top-left corner, so a flat fill reads as a surface */}
                 <span aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-br from-background/15 via-transparent to-transparent transition-opacity duration-150 group-hover:from-background/22" />
                 {mid && (
