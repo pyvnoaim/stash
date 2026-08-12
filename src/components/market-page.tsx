@@ -532,6 +532,13 @@ export default function MarketPage() {
   // in money, not in R: "the reward is under 1R" is only clear if you already know what R is
   const risk = plan ? Math.abs(plan.entry - plan.stop) : 0
   const reward = plan ? Math.abs(plan.target - plan.entry) : 0
+  // the exchange position on this very chart, if there is one — the strip above already knew about
+  // it, and from here down so does the card
+  const held = exch.rows.find((p) => assetOf(p.symbol) === current.id)
+  /* How the position is doing on its own entry, the venue's sign convention: up is up whichever
+     way it is facing. */
+  const heldMove = held && last != null && held.entry > 0
+    ? (last / held.entry - 1) * (held.side === 'long' ? 100 : -100) : null
   /* Two ladders, because the two strategies answer different questions. Trading asks "is there a
      trade", and no is a normal answer to that. Investing asks "should I own this", and no is still
      an answer — Out is a position — so this side never renders the "nothing found" shape. */
@@ -563,9 +570,22 @@ export default function MarketPage() {
           text: 'Hold', tone: 'hold' as const,
           why: `the trend is intact — hold what you have and add at the ${cfg.fast}-MA, ${fmt(plan.entry)} (${Math.abs(((plan.entry - last) / last) * 100).toFixed(1)}% below) · out on a close under ${fmt(plan.stop)}`,
         }
-    // TRADING — a split tally has no side to trade, and a bias on the wrong side of the session
-    // average has no trade either. Both used to render as an empty space where the answer goes,
-    // which reads as the tool being broken rather than as it having looked and found nothing.
+    /* TRADING — but first: the trade may already be on. Every rung below this one answers "should I
+       enter", and that is not the question once the entry is behind you — the card was reading
+       "Buy now · price is at the entry" at someone holding the very trade it was describing, off
+       the same feed it draws the position's levels with. Only when the readings still lean the way
+       you are facing: a tally that has flipped is not your trade any more, and that read (and the
+       "other side of this card" line below) is the one you want then. */
+    : held && held.side === side
+      ? {
+          text: 'In it', tone: 'hold' as const,
+          why: `the entry is behind you at ${fmt(held.entry)}${heldMove != null ? ` (${heldMove >= 0 ? '+' : ''}${heldMove.toFixed(2)}%)` : ''} — this is that trade, not a new one${
+            (held.stop ?? plan?.stop) != null ? ` · out at ${fmt((held.stop ?? plan!.stop))} if wrong` : ' · nothing is stopping this one'}${
+            (held.target ?? plan?.target) != null ? ` · take ${fmt((held.target ?? plan!.target))}` : ''}`,
+        }
+    // a split tally has no side to trade, and a bias on the wrong side of the session average has
+    // no trade either. Both used to render as an empty space where the answer goes, which reads as
+    // the tool being broken rather than as it having looked and found nothing.
     : block === 'flat'
       ? {
           text: 'No side to take', tone: 'wait' as const,
@@ -608,12 +628,11 @@ export default function MarketPage() {
     hold: 'text-foreground',
     wait: 'text-amber-600 dark:text-amber-500',
   } as const
-  // the exchange position on this very chart, if there is one — its levels get drawn with the plan's.
-  // The whole position wears fuchsia — the one hue nothing else on the chart uses (candles are
-  // emerald/red, plan entry sky, MAs sky/amber, range violet, sessions rose/indigo/teal), and the
-  // one that stays apart from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by
-  // weight and dash, and the legend below shows exactly those dashes.
-  const held = exch.rows.find((p) => assetOf(p.symbol) === current.id)
+  // `held`'s levels get drawn with the plan's. The whole position wears fuchsia — the one hue
+  // nothing else on the chart uses (candles are emerald/red, plan entry sky, MAs sky/amber, range
+  // violet, sessions rose/indigo/teal), and the one that stays apart from sky for colorblind eyes
+  // where fuchsia-500 didn't. Role is carried by weight and dash, and the legend below shows
+  // exactly those dashes.
   /* The hand-entered position on this asset is the one that knows its leverage, so it is the one
      with a liquidation price — the exchange feed's rows deliberately carry no lev (see bitget.ts).
      With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
@@ -1062,7 +1081,9 @@ export default function MarketPage() {
             <Hint label="It files itself to the record with the R it really did when it closes, wherever you close it.">
               <p className="text-muted-foreground mt-2 w-fit text-xs">
                 You are {held.side} {held.size} from {fmt(held.entry)}
-                {held.side === side ? ' — the side this card reads' : ' — the other side of this card'}
+                {/* the matching side is the verdict's own first word now, so this line stops
+                    saying it twice and keeps the half the verdict can't know: the size */}
+                {held.side === side ? '' : ' — the other side of this card'}
               </p>
             </Hint>
           )}
