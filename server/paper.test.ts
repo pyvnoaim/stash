@@ -2,7 +2,7 @@
 // never ran, which is worse than reporting nothing.
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
-import { createPaper, step, type Paper } from './paper.ts'
+import { cooling, createPaper, step, type Paper } from './paper.ts'
 
 const NOW = Date.UTC(2026, 0, 2, 12)
 const HOUR = 36e5
@@ -48,16 +48,19 @@ assert.equal(won.level, 'target')
 assert.equal(won.r, 2)          // (110 − 100) / 5
 assert.equal(won.exit, 110)
 
+/* A stop is a market exit, so it pays the spread to cross — but only the spread. 95 × 0.9995 is
+   94.9525, and (94.9525 − 100) / 5 is the 1R risked plus a hundredth of it in slip. */
 const lost = step(live, 95, NOW + 2 * HOUR)!
 assert.equal(lost.level, 'stop')
-assert.equal(lost.r, -1)
+assert.equal(lost.r, -1.01)
+assert.equal(lost.exit, 94.9525)
 
-/* A poll every minute lands past a level as often as on it, and the two ends keep the overshoot
-   differently. A stop is a market exit and really pays it: */
+/* A poll every minute lands past a level as often as on it — and how far past is a fact about the
+   poll, not about the fill. Both of these are the same stop and cost the same: */
 const gapped = step(live, 92, NOW + 2 * HOUR)!
 assert.equal(gapped.level, 'stop')
-assert.equal(gapped.r, -1.6)    // (92 − 100) / 5, the loss that really happened
-assert.equal(gapped.exit, 92)
+assert.equal(gapped.r, -1.01)   // not the −1.6 the tick happened to show
+assert.equal(gapped.exit, 94.9525)
 
 /* — a target is a limit order, and does not get paid for the distance past it. Priced at the
    level however far through the poll caught it. */
@@ -78,14 +81,27 @@ assert.equal(step(shortLive, 90, NOW + 2 * HOUR)!.level, 'target')
 assert.equal(step(shortLive, 90, NOW + 2 * HOUR)!.r, 2)   // (100 − 90) / 5
 assert.equal(step(shortLive, 80, NOW + 2 * HOUR)!.exit, 90)   // and the same limit, the other way
 assert.equal(step(shortLive, 105, NOW + 2 * HOUR)!.level, 'stop')
+assert.equal(step(shortLive, 105, NOW + 2 * HOUR)!.exit, 105.0525)  // the slip, the other way
+assert.equal(step(shortLive, 120, NOW + 2 * HOUR)!.r, -1.01)
 
 // a feed that says nothing usable says nothing at all, rather than filing a trade off a NaN
 assert.equal(step(live, NaN, NOW + 2 * HOUR), null)
 
+/* ---------- the same idea, refiled ---------- */
+
+/* Eight bars of its own interval after a stop, the desk leaves that asset and side alone — the
+   four Dogecoin longs of 12 Aug were one bet, and the record counted them as four. */
+assert.equal(cooling(null, '15m', NOW), false)              // never stopped, nothing to serve out
+assert.equal(cooling(NOW - 7 * 9e5, '15m', NOW), true)      // seven 15m bars back, still cooling
+assert.equal(cooling(NOW - 9 * 9e5, '15m', NOW), false)     // nine, and it may speak again
+// and the clock is the interval's: nine 15m bars is not nine hourly ones
+assert.equal(cooling(NOW - 9 * 9e5, '1h', NOW), true)
+
 /* ---------- the record already written ---------- */
 
-/* Rows closed before the target was priced at its level. createPaper re-prices them on boot, and
-   has to leave everything else exactly as it found it — a stop's slippage is real and stays. */
+/* Rows closed before either end was priced off its own level — the winners carrying the poll's
+   overshoot as profit, the losers carrying its drift as slippage. createPaper re-prices both on
+   boot, because the average under the table is over the whole record. */
 {
   const db = new DatabaseSync(':memory:')
   db.exec(`create table users (id integer primary key);
@@ -101,7 +117,8 @@ assert.equal(step(live, NaN, NOW + 2 * HOUR), null)
     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   ins.run(...row('over', 'long', 110, 'target', 130, 6))     // the overshoot, booked as profit
   ins.run(...row('shortover', 'short', 90, 'target', 80, 4))
-  ins.run(...row('slipped', 'long', 110, 'stop', 92, -1.6))  // a real cost, not to be touched
+  ins.run(...row('slipped', 'long', 110, 'stop', 92, -1.6))  // a minute of drift booked as a fill
+  ins.run(...row('shortslipped', 'short', 90, 'stop', 112, -1.4))
   // an accumulation plan filed under a bearish tally: short, stop below its own entry, never a trade
   ins.run('backwards', 1, 'X', 'X', 'short', 'r', '4h', 100, 90, 120, 1.8, NOW, NOW, NOW, 'stop', 100, 0)
   desk.stop()
@@ -113,8 +130,10 @@ assert.equal(step(live, NaN, NOW + 2 * HOUR), null)
   assert.equal(by.over.r, 2)
   assert.equal(by.shortover.exit, 90)
   assert.equal(by.shortover.r, 2)
-  assert.equal(by.slipped.exit, 92)      // untouched
-  assert.equal(by.slipped.r, -1.6)
+  assert.equal(by.slipped.exit, 94.9525)   // the level plus the spread, not the drift
+  assert.equal(by.slipped.r, -1.01)
+  assert.equal(by.shortslipped.exit, 105.0525)
+  assert.equal(by.shortslipped.r, -1.01)
 }
 
 console.log('paper ok')

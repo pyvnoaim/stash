@@ -34,10 +34,43 @@ const BARS_EVERY = 15 * 60_000
 const EXPIRE_BARS = 12
 /** Rows kept per person. The desk files a handful a day; this is a season of them. */
 const KEEP = 400
+/** How long an asset and side is left alone after a stop, in bars of its own interval. The other
+ *  guard only blocks a second row while the first is still open, so a range that keeps re-arming
+ *  the same read files it again the moment it loses: Dogecoin went long at 0.07192, 0.07190,
+ *  0.07214 and 0.07224 on 12 Aug and was stopped all four times. That is one idea losing once and
+ *  reporting as four — a real bleed live, and four correlated rows in an expectancy that reads as
+ *  though it had four independent trades to say it with. Eight bars is two hours on the 15m the
+ *  desk trades, which is past the chop that re-armed those four.
+ *  ponytail: a flat bar count, and the blunt half of the right idea — what actually says the
+ *  setup is new again is structure, not the clock. Swap it for a re-entry that waits on a fresh
+ *  swing if two hours proves either too long or too short. */
+const COOL_BARS = 8
+/** What a stop costs to get out of beyond its own level, percent of price. A stop really is a
+ *  market exit and really does fill worse than the line — but not by however far a once-a-minute
+ *  poll happened to drift, which is what booking it at the price seen was actually charging. The
+ *  distance matters here because it is measured against an ATR on a 15m bar: risk is a quarter to
+ *  four tenths of a percent of price, so a minute of drift was worth a third of an R on every
+ *  loser. Dogecoin's −1.51R of 12 Aug exited 0.19% past its stop and Gold's −1.43R 0.09% past;
+ *  neither is a fill, both are latency, and 72% of the record is losers.
+ *  ponytail: one number for the whole book and every hour of the day, not a measured one — five
+ *  basis points is the conservative middle between a major perp and a small one. Measure it per
+ *  asset off book depth if the expectancy ever turns on it. */
+const STOP_SLIP = 0.05
 
 const BAR_MS: Record<Interval, number> = {
   '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8,
 }
+/** A bar of the row's own interval. Rows carry `interval` as the loose string the document had. */
+const barMs = (iv: string) => BAR_MS[iv as Interval] ?? BAR_MS['1h']
+
+/** Where a stop really filled: its level, plus the slip, on the side that costs. */
+const stopFill = (row: { dir: string; stop: number }) =>
+  row.stop * (1 + (row.dir === 'long' ? -STOP_SLIP : STOP_SLIP) / 100)
+
+/** Whether this asset and side is still serving out a stop — see COOL_BARS. Null is a side that
+ *  has never been stopped, which is not cooling. */
+export const cooling = (lastStopAt: number | null, interval: string, at: number) =>
+  lastStopAt != null && at - lastStopAt < COOL_BARS * barMs(interval)
 
 /** Everything the app needs to draw one paper trade. `r` is null until it is over. */
 export type Paper = {
@@ -81,8 +114,7 @@ export function step(row: Paper, price: number, at: number): Partial<Paper> | nu
   const entryAt = row.entryAt ?? (reached(row.entry) ? at : null)
   if (entryAt == null) {
     // never filled, and out of time: filed as the trade nobody was ever in
-    const iv = (BAR_MS[row.interval as Interval] ?? BAR_MS['1h'])
-    return at - row.ts > EXPIRE_BARS * iv
+    return at - row.ts > EXPIRE_BARS * barMs(row.interval)
       ? { closedAt: at, level: 'gone' as const, exit: price, r: null }
       : null
   }
@@ -96,14 +128,15 @@ export function step(row: Paper, price: number, at: number): Partial<Paper> | nu
   const risk = Math.abs(row.entry - row.stop)
   /* The two ends are not symmetric, and pricing them the same was flattering the record.
      A target is a limit order sitting at a level: it fills there, and the distance past it is not
-     yours. A stop is a market exit: it fills where the book is when it triggers, which on a fast
-     move is worse than the level. So the target is written at the level and the stop at the price
-     really seen — each one taking the side of the poll that a real fill would have taken.
-     It matters because the poll is a minute wide. XRP came back at 1.0071 against a target of
-     1.0155 and the overshoot was booked as profit: 5.59R for a plan that was worth 2.04. The
-     entry has always been priced this way — the pull-back is a limit too, and the fill is assumed
-     at `entry` rather than at whatever the tick that crossed it showed. */
-  const exit = level === 'target' ? row.target : price
+     yours. XRP came back at 1.0071 against a target of 1.0155 and the overshoot was booked as
+     profit: 5.59R for a plan that was worth 2.04. A stop is a market exit and does fill worse than
+     its level — but by the spread it crosses, not by the width of the poll that noticed. Booking
+     it at the price seen charged every loser a minute of drift as though it were slippage, which
+     on a stop a third of a percent wide is a third of an R. So both ends are now written at their
+     level, and the one that pays to cross pays STOP_SLIP to cross it.
+     The entry has always been priced this way — the pull-back is a limit too, and the fill is
+     assumed at `entry` rather than at whatever the tick that crossed it showed. */
+  const exit = level === 'target' ? row.target : stopFill(row)
   const r = risk > 0 ? (long ? exit - row.entry : row.entry - exit) / risk : 0
   return { ...opened, closedAt: at, level, exit, r: Math.round(r * 100) / 100 }
 }
@@ -149,6 +182,23 @@ export function createPaper(db: DatabaseSync) {
     where level = 'target' and entry <> stop and exit is not target
   `)
 
+  /* And the losers, for the mirror of that reason: they were booked wherever the once-a-minute
+     poll caught price after it went through the stop, so the record holds −1.51R and −1.43R for
+     plans that risked exactly 1R. Re-priced to the level plus the slip, the same arithmetic
+     step() now uses — the average under the table is over the whole record, and a fill nobody
+     could have got drags it just as far from this end as it did from the other.
+     Idempotent by construction rather than by its `where`: the new exit is a function of `entry`
+     and `stop` alone, so every re-run writes the number already there. */
+  db.exec(`
+    update paper set
+      exit = stop * (case when dir = 'long' then ${1 - STOP_SLIP / 100} else ${1 + STOP_SLIP / 100} end),
+      r = round((case when dir = 'long'
+                      then stop * ${1 - STOP_SLIP / 100} - entry
+                      else entry - stop * ${1 + STOP_SLIP / 100} end)
+                / abs(entry - stop), 2)
+    where level = 'stop' and entry <> stop
+  `)
+
   /* And the rows filed backwards before found() read the side off the plan — a short with its stop
      under its own entry, which is not a position. Deleted rather than re-sided: every one of them
      was closed on its first tick against a level it was already through, so there is no result to
@@ -166,6 +216,8 @@ export function createPaper(db: DatabaseSync) {
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     open: db.prepare('select * from paper where closedAt is null'),
     live: db.prepare('select 1 from paper where user = ? and asset = ? and dir = ? and closedAt is null'),
+    lastStop: db.prepare(`select max(closedAt) as at from paper
+      where user = ? and asset = ? and dir = ? and level = 'stop'`),
     mine: db.prepare('select * from paper where user = ? order by ts desc limit ?'),
     fill: db.prepare('update paper set entryAt = ? where id = ? and user = ?'),
     close: db.prepare('update paper set entryAt = ?, closedAt = ?, level = ?, exit = ?, r = ? where id = ? and user = ?'),
@@ -242,6 +294,9 @@ export function createPaper(db: DatabaseSync) {
         // one open trade per asset and side: the desk saying the same thing twice in a morning is
         // one idea, and two rows would double-count it in every number below
         if (q.live.get(user, p.asset, p.dir)) continue
+        // and not straight back into the one that just stopped — see COOL_BARS
+        const beaten = (q.lastStop.get(user, p.asset, p.dir) as { at: number | null }).at
+        if (cooling(beaten, p.interval, at)) continue
         q.add.run(p.id, user, p.asset, p.label, p.dir, p.rule, p.interval,
           p.entry, p.stop, p.target, p.net, p.ts)
       }

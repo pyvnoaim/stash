@@ -1496,8 +1496,10 @@ export type Setup = { plan: Plan | null; block: Block | null }
  *
  * Deliberately absent: no trailing stop and no partial off at 1R. Both need a bar-by-bar walk that a
  * card rendered once from the latest bar cannot do.
- * ponytail: the 1-ATR stop and 2× target are the conventional pair, not a measured one — the
- * backtest below still walks the swing rule, so run it against this before believing the number.
+ * ponytail: the 1-ATR stop and 2× target are the conventional pair, not a measured one. The
+ * backtest below does walk this rule now — it went through strategyPlan when the horizons stopped
+ * sharing one — so the measurement is there to be run over a window worth believing, which a
+ * fortnight of the forward test is not.
  * Fixed-R also means the stop ignores where the swing actually is; in a tight range the ATR stop can
  * sit inside the noise band the swing rule was respecting.
  */
