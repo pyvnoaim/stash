@@ -174,6 +174,18 @@ export type Closed = {
   /** What it was held at. This is what makes a history row filable on its own: the margin behind a
    *  50× position is entry/50 of price, and that distance is the risk an R is counted in. */
   lev: number | null
+  /** The position's own size, in coins. Only ever a step on the way to the margin — size × entry is
+   *  the notional, and the notional over the leverage is the money that was really behind it. */
+  size?: number | null
+  /**
+   * What the trade actually put up, in the quote currency. This is the denominator the record
+   * counts an R in, and it is deliberately not `entry / lev` in disguise: it comes off the fills
+   * that opened the position, each with the leverage it was placed at, so a position scaled in at
+   * two multipliers lands where it belongs rather than at whichever one the account happens to be
+   * set to today. Null where nothing could say — and there the R falls back to the price arithmetic
+   * it used before, which is a guess wearing the same unit.
+   */
+  margin?: number | null
 }
 
 /** Bitget's closed positions into that shape. Rows with no usable close price are dropped: a
@@ -183,20 +195,31 @@ export function shapeClosed(rows: unknown[], venue = 'bitget'): Closed[] {
     const n = Number(v)
     return v === '' || v == null || !isFinite(n) ? null : Math.round(n * 100) / 100
   }
+  const pos = (v: unknown) => { const n = Number(v); return isFinite(n) && n > 0 ? n : null }
   return (rows as Record<string, unknown>[]).map((p) => {
     const at = Number(p.utime ?? p.uTime)
     const opened = Number(p.ctime ?? p.cTime)
+    const entry = Number(p.openAvgPrice ?? p.openPriceAvg)
+    const exit = Number(p.closeAvgPrice)
+    /* The size, and where the field for it is missing, the size the money implies: their `pnl` is
+       the price move alone, so it over the distance travelled is the coins that moved. Twice now a
+       field guessed off the documentation has come back null, and this one has an arithmetic
+       fallback that cannot — the two numbers behind it are the ones the row is filed on anyway. */
+    const moved = Math.abs(entry - exit)
     return {
       venue,
       symbol: String(p.symbol ?? '').toUpperCase(),
       side: p.holdSide === 'short' ? 'short' as const : 'long' as const,
-      entry: Number(p.openAvgPrice ?? p.openPriceAvg),
-      exit: Number(p.closeAvgPrice),
+      entry,
+      exit,
       openedAt: isFinite(opened) && opened > 0 ? opened : null,
       closedAt: isFinite(at) && at > 0 ? at : 0,
       // netProfit is after their fees; pnl is before. The record wants what landed in the account
       pnl: signed(p.netProfit ?? p.pnl),
-      lev: (() => { const n = Number(p.openLeverage ?? p.leverage); return isFinite(n) && n > 0 ? n : null })(),
+      lev: pos(p.openLeverage ?? p.leverage),
+      size: pos(p.openTotalPos ?? p.openSize ?? p.closeTotalPos)
+        ?? (moved > 0 ? pos(Math.abs(Number(p.pnl)) / moved) : null),
+      margin: null as number | null,
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.exit) && p.exit > 0 && p.closedAt > 0)
 }
@@ -230,7 +253,12 @@ export async function closed(key: string, secret: string, pass: string, since: n
   const orders = oh?.code === '00000'
     ? (Array.isArray(oh.data) ? oh.data : oh.data?.entrustedList ?? oh.data?.list ?? []) as unknown[]
     : []
-  rows = rows.map((x) => (x.lev != null ? x : { ...x, lev: levOf(orders, x) }))
+  /* The fills first, the row's own field behind them: a position scaled in at two multipliers has
+     no single `openLeverage`, and the fills are the only place the real one is written down. */
+  rows = rows.map((x) => {
+    const f = levOf(orders, x)
+    return marginOf({ ...x, lev: f?.lev ?? x.lev, margin: f?.margin ?? null })
+  })
   const still = [...new Set(rows.filter((x) => x.lev == null).map((x) => x.symbol))].slice(0, 8)
   if (!still.length) return rows
   // eight at most: a week of one person's trades is a handful of symbols, and this is a call each
@@ -241,8 +269,15 @@ export async function closed(key: string, secret: string, pass: string, since: n
     if (a?.code !== '00000') return
     levs.set(symbol, accountLev(a.data))
   }))
-  return rows.map((x) => (x.lev != null ? x : { ...x, lev: levs.get(x.symbol)?.[x.side] ?? null }))
+  return rows.map((x) => (x.lev != null ? x : marginOf({ ...x, lev: levs.get(x.symbol)?.[x.side] ?? null })))
 }
+
+/** The margin behind a closed row where the fills did not say: size × entry is what was on the
+ *  table, and over the leverage is what was put up for it. Leaves a margin the fills did give. */
+const marginOf = (x: Closed): Closed => ({
+  ...x,
+  margin: x.margin ?? (x.lev && x.size ? Math.round((x.size * x.entry / x.lev) * 100) / 100 : null),
+})
 
 /**
  * The leverage a closed position really ran at, worked out from the orders that opened it.
@@ -255,25 +290,33 @@ export async function closed(key: string, secret: string, pass: string, since: n
  * Matched on symbol, side and the window the position was open for. Opening fills only: a
  * reduce-only order is the way out, and counting it would halve the answer.
  */
-export function levOf(orders: unknown[], p: { symbol: string, side: 'long' | 'short', openedAt: number | null, closedAt: number }): number | null {
+export function levOf(orders: unknown[], p: { symbol: string, side: 'long' | 'short', openedAt: number | null, closedAt: number }): { lev: number, margin: number | null } | null {
   if (p.openedAt == null) return null
   let notional = 0, margin = 0
+  /* The leverage on any fill of this position, the way out included. A reduce-only fill is no use
+     for the margin — counting it would halve the answer — but it still says what the position was
+     running at, and that is a better last word than the account's setting as it stands today. */
+  let held: number | null = null
   for (const o of (orders as Record<string, unknown>[])) {
     if (String(o?.symbol ?? '').toUpperCase() !== p.symbol) continue
     // hedge mode names the side outright; one-way mode does not, and there the window decides
     const posSide = String(o?.posSide ?? '').toLowerCase()
     if ((posSide === 'long' || posSide === 'short') && posSide !== p.side) continue
-    if (String(o?.reduceOnly ?? '').toUpperCase() === 'YES') continue
-    if (String(o?.tradeSide ?? '').toLowerCase() === 'close') continue
     const at = Number(o?.cTime ?? o?.ctime)
     // a minute either side: the fill that opened it is stamped a breath before the position is
     if (!isFinite(at) || at < p.openedAt - 60_000 || at > p.closedAt + 60_000) continue
     const vol = Number(o?.quoteVolume), lev = Number(o?.leverage)
-    if (!isFinite(vol) || vol <= 0 || !isFinite(lev) || lev <= 0) continue
+    if (!isFinite(lev) || lev <= 0) continue
+    held ??= lev
+    if (String(o?.reduceOnly ?? '').toUpperCase() === 'YES') continue
+    if (String(o?.tradeSide ?? '').toLowerCase() === 'close') continue
+    if (!isFinite(vol) || vol <= 0) continue
     notional += vol
     margin += vol / lev
   }
-  return margin > 0 ? Math.round((notional / margin) * 100) / 100 : null
+  const round = (n: number) => Math.round(n * 100) / 100
+  if (margin > 0) return { lev: round(notional / margin), margin: round(margin) }
+  return held != null ? { lev: held, margin: null } : null
 }
 
 /** The leverage an account is set to on one symbol, per side. Isolated keeps a number per side and

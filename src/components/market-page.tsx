@@ -1808,7 +1808,30 @@ type ClosedRow = {
   pnl: number | null
   /** What it was held at — the risk behind a stopless position, since the margin is entry/lev. */
   lev: number | null
+  /** What the position really put up, in the venue's own currency. See the note on `rOfClose` below
+   *  for why an R off this and the money beats one off a price and a leverage nobody can pin down. */
+  margin?: number | null
+  /** Its size in coins — only ever here to turn that margin back into a price distance. */
+  size?: number | null
 }
+
+/**
+ * What a venue-closed row scored, in R.
+ *
+ * The money over the margin, wherever the venue gave both — and that is not a rearrangement of the
+ * price arithmetic it replaces. A stopless position risks the margin, so the margin is the
+ * denominator; the old one was `entry / lev`, which is the same distance only when the leverage is
+ * right, and the leverage was the one number nothing here could pin down — the account's setting as
+ * it stands today, standing in for what a trade ran at last week. Guess it low and a position that
+ * lost its margin files as −0.14R, which is how a record came to read +1.46R over a week that paid
+ * −$5.56. The money has no such hole in it: the venue counted it, fees and funding are already
+ * inside it, and the R and the figure beside it can no longer tell two different stories.
+ *
+ * Null where the venue gave neither, and the caller falls back to the price arithmetic — a guess,
+ * but a guess is still better than dropping a trade that happened out of the record.
+ */
+const rOfClose = (c: Pick<ClosedRow, 'pnl' | 'margin'>) =>
+  c.margin && c.pnl != null ? c.pnl / c.margin : null
 
 /**
  * A position that was here last look and is gone this one has closed, and the trade files itself
@@ -1863,7 +1886,8 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
        of the record for having been managed well, and a trade that happened and is not written
        down is the one failure this function exists to prevent. The last of them is the same
        distance the history path below prices by: entry ÷ lev is where the money runs out. */
-    const risk = riskOf(p.side, p.entry, p.stop)
+    const stopRisk = riskOf(p.side, p.entry, p.stop)
+    const risk = stopRisk
       ?? riskOf(p.side, p.entry, p.liq)
       ?? (p.lev && p.lev > 0 && p.entry > 0 ? p.entry / p.lev : null)
     if (risk == null) continue
@@ -1878,7 +1902,11 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
     if (hit) used.add(hit)
     const exit = hit?.exit ?? p.mark   // failing that, the last mark seen — the old behaviour
     if (exit == null) continue
-    const r = (p.side === 'long' ? exit - p.entry : p.entry - exit) / risk
+    /* A resting stop is a real denominator and keeps its R: that is the money the trade was
+       actually willing to lose. Without one the row was being scored against a liquidation price or
+       a leverage, and there the venue's own money over the margin says it better — see rOfClose. */
+    const r = (stopRisk == null && hit ? rOfClose(hit) : null)
+      ?? (p.side === 'long' ? exit - p.entry : p.entry - exit) / risk
     const id = assetOf(p.symbol)
     closeWatch({
       // the open stamp is in the id, so closing and reopening the same symbol is two trades —
@@ -1911,16 +1939,19 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
      app ever saw the position open. A trade closed on the exchange's website, or on a phone, or
      while this was shut for a week, was never in a snapshot to go missing from, and the diff above
      is blind to every one of them. The history row is not: it carries the entry, the exit, the
-     money and the leverage, and the leverage is what makes it filable — a position held at 50× has
-     entry/50 of price behind it, so that distance is what was risked and R is the share of it that
-     came back. Which is the same number the venue prints as ROI, before its fees.
+     money and the margin, and the margin is what makes it filable — a stopless position risks what
+     it put up, so that is what an R is the share of, and the venue's own money over it is the whole
+     sum. Which is the number the venue prints as ROI, its fees included rather than before them.
 
      ponytail: the margin, not a stop. A resting stop is the better denominator and the history does
      not carry one, so a row the diff above could claim is claimed there and skipped here. */
   for (const c of history) {
-    if (used.has(c) || c.lev == null || !(c.entry > 0)) continue
-    const risk = c.entry / c.lev                    // price distance to the margin being gone
-    const r = (c.side === 'long' ? c.exit - c.entry : c.entry - c.exit) / risk
+    if (used.has(c) || !(c.entry > 0)) continue
+    // the price distance to the margin being gone, which is what the row's stop and target are
+    // drawn at: off the leverage where there is one, off the margin per coin where there is not
+    const risk = c.lev ? c.entry / c.lev : (c.margin && c.size ? c.margin / c.size : null)
+    if (risk == null || !(risk > 0)) continue
+    const r = rOfClose(c) ?? (c.side === 'long' ? c.exit - c.entry : c.entry - c.exit) / risk
     const id = assetOf(c.symbol)
     closeWatch({
       // the same id the diff builds, so a trade both paths reach is still one row in the record

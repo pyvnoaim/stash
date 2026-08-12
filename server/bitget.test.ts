@@ -37,7 +37,7 @@ assert.equal(rows[1].lev, null)
 /* the closed book: the venue's own average close, which is the price the record files at. A row
    with no usable close price is dropped — it would be no better than the last mark it replaces. */
 const done = shapeClosed([
-  { symbol: 'btcusdt', holdSide: 'short', openAvgPrice: '200', closeAvgPrice: '190', ctime: '1754400000000', utime: '1754500000000', netProfit: '19.94', openLeverage: '10' },
+  { symbol: 'btcusdt', holdSide: 'short', openAvgPrice: '200', closeAvgPrice: '190', ctime: '1754400000000', utime: '1754500000000', netProfit: '19.94', openLeverage: '10', openTotalPos: '2' },
   { symbol: 'ETHUSDT', holdSide: 'long', openAvgPrice: 100, closeAvgPrice: 0, utime: 1754500000000 },
   { symbol: 'SOLUSDT', holdSide: 'long', openAvgPrice: 10, closeAvgPrice: 12, utime: 0 },
 ])
@@ -48,7 +48,15 @@ assert.deepEqual(done, [{
   pnl: 19.94,
   // and the multiplier, which is what lets this row be filed without ever having been seen open
   lev: 10,
+  // the size, and the margin the fills have not filled in yet — closed() does that
+  size: 2, margin: null,
 }])
+
+/* the size where the venue's field for it is missing: their gross pnl over the distance the price
+   travelled is the coins that moved, which is arithmetic rather than a field name to be wrong about */
+assert.equal(shapeClosed([{ symbol: 'ADAUSDT', holdSide: 'long', openAvgPrice: 1, closeAvgPrice: 1.5, utime: 1, pnl: '605' }])[0].size, 1210)
+// and nothing to derive it from — a scratch that closed where it opened — is null, not Infinity
+assert.equal(shapeClosed([{ symbol: 'ADAUSDT', holdSide: 'long', openAvgPrice: 1, closeAvgPrice: 1, utime: 1, pnl: '0' }])[0].size, null)
 
 /* what a closed position really ran at, off the fills that opened it: quoteVolume ÷ leverage is
    the margin each put up, and the whole notional over the whole margin is the multiplier held. The
@@ -63,12 +71,18 @@ const fills = [
   { symbol: 'ADAUSDT', posSide: 'long', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '5', cTime: '1786310753600' },
   { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '3', cTime: '1700000000000' },
 ]
-assert.equal(levOf(fills, ada), 50)
+// the margin those fills put up is the R denominator, and it comes back with the multiplier
+assert.deepEqual(levOf(fills, ada), { lev: 50, margin: 4.81 })
 // scaled in at two leverages: the answer is the notional over the margin, which lands between them
-assert.equal(levOf([
+assert.deepEqual(levOf([
   { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', quoteVolume: 100, leverage: 10, cTime: 1786310753682 },
   { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', quoteVolume: 100, leverage: 50, cTime: 1786310800000 },
-], ada), 16.67)
+], ada), { lev: 16.67, margin: 12 })
+/* only the way out in the window — the opening fill is off the page or older than it. No margin to
+   be had, but the leverage the position ran at is on that fill too, and it beats today's setting */
+assert.deepEqual(levOf([
+  { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'close', reduceOnly: 'YES', quoteVolume: '235.95', leverage: '50', cTime: '1786355419000' },
+], ada), { lev: 50, margin: null })
 assert.equal(levOf([], ada), null)
 assert.equal(levOf(fills, { ...ada, openedAt: null }), null)
 
