@@ -276,11 +276,15 @@ export async function closed(key: string, secret: string, pass: string, since: n
   return rows.map((x) => (x.lev != null ? x : marginOf({ ...x, lev: levs.get(x.symbol)?.[x.side] ?? null })))
 }
 
+/** Float noise off a division, not a rounding to money: this figure is what an R is divided by, and
+ *  a hundredth of it is a hundredth of every R counted on a small position. */
+const exact = (n: number) => Math.round(n * 1e6) / 1e6
+
 /** The margin behind a closed row where the fills did not say: size × entry is what was on the
  *  table, and over the leverage is what was put up for it. Leaves a margin the fills did give. */
 const marginOf = (x: Closed): Closed => ({
   ...x,
-  margin: x.margin ?? (x.lev && x.size ? Math.round((x.size * x.entry / x.lev) * 100) / 100 : null),
+  margin: x.margin ?? (x.lev && x.size ? exact(x.size * x.entry / x.lev) : null),
 })
 
 /**
@@ -318,8 +322,8 @@ export function levOf(orders: unknown[], p: { symbol: string, side: 'long' | 'sh
     notional += vol
     margin += vol / lev
   }
-  const round = (n: number) => Math.round(n * 100) / 100
-  if (margin > 0) return { lev: round(notional / margin), margin: round(margin) }
+  // two places for the multiplier, six for the money it stands on: the margin is a divisor
+  if (margin > 0) return { lev: Math.round((notional / margin) * 100) / 100, margin: exact(margin) }
   return held != null ? { lev: held, margin: null } : null
 }
 

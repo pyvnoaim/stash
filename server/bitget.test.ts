@@ -71,8 +71,9 @@ const fills = [
   { symbol: 'ADAUSDT', posSide: 'long', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '5', cTime: '1786310753600' },
   { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', reduceOnly: 'NO', quoteVolume: '240', leverage: '3', cTime: '1700000000000' },
 ]
-// the margin those fills put up is the R denominator, and it comes back with the multiplier
-assert.deepEqual(levOf(fills, ada), { lev: 50, margin: 4.81 })
+/* the margin those fills put up is the R denominator, and it comes back with the multiplier — to
+   the millionth, not the cent: a cent of a margin this size is a percent of every R counted on it */
+assert.deepEqual(levOf(fills, ada), { lev: 50, margin: 4.805612 })
 // scaled in at two leverages: the answer is the notional over the margin, which lands between them
 assert.deepEqual(levOf([
   { symbol: 'ADAUSDT', posSide: 'short', tradeSide: 'open', quoteVolume: 100, leverage: 10, cTime: 1786310753682 },
