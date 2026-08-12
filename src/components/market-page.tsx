@@ -27,7 +27,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
-  TREND_NETWORK, usMarketOpen, venueName, priceDigits, readInterval,
+  TREND_NETWORK, usMarketOpen, venueName, priceDigits, readInterval, toll,
   scanBars, scanRead,
   type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -509,7 +509,8 @@ export default function MarketPage() {
   const { plan, block } = view && last != null
     ? strategyPlan(horizon, {
         dir, price: last, fast: entryMA, slow: slowMA,
-        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee: dials.fee,
+        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
+        toll: toll(candles, dials.fee), fee: dials.fee,
       })
     : { plan: null, block: null }
   const holding = horizon === 'long' // the accumulation rule, which answers in positions not trades
@@ -604,6 +605,11 @@ export default function MarketPage() {
       ? {
           text: 'No stop to size', tone: 'wait' as const,
           why: 'there is no ATR off these bars yet — without a normal bar\'s travel to measure, the stop would be a guess',
+        }
+    : block === 'toll'
+      ? {
+          text: 'The fee eats it', tone: 'wait' as const,
+          why: `a normal ${interval} bar is small enough that crossing the book twice at ${dials.fee}% a side costs more than a quarter of the risk — this rule stops one ATR away, so on bars this size the fee is most of the trade. Walked over 1807 of these, it lost 0.29R a trade with every asset losing. Take it on a bigger bar, or somewhere that charges you less.`,
         }
     : block === 'warmup'
       ? {
@@ -824,7 +830,7 @@ export default function MarketPage() {
             left alone. */}
         <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
           {(Object.keys(HORIZONS) as Horizon[]).map((h) => (
-            <Hint key={h} label={`${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule.`}>
+            <Hint key={h} label={`${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule. ${HORIZONS[h].measured}`}>
               <Button size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
                 className={cn('h-7', horizon !== h && 'text-muted-foreground')}
                 onClick={() => { setHorizon(h); if (preset === 'standard') setInterval(HORIZONS[h].interval) }}>

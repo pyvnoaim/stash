@@ -744,6 +744,52 @@ export function atr(c: Candle[], p = 14): number | null {
   return a
 }
 
+/**
+ * What one round trip costs, in R, on bars this size — the fee measured against the risk the rule
+ * is actually taking, which is one ATR.
+ *
+ * The median true range of the recent window, not this bar's ATR, and that distinction is the
+ * whole function. Read off the setup in front of you, this number is smallest exactly when the
+ * market is wildest, so a gate built on it keeps the violent setups and declines the calm ones —
+ * which is not a cost filter, it is a volatility filter wearing one. Measured: gating each read on
+ * its own ATR took the 15m rule from −0.302R a trade to −0.454R, because the setups it kept were
+ * the chop. The median over two hundred bars is a property of the timeframe and the venue instead,
+ * so the answer is the same all week and it refuses a whole cell rather than picking within it.
+ *
+ * Both crossings, because a position is paid for twice — in at the entry and out at whichever exit
+ * comes. Null when there are not enough bars to have a median worth the name.
+ */
+export function toll(c: Candle[], fee: number, look = 200): number | null {
+  if (c.length < 30 || fee <= 0) return c.length < 30 ? null : 0
+  const win = c.slice(-look)
+  const trs = win.map((x, i) => {
+    const prev = i === 0 ? x.c : win[i - 1].c
+    return Math.max(x.h - x.l, Math.abs(x.h - prev), Math.abs(x.l - prev)) / x.c
+  }).sort((a, b) => a - b)
+  const med = trs[Math.floor(trs.length / 2)]
+  return med > 0 ? (2 * (fee / 100)) / med : null
+}
+
+/**
+ * How much of the risk the round trip may eat before the desk stops calling it a trade. A quarter
+ * is where the hour sits (0.21R median) on the right side and the quarter-hour (0.43R) on the
+ * wrong one, and the two do not overlap much: 1807 filed 15m setups over 344 days came out at
+ * −0.289R ± 0.035 a trade, every one of eight assets losing, against −0.302R on a different venue
+ * and a different year. That is about as repeatable as anything here gets.
+ *
+ * Be exact about what this buys, because the number that matters is not the one it improves. It
+ * refuses 81% of those 15m setups — 1807 down to 337 — and the 337 that still qualify go on losing,
+ * at −0.248R. So it cuts the damage by volume, roughly −522R to −84R over that year, and it does
+ * not make the quarter-hour safe. Nor does clearing the bar mean a cell pays: 903 filed 1h setups
+ * over 282 days came out at −0.062R ± 0.049, seven of eight assets losing, and gating them barely
+ * moved it (849 setups, −0.053R).
+ *
+ * This is a seatbelt on a rule with no measured edge — see HORIZONS.short.measured. It removes the
+ * losses that are certain and arithmetic. The rest is the rule's own problem and no threshold here
+ * can reach it.
+ */
+const TOLL_MAX = 0.25
+
 /** Bollinger band width now, and where that sits in its own recent range (0 = tightest in `look`
  *  bars, 1 = widest). Volatility coils before it expands, so a low reading is the classic warning
  *  that a move is being loaded — it says nothing about which way, and neither do we. */
@@ -1485,7 +1531,7 @@ export function priced(long: boolean, entry: number, stop: number, target: numbe
  * wants prices in it and only the card knows how many decimals this asset prints to. Null means the
  * strategy produced a plan.
  */
-export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'warmup' | 'below' | 'unconfirmed' | 'geometry'
+export type Block = 'flat' | 'chase' | 'vwap' | 'quiet' | 'warmup' | 'toll' | 'below' | 'unconfirmed' | 'geometry'
 export type Setup = { plan: Plan | null; block: Block | null }
 
 /**
@@ -1514,9 +1560,11 @@ export type Setup = { plan: Plan | null; block: Block | null }
  */
 export function dayPlan(
   dir: 'long' | 'short' | 'flat', price: number, entry: number,
-  atrValue: number | null, vwap: number | null, fee = 0,
+  atrValue: number | null, vwap: number | null, fee = 0, tollR: number | null = null,
 ): Setup {
   if (dir === 'flat') return { plan: null, block: 'flat' }
+  // before anything about direction: on bars this small the fee is most of the trade — see toll()
+  if (tollR != null && tollR > TOLL_MAX) return { plan: null, block: 'toll' }
   const long = dir === 'long'
   // the same quarter-ATR band around the entry as tradePlan, and for the same reason — see there
   const buffer = (atrValue ?? 0) * 0.25
@@ -1589,6 +1637,10 @@ export function strategyPlan(h: Horizon, i: {
   atr: number | null
   /** The session VWAP, where the feed and the bar size allow one. Only the trading rule gates on it. */
   vwap: number | null
+  /** The round trip in R on these bars — signals().toll. Only the trading rule gates on it, and
+   *  only because its risk is one ATR: the accumulation stop is a regime line hundreds of bars
+   *  wide, so no realistic fee is a meaningful share of it. */
+  toll?: number | null
   fee?: number
 }): Setup {
   return h === 'long'
@@ -1605,7 +1657,7 @@ export function strategyPlan(h: Horizon, i: {
        average and no more, the read is still thin — require slow + a margin then. */
     : i.fast == null || i.slow == null
       ? { plan: null, block: 'warmup' }
-      : dayPlan(i.dir, i.price, i.fast, i.atr, i.vwap, i.fee)
+      : dayPlan(i.dir, i.price, i.fast, i.atr, i.vwap, i.fee, i.toll ?? null)
 }
 
 /** One simulated trade: the bar the plan was made on, the bar its entry was actually reached, and
@@ -2051,13 +2103,24 @@ export const HORIZONS = {
     label: 'Investing', fast: 50, slow: 200, srWindow: 60, interval: '1d',
     strategy: 'Trend accumulation',
     rule: 'Long only, above the 200-MA. Add on dips to the 50-MA, out on a daily close back under the 200. The wide high is a trim, not a deadline.',
+    measured: 'Not walked. It needs 200 daily bars to have a regime line at all, and until the venue supplies them there is nothing to measure — Bitget keeps 90, MEXC 2000. Treat it as untested rather than as the safer of the two.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
     strategy: 'VWAP pull-back',
     rule: 'Both sides, but only on your side of the session VWAP. Entry at the 9-MA, stop one ATR past it, target two — a fixed 2R. Flat by the session end.',
+    measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing *before* costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything.',
   },
-} as const satisfies Record<string, { label: string; fast: number; slow: number; srWindow: number; interval: Interval; strategy: string; rule: string }>
+/* `measured` is what the rule actually did when it was walked over its own filed setups, and it
+   sits beside `rule` deliberately: the sentence describing a strategy and the sentence saying
+   whether it pays should not live in different files, or the first one gets read alone. Both are
+   shown wherever the horizon names itself — the card, the Scan and the MCP answer.
+   Re-run before editing either number. The rig is a walk over scanRead with the desk's own filing
+   gates (tier 3, the agreement floor, the cooldown, the entry expiry), fees and stop slippage
+   charged, paired across exit variants so a difference can be told from noise. Everything this
+   session that was measured on a 37-day window and not re-run on a year turned out to be the
+   window talking. */
+} as const satisfies Record<string, { label: string; fast: number; slow: number; srWindow: number; interval: Interval; strategy: string; rule: string; measured: string }>
 export type Horizon = keyof typeof HORIZONS
 
 /**
@@ -2705,7 +2768,7 @@ export function scanRead(
   const slowMA = view.smaSlow.at(-1)
   const { plan, block } = strategyPlan(horizon, {
     dir, price, fast: entryMA ?? null, slow: slowMA ?? null,
-    levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee,
+    levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, toll: toll(candles, fee), fee,
   })
   const holding = horizon === 'long'
   const against = !holding && !!plan && !!higher
@@ -2722,6 +2785,7 @@ export function scanRead(
     : block === 'vwap' ? [0, `wrong side of the VWAP for a ${dir}`]
     : block === 'quiet' ? [0, 'no ATR yet — no stop to size']
     : block === 'warmup' ? [0, 'not enough bars to warm the averages this read is made of']
+    : block === 'toll' ? [0, 'the round trip costs more than a quarter of the risk on these bars']
     : !plan ? [0, 'no clean setup — price already ran']
     : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
     : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']

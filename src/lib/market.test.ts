@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
   ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen,
-  heikin, heikinRun } = await import('./market.ts')
+  heikin, heikinRun, toll } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -305,6 +305,30 @@ assert.equal(strategyPlan('long', { dir: 'short', price: 120, fast: 100, slow: 8
 const sameChart = { dir: 'long' as const, price: 98, fast: 100, slow: 80, levels: band, atr: 5, vwap: 97 }
 assert.equal(strategyPlan('short', sameChart).block, 'chase')
 assert.equal(strategyPlan('long', sameChart).plan?.entry, 98)
+
+/* The round trip in R: two crossings of the book against a one-ATR stop. A bar that travels 1% of
+   price at 0.05% a side costs a tenth of the risk; the same fee on a bar that travels a tenth of a
+   percent costs the whole trade, which is the 5m and 15m case and why they are refused. */
+const barsOf = (range: number, price = 100) => Array.from({ length: 300 }, (_, i) => ({
+  t: i * 6e4, o: price, h: price + range / 2, l: price - range / 2, c: price,
+}))
+assert.equal(toll(barsOf(1), 0.05)?.toFixed(3), '0.100')   // 1% bar → 0.1R
+assert.equal(toll(barsOf(0.25), 0.05)?.toFixed(3), '0.400') // quarter-percent bar → 0.4R, the 15m case
+assert.equal(toll(barsOf(1), 0), 0)                         // no fee, no toll, whatever the bar
+assert.equal(toll(barsOf(1).slice(0, 10), 0.05), null)      // too few bars for a median worth having
+// the median, not the latest bar: one wild bar in a calm week must not make the week look cheap.
+// Gating on each read's own ATR instead took the 15m rule from −0.302R to −0.454R, because what it
+// kept was the chop — see toll().
+const calmWithSpike = [...barsOf(0.25).slice(0, 299), { t: 3e7, o: 100, h: 110, l: 90, c: 100 }]
+assert.equal(toll(calmWithSpike, 0.05)?.toFixed(3), '0.400')
+
+/* The trading rule refuses bars where the fee is most of the trade, and the fee dial decides it:
+   the same 15m bars are refused at taker rates and fine at maker ones. */
+assert.equal(dayPlan('long', 102, 100, 5, 99, 0.05, 0.4).block, 'toll')
+assert.equal(dayPlan('long', 102, 100, 5, 99, 0.05, 0.1).plan?.rr, 2)
+assert.equal(dayPlan('long', 102, 100, 5, 99, 0.05, null).plan?.rr, 2) // no reading, no gate
+// and it is checked before the direction, so a blocked bar says why rather than "no side"
+assert.equal(dayPlan('flat', 102, 100, 5, 99, 0.05, 0.4).block, 'flat')
 
 /* The accumulation rule is read on its own bars, whatever the chart is showing: 200 four-hour bars
    is a month, not the regime the rule names. Trading takes whatever it is given. */

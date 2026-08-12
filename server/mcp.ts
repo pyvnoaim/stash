@@ -443,7 +443,8 @@ const tools: Record<string, {
          The fee dial rides along because "does this pay" is the part it disagrees on. */
       const { plan, block } = market.strategyPlan(h, {
         dir, price, fast: view.smaFast.at(-1) ?? null, slow: view.smaSlow.at(-1) ?? null,
-        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, fee: s.dials.fee,
+        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
+        toll: market.toll(candles, s.dials.fee), fee: s.dials.fee,
       })
       const holding = h === 'long'
       // accumulation is long-only and gated on the 200-MA already, so the higher timeframe is not a
@@ -455,6 +456,7 @@ const tools: Record<string, {
         vwap: `Wrong side of the session VWAP for a ${dir} — this rule will not take one against the average paid since the open`,
         quiet: 'No ATR off these bars yet, so there is no stop to size',
         warmup: `Too few ${interval} bars came back to warm the ${cfg.slow}-MA — the read would be decided by whichever cards had enough bars, which is not this rule`,
+        toll: `A normal ${interval} bar is small enough that crossing the book twice at ${s.dials.fee}% a side costs over a quarter of the risk — this rule stops one ATR away, so the fee would be most of the trade. Walked, these came out break-even gross and −0.30R net`,
         below: `Out — price is under the ${cfg.slow}-MA, and below that line there is nothing to hold`,
         unconfirmed: `Out — back above the ${cfg.slow}-MA but the ${cfg.fast} has not crossed it, so the recovery is unconfirmed`,
         geometry: 'The levels do not make a trade — the stop or the target lands the wrong side of the entry',
@@ -467,6 +469,9 @@ const tools: Record<string, {
         tally: { bulls, bears, bias: dir },
         signals: list.map((x) => ({ label: x.label, tone: x.tone, detail: x.detail })),
         strategy: cfg.strategy, rule: cfg.rule,
+        /* Beside the plan, not below it. An agent reading this over MCP will otherwise relay an
+           entry, a stop and a target as advice, which is the one reading the walk says is wrong. */
+        measured: cfg.measured,
         plan: plan && {
           ...plan,
           side: holding ? 'long' : dir,
