@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, parsePoolLine, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen,
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen,
   heikin, heikinRun } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
@@ -305,6 +305,13 @@ assert.equal(strategyPlan('long', { dir: 'short', price: 120, fast: 100, slow: 8
 const sameChart = { dir: 'long' as const, price: 98, fast: 100, slow: 80, levels: band, atr: 5, vwap: 97 }
 assert.equal(strategyPlan('short', sameChart).block, 'chase')
 assert.equal(strategyPlan('long', sameChart).plan?.entry, 98)
+
+/* The accumulation rule is read on its own bars, whatever the chart is showing: 200 four-hour bars
+   is a month, not the regime the rule names. Trading takes whatever it is given. */
+assert.equal(readInterval('long', '4h'), '1d')
+assert.equal(readInterval('long', '1w'), '1d')
+assert.equal(readInterval('short', '15m'), '15m')
+assert.equal(readInterval('short', '1d'), '1d')
 
 /* Neither rule trades on averages that have not warmed up. Bitget returns 13 weekly candles, so a
    1w read has no 21-MA, no MACD, no timeframe above it and no session inside a bar to take a VWAP

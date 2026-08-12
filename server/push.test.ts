@@ -213,7 +213,12 @@ assert.equal(nextCharge('2026-01-15', 'monthly', '2026-08-03'), '2026-08-17')  /
    from before the field existed, or one edited into nonsense, falls back to the horizon's own
    default — the same fallback the page makes. */
 assert.equal(intervalOf({ marketInterval: '15m' }, 'short'), '15m')
-assert.equal(intervalOf({ marketInterval: '1w' }, 'long'), '1w')
+/* Investing ignores the chart. Its rule is written in days — a close under the 200-MA means a day
+   — so a selector left on the week filed accumulation against a regime line that meant four years,
+   and one left on 4h against one that meant a month. The trading rule keeps taking what it is
+   shown, which is the point of it. See readInterval. */
+assert.equal(intervalOf({ marketInterval: '1w' }, 'long'), '1d')
+assert.equal(intervalOf({ marketInterval: '4h' }, 'long'), '1d')
 assert.equal(intervalOf({}, 'short'), '1h', 'Trading reads the hour when nothing says otherwise')
 assert.equal(intervalOf({}, 'long'), '1d', 'and Investing the day')
 for (const junk of [null, undefined, 7, '3m', '', 'toString']) {

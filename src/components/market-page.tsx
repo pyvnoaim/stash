@@ -27,7 +27,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
-  TREND_NETWORK, usMarketOpen, venueName, priceDigits,
+  TREND_NETWORK, usMarketOpen, venueName, priceDigits, readInterval,
   scanBars, scanRead,
   type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
 } from '@/lib/market'
@@ -171,8 +171,12 @@ function CopyNum({ v, className, children }: { v: string; className?: string; ch
 export default function MarketPage() {
   const {
     chart, apiKey, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
-    marketInterval: interval, marketPreset: preset,
+    marketInterval: chosenInterval, marketPreset: preset,
   } = useStash()
+  /* Accumulation is read on days whatever the selector was left on — its timeframe is part of the
+     rule, and the server derives the desk's from the same function, so the chart, the card and the
+     row the phone gets cannot drift apart. See readInterval. */
+  const interval = readInterval(horizon, chosenInterval)
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload. So do the picker and the
   // preset, for the extra reason that the push server scans on whatever they say (see push.ts).
@@ -843,9 +847,11 @@ export default function MarketPage() {
             /* A dropdown, like the asset: six pills is the widest thing in this bar and five of
                them are always the wrong answer. The trigger wears the tray's own fill so the row
                still reads as one set of controls rather than a switch and a form field. */
-            <Select value={interval} onValueChange={(v) => setInterval(v as Interval)}>
-              <Hint label="Bar size — how much time one candle covers. Every reading below is measured on these bars.">
-                <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
+            <Select value={interval} onValueChange={(v) => setInterval(v as Interval)} disabled={horizon === 'long'}>
+              <Hint label={horizon === 'long'
+                ? 'Investing is read on daily bars, because that is what its rule is written in — a close under the 200-MA means a day, and 200 four-hour bars is a month. Switch to Trading to pick the bar size.'
+                : 'Bar size — how much time one candle covers. Every reading below is measured on these bars.'}>
+                <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 disabled:opacity-100 [&_svg]:size-3.5">
                   {/* the value written out, the way the asset trigger does it — this file never
                       imported SelectValue and does not need it for a string */}
                   <span>{interval}</span>

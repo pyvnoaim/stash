@@ -30,7 +30,7 @@ import type { DatabaseSync } from 'node:sqlite'
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
 import {
-  ASSETS, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, scanBars, scanRead,
+  ASSETS, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, readInterval, scanBars, scanRead,
   type Move,
   SESSIONS, type Candle, type Dials, type Interval,
 } from '../src/lib/market.ts'
@@ -109,9 +109,11 @@ export const lastBarOff = (bars: Record<Interval, Candle[]>): Record<Interval, C
   Object.fromEntries(INTERVALS.map((iv) => [iv, bars[iv]?.slice(0, -1) ?? []])) as Record<Interval, Candle[]>
 
 /** Which bar the desk is reading, off a document that may predate the field or have been edited by
- *  hand — the horizon's own default is the fallback, which is what the page falls back to too. */
+ *  hand — the horizon's own default is the fallback, which is what the page falls back to too.
+ *  Through readInterval, so the accumulation rule is read on the days it is written in whatever
+ *  the chart was left on; the page derives it from the same function. */
 export const intervalOf = (doc: any, horizon: 'long' | 'short'): Interval =>
-  ((INTERVALS as readonly string[]).includes(doc?.marketInterval)
+  readInterval(horizon, (INTERVALS as readonly string[]).includes(doc?.marketInterval)
     ? doc.marketInterval : HORIZONS[horizon].interval)
 
 /**

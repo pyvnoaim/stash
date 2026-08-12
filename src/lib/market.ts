@@ -2060,6 +2060,28 @@ export const HORIZONS = {
 } as const satisfies Record<string, { label: string; fast: number; slow: number; srWindow: number; interval: Interval; strategy: string; rule: string }>
 export type Horizon = keyof typeof HORIZONS
 
+/**
+ * Which bars a horizon is actually read on — here, and shared, for the same reason `tally` and
+ * `deskSignals` are: the page, the Scan and the paper desk all have to answer it identically.
+ *
+ * The trading rule takes whatever timeframe you are looking at, which is the point of it. The
+ * accumulation rule does not, because its timeframe *is* the rule: "out on a daily close back
+ * under the 200-MA" is a sentence about days, and 200 four-hour bars is thirty-three of them. The
+ * horizon toggle already snapped the chart to daily when you switched to Investing — but nothing
+ * held it there, so leaving the selector on 4h and switching to Investing filed accumulation rows
+ * against a regime line that meant a month. That is not a slower reading of this rule; it is a
+ * different rule wearing its name, and it is where the desk's one −1.39R accumulation trade
+ * came from.
+ *
+ * Worth knowing what this refuses: Bitget keeps 90 daily bars for its perps, and paging its
+ * history endpoint does not find more, so a 200-MA cannot exist there at all and the card now says
+ * so through `warmup` instead of quietly reading a faster chart. MEXC keeps 2000, back to 2021 —
+ * so accumulation on crypto is a venue setting, which is a thing you can act on, unlike a number
+ * that was never what it claimed.
+ */
+export const readInterval = (h: Horizon, chosen: Interval): Interval =>
+  h === 'long' ? HORIZONS.long.interval : chosen
+
 export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow: number } = HORIZONS.long): {
   smaFast: (number | null)[]
   smaSlow: (number | null)[]
