@@ -692,6 +692,35 @@ assert.equal(pos({}).size, undefined)                     // a plain watched pla
   closeWatch({ ...done, id: 'mexc-SOLUSDT-later', asset: 'SOLUSDT', closedAt: 5000 + 5400_000, r: -1.4 },
     5000 + 5400_000)
   assert.equal(getState().results.length, 2)
+  /* The diff files a close the venue's history has not caught up with yet: no money, and an R off
+     a reconstructed risk. The history row that turns up next poll carries both, and takes the
+     row over — the money the whole point, the R and the exit because the venue's are better
+     sourced than a last mark and a leverage. */
+  clearResults()
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -1.02, exit: 141 }, 5000)
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -0.83, exit: 141.4, cash: -17.2 }, 5000)
+  assert.equal(getState().results.length, 1)
+  assert.equal(getState().results[0].cash, -17.2)
+  assert.equal(getState().results[0].r, -0.83)
+  assert.equal(getState().results[0].exit, 141.4)
+  // and only that way round: a second telling with no money leaves the settled row alone
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9 }, 5000)
+  assert.equal(getState().results[0].r, -0.83)
+  // …as does one that has its own, however it differs — that is the same trade told twice, not news
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9, cash: -99 }, 5000)
+  assert.equal(getState().results[0].cash, -17.2)
+  /* Across the two ids as well, which is the arrangement it actually shows up in: the diff and the
+     history stamp a trade differently, so `twice` is what recognises the row to settle. */
+  clearResults()
+  closeWatch({ ...done, id: 'bitget-XRPUSDT-2026', asset: 'XRPUSDT', r: -1.02 }, 5000)
+  closeWatch({ ...done, id: 'bitget-XRPUSDT-142.35', asset: 'XRPUSDT', r: -0.83, cash: -17.2 }, 5000)
+  assert.deepEqual(getState().results.map((r) => [r.id, r.cash]), [['bitget-XRPUSDT-142.35', -17.2]])
+  // a hand-entered position is out of reach of all of it: no hyphen in a uid, so nothing matches it
+  clearResults()
+  closeWatch({ ...done, id: 'r9', size: 100, lev: 10, r: -1 }, 5000)
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', r: -0.83, cash: -17.2 }, 5000)
+  assert.equal(getState().results.length, 2)
+
   /* Two trades that both settled at nothing are two trades: a scratch is the one figure real ones
      share, so the money identifies a pair only when there is some of it. */
   clearResults()

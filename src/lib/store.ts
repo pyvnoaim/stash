@@ -1268,16 +1268,46 @@ export const openWatch = (id: string, at: number) => set((s) => ({
  * It ran to its target or its stop: off the live list, into the record. Idempotent on the id, so
  * two ticks landing on the same crossing file it once — and on the trade itself, so the exchange
  * filer's two paths cannot write one close twice under two ids (see `twice`).
+ *
+ * With one exception, below: a row already on file that never got the venue's money takes it when
+ * it finally arrives.
  */
-export const closeWatch = (r: Result, at = Date.now()) => set((s) => (s.results.some((x) => x.id === r.id || twice(x, r)) ? s : {
-  ...s,
-  watches: s.watches.filter((w) => w.id !== r.id),
-  /* A plan that was only ever watched is news for half a day — the bell says how it went — and
-     after that nothing reads it: the Log shows real trades only. Kept in the list past that, it
-     would spend the fifty on trades nobody took and push the real ones out the bottom. So the cap
-     is spent on real rows, and a watched one holds a place only while it is still being said. */
-  results: [r, ...s.results].filter((x) => isReal(x) || at - x.closedAt < RESULT_FRESH).slice(0, KEEP_RESULTS),
-}))
+export const closeWatch = (r: Result, at = Date.now()) => set((s) => {
+  const filed = s.results.findIndex((x) => x.id === r.id || twice(x, r))
+  /**
+   * Already here — and the second telling is worth more than the first exactly once: when it
+   * carries the venue's settled money and the row on file does not.
+   *
+   * That row is the position-diff's work. It files the moment a symbol goes missing from the open
+   * book, and where the venue's history has not caught up with the close yet there is nothing to
+   * price it by: no `cash`, an exit that is only the last mark this app happened to see, and an R
+   * off whatever risk could be reconstructed — a liquidation price, or the leverage the account is
+   * set to today. The history row that turns up on a later poll is better sourced on every one of
+   * those: the venue's own average close, its own realised money, and that money over the margin
+   * the position really put up. So it replaces the row wholesale rather than lending it a figure.
+   *
+   * Only ever in that direction. Two rows that both have money, or both lack it, are the same
+   * trade told twice and the first telling stands — which is the dedupe this has always been, and
+   * what stops two ticks racing on one close from rewriting each other. A hand-entered position
+   * cannot be reached from here at all: `twice` and the id both need the filer's `venue-symbol-when`
+   * on either side, and what you type is a bare `uid()`.
+   */
+  if (filed >= 0) {
+    if (r.cash == null || s.results[filed].cash != null) return s
+    const results = s.results.slice()
+    results[filed] = r
+    return { ...s, results }
+  }
+  return {
+    ...s,
+    watches: s.watches.filter((w) => w.id !== r.id),
+    /* A plan that was only ever watched is news for half a day — the bell says how it went — and
+       after that nothing reads it: the Log shows real trades only. Kept in the list past that, it
+       would spend the fifty on trades nobody took and push the real ones out the bottom. So the cap
+       is spent on real rows, and a watched one holds a place only while it is still being said. */
+    results: [r, ...s.results].filter((x) => isReal(x) || at - x.closedAt < RESULT_FRESH).slice(0, KEEP_RESULTS),
+  }
+})
 
 /** Returns what it cleared so the caller can offer an undo — the same as every other delete here. */
 export function clearResults() {
