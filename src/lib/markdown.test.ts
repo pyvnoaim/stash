@@ -97,4 +97,19 @@ assert.deepEqual(wikiLinks('[[   ]] is not one either'), [])
 assert.deepEqual(wikiLinks('[[open\nclosed]]'), [])
 assert.deepEqual(wikiLinks('[not a wiki](http://x)'), [])
 
+import { cells, isDivider } from './markdown.ts'
+
+// a table row splits on its inner pipes, and an empty leading cell is a cell
+assert.deepEqual(cells('| a | b |'), ['a', 'b'])
+assert.deepEqual(cells('| | dwatcher | NinjaOne |'), ['', 'dwatcher', 'NinjaOne'])
+assert.deepEqual(cells('a | b'), ['a', 'b'])   // outer pipes are optional
+
+// the divider is what makes the pipes above it a table
+assert.ok(isDivider('|---|---|'))
+assert.ok(isDivider('| :--- | ---: | :---: |'))
+assert.ok(!isDivider(undefined))
+assert.ok(!isDivider('| a | b |'))
+assert.ok(!isDivider('---|---'))               // no leading pipe, so not a table either
+assert.ok(!isDivider('| --- | b |'))           // one real cell and it is prose
+
 console.log('markdown: ok')

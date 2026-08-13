@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { safeHref, safeSrc, spanOpen, type WikiTarget } from '@/lib/markdown'
+import { cells, isDivider, safeHref, safeSrc, spanOpen, type WikiTarget } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 
 /**
@@ -201,6 +201,38 @@ export function Markdown({ text, onToggle, links }: {
        nothing; hoist the closing index if one ever runs long enough to feel it. */
     if (para.length && spanOpen(para.join('\n')) && lines.slice(n).some((l) => l.includes('`'))) {
       para.push(line.trim())
+      continue
+    }
+
+    if (line.trim().startsWith('|') && isDivider(lines[n + 1])) {
+      flush()
+      const head = cells(line)
+      const rows: string[][] = []
+      n++ // the divider itself
+      while (lines[n + 1]?.trim().startsWith('|')) rows.push(cells(lines[++n]))
+      blocks.push(
+        // the wrapper scrolls, not the note — a wide table must not push the page sideways
+        <div key={blocks.length} className="overflow-x-auto">
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr>
+                {head.map((c, i) => (
+                  <th key={i} className="border-b px-2 py-1 align-top font-semibold">{inline(c, links)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, r) => (
+                <tr key={r}>
+                  {row.map((c, i) => (
+                    <td key={i} className="border-b px-2 py-1 align-top">{inline(c, links)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      )
       continue
     }
 

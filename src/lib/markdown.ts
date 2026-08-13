@@ -66,6 +66,19 @@ export function wikiLinks(note: string): string[] {
   return [...seen]
 }
 
+/* ---------- | tables | ---------- */
+
+/** The cells of one row, outer pipes dropped. `| | a |` is a real row whose first cell is empty. */
+export const cells = (row: string) => row.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+
+/**
+ * The `|---|---|` under a header row. That line is what makes a run of pipes a table rather than a
+ * paragraph that happens to hold one, so a sentence with a | in it is never eaten as a one-row table.
+ * ponytail: `:---:` parses but its alignment is ignored — every column renders left.
+ */
+export const isDivider = (row?: string) =>
+  row !== undefined && row.trim().startsWith('|') && cells(row).every((c) => /^:?-+:?$/.test(c))
+
 /**
  * True when a run of text leaves a ` code span open, so the line that closes it is still to come.
  * An email body pasted between backticks is the ordinary case: it spans lines, holds blank ones,
