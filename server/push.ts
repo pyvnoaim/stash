@@ -17,6 +17,8 @@
  *    refreshPrices for why the stocks still aren't priced here.
  *  - a listed asset that has just moved hard, whether or not anything was ever saved on it. The
  *    same rule and the same two numbers the in-app bell uses, imported rather than copied.
+ *  - a resting order that has become a position: the desk's own book, read off the stored key. The
+ *    one knock here about money rather than about a price.
  *  - an item that named an hour, once that hour has come round where the phone is.
  *  - a market about to open, for anyone who has turned that dial off zero.
  *  - once a day, in the morning, what is due and what is about to be charged.
@@ -30,10 +32,13 @@ import type { DatabaseSync } from 'node:sqlite'
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
 import {
-  ASSETS, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, readInterval, scanBars, scanRead,
+  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, readInterval, scanBars, scanRead,
   type Move,
   SESSIONS, type Candle, type Dials, type Interval,
 } from '../src/lib/market.ts'
+/* The one venue with a book this process can read. Everything else here is a public feed served
+   the same to everyone; this is one account's own orders, off the key it stored. */
+import { pending as bitgetPending, positions as bitgetPositions, type Order } from './bitget.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -287,6 +292,48 @@ export function alertsOf(
   return out
 }
 
+/** One look at an account's futures book: what is resting on it, and what is open behind that. */
+export type Book = {
+  orders: Order[]
+  positions: { symbol: string, side: 'long' | 'short', size: number }[]
+}
+
+/**
+ * The resting orders that became positions between two looks — the only news on this desk that is
+ * somebody's own money moving rather than a price arriving somewhere.
+ *
+ * An order that has left the book has either filled or been cancelled, and the book alone cannot
+ * say which. The position behind it is what says: an order gone while the side it would open grew
+ * is a fill; gone with nothing behind it is a cancel, which is nearly always one you made yourself
+ * and not worth a phone going off. That size test is also what carries the one-way-mode accounts,
+ * where the venue calls every order an opening one (see shapeOrders in bitget.ts) — a close that
+ * fills shrinks the side rather than growing it, and says nothing here.
+ *
+ * The order's own price, not the position's entry: a resting limit fills at its price or better,
+ * and the entry is an average that the next fill moves. Keyed by order id, which the venue never
+ * reissues, so a fill is news exactly once and no window has to be remembered for it.
+ */
+export function fillsOf(was: Book, now: Book): Alert[] {
+  const live = new Set(now.orders.map((o) => o.id))
+  const sizeOf = (b: Book, symbol: string, side: 'long' | 'short') =>
+    b.positions.find((p) => p.symbol === symbol && p.side === side)?.size ?? 0
+  const out: Alert[] = []
+  for (const o of was.orders) {
+    if (!o.opens || live.has(o.id)) continue
+    const side = o.side === 'buy' ? 'long' as const : 'short' as const
+    if (sizeOf(now, o.symbol, side) <= sizeOf(was, o.symbol, side)) continue
+    const id = assetOf(o.symbol)
+    const a = ASSETS.find((x) => x.id === id)
+    out.push({
+      key: `fill-${o.id}`,
+      title: `${a?.label ?? o.symbol} ${side} filled`,
+      body: `${o.size} ${id.replace(/USDT$/, '')} at ${fmtPrice(o.price)} — the order you left resting is on`,
+      target: 'market',
+    })
+  }
+  return out
+}
+
 export function createPush(db: DatabaseSync) {
   db.exec(`
     create table if not exists meta (k text primary key, v text not null);
@@ -313,6 +360,7 @@ export function createPush(db: DatabaseSync) {
     seen: db.prepare('update pushes set seen = ? where endpoint = ?'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
     tzOf: db.prepare('select tz from pushes where user = ? limit 1'),
+    bitget: db.prepare('select bitget from users where id = ?'),
   }
 
   /* One keypair for this server, kept because the browsers tie a subscription to the key that
@@ -530,6 +578,62 @@ export function createPush(db: DatabaseSync) {
     return out
   }
 
+  /* ---------- the book, with the app closed ---------- */
+
+  /** The last look at each account's book. No entry is an account never looked at, and the first
+   *  look files nothing: everything resting when this process started has been there all along, and
+   *  a restart must not knock about a week-old position. */
+  const books = new Map<number, Book>()
+  /** Fills noticed, per user, and when. Unlike everything else in `alertsOf`, a fill is an event
+   *  rather than a state — nothing about the book still says it happened once the position is just
+   *  a position — so it is held here for as long as it is worth reading, then dropped. */
+  const filled = new Map<number, { at: number, a: Alert }[]>()
+  /** How long a fill stays on the list. Long enough that a phone knocked at the edge of a pass and
+   *  woken slowly still finds it, short enough that it isn't news at lunchtime. */
+  const FILL_FOR = 30 * 60_000
+
+  /** This account's Bitget credentials, or null — the same stored blob /api/positions reads. */
+  const keyOf = (user: number) => {
+    const raw = (q.bitget.get(user) as { bitget: string | null } | undefined)?.bitget
+    if (!raw) return null
+    try {
+      const c = JSON.parse(raw)
+      return c?.key && c?.secret && c?.passphrase ? c as { key: string, secret: string, passphrase: string } : null
+    } catch { return null }
+  }
+
+  /** Look at every subscribed account's book and keep whatever filled since the last look. One
+   *  signed pair of calls per account with a key — nobody subscribed to a push has one asked for. */
+  async function refreshBooks(users: number[]) {
+    for (const u of users) {
+      const c = keyOf(u)
+      if (!c) { books.delete(u); continue }
+      let now: Book
+      try {
+        // the book uncached and the positions on their own 30-second one (see bitget.ts): an order
+        // is read to decide whether it is still there, which a stale answer cannot say
+        const [orders, feed] = await Promise.all([
+          bitgetPending(c.key, c.secret, c.passphrase),
+          bitgetPositions(c.key, c.secret, c.passphrase),
+        ])
+        now = { orders, positions: feed.positions }
+      } catch {
+        /* A venue that will not answer says nothing, and — this is the half that matters — the last
+           look is kept rather than replaced. Overwriting it with an empty book would make every
+           order on it read as vanished on the pass after, which is a fill alert per order for an
+           outage. The next good look diffs against the last good one. */
+        continue
+      }
+      const was = books.get(u)
+      books.set(u, now)
+      if (!was) continue
+      const news = fillsOf(was, now)
+      if (!news.length) continue
+      const at = Date.now()
+      filled.set(u, [...(filled.get(u) ?? []), ...news.map((a) => ({ at, a }))])
+    }
+  }
+
   async function refreshMovers(at = Date.now()) {
     try {
       // the hour just gone and the four behind it, both measured off the same day of hourly bars
@@ -545,11 +649,15 @@ export function createPush(db: DatabaseSync) {
     }
   }
 
-  /** One person's list, out of their newest document and the prices last fetched — behind whatever
-   *  another module already decided, which stands on its own: an order that has been cancelled at
-   *  an exchange is news whether or not the document it came from still parses. */
+  /** One person's list, out of their newest document, the prices last fetched, and their own book. */
   function alertsFor(user: number, tz: number): Alert[] {
-    const out: Alert[] = []
+    /* A fill leads whatever else is true: it is the only line here that is money already committed
+       rather than a level reached or a task due. Read off the venue rather than out of the document
+       below, and ahead of parsing it — an order that filled is news whether or not the document
+       that planned it still parses. Pruned as it is read; nothing else has to. */
+    const mine = (filled.get(user) ?? []).filter((f) => Date.now() - f.at <= FILL_FOR)
+    if (mine.length) filled.set(user, mine); else filled.delete(user)
+    const out: Alert[] = mine.map((f) => f.a)
     const row = q.doc.get(user) as { json: string } | undefined
     if (!row) return out
     try {
@@ -586,10 +694,12 @@ export function createPush(db: DatabaseSync) {
     /* The scan rate-limits itself to a quarter of an hour inside refreshScan; catching here rather
        than letting it reject keeps a bad klines pass from taking the prices and the movers with
        it — Promise.all rejects on the first, and these are three separate calls to one feed. */
+    const users = [...new Set(rows.map((r) => r.user))]
     await Promise.all([
-      refreshPrices([...new Set(rows.map((r) => r.user))]),
+      refreshPrices(users),
       refreshMovers(),
       refreshScan().catch(() => {}),
+      refreshBooks(users),
     ])
 
     for (const r of rows) {
@@ -601,7 +711,9 @@ export function createPush(db: DatabaseSync) {
         // the price has reached is exactly the thing that cannot wait for office hours — and
         // neither is an hour someone set themselves, whatever hour they set it to, nor an order
         // that has just been cancelled at an exchange, or is still resting there wanting a hand.
-        && (a.key.startsWith('watch-') || a.key.startsWith('at-')
+        // a fill is money that moved while you were asleep, which is the definition of the thing
+        // that cannot wait for eight o'clock
+        && (a.key.startsWith('watch-') || a.key.startsWith('at-') || a.key.startsWith('fill-')
           || localHour(r.tz) >= QUIET_UNTIL))
       if (!fresh.length) continue
       /* Before the knock, not after: the phone can be asking /api/alerts while this line is still

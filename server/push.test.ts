@@ -3,7 +3,7 @@
    already does (notify.ts, store.ts), which is exactly why they are asserted here: the two sides
    drifting apart is the failure nobody would notice. */
 import assert from 'node:assert/strict'
-import { alertsOf, chargeAt, intervalOf, newsFirst, nextCharge, type Alert } from './push.ts'
+import { alertsOf, chargeAt, fillsOf, intervalOf, newsFirst, nextCharge, type Alert } from './push.ts'
 import { readInterval } from '../src/lib/market.ts'
 
 /** Midday UTC on the day everything below is written against, so a timezone can't move the date. */
@@ -239,5 +239,34 @@ assert.equal(orbInterval({ marketInterval: '1h' }, 'long', true), '1d')
 for (const junk of [null, {}, { items: 'nope', subs: 3, watches: null }]) {
   assert.deepEqual(at(junk), [], 'a hand-edited document should say nothing, not throw')
 }
+
+/* ---------- an order that became a position ---------- */
+
+const order = (over: Partial<Parameters<typeof fillsOf>[0]['orders'][number]> = {}) =>
+  ({ id: 'o1', symbol: 'SOLUSDT', side: 'buy' as const, price: 75.92, size: 3.1, live: true, opens: true, ...over })
+const pos = (size: number, side: 'long' | 'short' = 'long') => ({ symbol: 'SOLUSDT', side, size })
+const book = (orders: ReturnType<typeof order>[], positions: ReturnType<typeof pos>[] = []) => ({ orders, positions })
+
+// still resting is not news, and neither is a book that was empty to begin with
+assert.deepEqual(fillsOf(book([order()]), book([order()])), [])
+assert.deepEqual(fillsOf(book([]), book([], [pos(3.1)])), [])
+// gone, with the side it opens grown behind it: the fill
+const hit = fillsOf(book([order()]), book([], [pos(3.1)]))
+assert.equal(hit.length, 1)
+assert.equal(hit[0].key, 'fill-o1', 'the venue never reissues an order id, so this is news once')
+assert.equal(hit[0].title, 'Solana long filled')
+assert.match(hit[0].body, /3\.1 SOL at 75\.92/)
+// gone with nothing behind it is a cancel — nearly always your own, and not worth a phone ringing
+assert.deepEqual(fillsOf(book([order()]), book([])), [])
+// an add to a position that was already open still counts: the size is what grew
+assert.equal(fillsOf(book([order()], [pos(2)]), book([], [pos(5.1)])).length, 1)
+// …and a side that shrank is a close filling, which is what a one-way-mode account calls an
+// opening sell. The size test is the only thing standing between that and a wrong alert.
+assert.deepEqual(fillsOf(book([order({ side: 'sell' })], [pos(5.1)]), book([], [pos(2)])), [])
+// a closing order says nothing even where the venue admits it is one
+assert.deepEqual(fillsOf(book([order({ opens: false })]), book([], [pos(3.1)])), [])
+// the position that grew has to be the one this order was for
+assert.deepEqual(fillsOf(book([order()]), book([], [pos(3.1, 'short')])), [])
+assert.deepEqual(fillsOf(book([order({ symbol: 'BTCUSDT' })]), book([], [pos(3.1)])), [])
 
 console.log('push alerts ok')
