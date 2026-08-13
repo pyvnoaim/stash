@@ -10,7 +10,7 @@
  * string it sends rather than rebuilding it.
  */
 import { createHmac } from 'node:crypto'
-import type { Closed, Feed, Position } from './bitget.ts'
+import type { Closed, Feed, Order, Position } from './bitget.ts'
 
 const BASE = 'https://contract.mexc.com'
 /** The exchange is asked at most this often, however many tabs poll the route. */
@@ -34,6 +34,25 @@ const authed = (key: string, secret: string, path: string, query = '') => {
     },
     signal: AbortSignal.timeout(10_000),
   }).then((r) => r.json())
+}
+
+const pub = (path: string) => fetch(BASE + path, { signal: AbortSignal.timeout(10_000) }).then((r) => r.json())
+
+/* contractSize by symbol — the number that turns MEXC's contracts into coins, and the one thing
+   here that never changes. Held for an hour rather than fetched beside every look at the book: it
+   is the whole contract list, and two callers a minute were asking for it. A failed fetch is not
+   cached and not caught — the callers below already treat an empty list as every row unsized. */
+let contracts: { at: number; sizes: Map<string, number> } | null = null
+const CONTRACTS_TTL = 3600_000
+const contractSizes = async () => {
+  if (contracts && Date.now() - contracts.at < CONTRACTS_TTL) return contracts.sizes
+  const details = await pub('/api/v1/contract/detail')
+  const sizes = new Map(
+    ((details?.data ?? []) as { symbol?: unknown; contractSize?: unknown }[])
+      .map((d) => [String(d.symbol ?? '').toUpperCase(), Number(d.contractSize)] as const),
+  )
+  if (sizes.size) contracts = { at: Date.now(), sizes }
+  return sizes
 }
 
 /** MEXC answers a list either as the array itself or as a page wrapping one, depending on the
@@ -114,6 +133,50 @@ export function shapeStops(rows: unknown[]): Map<string, { stop: number | null, 
   return out
 }
 
+/**
+ * The orders resting on the book, in the shape bitget.ts declares. Contracts into coins off the
+ * same public list the positions use, so `size` is the coins every other row here speaks.
+ *
+ * MEXC is the better-mannered venue on this one: its `side` says outright what an order would do —
+ * 1 opens a long, 3 opens a short, 2 and 4 close one of each — where Bitget's one-way mode leaves
+ * `opens` a guess. Buying is opening a long or closing a short; selling is the other two.
+ */
+export function shapeOrders(rows: unknown[], sizes: Map<string, number>): Order[] {
+  return (rows as Record<string, unknown>[]).map((o) => {
+    const raw = String(o.symbol ?? '').toUpperCase()
+    const per = sizes.get(raw)
+    const side = Number(o.side)
+    return {
+      id: String(o.orderId ?? ''),
+      symbol: raw.replace('_', ''),
+      side: side === 1 || side === 2 ? 'buy' as const : 'sell' as const,
+      price: Number(o.price),
+      // a symbol the contract list forgot is dropped below rather than sized 10000× wrong, the
+      // same bargain `shape` makes for a position
+      size: per != null && isFinite(per) ? Number(o.vol) * per : NaN,
+      // nothing dealt against it yet — MEXC counts the filled contracts rather than naming a state
+      // for it, and `state` on this endpoint is about the order being live at all
+      live: !Number(o.dealVol),
+      opens: side === 1 || side === 3,
+    }
+  }).filter((o) => o.id && o.symbol && isFinite(o.price) && o.price > 0 && isFinite(o.size) && o.size > 0)
+}
+
+/** Everything resting on the book. Uncached for the reason bitget's is: an order is read to decide
+ *  whether it is still there.
+ *  ponytail: written off the documented endpoint and never yet answered by a real MEXC key — the
+ *  same standing this file's `closed` had. A venue that refuses it contributes an empty book, which
+ *  is what MEXC contributed before this existed, so the failure is the old behaviour. */
+export async function pending(key: string, secret: string): Promise<Order[]> {
+  // no parameters, for the reason `closed` gives: they ride into the signature as well as the URL
+  const [open, sizes] = await Promise.all([
+    authed(key, secret, '/api/v1/private/order/list/open_orders'),
+    contractSizes(),
+  ])
+  if (open?.success !== true) throw new Error(String(open?.message ?? open?.code ?? 'the exchange did not answer'))
+  return shapeOrders(rowsOf(open.data), sizes)
+}
+
 /** MEXC's closed positions, in the shape bitget.ts declares for them. */
 export function shapeClosed(rows: unknown[]): Closed[] {
   // six places, for the reason bitget.ts's copy of this gives: the R is counted off this figure
@@ -164,13 +227,12 @@ const cached = new Map<string, { at: number; data: Feed }>()
 export async function positions(key: string, secret: string): Promise<Feed> {
   const hit = cached.get(key)
   if (hit && Date.now() - hit.at < TTL) return hit.data
-  const pub = (path: string) => fetch(BASE + path, { signal: AbortSignal.timeout(10_000) }).then((r) => r.json())
-  const [open, assets, tickers, details, stops] = await Promise.all([
+  const [open, assets, tickers, sizes, stops] = await Promise.all([
     authed(key, secret, '/api/v1/private/position/open_positions'),
     // equity is garnish on the rows: this call dying still shows positions
     authed(key, secret, '/api/v1/private/account/assets').catch(() => null),
     pub('/api/v1/contract/ticker'),
-    pub('/api/v1/contract/detail'),
+    contractSizes(),
     // and so are the levels: a stop book that will not answer leaves the rows stopless, which is
     // what they were before this call existed
     authed(key, secret, '/api/v1/private/stoporder/list/orders').catch(() => null),
@@ -179,10 +241,6 @@ export async function positions(key: string, secret: string): Promise<Feed> {
   const marks = new Map(
     ((tickers?.data ?? []) as { symbol?: unknown; fairPrice?: unknown }[])
       .map((t) => [String(t.symbol ?? '').toUpperCase(), Number(t.fairPrice)] as const),
-  )
-  const sizes = new Map(
-    ((details?.data ?? []) as { symbol?: unknown; contractSize?: unknown }[])
-      .map((d) => [String(d.symbol ?? '').toUpperCase(), Number(d.contractSize)] as const),
   )
   const rows = shape(rowsOf(open.data), marks, sizes, stops?.success === true ? shapeStops(rowsOf(stops.data)) : undefined)
   const data = {

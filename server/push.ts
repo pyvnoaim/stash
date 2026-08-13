@@ -39,6 +39,7 @@ import {
 /* The one venue with a book this process can read. Everything else here is a public feed served
    the same to everyone; this is one account's own orders, off the key it stored. */
 import { pending as bitgetPending, positions as bitgetPositions, type Order } from './bitget.ts'
+import { pending as mexcPending, positions as mexcPositions } from './mexc.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -292,11 +293,17 @@ export function alertsOf(
   return out
 }
 
-/** One look at an account's futures book: what is resting on it, and what is open behind that. */
+/** One look at an account's futures book: what is resting on it, and what is open behind that.
+ *  Both venues merge into one of these, which is why the ids carry the venue that issued them. */
 export type Book = {
   orders: Order[]
   positions: { symbol: string, side: 'long' | 'short', size: number }[]
 }
+
+/** Order ids namespaced by the venue that issued them: two exchanges each counting from one would
+ *  otherwise let a Bitget order id stand in for a MEXC one in a key that must be unique forever. */
+export const tag = (venue: string, orders: Order[]): Order[] =>
+  orders.map((o) => ({ ...o, id: `${venue}:${o.id}` }))
 
 /**
  * The resting orders that became positions between two looks — the only news on this desk that is
@@ -315,8 +322,11 @@ export type Book = {
  */
 export function fillsOf(was: Book, now: Book): Alert[] {
   const live = new Set(now.orders.map((o) => o.id))
+  /* Summed, not found: two venues merge into one book, and one asset held long on both is two rows
+     under the same symbol and side. `find` would weigh an order on one venue against a position on
+     the other and read a fill off whichever came first. */
   const sizeOf = (b: Book, symbol: string, side: 'long' | 'short') =>
-    b.positions.find((p) => p.symbol === symbol && p.side === side)?.size ?? 0
+    b.positions.reduce((n, p) => n + (p.symbol === symbol && p.side === side ? p.size : 0), 0)
   const out: Alert[] = []
   for (const o of was.orders) {
     if (!o.opens || live.has(o.id)) continue
@@ -360,7 +370,7 @@ export function createPush(db: DatabaseSync) {
     seen: db.prepare('update pushes set seen = ? where endpoint = ?'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
     tzOf: db.prepare('select tz from pushes where user = ? limit 1'),
-    bitget: db.prepare('select bitget from users where id = ?'),
+    keys: db.prepare('select bitget, mexc from users where id = ?'),
   }
 
   /* One keypair for this server, kept because the browsers tie a subscription to the key that
@@ -592,31 +602,45 @@ export function createPush(db: DatabaseSync) {
    *  woken slowly still finds it, short enough that it isn't news at lunchtime. */
   const FILL_FOR = 30 * 60_000
 
-  /** This account's Bitget credentials, or null — the same stored blob /api/positions reads. */
-  const keyOf = (user: number) => {
-    const raw = (q.bitget.get(user) as { bitget: string | null } | undefined)?.bitget
-    if (!raw) return null
-    try {
-      const c = JSON.parse(raw)
-      return c?.key && c?.secret && c?.passphrase ? c as { key: string, secret: string, passphrase: string } : null
-    } catch { return null }
-  }
-
-  /** Look at every subscribed account's book and keep whatever filled since the last look. One
-   *  signed pair of calls per account with a key — nobody subscribed to a push has one asked for. */
-  async function refreshBooks(users: number[]) {
-    for (const u of users) {
-      const c = keyOf(u)
-      if (!c) { books.delete(u); continue }
-      let now: Book
+  /** Whichever venues this account stored a key for, each as the two calls a look takes — the same
+   *  stored blobs and the same pair of readers /api/positions goes through. */
+  const venuesOf = (user: number) => {
+    const row = q.keys.get(user) as { bitget: string | null, mexc: string | null } | undefined
+    const of = (raw: string | null | undefined, need: string[], look: (c: any) => Promise<Book>) => {
+      if (!raw) return null
       try {
-        // the book uncached and the positions on their own 30-second one (see bitget.ts): an order
-        // is read to decide whether it is still there, which a stale answer cannot say
+        const c = JSON.parse(raw)
+        return need.every((k) => c?.[k]) ? () => look(c) : null
+      } catch { return null }
+    }
+    return [
+      of(row?.bitget, ['key', 'secret', 'passphrase'], async (c) => {
         const [orders, feed] = await Promise.all([
           bitgetPending(c.key, c.secret, c.passphrase),
           bitgetPositions(c.key, c.secret, c.passphrase),
         ])
-        now = { orders, positions: feed.positions }
+        return { orders: tag('bitget', orders), positions: feed.positions }
+      }),
+      of(row?.mexc, ['key', 'secret'], async (c) => {
+        const [orders, feed] = await Promise.all([mexcPending(c.key, c.secret), mexcPositions(c.key, c.secret)])
+        return { orders: tag('mexc', orders), positions: feed.positions }
+      }),
+    ].filter((v) => v !== null)
+  }
+
+  /** Look at every subscribed account's book and keep whatever filled since the last look. Two
+   *  signed calls per venue per account with a key — nobody subscribed to a push has none asked for.
+   *  Every venue or none, the same rule /api/positions keeps: a half-read book is a book. */
+  async function refreshBooks(users: number[]) {
+    for (const u of users) {
+      const look = venuesOf(u)
+      if (!look.length) { books.delete(u); continue }
+      let now: Book
+      try {
+        // the books uncached and the positions on their own 30-second one (see bitget.ts): an order
+        // is read to decide whether it is still there, which a stale answer cannot say
+        const seen = await Promise.all(look.map((go) => go()))
+        now = { orders: seen.flatMap((s) => s.orders), positions: seen.flatMap((s) => s.positions) }
       } catch {
         /* A venue that will not answer says nothing, and — this is the half that matters — the last
            look is kept rather than replaced. Overwriting it with an empty book would make every

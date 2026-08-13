@@ -1,7 +1,7 @@
 // npm test — the MEXC shaping: contracts turn into coins, sides read off positionType, and a
 // symbol the contract list forgot is dropped rather than priced ten-thousand-fold wrong
 import assert from 'node:assert/strict'
-import { equityOf, rowsOf, shape, shapeClosed, shapeStops, sign } from './mexc.ts'
+import { equityOf, rowsOf, shape, shapeClosed, shapeOrders, shapeStops, sign } from './mexc.ts'
 
 const marks = new Map([['BTC_USDT', 110], ['ETH_USDT', 190]])
 const sizes = new Map([['BTC_USDT', 0.0001], ['ETH_USDT', 0.01]])
@@ -55,6 +55,27 @@ assert.deepEqual(rowsOf({ nothing: true }), [])
 assert.equal(equityOf([{ currency: 'BTC', equity: 1 }, { currency: 'USDT', equity: '1200.505' }]), 1200.51)
 assert.equal(equityOf([{ currency: 'BTC', equity: 1 }]), null)
 assert.equal(equityOf(null), null)
+
+/* The resting orders. MEXC's `side` is the one field Bitget cannot match: it says outright whether
+   an order opens or closes, so `opens` here is the venue's word rather than an assumption. */
+const book = shapeOrders([
+  // 5000 contracts × 0.0001 = 0.5 BTC, and side 1 is a long being opened
+  { orderId: 9, symbol: 'BTC_USDT', side: 1, price: '100.5', vol: 5000, dealVol: 0 },
+  // side 3 opens a short — a sell, and an entry
+  { orderId: 10, symbol: 'ETH_USDT', side: 3, price: 200, vol: 200, dealVol: 0 },
+  // side 4 closes a long: a sell that is not an entry, which is the distinction Bitget's one-way
+  // mode loses. Side 2 closes a short and is a buy for the same reason.
+  { orderId: 11, symbol: 'ETH_USDT', side: 4, price: 210, vol: 100, dealVol: 30 },
+  // no contractSize known, no price, no id: none of them is an order anything can be matched to
+  { orderId: 12, symbol: 'DOGE_USDT', side: 1, price: 0.1, vol: 10, dealVol: 0 },
+  { orderId: 13, symbol: 'BTC_USDT', side: 1, price: 0, vol: 5000, dealVol: 0 },
+  { symbol: 'BTC_USDT', side: 1, price: 100, vol: 5000, dealVol: 0 },
+], sizes)
+assert.deepEqual(book.map((o) => o.id), ['9', '10', '11'])
+assert.deepEqual(book[0], { id: '9', symbol: 'BTCUSDT', side: 'buy', price: 100.5, size: 0.5, live: true, opens: true })
+assert.deepEqual(book[1], { id: '10', symbol: 'ETHUSDT', side: 'sell', price: 200, size: 2, live: true, opens: true })
+// already part-filled, and closing rather than opening
+assert.deepEqual(book[2], { id: '11', symbol: 'ETHUSDT', side: 'sell', price: 210, size: 1, live: false, opens: false })
 
 // hex HMAC over accessKey + timestamp (+ params) — deterministic, and the params change it
 assert.match(sign('s', 'k', '1'), /^[0-9a-f]{64}$/)

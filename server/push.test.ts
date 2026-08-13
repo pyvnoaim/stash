@@ -3,7 +3,7 @@
    already does (notify.ts, store.ts), which is exactly why they are asserted here: the two sides
    drifting apart is the failure nobody would notice. */
 import assert from 'node:assert/strict'
-import { alertsOf, chargeAt, fillsOf, intervalOf, newsFirst, nextCharge, type Alert } from './push.ts'
+import { alertsOf, chargeAt, fillsOf, intervalOf, newsFirst, nextCharge, tag, type Alert } from './push.ts'
 import { readInterval } from '../src/lib/market.ts'
 
 /** Midday UTC on the day everything below is written against, so a timezone can't move the date. */
@@ -268,5 +268,16 @@ assert.deepEqual(fillsOf(book([order({ opens: false })]), book([], [pos(3.1)])),
 // the position that grew has to be the one this order was for
 assert.deepEqual(fillsOf(book([order()]), book([], [pos(3.1, 'short')])), [])
 assert.deepEqual(fillsOf(book([order({ symbol: 'BTCUSDT' })]), book([], [pos(3.1)])), [])
+
+/* Two venues in one book. The same asset can be held long on both, and then one symbol and side is
+   two rows — the sizes are summed rather than the first one found, or an order resting on one venue
+   would be weighed against a position on the other. Here the order fills on the venue that was
+   flat while the other stands still: found-not-summed reads the untouched 4 first and says nothing. */
+assert.equal(fillsOf(book([order()], [pos(4)]), book([], [pos(4), pos(3.1)])).length, 1)
+// and the whole book shrinking by more than the order is not a fill, however it is split
+assert.deepEqual(fillsOf(book([order()], [pos(4), pos(1)]), book([], [pos(4)])), [])
+// the venue is inside the id, so two exchanges counting from one cannot collide on a key
+assert.equal(tag('mexc', [order({ id: '1' })])[0].id, 'mexc:1')
+assert.equal(fillsOf(book(tag('bitget', [order({ id: '1' })])), book([], [pos(3.1)]))[0].key, 'fill-bitget:1')
 
 console.log('push alerts ok')
