@@ -30,6 +30,11 @@ const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
+/** How far in from the left edge a swipe has to start to be reaching for the sidebar, in px — a
+ *  thumb's width, the same zone every drawer on a phone listens on. */
+const SIDEBAR_SWIPE_EDGE = 28
+/** And how far it has to travel before it is a swipe rather than a tap that wandered. */
+const SIDEBAR_SWIPE_OPEN = 60
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -107,6 +112,42 @@ function SidebarProvider({
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [toggleSidebar])
+
+  /* And the same shortcut for a thumb: swipe in from the left edge to open it. The trigger sits at
+     the top of the screen, which is the one place a hand holding a phone cannot reach — this is the
+     gesture every app with a drawer has, and the desktop keeps its Ctrl-B.
+
+     Only from the edge, and only a mostly-horizontal drag: the market chart pans left and right
+     under the same finger, and it never starts within a thumb's width of the frame. ponytail: in
+     Safari's own tab the left edge is its back gesture and iOS keeps the touches, so this is the
+     installed app's gesture in practice. Nothing to undo if that ever changes. */
+  React.useEffect(() => {
+    if (!isMobile) return
+    let from: { x: number; y: number } | null = null
+    const start = (e: TouchEvent) => {
+      const t = e.touches[0]
+      from = e.touches.length === 1 && t.clientX <= SIDEBAR_SWIPE_EDGE ? { x: t.clientX, y: t.clientY } : null
+    }
+    const move = (e: TouchEvent) => {
+      if (!from) return
+      const t = e.touches[0]
+      const dx = t.clientX - from.x
+      // a drag travelling more up or down than across is the page scrolling — it gives the
+      // gesture up rather than racing the scroll for it
+      if (Math.abs(t.clientY - from.y) > dx) { from = null; return }
+      if (dx < SIDEBAR_SWIPE_OPEN) return
+      from = null
+      setOpenMobile(true)
+    }
+    // passive: nothing here calls preventDefault, and saying so keeps the scroll off the main
+    // thread while the finger is still deciding what the gesture is
+    window.addEventListener("touchstart", start, { passive: true })
+    window.addEventListener("touchmove", move, { passive: true })
+    return () => {
+      window.removeEventListener("touchstart", start)
+      window.removeEventListener("touchmove", move)
+    }
+  }, [isMobile, setOpenMobile])
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
