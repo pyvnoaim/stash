@@ -2573,9 +2573,15 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
   /* Expectancy over the ones that ran. The unfilled are counted beside it and never in it: a plan
      whose entry never came round is not a trade that lost, which is the rule the whole app keeps. */
   const exp = done.length ? done.reduce((n, r) => n + (r.r ?? 0), 0) / done.length : null
-  const won = done.filter((r) => r.level === 'target').length
+  /* Did it pay, not did it reach a target. The regime rule has no target and comes off on a close —
+     counting hits by `level === 'target'` would report it at 0% forever however well it did, which
+     is the shape of wrong number that gets a working rule switched off. For every other rule the
+     two tests are the same one: a stop is booked at its own level and is always negative, a target
+     at its own level and always positive. */
+  const paid = (r: PaperRow) => (r.r ?? 0) > 0
+  const won = done.filter(paid).length
   const lanes = [...done.reduce((m, r) => m.set(r.rule, [...(m.get(r.rule) ?? []), r]), new Map<string, PaperRow[]>())]
-    .map(([name, rs]) => ({ name, n: rs.length, hit: rs.filter((r) => r.level === 'target').length,
+    .map(([name, rs]) => ({ name, n: rs.length, hit: rs.filter(paid).length,
       avg: rs.reduce((s, r) => s + (r.r ?? 0), 0) / rs.length }))
     .sort((a, b) => b.n - a.n)
   const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
@@ -2668,7 +2674,11 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
               <span className="hidden text-right sm:block">Rule</span>
             </div>
             {done.map((r) => {
-              const hit = r.level === 'target'
+              const hit = paid(r)
+              // what actually ended it, which on the regime rule is neither of the other two words:
+              // it left on a close through its line, and that close can be well above the entry
+              const ended = r.level === 'target' ? 'target'
+                : r.rule === HORIZONS.long.strategy ? 'regime' : 'stopped'
               return (
                 <div key={r.id} className={cn(LOG_GRID, 'hover:bg-muted/40 border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
                   {/* the rule rides under the name on a phone, where its own column does not fit
@@ -2684,7 +2694,7 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
                     {when(r.entryAt ?? r.ts)} → {when(r.closedAt!)}
                   </span>
                   <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {hit ? 'target' : 'stopped'}
+                    {ended}
                   </span>
                   <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r ?? 0)}</span>
                   <span className="text-muted-foreground hidden truncate text-right text-xs sm:block">{r.rule}</span>

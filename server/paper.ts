@@ -211,16 +211,21 @@ export function createPaper(db: DatabaseSync) {
      step() now uses — the average under the table is over the whole record, and a fill nobody
      could have got drags it just as far from this end as it did from the other.
      Idempotent by construction rather than by its `where`: the new exit is a function of `entry`
-     and `stop` alone, so every re-run writes the number already there. */
-  db.exec(`
+     and `stop` alone, so every re-run writes the number already there.
+     Not the regime rows, and this is the one exception that would have been silent: they are marked
+     'stop' too, but they came off at a *close* well away from the line, often above the entry —
+     rewriting them to the line plus a slip would book a hold that ran for months as −1.01R, on
+     every boot, for the rest of the record's life. Bound rather than interpolated: `rule` is the
+     one column here that carries a name rather than a number. */
+  db.prepare(`
     update paper set
       exit = stop * (case when dir = 'long' then ${1 - STOP_SLIP / 100} else ${1 + STOP_SLIP / 100} end),
       r = round((case when dir = 'long'
                       then stop * ${1 - STOP_SLIP / 100} - entry
                       else entry - stop * ${1 + STOP_SLIP / 100} end)
                 / abs(entry - stop), 2)
-    where level = 'stop' and entry <> stop
-  `)
+    where level = 'stop' and entry <> stop and rule <> ?
+  `).run(REGIME)
 
   /* And the rows filed backwards before found() read the side off the plan — a short with its stop
      under its own entry, which is not a position. Deleted rather than re-sided: every one of them
@@ -239,8 +244,12 @@ export function createPaper(db: DatabaseSync) {
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     open: db.prepare('select * from paper where closedAt is null'),
     live: db.prepare('select 1 from paper where user = ? and asset = ? and dir = ? and closedAt is null'),
+    /* The last time this asset, side and interval was stopped — and not counting the regime rows,
+       for the same reason the interval is in the key at all (see COOL_BARS): a rule leaving on its
+       regime line is not the setup below it re-arming, and a daily hold coming off would otherwise
+       shut a daily trade out for eight days over an idea it never had. */
     lastStop: db.prepare(`select max(closedAt) as at from paper
-      where user = ? and asset = ? and dir = ? and interval = ? and level = 'stop'`),
+      where user = ? and asset = ? and dir = ? and interval = ? and level = 'stop' and rule <> ?`),
     mine: db.prepare('select * from paper where user = ? order by ts desc limit ?'),
     fill: db.prepare('update paper set entryAt = ? where id = ? and user = ?'),
     close: db.prepare('update paper set entryAt = ?, closedAt = ?, level = ?, exit = ?, r = ? where id = ? and user = ?'),
@@ -357,7 +366,7 @@ export function createPaper(db: DatabaseSync) {
            exempt: what re-arms it is a daily close back over the 200-MA, which is a scarcer event
            than any bar count, and eight days of cooldown on top of it would sit out the re-entry
            the walk gets most of its return from. */
-        const beaten = (q.lastStop.get(user, p.asset, p.dir, p.interval) as { at: number | null }).at
+        const beaten = (q.lastStop.get(user, p.asset, p.dir, p.interval, REGIME) as { at: number | null }).at
         if (p.rule !== REGIME && cooling(beaten, p.interval, at)) continue
         q.add.run(p.id, user, p.asset, p.label, p.dir, p.rule, p.interval,
           p.entry, p.stop, p.target, p.net, p.ts, p.entryAt)

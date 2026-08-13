@@ -146,6 +146,10 @@ assert.equal(cooling(NOW - 9 * 9e5, '1h', NOW), true)
   ins.run(...row('shortslipped', 'short', 90, 'stop', 112, -1.4))
   // an accumulation plan filed under a bearish tally: short, stop below its own entry, never a trade
   ins.run('backwards', 1, 'X', 'X', 'short', 'r', '4h', 100, 90, 120, 1.8, NOW, NOW, NOW, 'stop', 100, 0)
+  /* A regime hold that ran: entry 100, the line at 80 the day it was filed, off at a close of 260.
+     It is marked 'stop' like any other exit, and the re-pricing above must not touch it — booked at
+     the line plus a slip it would read −1.01R on every boot, for the rest of the record's life. */
+  ins.run('held', 1, 'X', 'X', 'long', HORIZONS.long.strategy, '1d', 100, 80, 130, 0, NOW, NOW, NOW, 'stop', 260, 8)
   desk.stop()
 
   createPaper(db)   // the boot that corrects it
@@ -159,6 +163,8 @@ assert.equal(cooling(NOW - 9 * 9e5, '1h', NOW), true)
   assert.equal(by.slipped.r, -1.01)
   assert.equal(by.shortslipped.exit, 105.0525)
   assert.equal(by.shortslipped.r, -1.01)
+  assert.equal(by.held.exit, 260)   // the close it left on, not the line it was filed against
+  assert.equal(by.held.r, 8)
 }
 
 console.log('paper ok')
