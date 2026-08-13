@@ -540,6 +540,17 @@ export default function MarketPage() {
   // the exchange position on this very chart, if there is one — the strip above already knew about
   // it, and from here down so does the card
   const held = exch.rows.find((p) => assetOf(p.symbol) === current.id)
+  /* And what is only waiting: an order resting on this symbol's book. It is money committed at a
+     price nobody has traded yet — the one thing the desk knew about and never drew, so an entry
+     placed on the exchange looked, on this page, exactly like an entry nobody had placed. */
+  const resting = exch.orders.filter((o) => assetOf(o.symbol) === current.id)
+  /* The one of them that is this card's trade already placed: an opening order facing the way the
+     plan does. Everything below reads it — the verdict stops asking you to enter a trade you have
+     entered, and the footer stops saying there is nothing to press at someone who has pressed it.
+     Deliberately not matched on price: an order two ATR off the entry is still your order on this
+     side, and the line says how far off it sits rather than pretending it isn't there. */
+  const waiting = resting.find((o) => o.opens && (o.side === 'buy') === (side === 'long'))
+  const coin = current.id.replace(/USDT$/, '')
   /* How the position is doing on its own entry, the venue's sign convention: up is up whichever
      way it is facing. */
   const heldMove = held && last != null && held.entry > 0
@@ -622,6 +633,18 @@ export default function MarketPage() {
             ? `the fee comes off both ends — more than half of these have to win just to break even`
             : `the ${HIGHER[interval]} chart is going the other way, and that is the bigger tide`,
         }
+    /* The trade is placed. Below every filter above deliberately: a tally that has flipped or a fee
+       that eats it is news you want *because* an order is resting — that is the read that gets it
+       cancelled. Above the two entry rungs, because "buy at 75.93" at someone whose buy is already
+       on the book is the card asking twice for one trade. */
+    : waiting
+      ? {
+          text: 'Order in', tone: 'hold' as const,
+          why: `your ${waiting.side} for ${waiting.size} ${coin} rests at ${fmt(waiting.price)}${
+            Math.abs(waiting.price - plan.entry) > (view?.atr ?? 0) * 0.1
+              ? ` — ${away(waiting.price, plan.entry)} off the ${fmt(plan.entry)} entry` : ''
+          } · nothing to do until price comes to it`,
+        }
     : Math.abs(plan.entry - last) <= (view?.atr ?? 0) * 0.25
       ? {
           text: dir === 'long' ? 'Buy now' : 'Sell now', tone: 'go' as const,
@@ -654,12 +677,9 @@ export default function MarketPage() {
   // the exchange's own liquidation price where the feed carries one — that is the number that
   // actually fires — and the entry ± entry/lev estimate off the hand-entered position otherwise
   const liq = held?.liq ?? (mine ? liqOf(mine) : null)
-  /* And what is only waiting: an order resting on this symbol's book. It is money committed at a
-     price nobody has traded yet — the one thing the desk knew about and never drew, so an entry
-     placed on the exchange looked, on this page, exactly like an entry nobody had placed. Same
-     fuchsia as the position it would become, at half weight and its own dash: it is not a level
-     the trade is being measured against, it is a level the trade starts at if price comes. */
-  const resting = exch.orders.filter((o) => assetOf(o.symbol) === current.id)
+  /* Same fuchsia as the position it would become, at half weight and its own dash: a resting order
+     is not a level the trade is being measured against, it is the level the trade starts at if
+     price comes. */
   const posLines = [
     // the price is in the label so two orders on the same book are two chips, not one drawn twice
     ...resting.map((o) => ({
@@ -984,6 +1004,16 @@ export default function MarketPage() {
                 </Hint>
               </p>
               <p className="text-muted-foreground text-xs">{verdict.why}</p>
+              {/* The one case the verdict can't carry itself: it is saying no while your money is
+                  already committed at a price. Up here rather than with the levels below, because
+                  the levels card only renders when there is a plan and this is exactly the state
+                  where there often isn't one. */}
+              {waiting && verdict.tone === 'wait' && (
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
+                  Your {waiting.side} for {waiting.size} {coin} is still resting at {fmt(waiting.price)} — this card
+                  no longer endorses it. Cancel it, or leave it knowing that.
+                </p>
+              )}
             </>
           )}
         </CardContent>
@@ -1079,7 +1109,7 @@ export default function MarketPage() {
               <p className="text-muted-foreground mt-2 w-fit text-xs">
                 {euro(stake)} at risk is{' '}
                 <span className="text-foreground font-medium tabular-nums">
-                  {(stake / Math.abs(plan.entry - plan.stop)).toFixed(2)} {current.id.replace(/USDT$/, '')}
+                  {(stake / Math.abs(plan.entry - plan.stop)).toFixed(2)} {coin}
                 </span>{' '}
                 here · {euro(stake * plan.net)} net at the target
               </p>
@@ -1087,7 +1117,20 @@ export default function MarketPage() {
           )}
           {/* the button explained where it sits — it was the one thing on this card you had to
               already know. One line, gone once it is on. */}
-          {!inIt ? (
+          {waiting && !held ? (
+            /* What the order actually risks, against what this card sized. Both in the same unit as
+               the stop, so the two are comparable at a glance — the card's own line above says
+               "€20 at risk is 49.65 SOL" and an order for 3.1 of them is a different trade wearing
+               the same plan's levels. Nothing is filed either way: an order is not a fill. */
+            <Hint label={`Sized off this card, ${euro(stake)} of risk is ${risk > 0 ? (stake / risk).toFixed(2) : '—'} ${coin}. Nothing files off an order — the desk records the trade when it fills, not when it is placed.`}>
+              <p className="text-muted-foreground mt-2 w-fit text-xs">
+                Your {waiting.side} for{' '}
+                <span className="text-foreground font-medium tabular-nums">{waiting.size} {coin}</span>{' '}
+                rests at {fmt(waiting.price)}
+                {risk > 0 && <> · {euro(waiting.size * risk)} at risk to the {fmt(plan.stop)} stop</>}
+              </p>
+            </Hint>
+          ) : !inIt ? (
             <p className="text-muted-foreground mt-2 text-xs">
               Nothing to press — the desk files what it endorses on the Paper tab, even with every
               device here shut. Nothing is ever traded.
