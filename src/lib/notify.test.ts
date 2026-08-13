@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, cashAt, nakedAlerts, openRisk, riskOf, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, cashAt, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
@@ -166,6 +166,27 @@ assert.equal(naked[0].id, 'naked-mexc-BTCUSDT')
 assert.equal(naked[0].asset, 'BTCUSDT') // the chart the click opens
 assert.ok(naked[0].title.includes('BTCUSDT has no stop'))
 assert.ok(naked[0].detail.startsWith('MEXC long')) // the venue is named, not defaulted
+
+// …and where the levels would go on that bare row: one ATR out, two for the target
+assert.equal(suggestLine({ side: 'long', entry: 100, stop: null, target: null }, 2),
+  'nothing resting — stop at 98.00, target 104.00')
+assert.equal(suggestLine({ side: 'short', entry: 100, stop: null, target: null }, 2),
+  'nothing resting — stop at 102.00, target 96.00')
+// only the half that is missing is suggested, and a row wanting nothing says nothing
+assert.equal(suggestLine({ side: 'long', entry: 100, stop: 97, target: null }, 2),
+  'nothing resting — target 104.00')
+assert.equal(suggestLine({ side: 'long', entry: 100, stop: 97, target: 110 }, 2), null)
+// no ATR is no suggestion — the one guess this file will not make
+assert.equal(suggestLine({ side: 'long', entry: 100, stop: null, target: null }, null), null)
+/* the leverage, not the level: a stop one ATR out that sits past the liquidation is a price the
+   exchange would never let it reach, so the trade gets told that instead of a number */
+assert.ok(suggestLine({ side: 'long', entry: 100, stop: null, target: 110, liq: 99 }, 2)
+  ?.includes('past the liq'))
+assert.ok(suggestLine({ side: 'short', entry: 100, stop: null, target: 90, liq: 101 }, 2)
+  ?.includes('past the liq'))
+// …and a liq that leaves room does not trip it
+assert.equal(suggestLine({ side: 'long', entry: 100, stop: null, target: 110, liq: 90 }, 2),
+  'nothing resting — stop at 98.00')
 
 /* ---------- what actually happened: the window opening, and the trade ending ---------- */
 

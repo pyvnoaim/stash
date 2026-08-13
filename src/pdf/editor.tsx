@@ -18,7 +18,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
@@ -468,6 +468,17 @@ export default function Editor({ visible }: { visible: boolean }) {
             disabled={page >= count - 1} onClick={() => setPage(page + 1)}>
             <ChevronRight />
           </Button>
+          {/* Beside the page it acts on, since folded into the Pages menu nobody found it. That
+              does put a bin one button from the arrows you page with — the margin, the red and the
+              named page are what separate them, and ⌘Z takes a page back with its stamps if the
+              reach goes wrong anyway. */}
+          <Button
+            variant="ghost" size="icon-sm" className="text-destructive hover:text-destructive ml-1"
+            title={`Delete page ${page + 1}`} aria-label={`Delete page ${page + 1}`}
+            disabled={count < 2} onClick={drop}
+          >
+            <Trash2 />
+          </Button>
         </div>
 
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
@@ -501,8 +512,7 @@ export default function Editor({ visible }: { visible: boolean }) {
 
         <Separator orientation="vertical" className="data-vertical:h-4 data-vertical:self-center" />
 
-        {/* page work is occasional, so it folds away. Delete also reads better with a full
-            sentence next to it than as a bare bin you might hit while reaching for something */}
+        {/* adding pages is occasional, so it folds away — deleting one lives on the pager */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm">
@@ -515,10 +525,6 @@ export default function Editor({ visible }: { visible: boolean }) {
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => mergeRef.current?.click()}>
               <Upload /> Add another PDF to the end
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" disabled={count < 2} onSelect={drop}>
-              <Trash2 /> Delete page {page + 1}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -698,8 +704,16 @@ export default function Editor({ visible }: { visible: boolean }) {
                     setNotes((ns) => ns.map((n) =>
                       (n.id === note.id ? { ...n, text: e.target.value } : n)))
                   }}
-                  // an empty stamp is one you thought better of
-                  onBlur={() => !note.text && setNotes((ns) => ns.filter((n) => n.id !== note.id))}
+                  /* An empty stamp is one you thought better of. And the Enter you pressed and
+                     never typed on is not a line: the block is measured off the line count, so a
+                     trailing blank one grew it by a full line of nothing — visible as space under
+                     the text, in the preview and in the file both. Trimmed on the way out rather
+                     than on every keystroke, so the box still opens up as you press Enter. */
+                  onBlur={() => setNotes((ns) => ns.flatMap((n) => {
+                    if (n.id !== note.id) return [n]
+                    const text = n.text.replace(/\s+$/, '')
+                    return text ? [{ ...n, text }] : []
+                  }))}
                   className={cn(
                     'h-full w-full resize-none overflow-hidden text-black outline-none',
                     'font-[Helvetica,Arial,sans-serif]',

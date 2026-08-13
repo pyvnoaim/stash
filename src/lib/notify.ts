@@ -138,6 +138,38 @@ export function nakedAlerts(rows: NakedRow[]): Alert[] {
   })
 }
 
+/** The shape the suggestion reads: a fill, which way it faces, and whatever is already resting. */
+export type BareRow = {
+  side: 'long' | 'short'; entry: number
+  stop?: number | null; target?: number | null; liq?: number | null
+}
+
+/**
+ * Where the levels would go on a position that was opened and left bare — the sentence the tile
+ * prints under it. One ATR out for the stop and two for the target, which is the day rule's own
+ * geometry (see dayPlan), read off the fill you already have rather than off a fresh entry: the
+ * trade is on, so where it *should* have been entered is not the question any more.
+ *
+ * Null where there is nothing missing, or no ATR to measure with — a stop invented without one is
+ * the exact guess the rest of this file refuses to make.
+ */
+export function suggestLine(p: BareRow, atrValue: number | null | undefined): string | null {
+  if (atrValue == null || !(p.entry > 0)) return null
+  const long = p.side === 'long'
+  const stop = long ? p.entry - atrValue : p.entry + atrValue
+  /* A stop the leverage cannot afford is not a stop: past the liquidation the exchange takes the
+     trade first, so printing that price would be the desk naming a risk this position does not
+     have. The leverage is the finding then, and it is the more useful sentence anyway. */
+  const room = stop > 0 && (p.liq == null || (long ? stop > p.liq : stop < p.liq))
+  const parts = [
+    p.stop == null && (room ? `stop at ${fmtPrice(stop)}`
+      : 'a stop one ATR out sits past the liq — that is more leverage than this trade can be stopped at'),
+    p.target == null
+      && `target ${fmtPrice(long ? p.entry + atrValue * 2 : p.entry - atrValue * 2)}`,
+  ].filter(Boolean)
+  return parts.length ? `nothing resting — ${parts.join(', ')}` : null
+}
+
 /* ---------- what a setup actually did ---------- */
 
 /**

@@ -14,7 +14,7 @@ import {
 import { GuideDialog } from '@/components/guide-dialog'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
-import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf } from '@/lib/notify'
+import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils'
 import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ANCHOR, ASSETS, assetOf, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
   TREND_NETWORK, usMarketOpen, venueName, priceDigits, readInterval, toll,
   scanBars, scanRead,
@@ -2101,6 +2101,42 @@ function lastOpenCount() {
   } catch { return 0 }
 }
 
+/* Where a stop would go on a position that has none — one ATR out, which is the day rule's own
+   risk unit (see dayPlan). Read off the fill you already have rather than off a fresh entry: the
+   trade is on, so where it *should* have been entered is not the question any more.
+   ponytail: 15m, the desk's trading bar, whatever horizon the page is set to. A position carried
+   for a week wants a wider bar than this one — the suggestion is a floor to argue with, not a
+   number to paste. */
+const SUGGEST_IV: Interval = '15m'
+
+/**
+ * A stop and a target for every open row that is missing one, keyed by asset. One candle call per
+ * naked symbol and none at all on a book where everything already has its levels resting, which is
+ * the usual case — this is the card noticing you just opened something and left it bare.
+ */
+function useSuggested(rows: ExchangePosition[]) {
+  const feed = useVenue()
+  const [atrs, setAtrs] = useState<Record<string, number>>({})
+  // the effect keys off the symbols themselves, so a minute's poll that changed nothing but the
+  // mark does not refetch a day of candles
+  const naked = [...new Set(rows.filter((p) => p.stop == null || p.target == null)
+    .map((p) => assetOf(p.symbol)))].sort().join(',')
+  useEffect(() => {
+    if (feed === undefined || !naked) return
+    let on = true
+    void Promise.all(naked.split(',').map(async (id) => {
+      const a = ASSETS.find((x) => x.id === id)
+      // 200 bars is well past what a 14-period ATR needs, and one call either way
+      const c = a ? await fetchCandles(a, SUGGEST_IV, '', feed, 200).catch(() => []) : []
+      return [id, atr(c)] as const
+    })).then((r) => {
+      if (on) setAtrs(Object.fromEntries(r.filter((x): x is [string, number] => x[1] != null)))
+    })
+    return () => { on = false }
+  }, [naked, feed])
+  return atrs
+}
+
 /** Money the way every tile prints it: signed, two decimals, in the currency the venue quotes. */
 const cashLabel = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
 
@@ -2309,6 +2345,8 @@ function PositionsPlaceholder() {
  */
 export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void }) {
   const { rows, orders, equity, loading } = useExchangePositions()
+  // levels for the rows that have none — the card's answer to "I opened it and set nothing"
+  const atrs = useSuggested(rows)
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
@@ -2391,7 +2429,8 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             from={p.entry} now={p.mark} size={String(p.size)} pnl={p.pnl} value={p.value}
             stop={p.stop} target={p.target} liq={p.liq}
             funding={p.funding}
-            openedAt={p.openedAt} />
+            openedAt={p.openedAt}
+            meta={[suggestLine(p, atrs[assetOf(p.symbol)])]} />
         ))}
         </div>
         {/* Placed and waiting, which is neither a position nor a plan: the exchange is holding it,
