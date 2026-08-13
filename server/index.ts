@@ -31,7 +31,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
-import { closed as mexcClosed, positions as mexcPositions } from './mexc.ts'
+import { closed as mexcClosed, pending as mexcPending, positions as mexcPositions } from './mexc.ts'
 import { createStash } from './mcp.ts'
 import { BARS, MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -558,9 +558,9 @@ export function start({
     q.dropPdoc.run(owner, pid)
   }
 
-  /* The one thing here that reaches back out to an exchange and changes something: armed setups
-     that died unfilled, and the orders resting for them. Built before the push it speaks through
-     — every setup the desk endorses, filed and followed in R. See server/paper.ts. */
+  /* The rule tested forward against itself: every setup the desk endorses, filed the moment it
+     appears and followed to its stop or its target in R, whether or not anyone was at a screen.
+     It touches no exchange and holds no key — public prices and bars only. See server/paper.ts. */
   const paper = createPaper(db)
   /* The notifications that reach a closed app: its own module, its own table, and the minute
      timer that decides when anything is worth a knock. See server/push.ts. */
@@ -1192,7 +1192,7 @@ export function start({
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const stored = [
         { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase), book: (c: any) => bitgetPending(c.key, c.secret, c.passphrase) },
-        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret), book: null },
+        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret), book: (c: any) => mexcPending(c.key, c.secret) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       try {
@@ -1201,7 +1201,7 @@ export function start({
            for its book contributes an empty one rather than failing the call the rows come in. */
         const [feeds, books] = await Promise.all([
           Promise.all(stored.map((v) => v.go(JSON.parse(v.raw!)))),
-          Promise.all(stored.map((v) => (v.book ? v.book(JSON.parse(v.raw!)).catch(() => []) : []))),
+          Promise.all(stored.map((v) => v.book(JSON.parse(v.raw!)).catch(() => []))),
         ])
         return send(res, 200, {
           positions: feeds.flatMap((f, i) => f.positions.map((p) => ({ ...p, venue: stored[i].venue }))),

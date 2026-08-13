@@ -1852,7 +1852,8 @@ type RestingOrder = {
   /** Untouched, as against one that has already begun to fill. */
   live: boolean
   /** Whether it would open a trade rather than close one. On a one-way-mode account the venue does
-   *  not say, and this is true either way — see the note in sweep.ts on what that costs. */
+   *  not say, and this is true either way — so an order that would close a position can read as an
+   *  entry here, which is why nothing on this page turns on it beyond which card claims the order. */
   opens: boolean
   venue?: string
 }

@@ -104,24 +104,23 @@ assert.equal(equityOf(null), null)
 assert.equal(sign('secret', '1', 'get', '/x'), sign('secret', '1', 'GET', '/x'))
 assert.notEqual(sign('secret', '1', 'GET', '/x'), sign('secret', '2', 'GET', '/x'))
 assert.match(sign('secret', '1', 'GET', '/x'), /^[A-Za-z0-9+/]+=*$/)
-/* A POST signs its body too, which is the whole difference between asking what is on the book and
-   telling the exchange to take something off it. Written out longhand against the documented
-   prehash — a signature checked only against itself would pass while signing the wrong string, and
-   a cancel that fails to sign is a cancel that silently does not happen. */
-const body = JSON.stringify({ orderId: '1', symbol: 'DOGEUSDT' })
+/* Written out longhand against the documented prehash as well, not only against itself: a
+   signature compared only to another call of the same function passes while signing the wrong
+   string, and every one of these calls is refused rather than answered when it does. */
 assert.equal(
-  sign('secret', '1', 'POST', '/api/v2/mix/order/cancel-order', body),
-  createHmac('sha256', 'secret').update('1POST/api/v2/mix/order/cancel-order' + body).digest('base64'),
+  sign('secret', '1', 'GET', '/api/v2/mix/order/orders-pending?productType=USDT-FUTURES'),
+  createHmac('sha256', 'secret').update('1GET/api/v2/mix/order/orders-pending?productType=USDT-FUTURES').digest('base64'),
 )
-// and a body left off is a different signature from one sent, rather than quietly the same
-assert.notEqual(sign('secret', '1', 'POST', '/x', body), sign('secret', '1', 'POST', '/x'))
+// the query string is inside the signature, so two feeds off one path are two different asks
+assert.notEqual(sign('secret', '1', 'GET', '/x?a=1'), sign('secret', '1', 'GET', '/x?a=2'))
 
 /* The order rows: the five fields a match may turn on, and the rows that are not a resting limit
-   at a price — a market order has none to compare, an id-less row is nothing to cancel. */
+   at a price — a market order has no price to compare, an id-less row is nothing to match on. */
 const orders = shapeOrders([
   { orderId: '1', symbol: 'dogeusdt', side: 'Sell', price: '0.1985', size: '1210', status: 'live', tradeSide: 'open' },
   { orderId: '2', symbol: 'BTCUSDT', side: 'buy', price: 100, size: 1, status: 'partially_filled', tradeSide: 'close' },
-  // one-way mode says nothing about opening or closing — see the ponytail note in sweep.ts
+  // one-way mode says nothing about opening or closing, so an empty tradeSide reads as opening —
+  // and fillsOf in push.ts is what stops that being trusted on its own
   { orderId: '3', symbol: 'ETHUSDT', side: 'buy', price: 2000, size: 1, status: 'live', tradeSide: '' },
   { orderId: '4', symbol: 'SOLUSDT', side: 'buy', price: '', size: 1, status: 'live' },
   { symbol: 'XRPUSDT', side: 'buy', price: 2, size: 1, status: 'live' },
