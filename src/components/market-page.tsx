@@ -2498,7 +2498,12 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
    trade's name there). The fixed tracks plus the gaps already came to more than a phone is wide,
    so the flexible one — the side — was being squeezed to nothing: a Side heading with no side
    under it, and the money sliding out under the share button. */
-const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,10rem)_1fr_4rem_3.5rem_4.5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_8rem]'
+/* …and capped, which is the same lesson the position tiles already learned: a row stretched across
+   a 2000px window puts what a trade paid a hand's width from the name of the asset that paid it,
+   and the eye has to travel the gap on every line to keep the two together. The dates hold the
+   slack up to the cap and the table simply stops widening after it — a measure, the way any table
+   meant to be read across has one. */
+const LOG_GRID = 'grid max-w-5xl items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,10rem)_1fr_4rem_3.5rem_4.5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_8rem]'
 
 /**
  * A log reads in a window with its column headings pinned, not as a list that runs until the page
@@ -2510,6 +2515,12 @@ const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,
  * Two thirds of the viewport, so a screenful of rows is still a screenful and the card underneath
  * stays visible enough to be known about. The same shape DeskLog's dialog has used all along.
  */
+/** A date the way both logs write one, and the span between two of them. A trade that opened and
+ *  closed inside the same day printed that day twice with an arrow between — "13 Aug → 13 Aug" is
+ *  the most repeated string in the record and it says nothing the single date does not. */
+const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+const ran = (from: number, to: number) => (when(from) === when(to) ? when(to) : `${when(from)} → ${when(to)}`)
+
 const LOG_SCROLL = 'max-h-[60vh] overflow-y-auto'
 /** …and the headings that stay put inside it. `bg-card` because this one sits inside a Card, where
  *  the page background would show as a stripe of the wrong colour under the scrolled rows. */
@@ -2592,7 +2603,6 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
     .map(([name, rs]) => ({ name, n: rs.length, hit: rs.filter(paid).length,
       avg: rs.reduce((s, r) => s + (r.r ?? 0), 0) / rs.length }))
     .sort((a, b) => b.n - a.n)
-  const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 
   return (
     <>
@@ -2702,7 +2712,7 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
                     {r.dir === 'long' ? 'Long' : 'Short'} · {r.interval}
                   </span>
                   <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
-                    {when(r.entryAt ?? r.ts)} → {when(r.closedAt!)}
+                    {ran(r.entryAt ?? r.ts, r.closedAt!)}
                   </span>
                   <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                     {ended}
@@ -2835,7 +2845,6 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
      colour at all rather than the first one's: neither is the answer on its own. */
   const upTotal = money !== null && usd !== null && (money >= 0) !== (usd >= 0)
     ? null : (money ?? usd ?? total) >= 0
-  const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
   /* What a row is worth for the purpose of stacking it. Its own money where it has any, and its R
      where it has none — and dollars and euros are compared as the numbers they are, because the
      alternative is a rate this app refuses to invent for a sum and would then invent for a sort.
@@ -2953,7 +2962,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
                 </span>
                 {/* the two dates that matter: when the window opened and when it was over */}
                 <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
-                  {when(r.entryAt)} → {when(r.closedAt)}
+                  {ran(r.entryAt, r.closedAt)}
                 </span>
                 <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {hit ? 'target' : 'stopped'}
@@ -3236,6 +3245,15 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
                   {p.results.length
                     ? <DeskLog p={p} onPick={onPick} />
                     : <span className="text-muted-foreground text-xs">nothing finished yet</span>}
+                  {/* A flat desk says so, for the reason the empty stat slot does: a name with
+                      nothing under it reads as tiles that failed to arrive rather than as a book
+                      with none in it, and those are the two things this pane exists to tell apart.
+                      On the name's own line rather than under it — as a second line it was one word
+                      of grey alone across the whole card, and the desk it belongs to is a one-line
+                      desk. */}
+                  {!p.open.length && (
+                    <span className="text-muted-foreground shrink-0 text-xs">nothing open right now</span>
+                  )}
                   {!!p.results.length && (
                     /* The same two figures the log's own footer prints, and in the same order, so
                        opening the table never changes the answer the row already gave. */
@@ -3253,12 +3271,6 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
                     </span>
                   )}
                 </div>
-                {/* A flat desk says so, for the reason the empty stat slot did: a name with nothing
-                    under it reads as tiles that failed to arrive rather than as a book with none in
-                    it, and those are the two things this pane exists to tell apart. */}
-                {!p.open.length && (
-                  <p className="text-muted-foreground mt-1.5 text-xs">Nothing open right now</p>
-                )}
                 {/* someone watching thirty setups is a list nobody reads, and it would push every
                     other desk off the page — the count below says what was left out */}
                 <div className={cn('mt-1.5 empty:hidden', TILE_GRID)}>
