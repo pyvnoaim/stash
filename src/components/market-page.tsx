@@ -2537,9 +2537,9 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
 
   if (held) {
     const r = price != null ? rOf(held, price) : null
-    // net of funding, the same subtraction the bell's read-out makes — two numbers for one trade
-    // would be a bug report waiting to be filed
-    const money = r != null ? netOf(held, r, 0, dials.funding, Date.now()) : null
+    // net of funding and the round-trip fee, the same subtraction the bell's read-out makes — two
+    // numbers for one trade would be a bug report waiting to be filed
+    const money = r != null ? netOf(held, r, 0, dials, Date.now()) : null
     const long = held.dir === 'long'
     return (
       <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm">
@@ -2567,8 +2567,9 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
             Not in it any more
           </Button>
           <p className="text-muted-foreground w-full text-xs">
-            {euro(stakeOf(held))} at risk between here and the stop. Funding comes off at the flat
-            rate set in Settings → Markets; fees and the venue's real rate it does not know.
+            {euro(stakeOf(held))} at risk between here and the stop. Funding and the taker fee at
+            both ends come off at the flat rates set in Settings → Markets; the venue's real ones
+            it does not know.
           </p>
         </CardContent>
     )
@@ -2860,8 +2861,9 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
   /* Row by row rather than off the total, because the rows are no longer all the same kind of
      money: one you were in prices itself off its own size and leverage, one that was only ever
      watched off the stake in Settings. Null only when not a single row has a figure at all.
-     Net of funding to the close, the same subtraction the bell's result alert makes. */
-  const cashOf = (r: typeof all[number]) => netOf(r, r.r, stake, dials.funding, r.closedAt)
+     Net of funding to the close and of the fee at both ends, the same subtraction the bell's
+     result alert makes. */
+  const cashOf = (r: typeof all[number]) => netOf(r, r.r, stake, dials, r.closedAt)
   /* An exchange-closed row prints the venue's own dollars instead: it has no size in euros to be
      priced from, and the figure it does have is the settled one — fees and funding already in it,
      rather than this app's flat funding rate over a stake that was never at risk on it. */

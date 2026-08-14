@@ -32,7 +32,7 @@ import type { DatabaseSync } from 'node:sqlite'
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
 import {
-  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, moverMove, opensIn, readInterval, scanBars, scanRead,
+  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, MAINT, moverMove, opensIn, readInterval, scanBars, scanRead,
   type Move,
   SESSIONS, type Candle, type Dials, type Interval,
 } from '../src/lib/market.ts'
@@ -146,10 +146,18 @@ export function alertsOf(
     const reached = (lvl: number) => (long ? p <= lvl : p >= lvl)
     /* Liquidation first, the same order notify.ts reads in: it only beats the stop when the stop
        was set beyond it, and then the exchange ends the trade before the stop ever could. Longhand
-       like stakeOf below, for the same reason. entry ± entry/lev, no maintenance margin. */
+       like stakeOf below, for the same reason — and longhand is why this one went a commit reading
+       the bare margin price while liqOf had already learned to keep a maintenance slice back. Two
+       copies of one number is one of them being wrong for as long as nobody checks. Keep them the
+       same: the bare price decides whether there is a liquidation at all (a 1× long has none), the
+       slice decides where it is, and it can never eat more than half the distance. */
     const took = Number(w.size) > 0 && Number(w.lev) > 0
-    const liqAt = took ? w.entry * (1 + (long ? -1 : 1) / Number(w.lev)) : NaN
-    const liq = isFinite(liqAt) && liqAt > 0 ? liqAt : null
+    const away = long ? -1 : 1
+    const lev = Number(w.lev)
+    const bare = took ? w.entry * (1 + away / lev) : NaN
+    const liq = isFinite(bare) && bare > 0
+      ? w.entry * (1 + away * (1 / lev - Math.min(MAINT, 1 / lev / 2)))
+      : null
     const hit = liq !== null && reached(liq) ? 'liq'
       : reached(w.stop) ? 'stop'
         : (long ? p >= w.target : p <= w.target) ? 'target'
@@ -168,8 +176,8 @@ export function alertsOf(
       continue
     }
     /* What it did, and — where a stake is set — what that is in money. The same arithmetic
-       notify.ts does in the app (rOf × stake): R off the plan's own geometry, nothing bought,
-       no fee counted. Only on an outcome; at the entry nothing has happened yet. */
+       notify.ts does in the app (rOf × stake): R off the plan's own geometry, net of what the
+       trade costs to hold and to make. Only on an outcome; at the entry nothing has happened yet. */
     /* A setup you took prices itself instead: size × leverage is the notional, and the entry-to-stop
        distance is the share of it at risk. Same arithmetic as stakeOf in notify.ts — kept here in
        longhand rather than imported, because market.ts is the one module this process shares with
@@ -184,7 +192,14 @@ export function alertsOf(
        opened, the same arithmetic as fundingOf in notify.ts, longhand for the same reason as the
        stake above. A watched plan pays none; neither does a dial set to 0. */
     const fund = took && w.entryAt ? Number(w.size) * Number(w.lev) * (dialsOf(s).funding / 100) * ((at - w.entryAt) / 28_800_000) : 0
-    const gain = r * stake - fund
+    /* And of the taker fee at both ends — feeOf in notify.ts, longhand for the same reason as the
+       two above. A position states its own notional; a plan's is implied by the stake, which is
+       that stake read back through the entry-to-stop distance it was measured against. */
+    const dist = Math.abs(w.entry - w.stop)
+    const notional = took ? Number(w.size) * Number(w.lev)
+      : dist > 0 && w.entry > 0 && stake > 0 ? (stake * w.entry) / dist : 0
+    const fee = notional * (dialsOf(s).fee / 100) * 2
+    const gain = r * stake - fund - (isFinite(fee) ? fee : 0)
     const paid = hit !== 'entry' && stake > 0 && isFinite(stake) && isFinite(gain)
       ? ` · ${gain >= 0 ? '+' : '−'}${euro(Math.abs(gain))}${took ? '' : ' had you taken it'}`
       : ''

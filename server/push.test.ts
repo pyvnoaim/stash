@@ -48,6 +48,20 @@ assert.ok(at(taken, { BTCUSDT: 79 })[0].body.includes('€50.00 margin is gone')
 assert.equal(at({ watches: [{ ...long.watches[0], stop: 70 }] }, { BTCUSDT: 69 })[0].key, 'watch-w1-stop')
 // a short mirrors: at 5× the short from 100 dies at 120, before its 125 stop
 assert.equal(at({ watches: [{ ...short.watches[0], stop: 125, size: 50, lev: 5 }] }, { BTCUSDT: 121 })[0].key, 'watch-w2-liq')
+/* …and it dies a little before the bare margin price, the maintenance slice liqOf keeps back —
+   80.50 rather than 80. Asserted on the number and not just on the key, because the key fires
+   either way: this file held the bare price for a commit after notify.ts stopped, and nothing
+   here noticed. The whole point of the copy is that both sides say the same thing. */
+assert.ok(at(taken, { BTCUSDT: 79 })[0].body.includes('80.5'))
+
+/* What an outcome paid, net of the round trip — the same subtraction netOf makes in the app.
+   A position states its own notional: €50 at 5× is €250 on the market, 0.05% a side twice is 25
+   cents, and the 2R target on €25-per-R pays €50 gross. */
+const held = { watches: [{ ...long.watches[0], size: 50, lev: 5 }] }
+assert.ok(at(held, { BTCUSDT: 120 })[0].body.includes('+€49.75'))
+/* A plan has no size, so the stake implies one: €200 at risk across the 10-point stop is €2,000
+   of notional and €2 of fee off the €400 it would have paid. */
+assert.ok(at({ ...long, stake: 200 }, { BTCUSDT: 120 })[0].body.includes('+€398.00 had you taken it'))
 
 /* ---------- the bare alarms ---------- */
 

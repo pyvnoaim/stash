@@ -368,7 +368,8 @@ green with a `+`, an expense stays quiet behind a `€`. A charge is not an item
 opens the Subscriptions tool rather than trying to select it.
 
 Trades land on the day they closed, summed beside the day's number in their own money — off the
-size and leverage the position was taken with, net of funding. **Only trades you were actually
+size and leverage the position was taken with, net of funding and of the taker fee at both ends.
+**Only trades you were actually
 in.** The Markets record also keeps setups you watched and never took and prices them off the
 hypothetical stake in Settings, and those are deliberately not here: a day is a thing that
 happened, and a month of what untaken plans would have paid summed beside a month of what was
@@ -622,8 +623,14 @@ gapped through says worse than −1R. Set **What a setup is worth** in Settings 
 you would have had at risk on one, and the same rows read in money too: *+€480.00 had you taken it*,
 and a running total across the lot. Leave it empty and it stays in R.
 
-Nothing here was ever bought. There is no position, no broker, no fee and no slippage in any of it —
-it is the plan's own arithmetic run forward, and the wording never says otherwise. Two more honest
+The taker fee comes off those euros, at the rate set beside the stake and on both ends of the
+trip. A position states the notional it pays that on; a plan has none, so the stake implies one —
+the size at which the entry-to-stop distance is worth exactly what you said it was. It is the same
+fee the plan's own risk-to-reward was quoted after, which is the point: *1.8R after fees* above
+*+€480* that was gross of them was one of those two numbers lying.
+
+Nothing here was ever bought. There is no position, no broker and no slippage in any of it — it is
+the plan's own arithmetic run forward, and the wording never says otherwise. Two more honest
 limits: a level crossed while every device is shut is noticed at the next look, so the exit written
 down is the price then rather than the price at the crossing — the record shows both dates, so a
 suspiciously good number can be read for what it is. And the ledger only ever counts setups you

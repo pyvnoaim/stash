@@ -650,6 +650,20 @@ export const DIALS: Dials = {
   fee: 0.05,
 }
 
+/**
+ * A venue's maintenance margin: the slice of the position it keeps back, so it closes you while
+ * there is still something to close rather than at the price where the margin is exactly gone.
+ * Not a dial — nobody sets their own exchange's rules — and it lives here rather than beside the
+ * liquidation maths in notify.ts because the push server cannot import that file and had its own
+ * copy of the number, which is how the two spent a commit disagreeing about where a trade dies.
+ *
+ * ponytail: one flat rate for every venue, asset and size — a real one steps up in tiers with the
+ * notional, and the tables differ per exchange. Half a percent is the low tier on the majors at
+ * both venues here. The direction matters more than the number: a warning about this price has to
+ * arrive *before* the exchange acts, and the bare margin price arrives after.
+ */
+export const MAINT = 0.005
+
 /** What each dial may be set to. A bite of zero is every tick of every day, and there is no
  *  wording for a bell that never stops — so the range is part of the dial, not advice beside it. */
 const RANGE: Record<keyof Dials, [number, number]> = {

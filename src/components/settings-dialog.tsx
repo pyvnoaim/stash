@@ -351,8 +351,9 @@ function MarketsPanel() {
       <Section
         title="What a setup is worth"
         hint="The euros you would have had at risk on one saved setup. It is the only number
-          behind “had you taken it” on the record of how they went: that R times this. Nothing is
-          ever bought here, no fee is counted, and left empty the record simply reads in R."
+          behind “had you taken it” on the record of how they went: that R times this, less the
+          taker fee on the position such a risk implies. Nothing is ever bought here, and left
+          empty the record simply reads in R."
       >
         {/* a comma is what a German keyboard types and what the Subscriptions header shows back */}
         <Input
@@ -530,7 +531,7 @@ const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string
   { k: 'funding', label: 'Perp funding', unit: '%/8h',
     hint: 'What holding a leveraged position quietly costs: this share of the notional per 8 hours comes off every position\'s read-out. One flat rate for everything — 0.01 is the venues\' calm-market baseline. Zero turns the estimate off.' },
   { k: 'fee', label: 'Taker fee', unit: '% a side',
-    hint: 'What crossing the spread costs, each way. Every setup\'s risk-to-reward is quoted after it — paid once getting in and once getting out, which is why a stop costs a little more than 1R and a target pays a little less. 0.05 is the standard perp tier; a maker rebate or a spot account is lower. Zero shows the gross ratio every other chart tool quotes.' },
+    hint: 'What crossing the spread costs, each way. Every setup\'s risk-to-reward is quoted after it — paid once getting in and once getting out, which is why a stop costs a little more than 1R and a target pays a little less — and so is every euro figure beside one, on the bell, the record and the calendar alike. 0.05 is the standard perp tier; a maker rebate or a spot account is lower. Zero shows the gross ratio every other chart tool quotes.' },
   { k: 'setupAgree', label: 'Setups worth a knock', unit: 'of 6',
     hint: 'The scan reads every keyless chart on all six timeframes and grades the ones whose entry is here right now. This is how many of the six have to lean that way before your phone hears about it — the setup\'s own timeframe always counts itself, so 1 is every one of them and 0 is off. Raise it if the bell is loud: a "Buy now" only the fastest chart can see is the one most likely to be noise. Held back by the quiet hours, unlike a level you saved yourself.' },
   { k: 'openIn', label: 'Before a market opens', unit: 'min',

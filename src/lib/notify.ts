@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { isPosition, nextCharge, RESULT_FRESH, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
-import { ASSETS, assetOf, DIALS, fmtPrice, moverMove, venueName, type Dials, type Trend } from './market.ts'
+import { ASSETS, assetOf, DIALS, fmtPrice, MAINT, moverMove, venueName, type Dials, type Trend } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -57,7 +57,7 @@ export function watchAlerts(
        its entry or through its stop, and both of those already have the word for it. */
     if (w.entryAt && !hit) {
       // funding comes off the running read-out — the number on a held perp is net of what holding costs
-      const money = netOf(w, rOf(w, p), stake, d.funding, at)
+      const money = netOf(w, rOf(w, p), stake, d, at)
       return [{
         // no level in the id: this one alert is the whole running read-out, and dismissing it is
         // saying "stop telling me about this trade until it ends", which it then does
@@ -340,24 +340,46 @@ export const fundingOf = (w: Pick<Watch, 'size' | 'lev' | 'entryAt'>, rate: numb
   // max(0): an entryAt ahead of this clock — skew, or a hand-edited doc — must not pay you funding
   (isPosition(w) && w.entryAt && rate > 0 ? w.size! * w.lev! * (rate / 100) * (Math.max(0, at - w.entryAt) / 28_800_000) : 0)
 
-/** The row's cash at `r`, net of funding to `at` — null when nothing prices it. The one
- *  subtraction the bell, the record, the held-position card and the calendar all make; changing
- *  how money nets out means changing it here, once. */
-export const netOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev' | 'entryAt'>, r: number, stake: number, rate: number, at: number) => {
-  const gross = moneyOf(r, stakeOf(w, stake))
-  return gross === null ? null : gross - fundingOf(w, rate, at)
+/**
+ * What the trade is holding, in the currency it is priced in — the number a fee is a percentage of.
+ * A position says so itself: size × leverage. A plan nobody took has no size, so the hypothetical
+ * stake implies one — the notional at which the entry-to-stop distance is worth exactly that stake,
+ * which is `stakeOf` read backwards and agrees with it on a real position.
+ */
+export const notionalOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake = 0) => {
+  if (isPosition(w)) return w.size! * w.lev!
+  const dist = Math.abs(w.entry - w.stop)
+  // a stop on the entry implies an infinite position for any stake at all — no distance, no figure
+  return dist > 0 && w.entry > 0 && stake > 0 ? (stake * w.entry) / dist : 0
 }
 
 /**
- * A venue's maintenance margin: the slice of the position it keeps back, so it closes you while
- * there is still something to close rather than at the price where the margin is exactly gone.
+ * The round trip: in and out, one taker fee on the notional each side. Twice the dial, which is the
+ * same two-sided count `toll` in market.ts makes when it prices a rule's edge against its costs.
  *
- * ponytail: one flat rate for every venue, asset and size — a real one steps up in tiers with the
- * notional, and the tables differ per exchange. Half a percent is the low tier on the majors at
- * both venues here. The direction is what matters more than the number: an alert on this price has
- * to arrive *before* the exchange acts, and the bare margin price arrives after.
+ * ponytail: the entry's notional charged for both sides, where the exit's is the position at
+ * whatever price it closed at. On a 2R winner that understates the exit fee by a fraction of a
+ * percent of a fraction of a percent. A maker fill pays less than this and sometimes is paid; the
+ * dial is one number because a fill type is not something a saved setup remembers.
  */
-const MAINT = 0.005
+export const feeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake: number, fee: number) =>
+  (fee > 0 ? notionalOf(w, stake) * (fee / 100) * 2 : 0)
+
+/**
+ * The row's cash at `r`, net of what the trade costs to hold and to make: funding to `at`, and the
+ * taker fee at both ends. Null when nothing prices it. The one subtraction the bell, the record,
+ * the held-position card and the calendar all make; changing how money nets out means changing it
+ * here, once.
+ *
+ * It takes the whole dial set rather than one rate because it used to take one, and the day a
+ * second cost was added every call site had to be found and edited to keep saying the truth. The
+ * plan beside these figures has been graded net of the fee since `tradePlan` learned to — reading
+ * "1.8R after fees" above "+€480" that was gross of them was one number contradicting the other.
+ */
+export const netOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev' | 'entryAt'>, r: number, stake: number, d: Dials, at: number) => {
+  const gross = moneyOf(r, stakeOf(w, stake))
+  return gross === null ? null : gross - fundingOf(w, d.funding, at) - feeOf(w, stake, d.fee)
+}
 
 /**
  * Where the exchange takes the position away — entry ± entry × (1/lev − maintenance). Only a
@@ -429,7 +451,7 @@ export function resultAlerts(results: Result[], stake: number, at = Date.now(), 
   return results.filter((r) => at - r.closedAt < RESULT_FRESH).map((r) => {
     const won = r.level === 'target'
     // what it paid, net of the funding the holding quietly cost — accrued to the close, not to now
-    const money = netOf(r, r.r, stake, d.funding, r.closedAt)
+    const money = netOf(r, r.r, stake, d, r.closedAt)
     const who = r.horizon ? `${r.label} · ${r.horizon}` : r.label
     return {
       id: `result-${r.id}`,

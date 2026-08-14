@@ -95,8 +95,13 @@ assert.equal(run(105)[0].title, 'Bitcoin · Trading is up 1.00R')
 assert.equal(run(105)[0].id, 'watch-w1-open')
 assert.equal(run(105)[0].tone, 'info')
 assert.ok(run(105)[0].detail.includes('from the long entry at')) // no stake → no euros invented
-assert.ok(run(105, 200)[0].detail.includes('+€200'))
-assert.ok(run(102.5, 200)[0].detail.includes('+€100')) // half the distance, half the money
+/* €200 gross, less the round trip. A plan has no size of its own, so the stake implies one: €200
+   at risk across a 5% stop is €4,000 of notional, and 0.05% a side twice is €4. The fee comes off
+   a plan where funding does not — funding is what holding costs and a plan holds nothing, while
+   the fee is paid the moment you are in and out, at two prices the plan itself already names. */
+assert.ok(run(105, 200)[0].detail.includes('+€196'))
+// half the distance, half the money — but the same trip in and out, so the same €4
+assert.ok(run(102.5, 200)[0].detail.includes('+€96'))
 // a short runs the other way: open at 100, price 95 is 1R of profit
 const runShort = (p: number) => watchAlerts([{ ...short, entryAt: 1 }], { BTCUSDT: p })
 assert.equal(runShort(95)[0].title, 'Bitcoin · Trading is up 1.00R')
@@ -117,19 +122,22 @@ assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }, 200), [])
 const position: Watch = { ...running, size: 100, lev: 10 }
 // at = the entryAt: nothing has been held for any time yet, so no funding muddies the geometry
 const pos = (p: number, at = 1) => watchAlerts([position], { BTCUSDT: p }, 999, undefined, at)
-assert.ok(pos(105)[0].detail.includes('+€50'))
+// €50 gross, less €1 of fee — a position states its own notional, and €1,000 crossed twice at
+// 0.05% is a euro whether it won or lost
+assert.ok(pos(105)[0].detail.includes('+€49'))
 assert.ok(pos(105)[0].detail.includes('on your position'))
 assert.ok(!pos(105)[0].detail.includes('had you taken it'))
-assert.ok(pos(102.5)[0].detail.includes('+€25'))
-// leverage is the part that has to reach the money: the same €100 at 1× is a tenth of it
-assert.ok(pos(105)[0].detail.includes('+€50') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, 999, undefined, 1)[0].detail.includes('+€5'))
-/* Funding comes off a held position's read-out: €1,000 notional at the default 0.01%/8h is 10
-   cents a window, three windows in a day — +€50 gross reads +€49.70 held for one. A plan holds
-   nothing and still reads its full €200. */
-assert.ok(pos(105, 1 + 24 * 3600_000)[0].detail.includes('+€49.70'))
-assert.ok(run(105, 200)[0].detail.includes('+€200'))
+assert.ok(pos(102.5)[0].detail.includes('+€24'))
+// leverage is the part that has to reach the money: the same €100 at 1× is a tenth of it, and its
+// notional is a tenth too, so the fee it pays is ten cents rather than a euro
+assert.ok(pos(105)[0].detail.includes('+€49') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, 999, undefined, 1)[0].detail.includes('+€4.90'))
+/* Funding comes off on top of it, and only on a held position: €1,000 notional at the default
+   0.01%/8h is 10 cents a window, three windows in a day — +€49 net of the fee reads +€48.70 held
+   for one. Zero the two dials and the gross figure is back. */
+assert.ok(pos(105, 1 + 24 * 3600_000)[0].detail.includes('+€48.70'))
+assert.ok(watchAlerts([position], { BTCUSDT: 105 }, 999, dialsOf({ dials: { funding: 0, fee: 0 } }), 1)[0].detail.includes('+€50'))
 // half a position is no position: without both numbers it falls back to the stake, as it always did
-assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€200'))
+assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€196'))
 
 /* Liquidation: at 10× the long from 100 has its margin gone at 90 and is closed a little before,
    at 90.5 — the exchange keeps half a percent back. A stop inside that (95) ends the trade first
@@ -262,12 +270,13 @@ assert.equal(one(0).title, 'Bitcoin · Trading hit target')
 assert.ok(one(0).detail.startsWith('+2.00R'))
 assert.ok(!one(0).detail.includes('€'))
 
-// with one, the money is that R times the stake — and the wording never says it was traded
-assert.ok(one(200).detail.includes('+€400.00'))
+// with one, the money is that R times the stake, less the round trip it would have paid — €4 on
+// the €4,000 a €200 risk implies across this stop — and the wording never says it was traded
+assert.ok(one(200).detail.includes('+€396.00'))
 assert.ok(one(200).detail.includes('had you taken it'))
-// a loss reads as one, sign and all
+// a loss reads as one, sign and all, and the fee is on the losing side of it too
 assert.equal(one(200, { level: 'stop', r: -1, exit: 95 }).title, 'Bitcoin · Trading stopped out')
-assert.ok(one(200, { level: 'stop', r: -1, exit: 95 }).detail.includes('−€200.00'))
+assert.ok(one(200, { level: 'stop', r: -1, exit: 95 }).detail.includes('−€204.00'))
 assert.equal(one(200, { level: 'stop', r: -1 }).tone, 'warn')
 
 // it is news for half a day, and a record after that — the desk keeps it, the bell lets it go

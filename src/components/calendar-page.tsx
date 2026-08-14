@@ -223,7 +223,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
          no money against it rather than as nothing at all. */
       if (!isReal(r)) continue
       const key = stamp(new Date(r.closedAt))
-      const cash = r.cash != null ? null : netOf(r, r.r, 0, s.dials.funding, r.closedAt)
+      const cash = r.cash != null ? null : netOf(r, r.r, 0, s.dials, r.closedAt)
       const at = m.get(key) ?? { cash: null, usd: null, r: 0, unpricedR: 0 }
       at.r += r.r
       if (r.cash != null) at.usd = (at.usd ?? 0) + r.cash
@@ -232,7 +232,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
       m.set(key, at)
     }
     return m
-  }, [s.results, s.dials.funding])
+  }, [s.results, s.dials])
 
   /* What the subscribed calendar has on these days, if there is one. The server fetches and caches
      it, so paging back and forth over a month costs one request each way and nothing after that.
