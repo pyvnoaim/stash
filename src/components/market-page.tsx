@@ -26,7 +26,7 @@ import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, re
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, swings, tally, trendFilter,
+  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, tally, trendFilter,
   TREND_NETWORK, usMarketOpen, venueName, priceDigits, readInterval, toll,
   scanBars, scanRead,
   type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
@@ -35,10 +35,27 @@ import {
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
 const GROUPS = ASSETS.reduce<Record<string, Asset[]>>((m, a) => ((m[a.group] ??= []).push(a), m), {})
 
-const PRESETS = [
-  { id: 'standard', label: 'Standard' },
-  { id: 'orb', label: 'Opening range' },
+/**
+ * How the desk is reading, as one switch.
+ *
+ * It was two — a horizon (Trading / Investing) and a preset (Standard / Opening range) — which is a
+ * 2×2 whose fourth square, a daily opening range, has never meant anything. Two trays in the toolbar
+ * and two words to learn for one question: which rule is talking.
+ *
+ * The store still keeps both fields separately, because the push server and the paper desk read them
+ * as they are (see push.ts, paper.ts) and the stored document's shape is an API. This is the UI
+ * flattening them, not a migration.
+ */
+const modeHint = (h: Horizon) =>
+  `${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule. ${HORIZONS[h].measured}`
+
+const MODES = [
+  { id: 'short', label: 'Trading', hint: modeHint('short') },
+  { id: 'long', label: 'Investing', hint: modeHint('long') },
+  { id: 'orb', label: 'Opening range',
+    hint: "The first 15 minutes of the US session as the day's range — breaks of it are the trade, and the bars are pinned to 15m" },
 ] as const
+type Mode = (typeof MODES)[number]['id']
 
 /** One session open on the chart: where it sits, whose it is, and when — in the reader's own clock. */
 type SessionMark = { x: number; color: string; label: string; t: number; future: boolean }
@@ -56,18 +73,26 @@ const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops be
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 /**
- * The page's three sittings. `chart` is where you land — it is the asset you asked for.
+ * The page's three sittings, and there used to be five.
  *
- * The Log stands whether or not anything has finished. It used to appear only once a setup had
- * closed, which hid the one place the app keeps your results from exactly the person who has not
- * got any yet — and a tab that shows up unannounced later is one you never learn to look for.
+ * The three that went are all one question — how did trades go — asked of three different books:
+ * your own, the rule's, and everyone else's. Three tabs for that put the comparison a click apart in
+ * each direction, and left the toolbar carrying five pills before it got to the asset. They are one
+ * tab with a switch on it now (see RECORDS), which is where a comparison belongs.
+ *
+ * `chart` is where you land — it is the asset you asked for.
  */
 const TABS = [
-  { id: 'chart', label: 'Chart', hint: 'This asset: the verdict, the levels, the chart, the readings behind the call, and what the rule did on these bars' },
-  { id: 'scan', label: 'Scan', hint: 'Every other asset on every timeframe, and what is trending on-chain' },
-  { id: 'people', label: 'People', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
-  { id: 'record', label: 'Log', hint: 'Every finished trade: what it paid, why you took it, and a card of it to share. Hit rate and expectancy by rule.' },
-  { id: 'paper', label: 'Paper', hint: 'The rule tested forward: every setup the desk endorsed, filed automatically and followed to its stop or target. Nothing traded.' },
+  { id: 'chart', label: 'Chart' },
+  { id: 'scan', label: 'Scan' },
+  { id: 'record', label: 'Record' },
+] as const
+
+/** Whose finished trades. One question, three books — see the note on TABS. */
+const RECORDS = [
+  { id: 'mine', label: 'Yours', hint: 'Every finished trade of yours: what it paid, and a card of it to share. Hit rate and expectancy by rule.' },
+  { id: 'paper', label: 'The rule', hint: 'The rule tested forward: every setup the desk endorsed, filed by the server and followed to its stop or target. Nothing traded.' },
+  { id: 'people', label: 'The others', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -182,24 +207,30 @@ export default function MarketPage() {
   // preset, for the extra reason that the push server scans on whatever they say (see push.ts).
   const setAsset = setMarketAsset
   const setInterval = setMarketInterval
+  /* The two store fields as the one switch the toolbar shows — see MODES. Leaving the opening range
+     always releases the 15m pin, which is why the interval is set unconditionally here where the
+     old two-tray version only did it while the preset happened to be Standard. */
+  const mode: Mode = preset === 'orb' ? 'orb' : horizon
+  const setMode = (m: Mode) => {
+    if (m === 'orb') { setMarketPreset('orb'); setMarketHorizon('short'); return }
+    setMarketPreset('standard'); setMarketHorizon(m); setMarketInterval(HORIZONS[m].interval)
+  }
   const [candles, setCandles] = useState<Candle[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
   const phone = useIsMobile() // which verbs the chart's footer offers — pinch and tap, or wheel
-  const setPreset = setMarketPreset
-  const setHorizon = setMarketHorizon // standing preference, same as the asset — see the store
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
   const [guide, setGuide] = useState<Signal | null>(null) // the reading whose explainer is open
   const [showWhy, setShowWhy] = useState(false) // the readings behind the verdict, folded by default
-  /* Swing pivots and the range they span, over the price. On by default — they are the levels every
-     other reading on this page is quietly measured against, and the chart used to draw the verdict's
-     conclusions without ever showing the structure they came from. A toggle rather than always-on
-     because this chart already carries MAs, sessions, a plan and a live position, and there are days
-     you want the candles back. */
+  /* The unbroken swings, the range they span, and the gaps price has not come back for. On by
+     default — they are the levels every other reading on this page is quietly measured against, and
+     the chart used to draw the verdict's conclusions without ever showing the structure they came
+     from. A toggle rather than always-on because this chart already carries MAs, sessions, a plan
+     and a live position, and there are days you want the candles back. */
   const [structure, setStructure] = useState(true)
   /* The second panel under the price. Every one of these was already computed and voting on the
      verdict while being impossible to see: the guides draw RSI, MACD and volume as pictures and
@@ -447,9 +478,6 @@ export default function MarketPage() {
     else if (mk.future && atEdge && !last.future) labelled[labelled.length - 1] = mk
   }
 
-  // only the sessions that actually landed a line get a legend entry
-  const shownSessions = SESSIONS.filter((s) => marks.some((mk) => mk.label === s.label))
-
   // opening-range levels + breakout signal, computed off the full window so the 00:00 bar is found.
   // memoised so it doesn't re-scan (and re-spread) the whole candle array on every hover re-render
   const range = useMemo(() => (preset === 'orb' && candles.length ? orb(candles) : null), [preset, candles])
@@ -469,12 +497,11 @@ export default function MarketPage() {
      is the exact drift sharing the pivot definition was meant to rule out.
      Indices survive the slice, so they stay absolute into `candles` for the window maths below. */
   const closed = useMemo(() => candles.slice(0, -1), [candles])
-  /* Pivots off every closed bar rather than the drawn window: a pivot is a fact about the bars
-     either side of it, and rescanning the visible slice would invent one at each edge and make them
-     shuffle as you pan. Filtered to the window at draw time instead. */
-  const pivots = useMemo(() => (structure && closed.length ? swings(closed) : []), [structure, closed])
-  /* …and the two nobody has closed through yet, which are the only ones worth a line across the
-     chart. The rest are marked where they happened and left there. */
+  /* The two swings nobody has closed through yet, which are the only ones worth drawing: a break of
+     one is news, and the rest is a scatter of dots about levels that have already been settled.
+     Off every closed bar rather than the drawn window — a pivot is a fact about the bars either side
+     of it, and rescanning the visible slice would invent one at each edge and make them shuffle as
+     you pan. Filtered to the window at draw time instead. */
   const standing = useMemo(
     () => (structure && closed.length ? standingSwings(closed) : { high: null, low: null }),
     [structure, closed],
@@ -697,17 +724,13 @@ export default function MarketPage() {
     ...(liq != null ? [{ label: 'liq', lvl: liq, w: 1, dash: '1 3', op: 0.8 }] : []),
   ]
 
-  /* The range, as the two bands the rest of the page already leans on: the near swing band — what
-     "support / resistance" has always meant here, and where the stop goes — and the wider one three
-     windows back that the target aims at. A far level that has collapsed onto its near twin (not
-     enough history fetched to have a wider band yet) is dropped rather than drawn twice. */
+  /* The range price is working inside: the near swing band — what "support / resistance" has always
+     meant here, and where the stop goes.
+     The wider band three windows back used to be drawn with it, at a 40%-opacity 1-4 dash. It is
+     what the holding rule's target aims at, and the target already has a line of its own; two more
+     hairlines nobody could name were two more of the dozen this chart draws. */
   const rangeLines = view && structure
-    ? ([
-        { label: 'range high', lvl: view.resistance, near: true },
-        { label: 'range low', lvl: view.support, near: true },
-        { label: 'wide high', lvl: view.levels.farHigh, near: false },
-        { label: 'wide low', lvl: view.levels.farLow, near: false },
-      ] as const).filter((l) => l.near || (l.lvl !== view.resistance && l.lvl !== view.support))
+    ? [{ label: 'range high', lvl: view.resistance }, { label: 'range low', lvl: view.support }]
     : []
 
   // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
@@ -741,10 +764,6 @@ export default function MarketPage() {
      line starting off the edge of the view says the level came from somewhere it didn't. */
   const standingLines = [standing.high, standing.low]
     .filter((s): s is Swing => !!s && s.i < stop && s.price >= lo && s.price <= hi)
-  // the pivots the window actually shows, off the full-history scan above
-  const visPivots = structure
-    ? pivots.filter((p) => p.i >= start && p.i < stop && p.price >= lo && p.price <= hi)
-    : []
   /* The gaps worth a box here: made by a bar the window has reached, and overlapping the frame at
      all — a gap entirely above or below what is drawn would clamp to a hairline at the edge and
      read as a level rather than as the hole it is. Clamped rather than dropped when it only partly
@@ -770,15 +789,12 @@ export default function MarketPage() {
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
   const up = change >= 0
-  const [at, setTab] = useState<(typeof TABS)[number]['id']>('chart')
+  const [tab, setTab] = useState<(typeof TABS)[number]['id']>('chart')
+  // which book the Record tab is showing — see RECORDS
+  const [book, setBook] = useState<(typeof RECORDS)[number]['id']>('mine')
   // which tabs have ever been opened — see the note by the Scan below
   const [seen, setSeen] = useState<Partial<Record<(typeof TABS)[number]['id'], boolean>>>({ chart: true })
-  /* All of them, always. The Record used to appear only once something had finished, which meant the
-     one place the app keeps your results was invisible to anyone who had not got any yet — a tab
-     you cannot find until you no longer need to be told it exists. Empty, it says what lands there.
-     Which also retires the fallback that stood here: nothing takes a tab away mid-session any more,
-     so `at` is always one of them. */
-  const tab = at
+  const goChart = (id: string) => { setAsset(id); setTab('chart') }
 
   // date under the crosshair; intraday intervals want the time too
   const stamp = (ms: number) => new Date(ms).toLocaleString(undefined, {
@@ -788,18 +804,18 @@ export default function MarketPage() {
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
-      {/* asset picker — a grouped dropdown, too many now for a pill row */}
+      {/* The three questions this row is allowed to ask, in the order they get read: which page,
+          which asset, which rule. It used to carry six trays and sixteen controls — the pages, the
+          asset, the horizon, the bar size, the preset, three indicator panels, a structure toggle,
+          a live switch and a refresh — wrapping onto two and three lines on an ordinary window.
+
+          Everything that only decides what is *drawn* now lives on the chart card itself, where the
+          thing it changes is. And a control is only here on a tab that reads it: the Record has no
+          asset and no rule, so its toolbar is three pills and nothing else. */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* One question per tab. The page was ten cards in one scroll — the chart, the sweep over
-            every other asset, what everyone else is in, and the record of how the saved ones went
-            are separate sittings, and stacking them meant the answer to the one you came for was
-            somewhere in the middle. First in the toolbar rather than on a row of its own: which
-            page you are on is read before which asset it is about, and a row holding four pills
-            was a whole line of blank to the right of them. */}
         <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
-          {/* No tooltip: these are the four pages, and a page you can see the name of does not need
-              a paragraph explaining it — it needs clicking. The same two states every other group in
-              this row has: secondary for the one that is on, muted ghost for the rest. */}
+          {/* No tooltip: these are the three pages, and a page you can see the name of does not need
+              a paragraph explaining it — it needs clicking. */}
           {TABS.map(({ id, label }) => (
             <Button
               key={id}
@@ -812,147 +828,83 @@ export default function MarketPage() {
             </Button>
           ))}
         </div>
-        <span className="bg-border mx-1 hidden h-5 w-px sm:block" />
-        <Select value={asset} onValueChange={setAsset}>
-          {/* Not a pill: the groups either side of it are one-of-N switches, and an outlined box the
-              same height and radius sitting between them read as a third one. This is the thing the
-              whole row is *about*, so it says so with the logo and its name and nothing else —
-              borderless, narrower, and quiet until you go near it. */}
-          {/* 32px, the height of a tray: a h-7 button in p-0.5. Written as the data-variant because
-              SelectTrigger's own `data-[size=default]:h-8` is an attribute selector and outranks a
-              plain `h-9` — which is why every attempt to match this row left it a size short. */}
-          <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
-            <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
-          </SelectTrigger>
-          <SelectContent position="popper">
-            {Object.entries(GROUPS).map(([group, list]) => (
-              <SelectGroup key={group}>
-                <SelectLabel>{group}</SelectLabel>
-                {list.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    <span className="flex items-center gap-2"><AssetLogo src={a.logo} /> {a.label}</span>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ))}
-          </SelectContent>
-        </Select>
-        {/* trade horizon — swaps the strategy, not just the speed. The MA pair (50/200 vs 9/21) and
-            the bar size move with it, but so does the rule those numbers feed: accumulation on one
-            side, a fixed-2R day trade on the other. Opening range pins 15m, so there the interval is
-            left alone. */}
-        <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
-          {(Object.keys(HORIZONS) as Horizon[]).map((h) => (
-            <Hint key={h} label={`${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule. ${HORIZONS[h].measured}`}>
-              <Button size="sm" variant={horizon === h ? 'secondary' : 'ghost'}
-                className={cn('h-7', horizon !== h && 'text-muted-foreground')}
-                onClick={() => { setHorizon(h); if (preset === 'standard') setInterval(HORIZONS[h].interval) }}>
-                {HORIZONS[h].label}
-              </Button>
-            </Hint>
-          ))}
-        </div>
-        {/* what you're looking at, then how you're looking at it. No divider between these two:
-            the row wraps here on most windows, and a rule at the end of a line separates a cluster
-            from nothing at all. The one after the tabs stays, because that one never wraps.
-
-            Flat, not nested: a flex item cannot be split across lines, so wrapping these four trays
-            in one div meant they all dropped to a second row together the moment the last of them
-            did not fit — a whole line of blank to the right of the first row, and a whole line of
-            blank to the right of the second. Loose in the same flex, they fill the width they have
-            and only what is actually over the edge goes down. */}
-          {/* opening range pins 15m, so the interval picker only shows in Standard */}
-          {preset === 'standard' && (
-            /* A dropdown, like the asset: six pills is the widest thing in this bar and five of
-               them are always the wrong answer. The trigger wears the tray's own fill so the row
-               still reads as one set of controls rather than a switch and a form field. */
-            <Select value={interval} onValueChange={(v) => setInterval(v as Interval)} disabled={horizon === 'long'}>
-              <Hint label={horizon === 'long'
-                ? 'Investing is read on daily bars, because that is what its rule is written in — a close under the 200-MA means a day, and 200 four-hour bars is a month. Switch to Trading to pick the bar size.'
-                : 'Bar size — how much time one candle covers. Every reading below is measured on these bars.'}>
-                <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 disabled:opacity-100 [&_svg]:size-3.5">
-                  {/* the value written out, the way the asset trigger does it — this file never
-                      imported SelectValue and does not need it for a string */}
-                  <span>{interval}</span>
-                </SelectTrigger>
-              </Hint>
-              <SelectContent position="popper">
-                {INTERVALS.map((iv) => (
-                  <SelectItem key={iv} value={iv} className="tabular-nums">{iv}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
-            {PRESETS.map((p) => (
-              <Hint key={p.id} label={p.id === 'standard'
-                ? 'The moving-average read: pull-backs to the fast MA, with the range and the trend filter around it'
-                : "The first 15 minutes of the US session as the day's range — breaks of it are the trade, and the bars are pinned to 15m"}>
-                <Button size="sm" variant={preset === p.id ? 'secondary' : 'ghost'}
-                  className={cn('h-7', preset !== p.id && 'text-muted-foreground')} onClick={() => setPreset(p.id)}>
-                  {p.label}
-                </Button>
-              </Hint>
-            ))}
-          </div>
-          {/* the panel under the price — the readings that were voting while invisible */}
-          <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
-            {/* No "None" button: the one that is on turns itself off. Three pills instead of four,
-                and the way out of a panel is the thing you clicked to get into it. */}
-            {([
-              ['volume', 'Vol', 'Volume per bar, under the price — how much agreed with the move'],
-              ['rsi', 'RSI', 'RSI(14) with its 30 and 70 lines — one of the votes in the tally above'],
-              ['macd', 'MACD', 'MACD 12/26 and its 9 signal — the cross the verdict reads, drawn'],
-            ] as const).map(([id, label, hint]) => (
-              <Hint key={id} label={panel === id ? `${hint}. Click to close the panel.` : hint}>
-                <Button size="sm" variant={panel === id ? 'secondary' : 'ghost'}
-                  className={cn('h-7', panel !== id && 'text-muted-foreground')}
-                  onClick={() => setPanel(panel === id ? 'none' : id)}>
-                  {label}
-                </Button>
-              </Hint>
-            ))}
-          {/* swings and the range they span — off is for reading the candles on their own. In the
-              same tray as the panels: every switch in here answers "what is drawn on the chart",
-              and four trays in a row for one question each is what made this bar feel like a lot. */}
-          <Hint label={structure
-            ? 'Structure — swing highs and lows, the range they span, and the gaps price has not come back for. Click to hide.'
-            : 'Structure — swing highs and lows, the range they span, and the gaps price has not come back for. Off.'}>
-            <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
-              aria-pressed={structure} className={cn('size-7', !structure && 'text-muted-foreground')}
-              onClick={() => setStructure((v) => !v)}>
-              <Waypoints className="size-3.5" />
-            </Button>
-          </Hint>
-          </div>
-          {/* the controls that are not about the chart in front of you: whether the feed is
-              updating, and asking it to update now */}
-          <div className="bg-muted/50 flex items-center gap-1 rounded-lg p-0.5">
-          {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
-          <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
-            : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
-            <Button size="sm" variant="ghost" className={cn('h-7 gap-1.5', (!live || stale) && 'text-muted-foreground')}
-              onClick={() => setLive((v) => !v)}>
-              <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
-              Live
-            </Button>
-          </Hint>
-          <Hint label="Refresh">
-            <Button size="icon" variant="ghost" aria-label="Refresh" className="size-7" onClick={() => setNonce((n) => n + 1)}>
-              <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            </Button>
-          </Hint>
-          </div>
+        {tab !== 'record' && <span className="bg-border mx-1 hidden h-5 w-px sm:block" />}
+        {/* the asset is the chart's subject and nothing else on this page has one */}
+        {tab === 'chart' && (
+          <Select value={asset} onValueChange={setAsset}>
+            {/* Not a pill: the groups either side of it are one-of-N switches, and an outlined box the
+                same height and radius sitting between them read as a third one. This is the thing the
+                whole row is *about*, so it says so with the logo and its name and nothing else —
+                borderless, narrower, and quiet until you go near it. */}
+            {/* 32px, the height of a tray: a h-7 button in p-0.5. Written as the data-variant because
+                SelectTrigger's own `data-[size=default]:h-8` is an attribute selector and outranks a
+                plain `h-9` — which is why every attempt to match this row left it a size short. */}
+            <SelectTrigger className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
+              <span className="flex items-center gap-2"><AssetLogo src={current.logo} /> {current.label}</span>
+            </SelectTrigger>
+            <SelectContent position="popper">
+              {Object.entries(GROUPS).map(([group, list]) => (
+                <SelectGroup key={group}>
+                  <SelectLabel>{group}</SelectLabel>
+                  {list.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      <span className="flex items-center gap-2"><AssetLogo src={a.logo} /> {a.label}</span>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {/* Which rule is talking. One tray where there were two — see MODES. The Scan reads it too:
+            its whole table is every asset through this rule, so hiding the switch there would leave
+            a ranking with no way to say what it was ranked by. */}
+        {tab !== 'record' && (
+          <>
+            <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
+              {MODES.map((m) => (
+                <Hint key={m.id} label={m.hint}>
+                  <Button size="sm" variant={mode === m.id ? 'secondary' : 'ghost'}
+                    className={cn('h-7', mode !== m.id && 'text-muted-foreground')}
+                    onClick={() => setMode(m.id)}>
+                    {m.label}
+                  </Button>
+                </Hint>
+              ))}
+            </div>
+            {/* the opening range pins 15m and Investing pins the daily, so the bar size is only a
+                question on the one mode that has one */}
+            {mode === 'short' && (
+              /* A dropdown, like the asset: six pills is the widest thing in this bar and five of
+                 them are always the wrong answer. The trigger wears the tray's own fill so the row
+                 still reads as one set of controls rather than a switch and a form field. */
+              <Select value={interval} onValueChange={(v) => setInterval(v as Interval)}>
+                <Hint label="Bar size — how much time one candle covers. Every reading below is measured on these bars.">
+                  <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
+                    {/* the value written out, the way the asset trigger does it — this file never
+                        imported SelectValue and does not need it for a string */}
+                    <span>{interval}</span>
+                  </SelectTrigger>
+                </Hint>
+                <SelectContent position="popper">
+                  {INTERVALS.map((iv) => (
+                    <SelectItem key={iv} value={iv} className="tabular-nums">{iv}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </>
+        )}
       </div>
 
       {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
           is the one row here that is fact rather than reading. Absent unless the server has a key
           and a venue reports something open. */}
       <div className={cn('flex flex-col gap-4', tab !== 'chart' && 'hidden')}>
-      {/* what else is worth pressing, before the answer for this chart — it is the one line here
-          that can send you somewhere other than where you already are */}
-      <SetupsNow orbMode={preset === 'orb'} interval={readInterval(horizon, preset === 'orb' ? '15m' : interval)}
-        current={current.id} onPick={(id) => { setAsset(id); setTab('chart') }} />
+      {/* The setups strip used to stand here, above the chart you asked for: a sweep of every other
+          asset, on the one page that is about one asset. It is the Scan's own glance and it lives
+          there now — which also means the landing page no longer fires eleven assets × five
+          intervals of klines at a feed before drawing the chart anybody actually opened. */}
       <ExchangePositions onOpen={setAsset} />
 
       {needKey ? <KeyPrompt label={current.label} /> : (
@@ -1164,20 +1116,96 @@ export default function MarketPage() {
           )}
         </CardContent>
         )}
-        {/* what you are actually in on this asset, if anything — the card's last word, because the
-            plan is what the tool thinks and this is what you did, and they are not always the same */}
+        {/* what you are actually in on this asset, if anything — the plan is what the tool thinks
+            and this is what you did, and they are not always the same */}
         <Position asset={current.id} price={last ?? null} />
+        {/* The open, when there is something to act on — in the opening-range mode, always: there
+            the open is the whole subject. A card of its own for one sentence was a card too many;
+            it is the same verdict said about a different clock, so it belongs on the same card. */}
+        <OpenPlay candles={candles} full={mode === 'orb'} />
+        {/* The readings behind the call. They had a whole card to themselves under the chart, which
+            put the working two screens below the answer it is the working for — and made the page
+            four cards where it is really two. Folded, on the answer's own card. */}
+        {view && (
+          <CardContent className="border-t px-3 pt-3">
+            <button type="button" onClick={() => setShowWhy((v) => !v)}
+              className="flex w-full items-baseline gap-2 text-left">
+              <span className="font-heading text-xs tracking-wide uppercase">Why this call</span>
+              <span className="text-muted-foreground text-xs">
+                {bulls} bull · {bears} bear{showWhy ? ' · tap a reading for its guide' : ''}
+              </span>
+              <ChevronDown className={cn('text-muted-foreground ml-auto size-4 self-center transition-transform', showWhy && 'rotate-180')} />
+            </button>
+            {showWhy && (
+              <div className="mt-3 grid gap-x-8 gap-y-2 sm:grid-cols-2">
+                {/* click a reading for its guide: what it's called, what it claims, when it turns up —
+                    over a worked example drawn from the same code that drew the chart above */}
+                {shownSignals.map((sig, i) => (
+                  <button key={i} type="button" onClick={() => setGuide(sig)}
+                    className="flex min-w-0 items-baseline gap-2 text-left text-sm">
+                    <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
+                    <span className="decoration-muted-foreground/40 shrink-0 underline decoration-dotted underline-offset-4">{sig.label}</span>
+                    <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
+                  </button>
+                ))}
+                {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
+              </div>
+            )}
+          </CardContent>
+        )}
       </Card>
-
-      {/* the open, when there is something to act on — in the opening-range preset, always: there
-          the open is the whole subject */}
-      <OpenPlay candles={candles} full={preset === 'orb'} />
 
       {/* the chart: price line, the two MAs whose cross the guides watch, and the S/R band */}
       <Card className="py-3">
         <CardContent className="px-3">
-          {/* who is at their desks — context for the candles it sits directly on top of */}
-          <OpenNow at={candles.at(-1)?.t} />
+          {/* The chart's own switches, on the chart. Every one of them decides what is drawn in the
+              box directly beneath — which is the one place they were never allowed to sit: they were
+              two trays in the page toolbar, past the tabs, the asset and the rule, changing a thing
+              three controls away from them. Beside them, who is at their desks, which is context for
+              the candles it sits on top of. */}
+          <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <OpenNow at={candles.at(-1)?.t} />
+            <div className="ml-auto flex items-center gap-0.5">
+              {/* the panel under the price — the readings that were voting while invisible. No
+                  "None" button: the one that is on turns itself off. */}
+              {([
+                ['volume', 'Vol', 'Volume per bar, under the price — how much agreed with the move'],
+                ['rsi', 'RSI', 'RSI(14) with its 30 and 70 lines — one of the votes in the tally above'],
+                ['macd', 'MACD', 'MACD 12/26 and its 9 signal — the cross the verdict reads, drawn'],
+              ] as const).map(([id, label, hint]) => (
+                <Hint key={id} label={panel === id ? `${hint}. Click to close the panel.` : hint}>
+                  <Button size="sm" variant={panel === id ? 'secondary' : 'ghost'}
+                    className={cn('h-6 px-2 text-xs', panel !== id && 'text-muted-foreground')}
+                    onClick={() => setPanel(panel === id ? 'none' : id)}>
+                    {label}
+                  </Button>
+                </Hint>
+              ))}
+              {/* swings, the range they span, and the gaps price has not come back for */}
+              <Hint label={`Structure — the unbroken swing highs and lows, the range they span, and the gaps price has not come back for. ${structure ? 'Click to hide.' : 'Off.'}`}>
+                <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
+                  aria-pressed={structure} className={cn('size-6', !structure && 'text-muted-foreground')}
+                  onClick={() => setStructure((v) => !v)}>
+                  <Waypoints className="size-3.5" />
+                </Button>
+              </Hint>
+              <span className="bg-border mx-1 h-4 w-px" />
+              {/* live repricing of the forming bar — off is for reading a chart without it moving under you */}
+              <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
+                : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
+                <Button size="sm" variant="ghost" className={cn('h-6 gap-1.5 px-2 text-xs', (!live || stale) && 'text-muted-foreground')}
+                  onClick={() => setLive((v) => !v)}>
+                  <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
+                  Live
+                </Button>
+              </Hint>
+              <Hint label="Refresh">
+                <Button size="icon" variant="ghost" aria-label="Refresh" className="size-6" onClick={() => setNonce((n) => n + 1)}>
+                  <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+                </Button>
+              </Hint>
+            </div>
+          </div>
           <div ref={plot} className="relative h-75 md:h-95">
             {error && <p className="text-destructive absolute inset-0 flex items-center justify-center text-sm">{error}</p>}
             {loading && (
@@ -1304,8 +1332,8 @@ export default function MarketPage() {
                       )}
                       {rangeLines.filter((l) => l.lvl >= lo && l.lvl <= hi).map((l) => (
                         <line key={l.label} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
-                          className={l.near ? 'stroke-muted-foreground/70' : 'stroke-muted-foreground/40'}
-                          strokeWidth={1} strokeDasharray={l.near ? '4 3' : '1 4'} vectorEffect="non-scaling-stroke" />
+                          className="stroke-muted-foreground/70"
+                          strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                       ))}
                     </>
                   ) : !plan && (
@@ -1432,17 +1460,10 @@ export default function MarketPage() {
                   )}
                 </svg>
 
-                {/* Each confirmed pivot, marked on the bar that made it — over the candles, because
-                    the whole claim is which bar this was. HTML, not an SVG shape: preserveAspectRatio
-                    =none scales x and y independently, so a circle in there is an ellipse. It used to
-                    be a zero-length round-capped stroke held round by non-scaling-stroke, which WebKit
-                    gets wrong — a zero-length segment has no direction to hold, so the Dock app drew
-                    the squash the trick was meant to escape. */}
-                {visPivots.map((p) => (
-                  <div key={`${p.kind}-${p.i}`}
-                    className="bg-foreground/45 pointer-events-none absolute size-0.75 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                    style={{ left: `${xAt(p.i - start)}%`, top: `${y(p.price) + (p.kind === 'high' ? -1.8 : 1.8)}%` }} />
-                ))}
+                {/* A dot on every confirmed pivot used to sit here. Forty of them across a window is
+                    texture, not information — the pivots that are worth acting on are the two nobody
+                    has closed through, and those get a line across the chart at the price. The rest
+                    were a count in the legend of marks the eye could already see. */}
 
                 {/* which session each upcoming line is, named where it sits — the reason for the gap */}
                 {/* the name of the desk and the time on your clock, at the head of its own line —
@@ -1571,40 +1592,25 @@ export default function MarketPage() {
                   </span>
                 )
               })}
-              {shownSessions.map((s) => (
-                <span key={s.label} className="opacity-70">
-                  <span className="inline-block h-0.5 w-3 -translate-y-0.75 align-middle" style={{ backgroundColor: s.color }} /> {s.label} open
-                </span>
-              ))}
               {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 -translate-y-0.75 align-middle" /> opening range</span>}
-              {/* The setup's own lines. They were the only levels on this chart drawn without a word
-                  anywhere naming them — and they are the ones the card underneath is about, which
-                  made them the worst possible thing to leave to guesswork.
-                  Named one at a time, off the same frame test the lines themselves are drawn
-                  through. The stop and the target sit an ATR either side of an entry the autoscale
-                  is framed on, so one or both are off frame most of the time — a chip that promised
-                  "grey dots are its stop and target" whenever the entry was visible would be the
-                  legend describing a line nobody can find, which is the exact thing the MAs' "off
-                  frame ↑" exists to prevent. */}
-              {plan && ([
-                [holding ? 'buy at' : 'setup entry', plan.entry, 'stroke-sky-500', '5 3'],
-                [holding ? 'regime line' : 'setup stop', plan.stop, 'stroke-muted-foreground/60', '2 4'],
-                // named for what it is on each side: a level the trade leaves at, or one it may take
-                // something off into. Same line, and calling the trim a target is how it gets traded
-                [holding ? 'trim' : 'setup target', plan.target, 'stroke-muted-foreground/60', '2 4'],
-              ] as const).filter(([, lvl]) => lvl >= lo && lvl <= hi).map(([label, , cls, dash]) => (
-                <span key={label} className="opacity-80">
+              {/* The setup's own lines, as one chip rather than three. They were named one at a time
+                  — entry, stop, target — which was right when the only thing saying what they were
+                  was this row; the levels card directly above prints all three with their numbers,
+                  and the stop and the target are drawn in the same grey dash as each other, so two
+                  chips were describing one line twice. The entry keeps its own: it is the only
+                  coloured one, and it is the level the whole card is waiting on. */}
+              {plan && plan.entry >= lo && plan.entry <= hi && (
+                <span className="opacity-80">
                   <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                    <line x1="0" x2="16" y1="1.5" y2="1.5" className={cls} strokeWidth={1.25} strokeDasharray={dash} />
-                  </svg> {label}
+                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-sky-500" strokeWidth={1.25} strokeDasharray="5 3" />
+                  </svg> {holding ? 'buy at' : 'setup entry'}
                 </span>
-              ))}
-              {/* the hours two desks are at their desks at once — a wash, not a level, and the one
-                  mark on the chart that is about when rather than about how much */}
-              {!!sessionMarks.overlaps.length && (
-                <span className="opacity-70">
-                  <span className="inline-block h-2 w-3 translate-y-px bg-amber-400/25 align-middle dark:bg-amber-300/25" />
-                  {' '}two desks open
+              )}
+              {plan && [plan.stop, plan.target].some((l) => l >= lo && l <= hi) && (
+                <span className="opacity-80">
+                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
+                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-muted-foreground/60" strokeWidth={1.25} strokeDasharray="2 4" />
+                  </svg> {holding ? 'regime line · trim' : 'stop · target'}
                 </span>
               )}
               {/* the line that had been voting invisibly since the day it was added */}
@@ -1616,31 +1622,17 @@ export default function MarketPage() {
                   {!(vwap.vwap >= lo && vwap.vwap <= hi) && <span className="ml-1">off frame {vwap.vwap > hi ? '↑' : '↓'}</span>}
                 </span>
               )}
-              {/* the two new marks named in the terms the chart draws them: a dot on the bar that
-                  made the pivot, a dashed line for the range it sits inside */}
-              {structure && !!visPivots.length && (
-                <span className="opacity-80">
-                  <span className="bg-foreground/45 mr-0.5 inline-block size-1.5 -translate-y-px rounded-full align-middle" />
-                  {/* only claimed when a dash is actually on screen. standingLines is filtered by
-                      the frame as well as by whether the level holds, so "none drawn" also covers a
-                      level that is standing but scrolled out — and saying "all broken through"
-                      there would be the legend reporting a break that never happened */}
-                  {visPivots.length} swings{standingLines.length ? ' · dashes are the unbroken ones' : ''}
-                </span>
-              )}
+              {/* One chip for the structure overlay instead of three. The session opens name
+                  themselves on the chart, in their own colour, with the time on them; the swing
+                  count, the gap count and the overlap wash were the legend counting marks the eye
+                  can already see. What is left is the one thing the marks do not say themselves:
+                  where the range actually is, in numbers. */}
               {structure && (
                 <span className="opacity-80">
                   <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
                     <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-muted-foreground/70" strokeWidth={1} strokeDasharray="4 3" />
                   </svg> range · <span className="tabular-nums">{fmt(view.support)}–{fmt(view.resistance)}</span>
-                </span>
-              )}
-              {/* the boxes, named for what they are — and only when some are on screen, since an
-                  entry for a mark nobody can see is the legend describing a different chart */}
-              {structure && !!visGaps.length && (
-                <span className="opacity-80">
-                  <span className="bg-emerald-500/40 mr-0.5 inline-block h-2 w-3 translate-y-px align-middle" />
-                  {visGaps.length} unfilled {visGaps.length === 1 ? 'gap' : 'gaps'}
+                  {!!visGaps.length && <span className="ml-1.5">· {visGaps.length} unfilled {visGaps.length === 1 ? 'gap' : 'gaps'}</span>}
                 </span>
               )}
               {/* the position's levels, chip drawn with the very dash the chart uses — and the
@@ -1657,8 +1649,8 @@ export default function MarketPage() {
                   </span>
                 )
               })}
-              {/* the same two numbers the range chip above now carries, so they are only spelled
-                  out here when the overlay that draws them is off */}
+              {/* the same two numbers the range chip above carries, so they are only spelled out
+                  here when the overlay that draws them is off */}
               <span className="ml-auto tabular-nums">
                 {/* the verbs the device actually has: a phone has no wheel to scroll and no pointer
                     to hover, and being told to use one is how a chart reads as broken */}
@@ -1672,38 +1664,6 @@ export default function MarketPage() {
         </CardContent>
       </Card>
 
-      {/* The readings behind the call, folded: the verdict at the top already carries the answer,
-          and eight spelled-out readings under the chart were the page's densest stretch. The tally
-          stays on the fold line; the working opens on demand, guides and all. */}
-      {view && (
-        <Card className="py-3">
-          <CardContent className="px-3">
-            <button type="button" onClick={() => setShowWhy((v) => !v)}
-              className="flex w-full items-baseline gap-2 text-left">
-              <span className="font-heading text-sm tracking-wide uppercase">Why this call</span>
-              <span className="text-muted-foreground text-xs">
-                {bulls} bull · {bears} bear{showWhy ? ' · tap a reading for its guide' : ''}
-              </span>
-              <ChevronDown className={cn('text-muted-foreground ml-auto size-4 self-center transition-transform', showWhy && 'rotate-180')} />
-            </button>
-            {showWhy && (
-              <div className="mt-3 grid gap-x-8 gap-y-2 sm:grid-cols-2">
-                {/* click a reading for its guide: what it's called, what it claims, when it turns up —
-                    over a worked example drawn from the same code that drew the chart above */}
-                {shownSignals.map((sig, i) => (
-                  <button key={i} type="button" onClick={() => setGuide(sig)}
-                    className="flex min-w-0 items-baseline gap-2 text-left text-sm">
-                    <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
-                    <span className="decoration-muted-foreground/40 shrink-0 underline decoration-dotted underline-offset-4">{sig.label}</span>
-                    <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
-                  </button>
-                ))}
-                {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
       </>
       )}
       </div>
@@ -1718,27 +1678,35 @@ export default function MarketPage() {
         <div className={cn('flex flex-col gap-4', tab !== 'scan' && 'hidden')}>
           {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
               or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
-          <Scan orbMode={preset === 'orb'} interval={readInterval(horizon, preset === 'orb' ? '15m' : interval)}
-            onPick={(id) => { setAsset(id); setTab('chart') }} />
+          <Scan orbMode={mode === 'orb'} interval={readInterval(horizon, mode === 'orb' ? '15m' : interval)}
+            current={current.id} onPick={goChart} />
           <Trending />
         </div>
       )}
 
-      {seen.people && (
-        <div className={cn('flex flex-col gap-4', tab !== 'people' && 'hidden')}>
-          <Desk live={tab === 'people'} onPick={(id) => { setAsset(id); setTab('chart') }} />
-        </div>
-      )}
-
+      {/* One tab, three books, one question — see the note on TABS. The switch sits on the panel
+          rather than in the page toolbar, because it is a question about what is on this page and
+          not about which page you are on. */}
       {seen.record && (
         <div className={cn('flex flex-col gap-4', tab !== 'record' && 'hidden')}>
-          <Record onPick={(id) => { setAsset(id); setTab('chart') }} />
-        </div>
-      )}
-
-      {seen.paper && (
-        <div className={cn('flex flex-col gap-4', tab !== 'paper' && 'hidden')}>
-          <PaperDesk onPick={(id) => { setAsset(id); setTab('chart') }} />
+          <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-0.5">
+            {RECORDS.map(({ id, label, hint }) => (
+              <Hint key={id} label={hint}>
+                <Button size="sm" variant={book === id ? 'secondary' : 'ghost'}
+                  aria-current={book === id}
+                  className={cn('h-7', book !== id && 'text-muted-foreground')}
+                  onClick={() => setBook(id)}>
+                  {label}
+                </Button>
+              </Hint>
+            ))}
+          </div>
+          {/* Unmounted rather than hidden, unlike the tabs above. The two that cost anything both
+              poll on a minute, and a book nobody is reading has no business asking an exchange
+              about anybody — a switch back is one request, which is what the poll was for. */}
+          {book === 'mine' && <Record onPick={goChart} />}
+          {book === 'paper' && <PaperDesk onPick={goChart} />}
+          {book === 'people' && <Desk live={tab === 'record'} onPick={goChart} />}
         </div>
       )}
 
@@ -1747,15 +1715,6 @@ export default function MarketPage() {
   )
 }
 
-/**
- * How the saved setups actually went. A setup only lands here if its entry was really reached —
- * the window opening is the whole condition, since a plan whose price never came round is not a
- * trade that lost — and then only once it ran to its target or its stop.
- *
- * The money is arithmetic on a number you gave: the R it did, times the stake you said one setup
- * is worth. Nothing was ever bought, no fee is modelled, and the wording is careful about that —
- * "had you taken it" is the whole claim. Set no stake and it says R and nothing else.
- */
 /**
  * Who is at their desks, right now, on your own clock. The chart marks the opens and says nothing
  * about the closes, which is half a day's information: gold's range is mostly made in the two hours
@@ -1770,7 +1729,7 @@ function OpenNow({ at }: { at?: number }) {
   const desks = openDesks(at)
   const both = desks.length > 1
   return (
-    <div className="text-muted-foreground mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+    <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       {desks.map((s) => (
         <span key={s.label} className="inline-flex items-center gap-1.5">
           <span className="size-1.5 rounded-full" style={{ background: s.color }} />
@@ -1795,7 +1754,7 @@ function OpenPlay({ candles, full }: { candles: Candle[]; full?: boolean }) {
   const play = useMemo(() => (candles.length ? openPlay(candles) : null), [candles])
   if (!play) return null
   /* Waiting is the page's default state and the verdict above already owns it — the open earns a
-     card of its own only once there is something to act on. The opening-range preset is the
+     line of its own only once there is something to act on. The opening-range mode is the
      exception: there the open is the whole subject, so every state shows. */
   if (play.tone === 'wait' && !full) return null
   const TONE = {
@@ -1803,16 +1762,17 @@ function OpenPlay({ candles, full }: { candles: Candle[]; full?: boolean }) {
     ready: 'text-foreground',
     go: 'text-emerald-600 dark:text-emerald-400',
   } as const
+  /* A section of the verdict card, not a card of its own: one sentence about the same asset the
+     card above it is about does not earn its own rectangle, and it read as a second, competing
+     answer sitting between the verdict and the chart. */
   return (
-    <Card className="py-3">
-      <CardContent className="px-3">
-        <p className={cn('text-sm', TONE[play.tone])}>{play.say}</p>
-        <p className="text-muted-foreground mt-1 text-xs">
-          At the open · the opening-range play was break-even over 219 days once filtered — these are
-          levels worth knowing, not a system worth trusting.
-        </p>
-      </CardContent>
-    </Card>
+    <CardContent className="border-t px-3 pt-3">
+      <p className={cn('text-sm', TONE[play.tone])}>{play.say}</p>
+      <p className="text-muted-foreground mt-1 text-xs">
+        At the open · the opening-range play was break-even over 219 days once filtered — these are
+        levels worth knowing, not a system worth trusting.
+      </p>
+    </CardContent>
   )
 }
 
@@ -2925,7 +2885,10 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
   return (
     <Card className="py-3">
       <CardContent className="px-3">
-        <div className="mb-2 flex items-baseline gap-2">
+        {/* wrapping, because six things do not fit on a phone: a heading, a count, two totals, a
+            three-way sort and a Clear. Unwrapped, the sort tray and the button were pushed off the
+            right edge of the card with nothing to scroll. */}
+        <div className="mb-2 flex flex-wrap items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">How they went</span>
           <span className="text-muted-foreground text-xs">
             {results.length} finished · {won} hit target
@@ -3389,49 +3352,50 @@ function useScanBars(feed: VenueFeed, nonce = 0) {
 }
 
 /**
- * Which asset has a setup, on the page rather than behind a button. The Scan tab below is this same
- * sweep at full width, ranked, with every timeframe's lean on it; this is the glance version — only
- * the rows the desk would act on, one chip each, click to go there.
+ * The answer to "is anything worth pressing", as one line of chips: only the rows the desk stands
+ * behind, best-paying first, click to open it.
  *
- * It was a popover on a telescope button, which meant the answer to "is anything else worth
- * pressing" cost a click and a wait every time you wanted it — and a glance you have to ask for
- * is not a glance. So it reads on mount and sits above the chart instead. That sweep is the price
- * of the glance: eleven assets × five intervals of klines, once per load.
+ * It reads off rows the Scan has already computed rather than sweeping for itself. It used to run
+ * its own `useScanBars` above the chart, which meant every load of the page anybody opened fired
+ * eleven assets × five intervals of klines for a strip about ten other assets — and the moment the
+ * Scan tab was opened, the identical sweep went out a second time. One sweep, two readers of it.
  *
  * The whole list, including the chart already open. It used to drop that one on the grounds that
- * the chart underneath says all of it in full — but the strip is also the count, and hiding a row
- * from it turned "one setup, and it is the one you are on" into a strip that read like nothing was
- * there at all. The open one keeps a ring instead, so the row stays a complete answer to "what is
- * live right now" and still says which of them you are looking at.
+ * the chart says all of it in full — but the strip is also the count, and hiding a row from it
+ * turned "one setup, and it is the one you are on" into a strip that read like nothing was there.
+ * The open one keeps a ring instead.
  */
-function SetupsNow({ orbMode, interval, current, onPick }: {
+function SetupsNow({ rows, orbMode, interval, horizon, current, onPick }: {
+  /** Every scanned row, or null while the sweep is still out. */
+  rows: ScanCard[] | null
   orbMode: boolean
   interval: Interval
+  horizon: Horizon
   current: string
   onPick: (asset: string) => void
 }) {
-  const { marketHorizon: horizon, dials } = useStash()
-  const fee = dials.fee
-  const feed = useVenue()
-  const feeds = useScanBars(feed)
-
   /* A plan and a tier the desk stands behind. Tier 0 and 1 are "there is a shape here but do not
-     press it" — worth a paragraph on the Scan tab, and noise in a list this size. Ranked on the
+     press it" — the table below says so in full, and it is noise in a list this size. Ranked on the
      net R:R, the fee already taken off, because that is the order to look in. */
-  const rows = useMemo(() => feeds?.map((f) => scanCard(f, horizon, interval, orbMode, fee))
-    .filter((x): x is ScanCard => !!x?.plan && x.tier >= 2)
-    .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null,
-  [feeds, horizon, interval, orbMode, fee])
+  const best = useMemo(() => rows?.filter((x) => !!x.plan && x.tier >= 2)
+    .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null, [rows])
 
-  if (rows === null) return <p className="text-muted-foreground text-xs">Reading every chart…</p>
-  if (!rows.length) return <p className="text-muted-foreground text-xs">Nothing to press on any chart. Waiting is the position.</p>
+  // the table directly below already says the sweep is out — twice is once too many
+  if (best === null) return null
+  if (!best.length) {
+    return (
+      <p className="text-muted-foreground mb-3 border-b pb-3 text-xs">
+        Nothing to press on any chart. Waiting is the position.
+      </p>
+    )
+  }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="mb-3 flex flex-wrap items-center gap-1.5 border-b pb-3">
       <Hint label={`Every chart's setup on the ${orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read — the entry, and what it pays net of the fee. Click one to open it.`}>
         <span className="text-muted-foreground text-xs">Setups now</span>
       </Hint>
-      {rows.map((r) => (
+      {best.map((r) => (
         <button key={r.a.id} type="button" onClick={() => onPick(r.a.id)}
           className={cn(
             'bg-muted/50 hover:bg-accent flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1.5 text-xs',
@@ -3480,9 +3444,11 @@ const TIER_CLS = [
  * assets is a tenth of the budget. A shared per-(asset, interval) cache is the lever if the desk
  * ever polls this live.
  */
-function Scan({ orbMode, interval, onPick }: {
+function Scan({ orbMode, interval, current, onPick }: {
   orbMode: boolean
   interval: Interval
+  /** The asset the chart is on, so the strip above the table can ring it. */
+  current: string
   /** Picking a row is asking to look at that asset — the caller owns which tab that means. */
   onPick: (asset: string) => void
 }) {
@@ -3522,6 +3488,11 @@ function Scan({ orbMode, interval, onPick }: {
             </Button>
           </Hint>
         </div>
+        {/* The shortlist first, the whole table under it. They are the same sweep read at two
+            depths — which is worth press for press, and what every chart is doing — and the
+            shortlist used to sit on the chart tab, a page away from the table it summarises. */}
+        <SetupsNow rows={rows} orbMode={orbMode} interval={interval} horizon={horizon}
+          current={current} onPick={onPick} />
         {rows === null && <p className="text-muted-foreground py-4 text-sm">Reading every chart…</p>}
         {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">The feed is not answering.</p>}
         {!online && !!rows?.length && (
