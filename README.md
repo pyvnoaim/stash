@@ -260,8 +260,8 @@ touched, so it sinks under the first and rises under the second. Dragging a proj
 the order yours, so it drops straight back to **Custom**, freezing whatever order you were looking
 at and landing the drop where you saw it land.
 
-**Settings** in the footer holds the theme, the Markets chart style, what a setup is worth, the
-stock-data key and a card of every key. The theme is also a single button in the header that cycles system → light → dark,
+**Settings** in the footer holds the theme, the Markets chart style, what a setup is worth, your
+venue's fee and funding rates, and a card of every key. The theme is also a single button in the header that cycles system → light → dark,
 and the switch opens as a circle from whatever you clicked, using the browser's own View
 Transitions — Firefox and *reduce motion* get the plain switch.
 
@@ -471,13 +471,11 @@ Deleting gives the same undo toast every other delete in the app does.
 
 ## Markets
 
-A read-only desk over other people's price feeds. Crypto and gold ride Binance's public API — no
-key, no signup; gold is XAUT, a token pegged to a troy ounce and the most liquid one Binance
-lists (there is no XAUUSDT at all), and there is no liquid silver token so silver sits it out. The stocks and the three big index ETFs — S&P 500, Nasdaq 100 and Dow
-Jones, a group of their own in the picker — ride Twelve Data, which needs a free key: paste it
-into Settings or into the prompt the page shows, and it stays on this machine and never travels in
-a backup. The ETFs deliberately sit out the movers sweep: that batch call pays one credit per
-symbol, and the stocks already spend the free tier's whole minute.
+A read-only desk over other people's price feeds. Every asset is a USDT-margined perpetual on
+Bitget or MEXC — keyless, CORS-open, no signup — gold included, since Bitget lists XAUUSDT. One
+feed, one kind of instrument, nothing to configure. The stocks and the index ETFs came off the list
+and their Twelve Data feed came off with them: a second provider, an API key riding the synced
+document, a US-session clock and two slower poll rates, all for a group nothing pointed at.
 
 The bars you have already loaded are kept by the service worker, so the desk still draws with no
 network — every signal here is maths over bars that closed, and those read the same on a plane as
@@ -502,7 +500,7 @@ the crosshair, drag to pan back through the history, and scroll to zoom — 20 t
 4h chart thins out to something readable. The right of the chart is deliberately empty: ten bars of
 room ahead of the last candle, where the sessions that have not opened yet are already marked and
 named. The forming candle is live: its close follows the last price every five seconds (fifteen for
-stocks, whose free tier allows eight calls a minute) and its wick stretches to hold it, the same bar
+) and its wick stretches to hold it, the same bar
 the exchange is drawing. When the bar's duration is up the window refetches, so the next candle comes
 from the feed rather than being invented here. **Live** in the toolbar turns it off.
 
@@ -573,9 +571,8 @@ is a config that fails at three in the morning. Kraken Futures was the first ven
 gone: its column is dropped on the next start, so the credential it held leaves the database rather
 than sitting in the file unread.
 
-The key is typed in the browser but kept on the server, because it signs requests — the opposite
-arrangement from the Twelve Data key above it, which only reads public prices and therefore never
-leaves the machine. It never comes back out either: the server will only say whether one is set,
+The key is typed in the browser but kept on the server, because it signs requests. It is the only
+credential this app holds, and it never comes back out: the server will only say whether one is set,
 and saving again replaces it. The server signs the requests and joins in the mark prices; each
 exchange is asked at most every thirty seconds per key however many tabs poll; and the card renders
 nothing at all when you are flat or have no key saved. Every venue answers or none of them do: one
@@ -815,8 +812,7 @@ before Frankfurt or New York opens, one knock, keyed to that exchange's own day.
 the assets on the desk — they mark where the volume that moves gold and crypto arrives. Tokyo opens
 in the middle of the European night and is held back by the quiet hours like anything else, which
 is the honest way of saying it will rarely reach you. Weekends are skipped; public holidays are
-not, because the world's holiday calendars are a table that goes stale in a way nobody notices. Crypto and gold only, because a stock price needs the Twelve Data key and
-that key deliberately never leaves the browser it was typed into.
+not, because the world's holiday calendars are a table that goes stale in a way nobody notices.
 
 The push carries nothing at all. Encrypting a payload for each subscription is the bulk of the Web
 Push specification, and it delivers a sentence that was true a minute ago — so the server knocks
@@ -913,9 +909,9 @@ says so and offers the export, and it stays up until you dismiss it. Everything 
 as long as the tab is open; none of it is being kept.
 
 `⌘K → Export a backup` writes a JSON file; **Import a backup** replaces the current data with it.
-The Twelve Data key is stripped on the way out, so a backup you hand to someone else carries no
-credential of yours, and an import without one leaves the key already on this device alone rather
-than wiping it. Backups from the original pre-React version import fine. It stored a project's
+Nothing is stripped on the way out any more: the Twelve Data key was the one credential the
+document held, and the feed that wanted it is gone. An exchange key has never been in there.
+Backups from the original pre-React version import fine. It stored a project's
 colour as an HSL hue rather than a hex, so those are dropped and the projects come in uncoloured;
 nothing else is.
 
@@ -937,9 +933,9 @@ while the server is unreachable opens your own data rather than the sign-in scre
 
 One rule decides every conflict: the device that edited last wins, and the fifty versions the
 server keeps per user are the undo for the day that rule picks wrong. There is no merge engine —
-recovery over prevention, at a fraction of the code. The Twelve Data key rides the sync — typed on
-one device, the stocks work on all of them — while the backup export still strips it, since a file
-handed to someone else is a different promise than your own server.
+recovery over prevention, at a fraction of the code. Nothing secret rides the sync: the document
+is your rows and your settings, and the one credential this app keeps — an exchange key — is typed
+into Settings and stays on the server.
 
 Signup wants an invite code: sixteen hex characters out of `randomBytes`, good once and dead after
 a week, so a code that leaks somewhere is a code that stops working. Wrong codes from one address
@@ -1030,7 +1026,6 @@ runs over stdio from a checkout, which is what dev and the test use:
 
 ```sh
 claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e STASH_PASS=… \
-  -e STASH_TD_KEY=… \
   -- node --experimental-strip-types /path/to/stash/server/mcp.ts
 ```
 
@@ -1067,9 +1062,7 @@ to. They queue instead. What goes out is also run through `load` first, the same
 device's document comes in by: a date that cannot exist is dropped there rather than reported back
 as set and then quietly thrown away by the next reader.
 
-Three limits worth knowing. The Twelve Data key never leaves the browser it was typed into — the
-sync blanks it on every push — so the stocks and ETFs need `STASH_TD_KEY` in the MCP server's own
-environment (the container's, for the hosted route); the eleven keyless assets need nothing. This only runs while Claude is calling it: no
+Two limits worth knowing. This only runs while Claude is calling it: no
 watching, no alerts, nothing in the background. And some of what comes back is other people's
 writing — rows out of a project shared with you, and token symbols off GeckoTerminal, which are
 whoever-minted-it's text arriving in a model's context. It is data, not instruction, and none of
@@ -1083,8 +1076,9 @@ signed in on with one button to end all of them, and deleting the account — wh
 nobody could ever cut an invite again. **History** is the fifty versions the server keeps.
 **People** is there for an admin. **Data** is the backup out and back in, clearing what is finished,
 and what the browser will admit about keeping any of it. **About** says which build this is and
-looks for a newer one. **Markets** holds the chart style, what a setup is worth, and the stock-data
-key; that key and **Hotkeys** are kept on this machine and never travel.
+looks for a newer one. **Markets** holds the chart style, what a setup is worth, and your venue's
+taker fee and funding rate — the two costs only you know, and the ones inside every money figure on
+the desk. **Hotkeys** is kept on this machine and never travels.
 
 No Appearance: the theme cycles from the button in the header — system, light, dark — and ⌘K lists
 all three, so a third way to set it would be a setting for its own sake.
@@ -1128,9 +1122,8 @@ Every push to `main` here lands as a versioned GitHub release, so pin a tag if y
 not track `main` live. Updating is `git pull && docker compose up -d --build` — schema migrations
 run on boot, and a tab that is already open offers **Reload** when the new bundle is waiting.
 
-One optional variable on the container: `STASH_TD_KEY` lets the hosted MCP route read the stocks
-— absent, they answer with what is missing, and everything else runs the same. The exchange keys
-are not the container's: each account sets its own in Settings → Markets.
+No optional variables on the container. The exchange keys are not the container's either: each
+account sets its own in Settings → Markets.
 
 Data sits in one named volume; backing it up is copying one SQLite file — via `vacuum into`, since
 the live file is in WAL mode and a raw `cp` of it can catch a write half-landed:

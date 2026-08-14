@@ -27,10 +27,10 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  clearDone, hotkey, resetDials, resetHotkeys, setApiKey, setChart, setDesk, setDial, setHotkey,
+  clearDone, hotkey, resetDials, resetHotkeys, setChart, setDesk, setDial, setHotkey,
   setStake, useStash, type ChartStyle,
 } from '@/lib/store'
-import { ASSETS, type Dials as DialSet } from '@/lib/market'
+import { type Dials as DialSet } from '@/lib/market'
 import {
   calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
   links, linkUrl, logout, newFeed, restore, setCalendar, subscribeSync, updateAccount, versions,
@@ -387,24 +387,9 @@ function MarketsPanel() {
         </div>
       </Section>
 
-      {/* Only while there is something to spend it on. The stocks and the ETFs are out of the
-          asset list for now — this desk trades perpetuals — and a key field for a feed nothing
-          reads is a setting that fails silently. It comes back with them, list and all. */}
-      {ASSETS.some((a) => a.source === 'twelvedata') && (
-      <Section
-          title="Stock data key"
-          hint="Free key from twelvedata.com — needed only for the stock feeds. Crypto and gold work
-            without it. Synced with your account, so typing it here is typing it everywhere."
-        >
-          {/* a key is checked against the one on a website, so it is the field most worth revealing */}
-          <PasswordInput
-            id="td-key"
-            placeholder="Twelve Data API key"
-            defaultValue={s.apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-        </Section>
-      )}
+      {/* A "Stock data key" field stood here, shown only while some asset still rode Twelve Data —
+          which none has for a while, so it was already invisible. The feed is gone now and so is
+          the key: it was the one secret this app kept in the synced document. */}
 
       <ExchangeSection />
     </>
@@ -424,10 +409,10 @@ const VENUES = [
 ] as const
 
 /**
- * The other keys, kept differently: the Twelve Data key above rides the synced document because
- * the browser is what calls the price feed; an exchange key signs against an account, so it is
- * typed here and kept on the server, each account its own. It never comes back — the server will
- * only say whether one is set — so the fields always read empty, and saving again replaces it.
+ * The keys, and where they live: an exchange key signs against an account, so it is typed here and
+ * kept on the server, each account its own. It never comes back — the server will only say whether
+ * one is set — so the fields always read empty, and saving again replaces it. Nothing secret rides
+ * the synced document any more.
  *
  * One venue at a time, picked at the top: stacked key forms was a wall of fields, and nobody sets
  * more than one in a sitting. The picker is the first thing in the section because it

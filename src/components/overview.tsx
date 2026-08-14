@@ -13,11 +13,10 @@ import { treemap } from '@/lib/treemap'
 const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
 
 // a glance at the desk — whichever assets actually moved, not a fixed four. One batched 24h ticker
-// call ranks every keyless asset by the size of its move, then the top few get an hourly-closes call
-// each for the sparkline. Stocks sit it out: they need the Twelve Data key, and a tile that's empty
-// until you've pasted one is worse than a tile that isn't there.
+// call ranks every asset by the size of its move, then the top few get an hourly-closes call
+// each for the sparkline.
 const MOVERS = 4
-const CANDIDATES = ASSETS.filter((a) => a.source !== 'twelvedata')
+const CANDIDATES = ASSETS
 /* How often the tiles re-read. They were fetched once on mount and left there, so a tab open since
    the morning showed the morning's market under a percentage still labelled 24h — the one thing
    this app is careful about everywhere else. Five requests a minute at most, and only while

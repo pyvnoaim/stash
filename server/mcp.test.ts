@@ -71,7 +71,7 @@ const state: any = await (await fetch(`${url}/state`, {
 })).json()
 assert.equal(state.state.items.length, 1)
 assert.equal(state.state.projects[0].name, 'Kova')
-assert.equal(state.state.apiKey, '')   // the Twelve Data key never travels, from here either
+assert.equal(state.state.apiKey, undefined)  // no secret rides the document any more
 
 /* Subscriptions, the collection this server could not see at all until now. One tool does the
    four things, so what is asserted is that each of them lands on the server's own document and

@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react'
-import { ExternalLink, Flag, Maximize2, Trash2, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ExternalLink, Flag, Lightbulb, ListTodo, Maximize2, StickyNote, Trash2, X } from 'lucide-react'
 import { DueField } from '@/components/due-field'
 import { useMembers } from '@/components/faces'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,7 +18,14 @@ import { isRepeat, REPEATS, repeatLabel, today } from '@/lib/parse'
 import { wikiKey, wikiLinks } from '@/lib/markdown'
 import { patch, tagsFor, useStash, type Item, type ItemType } from '@/lib/store'
 
-const TYPES: ItemType[] = ['task', 'idea', 'note']
+/* The same three, wearing the same icons the capture bar gives them. They were three words in
+   three boxes here and an icon-and-word pair one row up, which is one switch drawn two ways —
+   and the icon is what the eye actually sorts a row of buttons by. */
+const TYPES = [
+  { id: 'task' as ItemType, label: 'Task', icon: ListTodo },
+  { id: 'idea' as ItemType, label: 'Idea', icon: Lightbulb },
+  { id: 'note' as ItemType, label: 'Note', icon: StickyNote },
+]
 const QUICK = '__inbox__'   // Select can't hold "" as a value
 const ONCE = '__once__'
 const NOBODY = '__nobody__'
@@ -138,8 +146,10 @@ function TagSuggest({ pid, has, q, onPick }: {
   )
 }
 
-export function Inspector({ it, onDelete, onExpand, onOpenItem }: {
+export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
   it: Item
+  /** Bumped by the list every time a row is *clicked* open — see the effect below. */
+  openedAt?: number
   onDelete: () => void
   onExpand: () => void
   /** open another item's page — what a backlink does when clicked */
@@ -149,6 +159,26 @@ export function Inspector({ it, onDelete, onExpand, onOpenItem }: {
   /* Who it is for. Only where there is somebody else to pick: in a stash of your own every row is
      yours, and a field whose only answer is "you" is not a field. */
   const members = useMembers(s.projects.find((p) => p.id === it.pid))
+
+  /* Ready to type. Opening a row is nearly always the prelude to renaming it, and the caret used to
+     land nowhere at all — you clicked once to open the panel and again to write in it.
+     Off the click's own counter and never off the selection, which is the whole care here: J and K
+     move that same selection, and a list you cannot walk twice because the first press stole the
+     caret would be a far worse trade than the second click. A counter rather than the item's id, so
+     clicking the row you are already on still puts you in the field.
+     The caret goes to the end rather than selecting the text: a title you meant to add a word to is
+     not one a stray keystroke should be allowed to replace.
+     Not on a phone. There the panel comes up over the list, and taking the field would throw the
+     on-screen keyboard over half of what you just opened — on a device where opening a row is how
+     you *read* it, since there is no second column to read it in. */
+  const title = useRef<HTMLTextAreaElement>(null)
+  const phone = useIsMobile()
+  useEffect(() => {
+    const el = title.current
+    if (!openedAt || !el || phone) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [openedAt, phone])
 
   const box = useRef<HTMLInputElement>(null)
   const [tagq, setTagq] = useState('')
@@ -181,14 +211,15 @@ export function Inspector({ it, onDelete, onExpand, onOpenItem }: {
       {/* h-14 header + border-b so the type toggle lines up with the main content header */}
       <div className="flex h-14 shrink-0 items-center border-b px-4">
         <div className="grid w-full grid-cols-3 gap-1.5">
-          {TYPES.map((t) => (
+          {TYPES.map(({ id, label, icon: Icon }) => (
             <Button
-              key={t}
+              key={id}
               size="sm"
-              variant={it.type === t ? 'default' : 'outline'}
-              onClick={() => patch(it.id, { type: t, done: t === 'task' ? it.done : false })}
+              variant={it.type === id ? 'default' : 'outline'}
+              onClick={() => patch(it.id, { type: id, done: id === 'task' ? it.done : false })}
             >
-              {t[0].toUpperCase() + t.slice(1)}
+              <Icon className="size-3.5" />
+              {label}
             </Button>
           ))}
         </div>
@@ -206,6 +237,7 @@ export function Inspector({ it, onDelete, onExpand, onOpenItem }: {
       <div className="grid gap-2">
         <Label htmlFor="i-title">Title</Label>
         <Textarea
+          ref={title}
           id="i-title"
           rows={2}
           value={it.text}
@@ -435,14 +467,15 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
         onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
       >
       <div className="grid grid-cols-3 gap-1.5">
-        {TYPES.map((t) => (
+        {TYPES.map(({ id, label, icon: Icon }) => (
           <Button
-            key={t}
+            key={id}
             size="sm"
-            variant={same('type') && picked[0].type === t ? 'default' : 'outline'}
-            onClick={() => each({ type: t, ...(t === 'task' ? {} : { done: false }) })}
+            variant={same('type') && picked[0].type === id ? 'default' : 'outline'}
+            onClick={() => each({ type: id, ...(id === 'task' ? {} : { done: false }) })}
           >
-            {t[0].toUpperCase() + t.slice(1)}
+            <Icon className="size-3.5" />
+            {label}
           </Button>
         ))}
       </div>

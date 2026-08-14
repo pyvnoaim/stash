@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, ChevronDown, CloudOff, Copy, Download, KeyRound, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { AlarmClock, ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -22,12 +22,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
+import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, tally, trendFilter,
-  usMarketOpen, venueName, priceDigits, readInterval, toll,
+  venueName, priceDigits, readInterval, toll,
   scanBars, scanRead,
   type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing,
 } from '@/lib/market'
@@ -65,11 +65,8 @@ const NO_MARKS: { marks: SessionMark[]; overlaps: { x0: number; x1: number }[] }
 const VISIBLE = 60 // bars drawn by default; MAs/signals still use every fetched bar
 const MIN_BARS = 20, MAX_BARS = 400 // how far the wheel can zoom in and out
 const LIVE = 5000 // how often the forming candle is repriced
-// …and how often for stocks: their feed's 800-credit day bought four hours at 15s a tick, and a
-// daily bar repriced on the minute is still a live chart
-const LIVE_SLOW = 60_000
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
-const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
+const ROLL_RETRY = 60_000
 /**
  * The page's three sittings, and there used to be five.
  *
@@ -193,7 +190,7 @@ function CopyNum({ v, className, children }: { v: string; className?: string; ch
 
 export default function MarketPage() {
   const {
-    chart, apiKey, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
+    chart, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
     marketInterval: chosenInterval, marketPreset: preset,
   } = useStash()
   /* The regime rule is read on days whatever the selector was left on — its timeframe is part of
@@ -255,21 +252,19 @@ export default function MarketPage() {
   const fmt = (v: number) => fmtPrice(v, candles.at(-1)?.c ?? 1)
   // the same number without the grouping, for the clipboard — see CopyNum
   const plain = (v: number) => v.toFixed(priceDigits(candles.at(-1)?.c ?? 1))
-  const needKey = current.source === 'twelvedata' && !apiKey
 
   // the opening-range play only makes sense on 15m bars, so selecting it pins the interval
   useEffect(() => { if (preset === 'orb') setInterval('15m') }, [preset])
 
   const seq = useRef(0)
   useEffect(() => {
-    if (needKey) { setCandles([]); setError(''); return } // no feed without the key; the prompt shows instead
     if (feed === undefined) { setLoading(true); return } // which venue is still being asked — see useVenue
     const mine = ++seq.current // ignore a slow response once the user has moved on
     // drop the old asset's candles right away so a loading state shows instead of a stale chart
     // a new feed resets the view — a scroll position in 4h bars means nothing in 1w bars
     setLoading(true); setError(''); setHover(null); setCandles([]); setScroll(0); setWin(VISIBLE)
     nextRoll.current = 0
-    fetchCandles(current, interval, apiKey, feed)
+    fetchCandles(current, interval, feed)
       .then((c) => { if (mine === seq.current) { setCandles(c); setLoading(false) } })
       // offline the fetch fails on the browser's own message ("Load failed", "Failed to fetch"),
       // which reads as a bug rather than the plain fact that this view was never cached
@@ -278,7 +273,7 @@ export default function MarketPage() {
         setError(navigator.onLine ? e.message : 'Offline — no saved bars for this view')
         setCandles([]); setLoading(false)
       })
-  }, [asset, interval, nonce, apiKey, needKey, feed]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asset, interval, nonce, feed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The bigger picture, twice over. `higher` is the timeframe one step up and votes in the tally —
   // the "don't fight the bigger picture" card. `anchor` is the daily (the weekly, once you're on the
@@ -290,55 +285,51 @@ export default function MarketPage() {
   const [anchor, setAnchor] = useState<Signal | null>(null)
   useEffect(() => {
     setHigher(null); setAnchor(null)
-    if (needKey || feed === undefined) return
+    if (feed === undefined) return
     let on = true
     const lean = (iv?: Interval) => (iv
-      ? fetchCandles(current, iv, apiKey, feed).then((c) => trendFilter(c, cfg.slow, iv)).catch(() => null)
+      ? fetchCandles(current, iv, feed).then((c) => trendFilter(c, cfg.slow, iv)).catch(() => null)
       : Promise.resolve(null))
     const up = HIGHER[interval], anc = ANCHOR[interval]
     const upLean = lean(up)
     // on 1h the step up already *is* the daily — one request, read twice, not two identical calls.
-    // Twelve Data's free tier allows 8 a minute and an interval switch already spends one on candles.
     const ancLean = anc === up ? upLean : lean(anc)
     upLean.then((s) => { if (on) setHigher(s) })
     ancLean.then((s) => { if (on) setAnchor(s) })
     return () => { on = false }
-  }, [asset, interval, nonce, apiKey, needKey, cfg.slow, feed]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asset, interval, nonce, cfg.slow, feed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The forming candle, kept alive off the last-price endpoint: its close follows the tick and its
   // high/low stretch to hold it, exactly as the real bar is doing on the exchange. One tiny request
-  // rather than refetching the window — a stock refetch is 5000 rows and Twelve Data's free tier
-  // allows 8 calls a minute, which a 5-second full poll would burn through immediately.
+  // rather than refetching the window — a full refetch is a thousand rows, and a 5-second poll of
+  // those is bytes and venue weight spent to move one candle's close.
   // Once the bar's own duration is up it has closed, so the window is refetched properly and the
   // new bar arrives from the feed rather than being invented here.
   // ponytail: polling, not a websocket. A socket means reconnects, backoff and a second code path
-  // for the stock feed that hasn't got one; swap it in if this ever needs to be tick-accurate.
+  // for each venue; swap it in if this ever needs to be tick-accurate.
   const lastAt = useRef(0)
   const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
   useEffect(() => {
     setNotLive(false) // a new view has not probed yet, so it makes no claim either way
-    if (needKey || !live || !online || feed === undefined) return // nothing to poll for with no feed to poll
+    if (!live || !online || feed === undefined) return // nothing to poll for with no feed to poll
     let on = true
     const tick = () => {
       const t = lastAt.current
       if (!t) return
       /* The bar's duration is up, so it has closed and the window is refetched for the real next
          one. Behind a cool-off, because "the last bar is older than one bar" is also permanently
-         true whenever the market is *shut* — a stock over a weekend would otherwise refetch 5000
-         rows every fifteen seconds, forever, against a feed that allows eight calls a minute, and
-         never converge because the answer keeps coming back the same. */
+         true whenever a book goes quiet — without it a stalled feed refetches the whole window
+         every fifteen seconds, forever, and never converges because the answer keeps coming back
+         the same. */
       if (Date.now() >= t + BAR_MS[interval] && Date.now() >= nextRoll.current) {
-        // a stock bar cannot roll while its market is shut — all night, this retry was buying
-        // the same closed session over and over at a credit a call
-        if (current.source === 'twelvedata' && !usMarketOpen()) return
-        nextRoll.current = Date.now() + (current.source === 'twelvedata' ? ROLL_RETRY_SLOW : ROLL_RETRY)
-        fetchCandles(current, interval, apiKey, feed)
+        nextRoll.current = Date.now() + ROLL_RETRY
+        fetchCandles(current, interval, feed)
           .then((fresh) => { if (on && fresh.length) setCandles(fresh) })
           .catch(() => {})
         return
       }
-      fetchPrices([current.id], apiKey, Date.now(), feed).then((pr) => {
+      fetchPrices([current.id], feed).then((pr) => {
         const px = pr[current.id]
         if (!on) return
         // fetchPrices resolves either way and simply omits what it could not get, so an absent
@@ -352,9 +343,9 @@ export default function MarketPage() {
         })
       }).catch(() => {})
     }
-    const h = window.setInterval(tick, current.source === 'twelvedata' ? LIVE_SLOW : LIVE)
+    const h = window.setInterval(tick, LIVE)
     return () => { on = false; window.clearInterval(h) }
-  }, [asset, interval, apiKey, needKey, live, online]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asset, interval, live, online]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const view = useMemo(() => (candles.length ? signals(candles, cfg) : null), [candles, cfg])
 
@@ -405,12 +396,12 @@ export default function MarketPage() {
 
   // session-open x-positions, memoised off the candles so hovering doesn't re-run the Intl work.
   // Mark the first bar that reaches the open each local day — works whether bars run continuously
-  // (crypto) or resume after an overnight gap (stocks, whose first bar of the day already sits at 09:30).
+  // (which every book here is) or resume after a gap.
   const sessionMarks = useMemo(() => {
     if (interval === '1d' || interval === '1w') return NO_MARKS
     // a candle must actually START at the session open (within one bar) to count — so a session that
-    // falls inside a closed-market gap (Asia/Europe on a US-hours stock) is skipped, not stamped on
-    // the first bar after the gap. Continuous 24/7 crypto still catches every session.
+    // falls inside a gap in the bars is skipped, not stamped on the first bar after it. A
+    // continuous 24/7 book still catches every session.
     const barMin = BAR_MS[interval] / 60_000
     const v = vis
     const m = v.length
@@ -418,7 +409,7 @@ export default function MarketPage() {
     // the same scan runs over the drawn bars and the projected ones, so an open that hasn't happened
     // yet gets marked in the empty right-hand room. ponytail: projected bars just repeat the last
     // bar's spacing — right for the 24/7 feeds; on a gapped stock feed the mark still counts real
-    // time to the open, it only ignores that no bars print while the market is shut.
+    // time to the open, it only ignores that no bars print while a book is quiet.
     const step = v.at(-1)!.t - v.at(-2)!.t
     const ts = [...v.map((c) => c.t), ...Array.from({ length: future }, (_, k) => v.at(-1)!.t + (k + 1) * step)]
     const at = (i: number) => (i / (m - 1 + future)) * 100
@@ -905,7 +896,6 @@ export default function MarketPage() {
           intervals of klines at a feed before drawing the chart anybody actually opened. */}
       <ExchangePositions onOpen={setAsset} />
 
-      {needKey ? <KeyPrompt label={current.label} /> : (
       <>
       {/* The answer first, as one block: the price, the tally's side, the verdict, the levels, and
           what you're actually in. "What do I do" is the question the page exists for, and it used
@@ -1663,11 +1653,10 @@ export default function MarketPage() {
       </Card>
 
       </>
-      )}
       </div>
 
-      {/* outside the chart tab, so they are there while the desk loads, errors, or waits for a
-          stock key — none of them needs any of that.
+      {/* outside the chart tab, so they are there while the desk loads or errors — neither of them
+          needs any of that.
           Hidden rather than unmounted: a tab switch that threw away the Scan's rows would send
           sixty-odd chart calls back out to look for the answer it already had. Not rendered until
           the tab is first opened, though — the sweep should cost nothing to someone who only ever
@@ -2084,7 +2073,7 @@ function useSuggested(rows: ExchangePosition[]) {
     void Promise.all(naked.split(',').map(async (id) => {
       const a = ASSETS.find((x) => x.id === id)
       // 200 bars is well past what a 14-period ATR needs, and one call either way
-      const c = a ? await fetchCandles(a, SUGGEST_IV, '', feed, 200).catch(() => []) : []
+      const c = a ? await fetchCandles(a, SUGGEST_IV, feed, 200).catch(() => []) : []
       return [id, atr(c)] as const
     })).then((r) => {
       if (on) setAtrs(Object.fromEntries(r.filter((x): x is [string, number] => x[1] != null)))
@@ -2665,7 +2654,7 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
           </div>
           {!rows.length ? (
             <p className="text-muted-foreground py-4 text-sm">
-              Nothing filed yet. The desk reads every keyless chart a few times an hour and files the
+              Nothing filed yet. The desk reads every chart a few times an hour and files the
               setups it grades top — the ones the Scan card prints in green. Quiet days file nothing,
               which is itself the answer to how often this rule actually speaks.
             </p>
@@ -3362,7 +3351,7 @@ const scanCard = (
 }
 
 /**
- * One sweep of klines for every keyless asset, shared by the strip above the chart and the Scan
+ * One sweep of klines for every asset, shared by the strip above the chart and the Scan
  * tab below it — the only part of a scan that touches a network.
  *
  * ponytail: one sweep per mount and per `nonce`, not a cache with a clock. Two mounts still fetch
@@ -3374,8 +3363,8 @@ function useScanBars(feed: VenueFeed, nonce = 0) {
     if (feed === undefined) return
     let on = true
     setFeeds(null)
-    void Promise.all(ASSETS.filter((a) => a.source !== 'twelvedata')
-      .map(async (a) => ({ a, bars: await scanBars(a, '', feed).catch(() => null) })))
+    void Promise.all(ASSETS
+      .map(async (a) => ({ a, bars: await scanBars(a, feed).catch(() => null) })))
       .then((r) => { if (on) setFeeds(r.filter((x): x is ScanFeed => !!x.bars)) })
     return () => { on = false }
   }, [feed, nonce])
@@ -3464,11 +3453,51 @@ const TIER_CLS = [
 ] as const
 
 /**
- * Which asset is worth opening, without opening them: every keyless asset through the desk's own
+ * The sweep, while it is out. One line per asset in the table's own grid, pulsing — a sentence
+ * saying "Reading every chart…" was a line of text where a table was about to be, and the card
+ * jumped its own height the moment the rows landed.
+ *
+ * The shape is knowable before the answer is: it is one row per asset on the list, every time. So
+ * the room is held, the columns are already where they will be, and the rows arrive in the space
+ * that was theirs. Only the shape, never a number — a stale reading pulsing as if it were loading
+ * would be the one thing this card must not do.
+ */
+function ScanPlaceholder() {
+  return (
+    <div role="status" aria-label="Reading every chart">
+      {/* the heading strip's own row, so the interval labels do not appear from nowhere */}
+      <div className={cn(SCAN_GRID, 'mb-1 px-1.5')}>
+        <span /><span /><span />
+        <span className="flex gap-1">
+          {INTERVALS.map((iv) => <Skeleton key={iv} className="h-2.5 w-8" />)}
+        </span>
+        <span /><span /><span />
+      </div>
+      {ASSETS.map((a, i) => (
+        <div key={a.id} className={cn(SCAN_GRID, 'border-border/40 border-b px-1.5 py-1.5 last:border-0')}
+          /* a shade quieter as the eye goes down, so the block reads as a list settling rather
+             than as twelve identical bars flashing in unison */
+          style={{ opacity: 1 - i * 0.05 }}>
+          <Skeleton className="size-4 rounded-full" />
+          <Skeleton className="h-3.5 w-16" />
+          <Skeleton className="h-3 w-8" />
+          <span className="flex gap-1">
+            {INTERVALS.map((iv) => <Skeleton key={iv} className="mx-auto h-3 w-3" />)}
+          </span>
+          <Skeleton className="h-4 w-full self-center" />
+          <Skeleton className="h-3 w-40" />
+          <Skeleton className="ml-auto h-3 w-7" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Which asset is worth opening, without opening them: every asset through the desk's own
  * read, best first. The picker can say what one asset thinks once you're on it; at the open the
  * question is which of eleven to even look at, and this is that pass in one card. Clicking a row
- * puts the desk on it. Stocks sit it out: eight more chart fetches against a feed that allows
- * eight calls a minute, on a market that also has a closing bell.
+ * puts the desk on it.
  * ponytail: fetched once per visit and on the refresh button, no live poll — these reads move by
  * the bar (an hour, a day), not by the tick. Five intervals an asset rather than one is five times
  * the calls on that one pass; Binance weights a klines call at 2 against 1200 a minute, so eleven
@@ -3510,7 +3539,7 @@ function Scan({ orbMode, interval, current, onPick }: {
         <div className="mb-2 flex items-baseline gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">Scan</span>
           <span className="text-muted-foreground text-xs">
-            every keyless chart on every timeframe, ranked by the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read
+            every chart on every timeframe, ranked by the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read
           </span>
           <Hint label="Refresh">
             <Button size="icon" variant="ghost" aria-label="Refresh" className="ml-auto size-6"
@@ -3524,7 +3553,6 @@ function Scan({ orbMode, interval, current, onPick }: {
             shortlist used to sit on the chart tab, a page away from the table it summarises. */}
         <SetupsNow rows={rows} orbMode={orbMode} interval={interval} horizon={horizon}
           current={current} onPick={onPick} />
-        {rows === null && <p className="text-muted-foreground py-4 text-sm">Reading every chart…</p>}
         {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">The feed is not answering.</p>}
         {!online && !!rows?.length && (
           <p className="text-amber-600 dark:text-amber-500 mb-1 flex items-center gap-1.5 text-xs">
@@ -3537,6 +3565,10 @@ function Scan({ orbMode, interval, current, onPick }: {
             so the scrolled edge is the card's edge rather than a stripe inside it. */}
         <div className="-mx-1.5 overflow-x-auto px-1.5">
         <div className="min-w-136">
+        {/* inside the scroller with the rows it stands in for: the grid's seven tracks are wider
+            than a phone, and a placeholder outside this box would be the one thing on the card
+            with no way to drag it into view */}
+        {rows === null && <ScanPlaceholder />}
         {/* the strip's heading, once — five arrows a row with no scale on them is a puzzle. The
             desk's own timeframe is marked, since that is the one the phrase and the plan belong to */}
         {!!rows?.length && (
@@ -3621,7 +3653,7 @@ function Scan({ orbMode, interval, current, onPick }: {
         </div>
         </div>
         {/* Three different things used to be one paragraph in a narrow column under a very wide
-            table: what the glyphs mean, how to read a row, and why the stocks are missing. Capping
+            table: what the glyphs mean and how to read a row. Capping
             it kept the line length honest and made the shape wrong instead — six short lines of
             prose hanging off the left edge of something 2000px wide.
             Split by what each part is for. The glyphs are a legend, so they read as chips on one
@@ -3651,24 +3683,3 @@ function Scan({ orbMode, interval, current, onPick }: {
    a minute per open tab and one more per row for the picture, to render a list this app had no
    opinion about. The bell that pointed at it went with it (see notify.ts), and so did its
    liquidity dials. The MCP tool still answers the same feed for an agent that asks. */
-
-// stocks come from Twelve Data; without a key they can't load, so prompt for one right here
-function KeyPrompt({ label }: { label: string }) {
-  const [k, setK] = useState('')
-  return (
-    <div className="mx-auto flex max-w-md flex-1 flex-col items-center justify-center gap-4 py-16 text-center">
-      <KeyRound className="text-muted-foreground size-8" />
-      <div>
-        <p className="text-lg">A key unlocks {label}</p>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Stock prices come from Twelve Data. Grab a free key at twelvedata.com and paste it — it stays on this device and never leaves in a backup. Crypto and gold need no key.
-        </p>
-      </div>
-      <div className="flex w-full gap-2">
-        <Input placeholder="Twelve Data API key" value={k} onChange={(e) => setK(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && k.trim()) setApiKey(k) }} />
-        <Button disabled={!k.trim()} onClick={() => setApiKey(k)}>Save</Button>
-      </div>
-    </div>
-  )
-}

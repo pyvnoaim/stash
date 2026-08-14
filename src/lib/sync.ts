@@ -8,7 +8,6 @@
  *    the newer edit so it wins, and theirs is a server snapshot, not a loss
  *  - a pull (start, focus, coming back online) adopts the server's document unless we are dirty,
  *    in which case the push goes first — local edits are never silently dropped
- *  - the Twelve Data key never leaves the machine, the same promise the backup export makes
  *  - no server, no session, no network: the app keeps working from localStorage alone
  *
  * The version-and-dirty record lives in localStorage too, beside the data, so tabs share it and
@@ -133,8 +132,6 @@ async function run(): Promise<void> {
   setSnap({ status: 'busy' })
   try {
     const at = rev
-    // the Twelve Data key rides along: typed on one device, the stocks work on all of them.
-    // The backup export still strips it — a file handed to someone else is a different promise.
     const body = JSON.stringify({ state: getState(), device })
     let r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(m.v) }, body })
     if (r.status === 409) {

@@ -258,8 +258,9 @@ export function createPaper(db: DatabaseSync) {
   }
 
   let bars: { at: number; by: Map<string, Record<Interval, Candle[]>> } | null = null
-  /** Every keyless asset — the stocks ride a key that never leaves the browser it was typed into. */
-  const MINE = ASSETS.filter((a) => a.source !== 'twelvedata')
+  /** Every asset. It used to filter out the ones riding a key that never left the browser; the
+   *  list has only perpetuals on it now, so the filter matched everything and said nothing. */
+  const MINE = ASSETS
 
   async function refreshBars(at: number) {
     if (bars && at - bars.at < BARS_EVERY) return
@@ -377,7 +378,7 @@ export function createPaper(db: DatabaseSync) {
     // --- and move the ones already running ---
     const live = q.open.all() as Paper[] & { user: number }[]
     if (!live.length) return
-    const prices = await fetchPrices([...new Set(live.map((p) => p.asset))], '')
+    const prices = await fetchPrices([...new Set(live.map((p) => p.asset))])
       .catch(() => ({} as Record<string, number>))
     for (const p of live as (Paper & { user: number })[]) {
       const price = prices[p.asset]

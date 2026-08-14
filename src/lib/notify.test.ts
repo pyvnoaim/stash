@@ -22,7 +22,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // typed as State so the literal unions in it (v: 1, theme: 'auto', …) survive, and a field the
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {}, subSort: 'recent',
+  projectSort: 'manual', collapsed: [], chart: 'line', hotkeys: {}, subSort: 'recent',
   subView: 'expense', calView: 'month', watches: [], alarms: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
   marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', dials: DIALS, dismissed: {} }
 

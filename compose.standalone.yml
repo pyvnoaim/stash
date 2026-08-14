@@ -10,7 +10,6 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      STASH_TD_KEY: ${STASH_TD_KEY:-}
     ports: ['127.0.0.1:8787:8787']
     volumes: ['stash:/data']
     healthcheck:

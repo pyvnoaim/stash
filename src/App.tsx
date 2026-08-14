@@ -273,11 +273,15 @@ export default function App() {
    *  onSelect, so an un-re-rendered row holds an old pick — the refs keep even that old one current. */
   const pickState = useRef({ items, focus: s.focus })
   pickState.current = { items, focus: s.focus }
+  /* Every click that opens a row, counted. The inspector puts the caret in its Title on each one —
+     it is the click that means "I am about to write here", where J and K mean "show me the next
+     one", and only this half is allowed to take the keyboard. */
+  const [clicked, setClicked] = useState(0)
   const pick = (id: string, range: boolean) => {
     const { items: list, focus: anchor } = pickState.current
     const from = list.findIndex((i) => i.id === anchor)
     const to = list.findIndex((i) => i.id === id)
-    if (!range || from < 0 || to < 0) { setMarked([]); focus(id); return }
+    if (!range || from < 0 || to < 0) { setMarked([]); focus(id); setClicked((n) => n + 1); return }
     setMarked(list.slice(Math.min(from, to), Math.max(from, to) + 1).map((i) => i.id))
   }
 
@@ -661,7 +665,7 @@ export default function App() {
           const open = !page && !paged && !inTrash && (marked.length > 1 || !!selected)
           const panel = page || paged || inTrash ? null : marked.length > 1
             ? <Selection ids={marked} onDelete={() => drop(marked)} />
-            : selected ? <Inspector it={selected} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} onOpenItem={openPage} /> : null
+            : selected ? <Inspector it={selected} openedAt={clicked} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} onOpenItem={openPage} /> : null
           if (panel) panelRef.current = panel
           return (
             <>

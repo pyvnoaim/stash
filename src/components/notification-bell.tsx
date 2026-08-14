@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { ASSETS, fetchMoves, fetchPrices, fetchStockHours } from '@/lib/market'
+import { ASSETS, fetchMoves, fetchPrices } from '@/lib/market'
 import { useVenue } from '@/lib/venue'
 import {
   alarmAlerts, alerts, moverAlerts, nakedAlerts, resultAlerts, watchAlerts, watchProgress,
@@ -22,30 +22,15 @@ const DOT: Record<Alert['tone'], string> = {
    lot, so there is no reason for this to be a shorter hand-kept list than the one the picker shows:
    the coin you are not watching is exactly the one whose move you would want telling about. */
 // every contract on the desk's own books — there is no third feed to leave out any more
-const MOVERS = ASSETS.filter((a) => a.source !== 'twelvedata')
-/* And the stocks, on their own timer. They were left out of this entirely, which meant the desk
-   could tell you gold had moved and never that Nvidia had. Two things keep them apart from the
-   sweep above rather than in it: the key, which lives in this browser and never reaches the push
-   server — so this half is in-tab only, and a closed phone still hears about crypto alone — and
-   Twelve Data's free tier of 800 calls a day, which a poll on the minute would spend by lunch. */
-// the Stocks group only, not everything Twelve Data serves: the sweep's batch call pays one
-// credit per symbol and eight stocks already spend the free tier's whole minute. The index
-// ETFs sit it out — an hour that moves SPY a whole percent is one the stocks will be shouting about anyway.
-const STOCKS = ASSETS.filter((a) => a.source === 'twelvedata' && a.group === 'Stocks')
+const MOVERS = ASSETS
 const POLL = 60_000 // how often saved setups are re-priced while the app is open
-/* Five minutes: 288 calls a day against the 800 allowed, leaving room for the setup poll beside
-   it. An hourly bar barely moves inside five minutes, so nothing is missed for the arithmetic. */
-/* Every batched call costs one credit per symbol on a 800-a-day budget: eight stocks on five
-   minutes was 96 an hour, which is the whole day's allowance spent by mid-session. Fifteen
-   minutes still catches "moved 3% in the last hour" with the day's budget to spare. */
-const STOCK_POLL = 15 * 60_000
 
 export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => void }) {
   const s = useStash()
   const [open, setOpen] = useState(false)
   /* The readings, not the sentences. Both sweeps below write rows and the wording happens in one
      memo underneath, so turning a threshold in Settings changes the bell on the spot rather than
-     on whichever poll happens next — which for the stocks is five minutes of wondering if it took. */
+     on whichever poll happens next. */
   const [movers, setMovers] = useState<Mover[]>([])
 
   /* The minute, as state: a task that names 10:15 has to turn overdue at 10:15, not at the next
@@ -78,25 +63,8 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     return () => { live = false; clearInterval(h) }
   }, [feed])
 
-  /* The same reading for the stocks, on the slower timer their feed can afford. Their own state,
-     not appended to the one above: the two arrive on different clocks, and one list written by two
-     timers would have each of them wiping the other's rows every time it landed. */
-  const [stockMovers, setStockMovers] = useState<Mover[]>([])
-  useEffect(() => {
-    if (!s.apiKey) { setStockMovers([]); return }
-    let on = true
-    const tick = () => fetchStockHours(STOCKS.map((a) => a.id), s.apiKey)
-      .then((rows) => {
-        if (!on) return
-        setStockMovers(rows.flatMap((h): Mover[] => {
-          const a = STOCKS.find((x) => x.id === h.id)
-          return a ? [{ asset: a.id, label: a.label, open: h.open, last: h.last, high: h.high, low: h.low }] : []
-        }))
-      })
-    tick()
-    const h = setInterval(tick, STOCK_POLL)
-    return () => { on = false; clearInterval(h) }
-  }, [s.apiKey])
+  /* A second movers poll stood here for the stocks, on its own slower timer and its own state,
+     because their feed charged a credit per symbol against 800 a day. There are no stocks. */
 
   // saved setups, re-priced on a timer. The joined ids are the dep so the poll only restarts when
   // the set of watched assets actually changes, not on every unrelated write to the store.
@@ -109,14 +77,14 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     // the whole session: this effect's deps are the watched ids, so it never re-ran on the answer
     if (feed === undefined) return
     let on = true
-    // merged over the last answer: off-hours fetchPrices omits the stocks entirely (see
-    // usMarketOpen), and a watched stock's closing price is still the true one to read it at
-    const tick = () => fetchPrices(assets.split(','), s.apiKey, Date.now(), feed)
+    // merged over the last answer rather than replacing it: an id the feed could not price this
+    // tick keeps the price it had, and a missing one fires nothing either way
+    const tick = () => fetchPrices(assets.split(','), feed)
       .then((p) => { if (on) setLive((prev) => ({ ...prev, ...p })) })
     tick()
     const h = setInterval(tick, POLL)
     return () => { on = false; clearInterval(h) }
-  }, [assets, s.apiKey, feed])
+  }, [assets, feed])
   const setups = useMemo(() => watchAlerts(s.watches, live, s.stake, s.dials), [s.watches, live, s.stake, s.dials])
 
   /* The same prices, written down. A setup whose entry the price has really reached is marked as
@@ -168,7 +136,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   const gone = (id: string) => (s.dismissed[id] ?? 0) > Date.now()
 
   // every market reading worded at once, against the thresholds market.ts holds
-  const market = useMemo(() => moverAlerts([...movers, ...stockMovers]), [movers, stockMovers])
+  const market = useMemo(() => moverAlerts(movers), [movers])
 
   const shown = [...stateAlerts, ...naked, ...setups, ...rung, ...done, ...market].filter((a) => !gone(a.id))
   const drop = dismissAlerts

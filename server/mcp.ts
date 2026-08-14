@@ -10,9 +10,8 @@
  *   STASH_URL=https://stash.example STASH_USER=leon STASH_PASS=… \
  *     node --experimental-strip-types server/mcp.ts
  *
- * The Twelve Data key deliberately never leaves the browser it was typed into — `sync.ts` blanks it
- * on every push — so the nine stocks need `STASH_TD_KEY` here as well. The eleven keyless assets,
- * and everything about the stash itself, work without one.
+ * Every asset here is a USDT perpetual off a keyless public book, so there is nothing to configure
+ * beyond the three variables above.
  */
 import { realpathSync } from 'node:fs'
 import type { Interval, Signal } from '../src/lib/market.ts'
@@ -38,7 +37,6 @@ const envCfg = () => ({
   url: (process.env.STASH_URL ?? 'http://localhost:8787').replace(/\/+$/, ''),
   user: (process.env.STASH_USER ?? '').trim().toLowerCase(),
   pass: process.env.STASH_PASS ?? '',
-  tdKey: process.env.STASH_TD_KEY ?? '',
 })
 
 /**
@@ -63,7 +61,7 @@ const serial = <T>(fn: () => Promise<T>): Promise<T> => {
  * one of these built from the environment, and the hosted /mcp route builds one per user. The
  * session cookie and document version live here; the store and the queue stay shared above.
  */
-export function createStash({ url, user, pass, tdKey = '' }: { url: string, user: string, pass: string, tdKey?: string }) {
+export function createStash({ url, user, pass }: { url: string, user: string, pass: string }) {
 
 let cookie = ''
 
@@ -113,7 +111,7 @@ async function push() {
      than what survived it would be telling the one lie that matters: `due: '2026-13-45'` reads as
      set, is dropped by the next reader, and the task is simply never due. */
   store.adoptRemote(store.getState())
-  const body = JSON.stringify({ state: { ...store.getState(), apiKey: '' }, device: UA })
+  const body = JSON.stringify({ state: store.getState(), device: UA })
   const put = (v: number) => api('/state', { method: 'PUT', headers: { 'if-match': String(v) }, body })
   let r = await put(version)
   if (r.status === 409) r = await put((await r.json() as { version: number }).version)
@@ -415,7 +413,6 @@ const tools: Record<string, {
       const want = asset(a.asset ?? s.marketAsset)
       const interval = (a.interval ?? cfg.interval) as Interval
       if (!market.INTERVALS.includes(interval)) throw new Error(`no such interval: ${interval}`)
-      if (want.source === 'twelvedata' && !tdKey) throw new Error(`${want.label} rides Twelve Data — set STASH_TD_KEY (the app's key never reaches the server)`)
 
       // the timeframe one step up votes too — "don't fight the bigger picture", the same card the
       // desk leads with. Its own fetch: the slow MA wants 200 of its bars, which this window has
@@ -423,8 +420,8 @@ const tools: Record<string, {
       // trips of latency for one answer. It fails quietly: a filter, not the feed.
       const up = market.HIGHER[interval]
       const [candles, higher] = await Promise.all([
-        market.fetchCandles(want, interval, tdKey),
-        up ? market.fetchCandles(want, up, tdKey).then((c) => market.trendFilter(c, cfg.slow, up)).catch(() => null) : null,
+        market.fetchCandles(want, interval),
+        up ? market.fetchCandles(want, up).then((c) => market.trendFilter(c, cfg.slow, up)).catch(() => null) : null,
       ])
       if (!candles.length) throw new Error('the feed returned no bars')
       const view = market.signals(candles, cfg)

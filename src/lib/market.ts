@@ -20,10 +20,14 @@ export type Candle = { t: number; o: number; h: number; l: number; c: number; v?
 
 /* No Binance and no spot. Every desk here trades perpetuals on Bitget or MEXC, so those are the
    two books the app reads — a level is only worth what it is on the book the order rests on, and
-   Binance's spot price was neither of them. `twelvedata` stays in the union with no asset on it:
-   the stocks are out for now (see ASSETS) and their fetcher is left where it is, so putting them
-   back is a list again rather than a feed again. */
-export type Source = 'bitget' | 'mexc' | 'twelvedata'
+   Binance's spot price was neither of them.
+   `twelvedata` used to stay in the union with no asset on it, its fetcher parked so that putting
+   the stocks back would be a list again rather than a feed again. What it actually parked was a
+   whole second feed nothing could reach: a key in the synced document, a key prompt, an
+   is-the-US-open clock, two slower poll rates, a filter the sweep applied to nothing, and a stock
+   bell that could never fire. Every asset here is a USDT perpetual. Putting stocks back is a feed
+   again, and that is the honest price of it. */
+export type Source = 'bitget' | 'mexc'
 export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
 
 /* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
@@ -58,8 +62,6 @@ export const ASSETS: Asset[] = [
 export const INTERVALS = ['5m', '15m', '1h', '4h', '1d', '1w'] as const
 export type Interval = (typeof INTERVALS)[number]
 
-// Twelve Data spells the intervals differently from Binance
-const TD_INTERVAL: Record<Interval, string> = { '5m': '5min', '15m': '15min', '1h': '1h', '4h': '4h', '1d': '1day', '1w': '1week' }
 // and Bitget capitalises everything from the hour up
 const BG_INTERVAL: Record<Interval, string> = { '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W' }
 // MEXC spells them out, and counts the hour in minutes
@@ -86,19 +88,18 @@ export type Venue = 'bitget' | 'mexc' | null
  * SOL_USDT in column arrays, a fetcher and two mappings for a venue nobody here has yet, and
  * perp-to-perp basis is cents where spot-to-perp was tens of them. Add it when someone sets that key.
  */
-const feedOf = (a: Asset, venue: Venue): Asset['source'] =>
+const feedOf = (_a: Asset, venue: Venue): Source =>
   // every id here is the same USDT perpetual on both books — SOLUSDT is SOL_USDT, gold included
   // (MEXC lists XAU_USDT), so nothing is pinned to one venue and the whole list moves together
-  a.source === 'twelvedata' ? a.source : venue === 'mexc' ? 'mexc' : 'bitget'
+  venue === 'mexc' ? 'mexc' : 'bitget'
 
-/** Routes to the right feed. All three return candles oldest → newest. Stocks need the key.
+/** Routes to the right feed. Both return candles oldest → newest.
  *  `bars` is how many are wanted: a chart takes the venue's ceiling, the movers sweep takes a day
  *  of them — asking for a thousand and keeping the last twenty-five is fifty times the bytes, once
  *  a minute, per asset. */
 export function fetchCandles(
-  asset: Asset, interval: Interval, apiKey: string, venue: Venue = null, bars = BARS,
+  asset: Asset, interval: Interval, venue: Venue = null, bars = BARS,
 ): Promise<Candle[]> {
-  if (asset.source === 'twelvedata') return fetchTwelve(asset.id, interval, apiKey)
   return feedOf(asset, venue) === 'mexc'
     ? fetchMexc(asset.id, interval, bars)
     : fetchBitget(asset.id, interval, bars)
@@ -113,28 +114,14 @@ export const BARS = 1000
  * or an id that isn't listed is simply absent from the result: a missing price fires no alert, and
  * that is the right way round for something that would otherwise nag you about a number it guessed.
  */
-/**
- * Whether the US session could be printing new prices — Mon–Fri, 13:00–21:30 UTC, wide enough to
- * cover daylight saving on both ends. Every Twelve Data call gates on this: the free tier is 800
- * credits a day at one credit per symbol, and a poll against a shut market spends them asking for
- * a number that cannot have changed. ponytail: no holiday calendar — a closed Thanksgiving burns a
- * few polls, and a calendar is a dependency with a maintenance schedule.
- */
-export const usMarketOpen = (now = Date.now()) => {
-  const d = new Date(now)
-  const h = d.getUTCHours() + d.getUTCMinutes() / 60
-  return d.getUTCDay() >= 1 && d.getUTCDay() <= 5 && h >= 13 && h <= 21.5
-}
-
 export async function fetchPrices(
-  ids: string[], apiKey: string, now = Date.now(), venue: Venue = null,
+  ids: string[], venue: Venue = null,
 ): Promise<Record<string, number>> {
   const assets = ids.map((id) => ASSETS.find((a) => a.id === id)).filter((a): a is Asset => !!a)
   // the same routing the candles take — an alert fired off a price from a book the chart never
   // showed is the level being wrong twice
   const mx = assets.filter((a) => feedOf(a, venue) === 'mexc').map((a) => a.id)
   const bg = assets.filter((a) => feedOf(a, venue) === 'bitget').map((a) => a.id)
-  const td = assets.filter((a) => a.source === 'twelvedata').map((a) => a.id)
   const out: Record<string, number> = {}
   const put = (id: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) out[id] = n }
 
@@ -152,73 +139,14 @@ export async function fetchPrices(
       .then((r) => r.json())
       .then((j: { data?: { lastPr?: string }[] }) => put(id, j?.data?.[0]?.lastPr)),
   )
-  // a shut market's last price is the closing price the caller already has — see usMarketOpen
-  if (td.length && apiKey && usMarketOpen(now)) jobs.push(
-    fetch(`https://api.twelvedata.com/price?symbol=${encodeURIComponent(td.join(','))}&apikey=${encodeURIComponent(apiKey)}`)
-      .then((r) => r.json())
-      .then((j: Record<string, { price?: string }> & { price?: string }) => {
-        // one symbol comes back bare, several come back keyed by symbol
-        if (td.length === 1) put(td[0], j.price)
-        else for (const id of td) put(id, j[id]?.price)
-      }),
-  )
   await Promise.all(jobs.map((p) => p.catch(() => {})))
   return out
 }
 
-/* ---------- the stocks' last hour ---------- */
-
-/** One listed asset's hour and the session it sits in — what moverMove reads, before it is words. */
-export type Hour = { id: string; open: number; last: number; high: number; low: number }
-
-/** A bar older than this is a market that shut, not a move. Without it the closing hour of a US
- *  session would be announced all evening and again all night, every poll, to nobody's benefit. */
-const STOCK_STALE = 2 * 3600_000
-
-/**
- * Twelve Data's hourly bars, turned into the same reading the crypto sweep produces. Pure, so a
- * real payload can be held against it without a network.
- *
- * The range here is the session's rather than a rolling 24 hours: a stock does not trade overnight,
- * and the eight bars asked for cover a US day with an hour to spare. That is the honest denominator
- * for "how much of today did this hour eat" on something that only has six and a half of them.
- */
-export function parseStockHours(json: unknown, ids: string[], now = Date.now()): Hour[] {
-  if (!json || typeof json !== 'object') return []
-  type Row = { datetime: string; open: string; high: string; low: string; close: string }
-  const j = json as Record<string, { values?: Row[] }> & { values?: Row[] }
-  return ids.flatMap((id): Hour[] => {
-    /* One symbol comes back bare, several come back keyed by symbol — the asymmetry fetchPrices
-       meets. Read either shape rather than deciding from the count: the count is what was asked
-       for, and the shape is what arrived. */
-    const rows = j[id]?.values ?? j.values
-    if (!Array.isArray(rows) || !rows.length) return []
-    // newest first, the way this feed answers. timezone=UTC on the request makes these absolute
-    const t = rows[0].datetime
-    const at = Date.parse(t.includes(' ') ? t.replace(' ', 'T') + 'Z' : t + 'T00:00:00Z')
-    if (!isFinite(at) || now - at > STOCK_STALE) return []
-    const open = +rows[0].open, last = +rows[0].close
-    const highs = rows.map((r) => +r.high).filter((n) => isFinite(n) && n > 0)
-    const lows = rows.map((r) => +r.low).filter((n) => isFinite(n) && n > 0)
-    if (!(open > 0) || !(last > 0) || !highs.length || !lows.length) return []
-    return [{ id, open, last, high: Math.max(...highs), low: Math.min(...lows) }]
-  })
-}
-
-/**
- * The stocks' last hour, in one call for all of them. Separate from fetchCandles because it must
- * never be the cached one — see the note on the worker's routes in vite.config.ts — and separate
- * from the crypto sweep because the free tier allows 800 calls a day, which a poll on the minute
- * spends by lunchtime. A key it does not have, or a feed that fails, says nothing at all.
- */
-export function fetchStockHours(ids: string[], apiKey: string, now = Date.now()): Promise<Hour[]> {
-  // off-hours the answer is a session that ended, which STOCK_STALE would discard anyway —
-  // skipping the call discards it before it costs ids.length credits
-  if (!apiKey || !ids.length || !usMarketOpen(now)) return Promise.resolve([])
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(ids.join(','))}`
-    + `&interval=1h&outputsize=8&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`
-  return fetch(url).then((r) => r.json()).then((j) => parseStockHours(j, ids, now)).catch(() => [])
-}
+/* The stocks' last hour lived here — Twelve Data's hourly bars parsed into the same Hour reading
+   the crypto sweep produces, gated on a US-session clock so a poll against a shut market did not
+   spend the free tier's 800 daily credits being told a closing price. It fed a bell for assets the
+   list no longer holds. */
 
 /**
  * MEXC's perpetuals, through this app's own server rather than from the browser: contract.mexc.com
@@ -278,7 +206,7 @@ export type Move = { id: string; label: string; hours: number; open: number; las
  */
 export async function fetchHours(assets: Asset[], venue: Venue = null): Promise<Hours[]> {
   const rows = await Promise.all(assets.map(async (a): Promise<Hours[]> => {
-    const c = await fetchCandles(a, '1h', '', venue, 25).catch(() => [])
+    const c = await fetchCandles(a, '1h', venue, 25).catch(() => [])
     return c.length ? [{ a, c }] : [] // a feed that is down says nothing, rather than guessing
   }))
   return rows.flat()
@@ -300,22 +228,6 @@ export function movesOf(rows: Hours[]): Move[] {
 }
 
 export const fetchMoves = (assets: Asset[], venue: Venue = null) => fetchHours(assets, venue).then(movesOf)
-
-async function fetchTwelve(symbol: string, interval: Interval, apiKey: string): Promise<Candle[]> {
-  if (!apiKey) throw new Error('Add a free Twelve Data key to load stocks')
-  // timezone=UTC so the datetimes are absolute — session markers convert to each exchange's local time
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}`
-    + `&interval=${TD_INTERVAL[interval]}&outputsize=5000&timezone=UTC&apikey=${encodeURIComponent(apiKey)}`
-  const j = await fetch(url).then((r) => r.json())
-  // Twelve Data reports its own errors in the body with 200 OK — a bad key or a hit rate limit lands here
-  if (j.status === 'error' || !Array.isArray(j.values)) throw new Error(j.message || 'No data for this symbol')
-  return j.values
-    .map((row: { datetime: string; open: string; high: string; low: string; close: string; volume?: string }) => {
-      const iso = row.datetime.includes(' ') ? row.datetime.replace(' ', 'T') + 'Z' : row.datetime + 'T00:00:00Z'
-      return { t: Date.parse(iso), o: +row.open, h: +row.high, l: +row.low, c: +row.close, v: row.volume ? +row.volume : undefined }
-    })
-    .reverse()
-}
 
 /* The memecoin end of the market. These never reach Binance and have no ticker: they are pools,
    keyed by address on a chain, and they live and die inside a day. GeckoTerminal's trending list is
@@ -2738,9 +2650,9 @@ export type ScanRow = {
 /** Every interval's bars for one asset, which is the only part of a scan that touches a network.
  *  Split from the reading below because the push server runs the same scan for everyone: the bars
  *  are fetched once a pass and then read once per document, against that person's own dials. */
-export async function scanBars(a: Asset, apiKey = '', venue: Venue = null): Promise<Record<Interval, Candle[]>> {
+export async function scanBars(a: Asset, venue: Venue = null): Promise<Record<Interval, Candle[]>> {
   const pairs = await Promise.all(INTERVALS.map(async (iv) =>
-    [iv, await fetchCandles(a, iv, apiKey, venue).catch(() => [] as Candle[])] as const))
+    [iv, await fetchCandles(a, iv, venue).catch(() => [] as Candle[])] as const))
   return Object.fromEntries(pairs) as Record<Interval, Candle[]>
 }
 

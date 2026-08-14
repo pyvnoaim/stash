@@ -60,10 +60,11 @@ function copyList() {
 }
 
 export function exportBackup() {
-  // strip the Twelve Data key — the store promises it never travels in a backup (store.ts apiKey)
-  const { apiKey: _drop, ...safe } = getState()
+  /* Nothing is stripped any more: the Twelve Data key was the only secret the document held, and
+     the feed that wanted it is gone. An exchange key has never been in here — those are typed into
+     Settings and kept on the server, and the server only ever says whether one is set. */
   const url = URL.createObjectURL(
-    new Blob([JSON.stringify(safe, null, 2)], { type: 'application/json' }),
+    new Blob([JSON.stringify(getState(), null, 2)], { type: 'application/json' }),
   )
   const a = Object.assign(document.createElement('a'), { href: url, download: `stash-${today()}.json` })
   a.click()

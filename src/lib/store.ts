@@ -360,9 +360,6 @@ export interface State {
   /** Parent projects folded shut in the sidebar. */
   collapsed: string[]
   chart: ChartStyle
-  /** Twelve Data key for the Markets stock feeds. Rides the sync so every device reads the
-   *  stocks; stripped from an exported backup, which is a file handed to someone else. */
-  apiKey: string
   /** Only the bindings that were changed; anything missing is the default in `HOTKEYS`. Local,
    *  like the theme — a keyboard is a property of the machine, not of the stash. */
   hotkeys: Record<string, string>
@@ -503,7 +500,7 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
   v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], chart: 'line', apiKey: '', hotkeys: {},
+  projectSort: 'manual', collapsed: [], chart: 'line', hotkeys: {},
   subSort: 'recent', subView: 'expense', calView: 'month',
   watches: [], alarms: [], results: [], stake: 0, desk: false,
   // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
@@ -727,7 +724,12 @@ export function load(data: unknown): State {
   if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'
   st.collapsed = Array.isArray(st.collapsed) ? st.collapsed.map(String) : []
   st.chart = st.chart === 'candles' ? 'candles' : 'line'
-  st.apiKey = typeof st.apiKey === 'string' ? st.apiKey : ''
+  /* The one field that has to be actively removed rather than merely stopped being read. `st` is
+     `{ ...blank(), ...raw }`, so anything a stored document carries rides through untouched and is
+     saved and synced again — which for a retired *credential* means the Twelve Data key would sit
+     in every document that ever held one, forever, for a feed that no longer exists. Deleted here,
+     so the first load after this build is the last one that ever sees it. */
+  delete (st as Partial<State> & { apiKey?: unknown }).apiKey
   /* only bindings the app has an action for, and only strings: a hand-edited backup must not be
      able to put a key on the keyboard that nothing will ever answer. */
   st.hotkeys = Object.fromEntries(
@@ -962,7 +964,6 @@ export function adoptRemote(data: unknown) {
     ...next,
     sel: isRoute(next, state.sel) ? state.sel : 'today',
     focus: null,
-    apiKey: next.apiKey || state.apiKey,
   }
   listeners.forEach((fn) => fn())
   adopting = true
@@ -1212,7 +1213,6 @@ export const select = (sel: string) => set((s) => ({ ...s, sel }))
 export const focus = (focus: string | null) => set((s) => ({ ...s, focus }))
 export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
 export const setChart = (chart: ChartStyle) => set((s) => ({ ...s, chart }))
-export const setApiKey = (apiKey: string) => set((s) => ({ ...s, apiKey: apiKey.trim() }))
 export const setSubSort = (subSort: SubSort) => set((s) => ({ ...s, subSort }))
 
 /** The binding in force for one action: yours if you set one, otherwise the one it shipped with. */
@@ -1641,7 +1641,7 @@ export function restoreSub(undo: { sub: Sub; at: number } | null) {
   })
 }
 
-// keep the live Twelve Data key on import — backups deliberately omit it, so a missing one must not
-// wipe the key already on this device (an older backup that still carries one is honoured)
-export const replaceAll = (data: unknown) =>
-  set((s) => { const next = load(data); return { ...next, apiKey: next.apiKey || s.apiKey } })
+/* Nothing to carry over any more: the Twelve Data key was the one field an import had to preserve
+   rather than replace, because backups deliberately omitted it and a missing one must not wipe the
+   key already on the device. The stocks feed is gone and so is the key. */
+export const replaceAll = (data: unknown) => set(() => load(data))

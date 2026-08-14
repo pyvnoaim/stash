@@ -51,16 +51,16 @@ const gold = ASSETS.find((a) => a.id === 'XAUUSDT')!
    since which one a reader gets is their key's business and offline must not depend on it. The
    MEXC one is this app's own route rather than the venue's: see fetchMexc. */
 for (const url of [
-  ...(await asked(() => fetchCandles(crypto, '1d', ''))),
-  ...(await asked(() => fetchCandles(gold, '1d', ''))),
-  ...(await asked(() => fetchCandles(crypto, '1d', '', 'mexc'))),
+  ...(await asked(() => fetchCandles(crypto, '1d'))),
+  ...(await asked(() => fetchCandles(gold, '1d'))),
+  ...(await asked(() => fetchCandles(crypto, '1d', 'mexc'))),
 ]) assert.ok(cached(url), `candles should be cached: ${url}`)
 
 // prices are not, on either feed, and must never quietly become so
 const priceUrls = [
-  ...(await asked(() => fetchPrices([crypto.id], ''))),
-  ...(await asked(() => fetchPrices([gold.id], ''))),
-  ...(await asked(() => fetchPrices([crypto.id], '', Date.now(), 'mexc'))),
+  ...(await asked(() => fetchPrices([crypto.id]))),
+  ...(await asked(() => fetchPrices([gold.id]))),
+  ...(await asked(() => fetchPrices([crypto.id], 'mexc'))),
 ]
 assert.ok(priceUrls.length >= 3, 'fetchPrices asked for nothing on one of the feeds')
 for (const url of priceUrls) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)

@@ -1,8 +1,8 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
-const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence, parseStockHours, moverMove,
+const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown, usMarketOpen,
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown,
   heikin, heikinRun, toll } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
@@ -939,42 +939,11 @@ assert.equal(fmtPrice(0.000001), '0.00000100')
    It drew the sparkline on each row of the Trending panel, and went with it — no other reader ever
    wanted a line for something that is not one of ASSETS. */
 
-/* The stocks' last hour. Its own reading rather than fetchCandles', because it is a live one — the
-   guards are the two things that would otherwise make it lie: a shut market's final hour announced
-   all evening, and a feed that left a symbol out read as a move from zero. */
-const hourRow = (t: string, o: number, h: number, l: number, c: number) =>
-  ({ datetime: t, open: String(o), high: String(h), low: String(l), close: String(c) })
-// 15:00 UTC on the day the clock below is set to, newest first the way this feed answers
-const at = Date.UTC(2026, 7, 4, 16, 30)
-const hours = {
-  NVDA: { values: [hourRow('2026-08-04 15:00:00', 100, 106, 99, 105), hourRow('2026-08-04 14:00:00', 98, 101, 94, 100)] },
-  TSLA: { values: [hourRow('2026-08-04 15:00:00', 200, 202, 199, 201)] },
-}
-const [nv] = parseStockHours(hours, ['NVDA'], at)
-assert.deepEqual(nv, { id: 'NVDA', open: 100, last: 105, high: 106, low: 94 },
-  'the hour is the newest bar; the range is every bar of the session')
-// the hour that moved reads as a mover, and it is the session's range it is measured against
-assert.ok(moverMove(nv.open, nv.last, nv.high, nv.low)?.up)
-assert.equal(parseStockHours(hours, ['NVDA', 'TSLA'], at).length, 2)
-
-// a market that shut hours ago has no news in it, however big its last hour was
-assert.deepEqual(parseStockHours(hours, ['NVDA'], at + 6 * 3600_000), [])
-// a symbol the feed left out is absent, never a move from zero
-assert.deepEqual(parseStockHours(hours, ['AAPL'], at), [])
-for (const junk of [null, 'nope', {}, { NVDA: {} }, { NVDA: { values: [] } }]) {
-  assert.deepEqual(parseStockHours(junk, ['NVDA'], at), [])
-}
-// one symbol comes back bare, and is read the same way
-assert.equal(parseStockHours({ values: hours.NVDA.values }, ['NVDA'], at).length, 1)
+/* parseStockHours and usMarketOpen were asserted here — the Twelve Data hourly parser and the
+   is-the-US-session-open clock that gated every call to it. Every asset on the list is a USDT
+   perpetual off a keyless book now; there is no second feed, no key, and no closing bell. */
 
 console.log('market: ok')
-
-// usMarketOpen gates every Twelve Data call: a mid-session Wednesday asks, a Saturday and a
-// European overnight do not — those were the polls that spent the day's 800 credits on a shut market
-assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 15, 0)), true)  // Wed 15:00 UTC — NY morning
-assert.equal(usMarketOpen(Date.UTC(2026, 7, 8, 15, 0)), false) // Saturday
-assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 3, 0)), false)  // overnight
-assert.equal(usMarketOpen(Date.UTC(2026, 7, 5, 21, 30)), true) // the wide edge still counts
 
 /* GeckoTerminal answers a rate-limit with no CORS header on it, so the browser reports a failed
    request rather than a 429 and the trending panel announced a feed that was up as unreachable.

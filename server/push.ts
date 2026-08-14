@@ -464,9 +464,9 @@ export function createPush(db: DatabaseSync) {
     /* The app's own pricer, which is what keeps the two venues apart. Batching every USDT symbol
        into one Binance call was what this did, and gold on Bitget is not a symbol Binance lists —
        one such row and the whole batch comes back as an error, which is every alert on the desk
-       going quiet to serve a watch on the one asset. It never throws and never returns a stock:
-       an id it cannot price is simply missing, and a missing price fires nothing. */
-    prices = await fetchPrices([...want], '')
+       going quiet to serve a watch on the one asset. It never throws: an id it cannot price is
+       simply missing, and a missing price fires nothing. */
+    prices = await fetchPrices([...want])
   }
 
   /* The listed assets that are moving, as of the last tick, already worded. Every contract on the
@@ -476,7 +476,7 @@ export function createPush(db: DatabaseSync) {
 
      This process reads the keyless books only. It never had a reader's own venue and should not:
      one push server serves every account, and the difference between two perp books is cents. */
-  const MOVERS = ASSETS.filter((a) => a.source !== 'twelvedata')
+  const MOVERS = ASSETS
   /* The tick's raw readings, not its sentences. Whether a move is worth waking someone for is that
      person's dial now, so the calls are made once and the wording happens per document — which
      is arithmetic over a dozen rows, not a request. */

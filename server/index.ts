@@ -1287,7 +1287,7 @@ export function start({
         const a = server.address()
         mcp = createStash({
           url: `http://127.0.0.1:${typeof a === 'object' && a ? a.port : port}`,
-          user: mu, pass: mp, tdKey: process.env.STASH_TD_KEY ?? '',
+          user: mu, pass: mp,
         })
         mcps.set(ck, mcp)
       }
@@ -1747,7 +1747,7 @@ export function start({
         'cache-control': forever ? 'public, max-age=31536000, immutable' : 'no-cache',
         'x-content-type-options': 'nosniff',
         // set here rather than in the proxy, so they hold whatever terminates TLS in front.
-        // wasm-unsafe-eval is pdf.js; the two hosts are the market feeds; nothing else may load.
+        // wasm-unsafe-eval is pdf.js; the one host is the market feed; nothing else may load.
         ...(ext === 'html' && {
           'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
             + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
@@ -1756,7 +1756,7 @@ export function start({
             // GeckoTerminal came off with the Trending panel: no browser code reaches it any more
             // (the MCP tool asks from this process), so the grant was permission for nothing —
             // and a connect-src host nothing uses is a host anything injected could use.
-            + "connect-src 'self' https://api.bitget.com https://api.twelvedata.com; "
+            + "connect-src 'self' https://api.bitget.com; "
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),
