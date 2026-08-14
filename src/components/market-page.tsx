@@ -2505,12 +2505,14 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
    trade's name there). The fixed tracks plus the gaps already came to more than a phone is wide,
    so the flexible one — the side — was being squeezed to nothing: a Side heading with no side
    under it, and the money sliding out under the share button. */
-/* …and capped, which is the same lesson the position tiles already learned: a row stretched across
-   a 2000px window puts what a trade paid a hand's width from the name of the asset that paid it,
-   and the eye has to travel the gap on every line to keep the two together. The dates hold the
-   slack up to the cap and the table simply stops widening after it — a measure, the way any table
-   meant to be read across has one. */
-const LOG_GRID = 'grid max-w-5xl items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,10rem)_1fr_4rem_3.5rem_4.5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_8rem]'
+/* The slack is shared rather than pooled. Only the dates were flexible, so every pixel a wide
+   window offered went into that one track and the row grew a hole in the middle of it — the dates
+   left-aligned against a stretch of nothing, and the numbers a hand's width away at the right edge.
+   Capping the whole table fixed the hole by making the table small, which is worse: a card two
+   thousand pixels wide with a thousand of them empty. So the three text columns take the growth
+   between them in proportion and the numeric ones stay the width of their own figures. Full width,
+   and nowhere for a gap to collect. */
+const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,10rem)_1fr_4rem_3.5rem_4.5rem] sm:grid-cols-[minmax(5rem,2fr)_minmax(5rem,1fr)_minmax(6rem,2fr)_4.5rem_3.5rem_8rem]'
 
 /**
  * A log reads in a window with its column headings pinned, not as a list that runs until the page
