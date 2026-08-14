@@ -2086,6 +2086,12 @@ function useSuggested(rows: ExchangePosition[]) {
 /** Money the way every tile prints it: signed, two decimals, in the currency the venue quotes. */
 const cashLabel = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
 
+/* One track per tile, as many as fit, and the last row stretches to fill the width. Two fixed
+   breakpoints meant two open positions on a wide window sat in the left two-thirds of the card
+   with a column of nothing beside them — the count of tiles is the thing that varies here, not
+   the window. auto-fit rather than auto-fill: an empty track is the dead space this replaces. */
+const TILE_GRID = 'grid gap-2 grid-cols-[repeat(auto-fit,minmax(19rem,1fr))]'
+
 /**
  * One open trade, as a tile: who it is and which way, what it is doing, and the levels behind it.
  * The same block for your own book and for everyone else's on the Desk — a position is a position,
@@ -2177,7 +2183,9 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     !bar && target != null && level('target', target),
     // the liq only where the bar is not already standing on it — a stopless position's losing end
     liq != null && !(bar && !bar.stopped) && level('liq', liq),
-    value != null && `worth $${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+    // two decimals like every other figure on the tile: $239.5 beside $219.26 read as a rounding
+    // nobody asked for, in the one column where money is supposed to line up
+    value != null && `worth $${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     /* what the price move did to the margin behind it — the number a leveraged trade is actually
        felt in. pct stays the price move it has always been; this is that times the multiplier, and
        it only appears where the venue said what the multiplier is. */
@@ -2187,7 +2195,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
       day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
     })}`,
     ...meta,
-  ].filter(Boolean).join(' · ')
+  ].filter((x): x is string => !!x)
   return (
     <div className="grid gap-1 rounded-md border px-2.5 py-2">
       <div className="flex items-center gap-2">
@@ -2237,7 +2245,14 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
           </div>
         </div>
       )}
-      {line && <p className="text-muted-foreground border-t pt-1 text-xs">{line}</p>}
+      {/* the same flex rhythm as the entry/now row above rather than a sentence joined by dots:
+          four unrelated facts strung into one grey line is the shape of prose, and none of them
+          is prose — spacing separates them where the interpuncts were only filling it */}
+      {!!line.length && (
+        <div className="text-muted-foreground flex flex-wrap gap-x-3 border-t pt-1 text-xs tabular-nums">
+          {line.map((t) => <span key={t}>{t}</span>)}
+        </div>
+      )}
     </div>
   )
 }
@@ -2258,7 +2273,7 @@ function PositionsPlaceholder() {
           <Skeleton className="ml-auto h-3 w-24" />
         </div>
         <Skeleton className="h-3 w-64" />
-        <div className="mt-0.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={cn('mt-0.5', TILE_GRID)}>
           {Array.from({ length: n }, (_, i) => (
             <div key={i} className="grid gap-2 rounded-md border px-2.5 py-2">
               <div className="flex items-center gap-2">
@@ -2365,7 +2380,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             P&L a screen away from the symbol it belonged to and left the middle empty; a tile keeps
             a trade's numbers inside its own box, and two or three of them sit side by side instead
             of one per line. */}
-        <div className="mt-0.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={cn('mt-0.5', TILE_GRID)}>
         {/* ponytail: no share button here. A card of a position still running is a number that has
             changed by the time anyone opens it, and the trade it brags about can still end red —
             the Record's rows are the ones with an answer on them. */}
@@ -3298,7 +3313,7 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
                 )}
                 {/* someone watching thirty setups is a list nobody reads, and it would push every
                     other desk off the page — the count below says what was left out */}
-                <div className="mt-1.5 grid gap-2 empty:hidden sm:grid-cols-2 xl:grid-cols-3">
+                <div className={cn('mt-1.5 empty:hidden', TILE_GRID)}>
                   {/* the same tile as your own book, off the same numbers: the money, the percent
                       and the R where a stop defines one, all read by the tile itself. A row from
                       someone's document knows none of them, and says so by leaving them out. */}
