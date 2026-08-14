@@ -100,10 +100,29 @@ const feedOf = (_a: Asset, venue: Venue): Source =>
 export function fetchCandles(
   asset: Asset, interval: Interval, venue: Venue = null, bars = BARS,
 ): Promise<Candle[]> {
-  return feedOf(asset, venue) === 'mexc'
+  /* The one place two books are ever mixed, and it buys the only rule on this desk that measures
+     positive. Bitget's daily endpoint serves 90 bars and no more, whatever you ask it for; the
+     regime rule is a 200-MA on daily bars, so on a Bitget desk it could never warm up and the card
+     said `warmup` for good — the reader was left with the trading rule, which is the one measured
+     to make nothing. MEXC keeps enough, is keyless and CORS-open the same way, and quotes the same
+     USDT perpetual. So a daily read that wants more bars than Bitget has goes to MEXC whichever
+     book the keys are on.
+     Nothing else crosses: the hourly sweep, the prices the alerts fire on and every level the desk
+     places all stay on the reader's own venue, which is the rule feedOf exists to keep. Perp-to-perp
+     basis on a daily close is cents — and a 200-MA is an average of two hundred of them. */
+  return feedOf(asset, venue) === 'mexc' || offMexc(interval, bars)
     ? fetchMexc(asset.id, interval, bars)
     : fetchBitget(asset.id, interval, bars)
 }
+
+/** What Bitget's daily candles top out at, measured against the endpoint rather than documented by
+ *  it: ask for a thousand and ninety come back. The 200-MA is what this number blocks. */
+export const BG_DAILY_MAX = 90
+
+/** Whether a read is the daily one that has to come off MEXC whoever the reader banks with. The
+ *  same test fetchCandles routes on, exported so the chart can say so rather than quietly showing
+ *  one book's bars under another book's prices. */
+export const offMexc = (interval: Interval, bars = BARS) => interval === '1d' && bars > BG_DAILY_MAX
 
 /** The window a chart reads, and every venue's own ceiling for one call. */
 export const BARS = 1000
@@ -2013,13 +2032,13 @@ export const HORIZONS = {
        entry-day stop, which is the rule they were filed under. Two rules, two names, one record. */
     strategy: 'Regime hold',
     rule: 'Long only. Own it at market while price is above the 200-MA, out on a daily close back under. No pull-back to wait for, no target, and nothing takes you out intraday. The wide high is a trim if you want one.',
-    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget keeps only 90 daily bars, so a 200-MA cannot exist there and the card says warmup rather than reading a faster chart.',
+    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget keeps only 90 daily bars and a 200-MA cannot exist on them, so the daily read comes off MEXC whichever book your keys are on — the chart says so. Before that it said warmup for good, and a Bitget desk could never run this rule at all.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
     strategy: 'VWAP pull-back',
     rule: 'Both sides, but only on your side of the session VWAP. Entry at the 9-MA, stop one ATR past it, target two — a fixed 2R. Flat by the session end.',
-    measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing before costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything.',
+    measured: 'Walked over 903 of its own filed setups — eight perps, 282 days of hourly bars, fees and stop slippage in — this rule came out at −0.06R a trade, with seven of the eight assets losing. On 15m bars, 1807 setups came out at −0.29R. It has no measured edge, and the tell is that it makes nothing before costs either: 37% of these reach the target where the geometry needs 33%, which is what a coin flip pays. Read the levels as information about the chart. They are not a reason to press anything — and the desk no longer does either: this rule files nothing into the record and knocks about nothing, on the strength of a second walk that found no setting of it that pays. See FILES.',
   },
 /* WHAT THE REGIME RULE COST TO GET WRONG, kept because the three things it does not do are the
    whole of it, and each one is the sort of thing that gets added back by someone improving it.
@@ -2064,6 +2083,28 @@ export const HORIZONS = {
    window talking. */
 } as const satisfies Record<string, { label: string; fast: number; slow: number; srWindow: number; interval: Interval; strategy: string; rule: string; measured: string }>
 export type Horizon = keyof typeof HORIZONS
+
+/**
+ * Which horizons the desk may act on by itself: file a row into the forward test, and knock a phone
+ * about a setup nobody saved. Both are the app volunteering a trade, which is a different act from
+ * drawing the levels — the chart, the Scan card and the plan on it are untouched by this, and go on
+ * saying what the rule reads. Read the levels; the desk just stops filing them as trades.
+ *
+ * The trading rule is not one of them, and `measured` above is why. Re-measured here over a wider
+ * window than that note's: ten perps, 3000 hourly bars each, 1233 filed setups, 0.06% a side and
+ * half a tick of stop slippage charged — −0.187R a trade at 34.2% hit, with eight of the ten assets
+ * losing. The geometry needs 33.3% to break even at 2R, so the read is worth a coin flip and the
+ * round trip is the whole of the loss.
+ *
+ * And it is not a tuning problem, which is the part worth writing down: the same walk over twelve
+ * pairs of its two free numbers — the stop at 0.5, 1, 1.5, 2 and 3 ATR against targets of 1, 1.5, 2
+ * and 3R — comes out negative in every cell. The best is 3 ATR at 1R, −0.017R, which is a loss
+ * indistinguishable from zero rather than an edge. At a 1-ATR stop the rule does beat its own
+ * geometry gross (58.5% where 1R needs 50%) and still loses net, because the fee and the slip are
+ * a fifth of an ATR-wide risk. There is no setting of this rule that pays. Turning it back on is
+ * one line, and wants a walk that clears costs first.
+ */
+export const FILES: Record<Horizon, boolean> = { long: true, short: false }
 
 /**
  * Which bars a horizon is actually read on — here, and shared, for the same reason `tally` and

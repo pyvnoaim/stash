@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -7,7 +7,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
@@ -15,19 +14,18 @@ import { GuideDialog } from '@/components/guide-dialog'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Hint } from '@/components/ui/tooltip'
 import { Sparkline } from '@/components/overview'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
+import { clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, tally, trendFilter,
-  venueName, priceDigits, readInterval, toll,
+  venueName, offMexc, priceDigits, readInterval, toll,
   scanBars, scanRead,
   type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing,
 } from '@/lib/market'
@@ -919,6 +917,15 @@ export default function MarketPage() {
                 <CloudOff className="size-3.5" />
                 {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
               </span>
+            )}
+            {/* the one read that crosses books, said out loud. A daily chart on a Bitget desk is
+                MEXC's bars, because Bitget keeps ninety of them and the 200-MA wants two hundred —
+                and a chart quietly drawn off a different book from the prices beside it is exactly
+                the kind of thing this desk says rather than hides. */}
+            {feed !== 'mexc' && offMexc(interval) && candles.length > 0 && (
+              <Hint label="Bitget serves 90 daily bars and the regime rule reads a 200-day average, so the daily chart is MEXC's — the same USDT perpetual on the other book. Every other bar size, and every price a level fires on, stays on your own venue.">
+                <span className="text-muted-foreground text-xs">daily bars from MEXC</span>
+              </Hint>
             )}
             {view && (
               <Hint label={`How the readings voted on this chart: ${bulls} lean up, ${bears} lean down. The verdict below is what that adds up to, not a reading of its own.`}>

@@ -30,7 +30,7 @@ import type { DatabaseSync } from 'node:sqlite'
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
 import {
-  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, MAINT, moverMove, opensIn, readInterval, scanBars, scanRead, SETUP_AGREE,
+  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, FILES, fmtPrice, HORIZONS, INTERVALS, localClock, MAINT, moverMove, opensIn, readInterval, scanBars, scanRead, SETUP_AGREE,
   type Move,
   SESSIONS, type Candle, type Interval,
 } from '../src/lib/market.ts'
@@ -543,6 +543,8 @@ export function createPush(db: DatabaseSync) {
     // saved, so it is the only one where "stop telling me" has to be a number you can set
     if (SETUP_AGREE <= 0) return []
     const horizon = doc?.marketHorizon === 'long' ? 'long' as const : 'short' as const
+    // and the same gate the record keeps: no knock about a setup from a rule measured flat — see FILES
+    if (!FILES[horizon]) return []
     /* The desk's own bars, not the horizon's default — the picker and the opening-range preset ride
        the document now, so the chart the notification is about is the chart you were last reading.
        The same two lines the Scan card is given on the page. */

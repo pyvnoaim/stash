@@ -19,7 +19,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  ASSETS, dialsOf, fetchPrices, HORIZONS, readInterval, scanBars, scanRead, SETUP_AGREE, sma,
+  ASSETS, dialsOf, fetchPrices, FILES, HORIZONS, readInterval, scanBars, scanRead, SETUP_AGREE, sma,
   type Candle, type Interval,
 } from '../src/lib/market.ts'
 import { intervalOf, lastBarOff } from './push.ts'
@@ -302,6 +302,8 @@ export function createPaper(db: DatabaseSync) {
     if (!bars) return []
     const d = dialsOf(doc)
     const horizon = doc?.marketHorizon === 'long' ? 'long' as const : 'short' as const
+    // a rule with no measured edge does not get to fill the record with its own rows — see FILES
+    if (!FILES[horizon]) return []
     const orbMode = doc?.marketPreset === 'orb'
     /* Through readInterval, like the plain path: the opening range is a 15m play, but the preset
        is stored separately from the horizon, so orb + Investing was reading a 200-day regime line
