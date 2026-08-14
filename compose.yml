@@ -2,8 +2,6 @@ services:
   stash:
     build: .
     restart: unless-stopped
-    # Optional: lets the hosted MCP route read the stocks — everything else runs the same without it.
-    environment:
     # A volume that already existed before the container dropped to the node user is still owned by
     # root, and Docker never re-stamps one it did not just create. Once, on an existing deployment:
     #   docker compose run --rm --user root --entrypoint chown stash -R node:node /data

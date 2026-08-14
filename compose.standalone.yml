@@ -9,7 +9,6 @@ services:
   stash:
     build: .
     restart: unless-stopped
-    environment:
     ports: ['127.0.0.1:8787:8787']
     volumes: ['stash:/data']
     healthcheck:
