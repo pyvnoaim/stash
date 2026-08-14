@@ -306,9 +306,11 @@ export default function SubsPage() {
                       variant="ghost"
                       size="icon"
                       aria-label={`Remove ${sub.name}`}
-                      className="text-muted-foreground hover:text-destructive size-8 shrink-0 opacity-0
-                        transition-opacity group-focus-within:opacity-100 group-hover:opacity-100
-                        focus-visible:opacity-100"
+                      // ponytail: visibility, not a transitioned opacity — a faded layer inside the
+                      // scrolling list gets left painted at 1 when the row is scrolled past mid-fade,
+                      // so icons stayed on rows the pointer had long left
+                      className="text-muted-foreground hover:text-destructive invisible size-8
+                        shrink-0 group-focus-within:visible group-hover:visible focus-visible:visible"
                       onClick={() => del(sub)}
                     >
                       <Trash2 />
