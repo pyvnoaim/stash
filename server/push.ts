@@ -32,9 +32,9 @@ import type { DatabaseSync } from 'node:sqlite'
    the alternative is the threshold that decides "is this worth waking someone" living in two
    files. The subscription maths below is the shape of that alternative, and its comment says so. */
 import {
-  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, MAINT, moverMove, opensIn, readInterval, scanBars, scanRead,
+  ASSETS, assetOf, dialsOf, fetchMoves, fetchPrices, fmtPrice, HORIZONS, INTERVALS, localClock, MAINT, moverMove, opensIn, readInterval, scanBars, scanRead, SETUP_AGREE,
   type Move,
-  SESSIONS, type Candle, type Dials, type Interval,
+  SESSIONS, type Candle, type Interval,
 } from '../src/lib/market.ts'
 /* The one venue with a book this process can read. Everything else here is a public feed served
    the same to everyone; this is one account's own orders, off the key it stored. */
@@ -49,6 +49,10 @@ const QUIET_UNTIL = 8
  *  is up to a dozen setups and two dozen mover readings, so fifty was not the margin it looked. */
 const KEEP_KEYS = 100
 const TICK = 60_000
+/** Minutes' warning before an exchange opens. Was a dial that shipped at zero; it is the value the
+ *  desk running this actually had it turned to, and 0 here is the off switch. An hour is the most
+ *  that is still news, and the tick is a minute, so under one would never fire. */
+const OPEN_IN = 15
 
 export interface Alert { key: string, title: string, body: string, target: string }
 
@@ -235,18 +239,18 @@ export function alertsOf(
      move is over by tomorrow morning and a task is not. */
   out.push(...market)
 
-  /* Then a market about to open, for anyone who has asked to be told: the minutes are a dial and
-     it ships at zero, because three knocks a day is a lot to hand someone who never set them.
+  /* Then a market about to open. This was a dial that shipped at zero and is now a constant set to
+     what the one desk running this had it turned to — a dial nobody could see the effect of was a
+     guess made once and never revisited. One line below to silence it: OPEN_IN = 0.
      The exchanges here trade none of the assets on the desk — they mark where the volume arrives,
      and gold and crypto move when it does.
      The key carries that market's own local day, so tomorrow's open is a new one. Not exempt from
      the quiet hours below, which is what keeps Tokyo — two in the morning in Berlin — from being
      a phone going off in the dark; a European or American open never lands in them. */
-  const openIn = dialsOf(s).openIn
-  if (openIn > 0) {
+  if (OPEN_IN > 0) {
     for (const m of SESSIONS) {
       const mins = opensIn(m, at)
-      if (mins === null || mins <= 0 || mins > openIn) continue
+      if (mins === null || mins <= 0 || mins > OPEN_IN) continue
       out.push({
         key: `open-${m.label}-${localClock(at, m.tz).day}`,
         title: `${m.where} opens in ${mins} minute${mins === 1 ? '' : 's'}`,
@@ -483,7 +487,7 @@ export function createPush(db: DatabaseSync) {
    *  morning of 5 Aug 2026, half the day's range, never printed a single hour over the floor.
    *  The four-hour read is also what carries a small-hours move past the quiet hours below: the
    *  spike's own hour is history by eight, but the window it sits in is still warm. */
-  function moversFor(dials: Dials): Alert[] {
+  function moversFor(): Alert[] {
     if (!ticks) return []
     const { moves, hr } = ticks
     /* The four-hour window stays warm as long as the run does, so its key is the quarter-day
@@ -494,7 +498,7 @@ export function createPush(db: DatabaseSync) {
       for (const a of MOVERS) {
         const h = moves.find((r) => r.id === a.id && r.hours === hours)
         if (!h) continue
-        const m = moverMove(h.open, h.last, h.high, h.low, dials)
+        const m = moverMove(h.open, h.last, h.high, h.low)
         if (!m) continue
         // the hour is looked at first, so when both windows catch one run the sharper sentence wins
         const id = `${a.id}-${m.up ? 'up' : 'down'}`
@@ -556,7 +560,7 @@ export function createPush(db: DatabaseSync) {
     const d = dialsOf(doc)
     // the off switch, and the reason there is one: this is the only knock about something nobody
     // saved, so it is the only one where "stop telling me" has to be a number you can set
-    if (d.setupAgree <= 0) return []
+    if (SETUP_AGREE <= 0) return []
     const horizon = doc?.marketHorizon === 'long' ? 'long' as const : 'short' as const
     /* The desk's own bars, not the horizon's default — the picker and the opening-range preset ride
        the document now, so the chart the notification is about is the chart you were last reading.
@@ -564,7 +568,7 @@ export function createPush(db: DatabaseSync) {
     const orbMode = doc?.marketPreset === 'orb'
     // through readInterval for the reason paper.ts gives: orb is a 15m play, the horizon is not
     const interval = readInterval(horizon, orbMode ? '15m' as const : intervalOf(doc, horizon))
-    const memo = `${horizon}-${interval}-${orbMode}-${d.fee}-${d.setupAgree}`
+    const memo = `${horizon}-${interval}-${orbMode}-${d.fee}`
     const had = scanned.get(memo)
     if (had) return had
 
@@ -578,7 +582,7 @@ export function createPush(db: DatabaseSync) {
       const row = scanRead(a, bars, horizon, interval, orbMode, d.fee)
       if (!row || row.tier !== 3 || !row.plan) continue
       // how many of the six charts lean this way, against the floor they set
-      if (row.agree < d.setupAgree) continue
+      if (row.agree < SETUP_AGREE) continue
       const bar = bars[interval]?.at(-1)
       if (!bar) continue
       /* the same read one bar back: news is the arriving, not the standing. On the same side too,
@@ -703,7 +707,7 @@ export function createPush(db: DatabaseSync) {
       const doc = JSON.parse(row.json)
       // their thresholds, off their own document — the same ones the bell in the tab reads. The
       // setups lead: an entry that is here right now outranks an asset that has merely moved.
-      const market = [...setupsFor(doc), ...moversFor(dialsOf(doc))]
+      const market = [...setupsFor(doc), ...moversFor()]
       return [...out, ...alertsOf(doc, tz, prices, Date.now(), market)]
     } catch { return out }
   }

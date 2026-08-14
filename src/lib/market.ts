@@ -385,11 +385,11 @@ export function parseTrending(json: unknown, now = Date.now()): Trend[] {
   })
 }
 
-/* Two callers want each of these lists on the same minute and it is the same list: the panel on the
-   Markets page, and the bell that polls whether or not you ever open that page. Without this they
-   were two requests a minute for one answer. A caller arriving mid-flight joins the request already
-   going; one arriving just after gets what it returned. Failures are deliberately not cached — a
-   feed that was down a second ago is allowed to be up now. */
+/* One reader left — the MCP tool, which an agent can ask twice in a breath. A caller arriving
+   mid-flight joins the request already going; one arriving just after gets what it returned.
+   Failures are deliberately not cached — a feed that was down a second ago is allowed to be up now.
+   It was built for two: the panel on the Markets page and the bell polling behind it, both on the
+   same minute for the same list. Both are gone. */
 const cache = new Map<string, { at: number; rows: Trend[] }>()
 const flights = new Map<string, Promise<Trend[]>>()
 const TREND_TTL = 50_000   // under the 60s both callers poll at, so a real tick always refetches
@@ -429,45 +429,10 @@ export const fetchTrending = () => fetchPools('trending_pools?duration=1h')
  *  Mostly rubbish by count, which is what the liquidity floors on both readers are for. */
 export const fetchNew = () => fetchPools('new_pools')
 
-/**
- * The closes out of GeckoTerminal's OHLCV list. It answers newest first, and a line drawn in that
- * order runs backwards — the one mistake here that looks like data rather than like a bug, so it
- * is pure and there is a test holding a real payload against it.
- */
-export function parsePoolLine(json: unknown): number[] {
-  const rows = (json as { data?: { attributes?: { ohlcv_list?: unknown[][] } } } | null)
-    ?.data?.attributes?.ohlcv_list
-  if (!Array.isArray(rows)) return []
-  return rows
-    .map((r) => Number(r?.[4]))
-    .filter((n) => isFinite(n) && n > 0)
-    .reverse()
-}
-
-/* One line per pool, kept for as long as a bar lasts. The panel re-reads every minute and these are
-   five-minute bars, so four of every five fetches would ask for a picture that cannot have changed
-   — at twelve rows that is the whole of the feed's allowance spent on nothing. */
-const lines = new Map<string, { at: number; closes: number[] }>()
-const LINE_TTL = 5 * 60_000
-
-/** The last hour of one pool, in five-minute closes — the window the panel ranks by. */
-export async function fetchPoolLine(pool: string): Promise<number[]> {
-  const held = lines.get(pool)
-  if (held && Date.now() - held.at < LINE_TTL) return held.closes
-  // ponytail: swept on write, no timer — pools churn, and a session left open all day would
-  // otherwise hold every one that was ever trending for five minutes
-  if (lines.size > 100) for (const [k, v] of lines) if (Date.now() - v.at >= LINE_TTL) lines.delete(k)
-  const url = `https://api.geckoterminal.com/api/v2/networks/${TREND_NETWORK}`
-    + `/pools/${encodeURIComponent(pool)}/ohlcv/minute?aggregate=5&limit=12&currency=usd`
-  try {
-    const closes = parsePoolLine(await fetch(url).then((r) => r.json()))
-    // an empty answer is not cached as an answer: a pool minutes old has no bars yet and will
-    if (closes.length) lines.set(pool, { at: Date.now(), closes })
-    return closes
-  } catch {
-    return []
-  }
-}
+/* A per-pool sparkline fetch stood here — twelve five-minute closes, cached for the length of a
+   bar, drawn on each row of the Trending panel. The panel is gone (it was a list of pools this app
+   has no chart for and could only ever link away to), and the picture went with it: nothing else
+   ever wanted a line for something that is not one of ASSETS. */
 
 /**
  * How many decimals a price needs to stay meaningful. Two is right for Bitcoin and wrong for a coin
@@ -605,25 +570,24 @@ export function opensIn(s: { tz: string, min: number }, at: number): number | nu
   return s.min - min
 }
 
+/**
+ * The numbers a reader is allowed to turn, and there used to be ten.
+ *
+ * The seven that went were all thresholds for when the bell is allowed to speak — how big an hour
+ * has to be, how much money a pool needs, how many timeframes have to agree. They were a screen of
+ * form fields tuning something nobody could see the effect of, and getting them right was a guess
+ * you made once and never revisited. They are constants now: MOVER_BITE and MOVER_FLOOR above,
+ * TREND_* in notify.ts, SETUP_AGREE below, OPEN_IN in server/push.ts. Every one of them is a single
+ * line to change if the bell turns out to be loud.
+ *
+ * What is left is not about the bell at all: two costs a venue charges that only you know, and which
+ * are inside every money figure on the desk. Nobody can look those up for you, which is the whole
+ * test of whether a number belongs in Settings.
+ *
+ * Removing keys is safe by construction: `dialsOf` walks `DIALS`, so a stored document's leftover
+ * `bite` or `setupAgree` is read past rather than rejected, and nothing has to be migrated.
+ */
 export type Dials = {
-  /** Share of the day's range an hour has to cover. */
-  bite: number
-  /** …and the percent it has to be worth at all, however quiet the day. */
-  floor: number
-  /** A pool's move in the last hour, in percent. */
-  trendMove: number
-  /** Hours old and still counting as a new pool. */
-  trendFresh: number
-  /** Dollars in the pool before either reading is worth a word. */
-  trendLiq: number
-  /** …and the floor the New list on the Markets page is filtered by. */
-  newLiq: number
-  /** Minutes' warning before an exchange opens. 0 is off, which is what it ships as. */
-  openIn: number
-  /** How many of the six timeframes have to lean a scanned setup's way before it is worth a knock.
-   *  The desk's own always counts itself, so 1 is every setup the scan grades as here-now and 0 is
-   *  the off switch. The one dial on an alert about something nobody saved. */
-  setupAgree: number
   /** Perp funding, percent of notional per 8 hours — what holding a position quietly costs.
    *  One flat rate for every asset; 0 turns the estimate off. */
   funding: number
@@ -634,21 +598,27 @@ export type Dials = {
 }
 
 export const DIALS: Dials = {
-  bite: MOVER_BITE, floor: MOVER_FLOOR,
-  trendMove: 25, trendFresh: 6, trendLiq: 50_000, newLiq: 15_000,
-  // three knocks a day is a lot to hand someone who never asked for them
-  openIn: 0,
-  /* Half the charts, near enough. A "Buy now" only the timeframe you happen to be on can see is the
-     setup most likely to be noise, and an unasked-for notification is the thing that can least
-     afford to be — one loud afternoon is how a bell gets switched off for good. Set against a
-     morning's readings this passes a couple of assets a day rather than five in an hour; lower it
-     to 1 for every setup the scan grades as here-now, which is a different appetite, not a wrong one. */
-  setupAgree: 3,
   // the perpetual-swap baseline rate; what most venues charge in a calm market
   funding: 0.01,
   // the standard taker fee across the major perp venues — the price of crossing the spread
   fee: 0.05,
 }
+
+/** Dollars in a pool before the MCP tool's New list will name it — the one reader left of a number
+ *  that used to be a dial beside the bell's. A shortlist floor, not an interruption threshold. */
+export const NEW_POOL_LIQ = 15_000
+
+/**
+ * How many of the six timeframes have to lean a scanned setup's way before it is worth a knock —
+ * and before the paper desk files it.
+ *
+ * Half the charts, near enough. A "Buy now" only the timeframe you happen to be on can see is the
+ * setup most likely to be noise, and an unasked-for notification is the thing that can least afford
+ * to be — one loud afternoon is how a bell gets switched off for good. Set against a morning's
+ * readings this passes a couple of assets a day rather than five in an hour. The desk's own
+ * timeframe always counts itself, so 1 would be every setup the scan grades as here-now.
+ */
+export const SETUP_AGREE = 3
 
 /**
  * A venue's maintenance margin: the slice of the position it keeps back, so it closes you while
@@ -664,15 +634,10 @@ export const DIALS: Dials = {
  */
 export const MAINT = 0.005
 
-/** What each dial may be set to. A bite of zero is every tick of every day, and there is no
- *  wording for a bell that never stops — so the range is part of the dial, not advice beside it. */
+/** What each dial may be set to. The range is part of the dial rather than advice beside it: these
+ *  two are inside every money figure the desk prints, and a typo in one is a wrong number
+ *  everywhere at once. */
 const RANGE: Record<keyof Dials, [number, number]> = {
-  bite: [0.05, 1], floor: [0.1, 25], trendMove: [1, 500],
-  trendFresh: [0.5, 72], trendLiq: [0, 5_000_000], newLiq: [0, 5_000_000],
-  // an hour's warning is the most that is still news; the push tick is a minute, so under one is 0
-  openIn: [0, 60],
-  // there are six intervals and the setup's own is one of them, so past six nothing can ever pass
-  setupAgree: [0, 6],
   // 1%/8h is a memecoin squeeze; anything past that is a number to disbelieve, not to set
   funding: [0, 1],
   // a quarter of a percent a side is the worst retail tier there is; past that, check the venue
@@ -697,7 +662,7 @@ export function dialsOf(s: unknown): Dials {
  * One asset's last hour measured against the day it happened in, or null when there is nothing
  * there worth saying. Both bells build their own sentence out of this; neither decides it.
  */
-export function moverMove(open: number, last: number, high: number, low: number, d: Dials = DIALS):
+export function moverMove(open: number, last: number, high: number, low: number):
 { pct: number; bite: number; up: boolean } | null {
   const range = high - low, moved = last - open
   // a feed that answered with a missing open would otherwise read as a move of infinity, and a
@@ -705,7 +670,7 @@ export function moverMove(open: number, last: number, high: number, low: number,
   if (!(open > 0) || !(range > 0) || !isFinite(moved)) return null
   const pct = (moved / open) * 100
   const bite = Math.abs(moved) / range
-  if (Math.abs(pct) < d.floor || bite < d.bite) return null
+  if (Math.abs(pct) < MOVER_FLOOR || bite < MOVER_BITE) return null
   return { pct, bite, up: moved >= 0 }
 }
 

@@ -25,11 +25,11 @@ import { cn } from '@/lib/utils'
 import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setApiKey, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchNew, fetchPoolLine, fetchPrices, fetchTrending, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, tally, trendFilter,
-  TREND_NETWORK, usMarketOpen, venueName, priceDigits, readInterval, toll,
+  usMarketOpen, venueName, priceDigits, readInterval, toll,
   scanBars, scanRead,
-  type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing, type Trend,
+  type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
@@ -68,8 +68,6 @@ const LIVE = 5000 // how often the forming candle is repriced
 // …and how often for stocks: their feed's 800-credit day bought four hours at 15s a tick, and a
 // daily bar repriced on the minute is still a live chart
 const LIVE_SLOW = 60_000
-const TREND_LIVE = 60_000 // trending pools re-read; the feed allows 30 calls a minute, this asks 1
-const TREND_ROWS = 12 // of the 20 the feed returns — past a dozen it stops being a shortlist
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000, ROLL_RETRY_SLOW = 300_000
 /**
@@ -1680,7 +1678,6 @@ export default function MarketPage() {
               or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
           <Scan orbMode={mode === 'orb'} interval={readInterval(horizon, mode === 'orb' ? '15m' : interval)}
             current={current.id} onPick={goChart} />
-          <Trending />
         </div>
       )}
 
@@ -2551,6 +2548,21 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
    under it, and the money sliding out under the share button. */
 const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,10rem)_1fr_4rem_3.5rem_4.5rem] sm:grid-cols-[minmax(5rem,12rem)_minmax(5rem,10rem)_1fr_4.5rem_3.5rem_8rem]'
 
+/**
+ * A log reads in a window with its column headings pinned, not as a list that runs until the page
+ * ends. Both of these fill up with a month of trades and then keep going: the record and the
+ * forward test were each a single unbounded column, so a card summarising thirty trades pushed
+ * everything under it — the lanes, the totals, the other card entirely — hundreds of rows down, and
+ * the only way back to the summary was to scroll the whole page.
+ *
+ * Two thirds of the viewport, so a screenful of rows is still a screenful and the card underneath
+ * stays visible enough to be known about. The same shape DeskLog's dialog has used all along.
+ */
+const LOG_SCROLL = 'max-h-[60vh] overflow-y-auto'
+/** …and the headings that stay put inside it. `bg-card` because this one sits inside a Card, where
+ *  the page background would show as a stripe of the wrong colour under the scrolled rows. */
+const LOG_HEAD = 'bg-card sticky top-0 z-10'
+
 /** How the record is stacked. Newest is the default because a log is read from the top down; the
  *  other two are the question "what actually paid, and what actually cost" asked directly. */
 const LOG_SORTS = [
@@ -2683,6 +2695,7 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
                 {live.filter((r) => r.entryAt != null).length} in, {live.filter((r) => r.entryAt == null).length} waiting for the entry
               </span>
             </div>
+            <div className={LOG_SCROLL}>
             {live.map((r) => (
               <div key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-dashed py-1.5 text-sm last:border-0">
                 <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] tracking-wide uppercase',
@@ -2699,6 +2712,7 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
                 </span>
               </div>
             ))}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -2709,7 +2723,8 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
             <div className="mb-2 flex items-baseline gap-2">
               <span className="font-heading text-sm tracking-wide uppercase">How they went</span>
             </div>
-            <div className={cn(LOG_GRID, 'text-muted-foreground font-heading border-b px-1.5 pb-1 text-[10px] tracking-wider uppercase')}>
+            <div className={LOG_SCROLL}>
+            <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading border-b px-1.5 pb-1 text-[10px] tracking-wider uppercase')}>
               <span>Trade</span>
               <span>Side</span>
               <span className="hidden sm:block">Ran</span>
@@ -2755,6 +2770,7 @@ function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
                 </div>
               )
             })}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -2893,13 +2909,26 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
           <span className="text-muted-foreground text-xs">
             {results.length} finished · {won} hit target
           </span>
-          <span className={cn('ml-auto font-mono text-sm tabular-nums',
-            upTotal === null ? '' : upTotal ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-            {paidTotal || rLabel(total)}
-          </span>
-          {!!paidTotal && (
-            <span className="text-muted-foreground font-mono text-xs tabular-nums">{rLabel(total)}</span>
-          )}
+          {/* Three numbers with no words on them — "−€6.72 · −$2.04 −0.97R" — is what this was, and
+              there is no reading it off the row: two of them are money in two currencies that are
+              deliberately never added together, and the third is not money at all. Each carries its
+              own word now, and the tooltip says why there are two of them. */}
+          <Hint label={[
+            money !== null && `Euros: this app's own arithmetic over the size or stake you typed, net of the ${dials.fee}%-a-side fee and the funding to the close.`,
+            usd !== null && 'Dollars: what a venue actually settled, its fees and funding already inside the figure.',
+            money !== null && usd !== null && 'Never added together — the sum of the two is a number no exchange rate ever produced, and a row is counted in one of them and not the other.',
+            `R is the whole record in units of risk, which is the only unit two trades on two assets add up in. A week can settle up in money and down in R, so each is coloured by itself.`,
+          ].filter(Boolean).join(' ')}>
+            <span className="ml-auto flex items-baseline gap-2 font-mono tabular-nums">
+              <span className={cn('text-sm',
+                upTotal === null ? '' : upTotal ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {paidTotal || rLabel(total)}
+              </span>
+              <span className="text-muted-foreground text-xs">
+                {paidTotal ? `paid · ${rLabel(total)} total` : 'total'}
+              </span>
+            </span>
+          </Hint>
           {/* stacking, not filtering: every row stays, the question is only which end it is read
               from. Beside the totals because those are what the answer is being compared against. */}
           <div className="bg-muted/50 -my-1 ml-2 flex gap-1 rounded-lg p-1">
@@ -2943,7 +2972,8 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
           ))}
         </div>
         {/* what each column is, once, instead of the eye working it out from the first row */}
-        <div className={cn(LOG_GRID, 'text-muted-foreground font-heading border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
+        <div className={LOG_SCROLL}>
+        <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
           <span>Trade</span>
           <span>Side</span>
           {/* the dates take the slack rather than an empty track taking it: the numbers stay at the
@@ -3011,6 +3041,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             </div>
           )
         })}
+        </div>
       </CardContent>
     </Card>
   )
@@ -3612,121 +3643,14 @@ function Scan({ orbMode, interval, current, onPick }: {
   )
 }
 
-/**
- * The other market: whatever opened this morning and is already moving. Nothing here is in ASSETS
- * and nothing here gets a chart — these live hours, and a moving average over a six-hour pool is a
- * line through noise. The panel's whole job is to say what is happening and get you to the pool.
- * The bell (trendAlerts) is what makes it fast; this is what makes it readable.
- */
-function Trending() {
-  /* Two lists, one panel: what is running now, and what has only just opened. The second is the one
-     you cannot get from the first — by the time a pool trends, the hour you wanted is behind you. */
-  const [mode, setMode] = useState<'trending' | 'new'>('trending')
-  // a pool an hour old with $3k in it is a chart with nobody behind it, and the new list is mostly
-  // those. The floor is a dial, in Settings → Markets, beside the ones the bell reads
-  const { newLiq } = useStash().dials
-  const [rows, setRows] = useState<Trend[] | null>(null)
-  const [err, setErr] = useState(false)
-  /* The last hour as a line, one pool at a time — the feed has no batch for it. Only for the rows
-     actually shown, and only the pools still on the list: a shortlist that turns over all day
-     would otherwise keep every pool it ever held. */
-  const [lines, setLines] = useState<Record<string, number[]>>({})
-
-  useEffect(() => {
-    let on = true
-    setRows(null)
-    const tick = () => (mode === 'new' ? fetchNew() : fetchTrending())
-      .then((t) => { if (on) { setRows(t); setErr(false) } })
-      .catch(() => { if (on) setErr(true) })
-    tick()
-    const h = window.setInterval(tick, TREND_LIVE)
-    return () => { on = false; window.clearInterval(h) }
-  }, [mode])
-
-  // the new list comes back newest first and mostly empty of money — the floor is what makes it a
-  // list of things you could act on rather than a feed of launches
-  const shown = (mode === 'new' ? rows?.filter((t) => t.liq >= newLiq) : rows)?.slice(0, TREND_ROWS)
-  useEffect(() => {
-    if (!shown?.length) return
-    let on = true
-    // one map, set once: twelve resolutions each setting their own would be twelve renders, and
-    // building it from the current rows is what drops the ones that have fallen off the list
-    void Promise.all(shown.map(async (t) => [t.pool, await fetchPoolLine(t.pool)] as const))
-      .then((pairs) => { if (on) setLines(Object.fromEntries(pairs)) })
-    return () => { on = false }
-    // the pools on the list, not the array: the fetch is cached per pool, but a new array every
-    // minute would still rebuild the map — and with it every line — for no change at all
-  }, [shown?.map((t) => t.pool).join()])   // eslint-disable-line react-hooks/exhaustive-deps
-
-  const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
-  const usd = (n: number) => n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1e3)}k`
-  const age = (h: number) => !isFinite(h) ? '' : h < 1 ? `${Math.round(h * 60)}m` : h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`
-
-  return (
-    <Card className="py-3">
-      <CardContent className="px-3">
-        <div className="mb-2 flex items-baseline gap-2">
-          <span className="font-heading text-sm tracking-wide uppercase">
-            {mode === 'new' ? 'New' : 'Trending'} on {TREND_NETWORK}
-          </span>
-          <span className="text-muted-foreground text-xs">
-            {mode === 'new' ? `just opened, over ${usd(newLiq)} in the pool` : 'by the last hour'}
-          </span>
-          <span className="ml-auto flex gap-1">
-            {(['trending', 'new'] as const).map((m) => (
-              <Button key={m} variant={mode === m ? 'secondary' : 'ghost'} size="sm"
-                className="h-6 px-2 text-xs capitalize" onClick={() => setMode(m)}>
-                {m}
-              </Button>
-            ))}
-          </span>
-        </div>
-        {/* only when there is nothing to show: a rate-limited tick with last minute's list still on
-            screen is not a feed you could not reach, and the next tick usually has it */}
-        {err && !rows && <p className="text-muted-foreground py-4 text-sm">Could not reach the pool feed.</p>}
-        {!err && !rows && <p className="text-muted-foreground py-4 text-sm">Loading pools…</p>}
-        {shown?.length === 0 && (
-          <p className="text-muted-foreground py-4 text-sm">
-            {mode === 'new' ? 'Nothing new with real money in it.' : 'Nothing trending right now.'}
-          </p>
-        )}
-        {shown?.map((t) => (
-          /* straight out to the pool: this app has no chart for it and pretending otherwise would
-             be the dishonest kind of feature. New tab, noreferrer — same terms as the item links. */
-          <a
-            key={t.pool}
-            href={t.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="hover:bg-accent -mx-1.5 flex items-baseline gap-2 rounded-md px-1.5 py-1 text-sm"
-          >
-            <span className="w-24 shrink-0 truncate font-medium">{t.symbol}</span>
-            <span className="text-muted-foreground w-24 shrink-0 font-mono text-xs tabular-nums">
-              {fmtPrice(t.price)}
-            </span>
-            <span className={cn('w-16 shrink-0 text-right font-mono text-xs tabular-nums',
-              t.h1 >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-              {pct(t.h1)}
-            </span>
-            {/* the hour the row is ranked by, drawn: twelve five-minute closes. A pool minutes old
-                has no bars yet and simply has no line, rather than a flat one that says nothing.
-                Hidden on a phone, where the row has no width to spare. */}
-            <span className="ml-3 hidden w-24 shrink-0 self-center sm:block">
-              <Sparkline data={lines[t.pool] ?? []} up={t.h1 >= 0} id={t.pool} className="h-4 w-full" />
-            </span>
-            {/* liquidity is the honest column here — a 300% hour on $4k of pool is not a market */}
-            <span className="text-muted-foreground ml-auto shrink-0 font-mono text-xs tabular-nums">
-              {usd(t.liq)}
-            </span>
-            <span className="text-muted-foreground w-10 shrink-0 text-right font-mono text-xs tabular-nums">
-              {age(t.age)}
-            </span>
-          </a>
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
+/* A "Trending on Solana" panel stood here: the twelve hottest pools on the chain and the ones that
+   had just opened, with a sparkline and a link out to GeckoTerminal.
+   It went because of what it could not do. Nothing on it is in ASSETS, so no row had a chart, a
+   verdict, a plan or a level — the panel's only verb was "open this somewhere else", under a
+   heading on a page whose whole subject is what to do about an asset. It polled two keyless feeds
+   a minute per open tab and one more per row for the picture, to render a list this app had no
+   opinion about. The bell that pointed at it went with it (see notify.ts), and so did its
+   liquidity dials. The MCP tool still answers the same feed for an agent that asks. */
 
 // stocks come from Twelve Data; without a key they can't load, so prompt for one right here
 function KeyPrompt({ label }: { label: string }) {

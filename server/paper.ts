@@ -19,7 +19,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import {
-  ASSETS, dialsOf, fetchPrices, HORIZONS, readInterval, scanBars, scanRead, sma,
+  ASSETS, dialsOf, fetchPrices, HORIZONS, readInterval, scanBars, scanRead, SETUP_AGREE, sma,
   type Candle, type Interval,
 } from '../src/lib/market.ts'
 import { intervalOf, lastBarOff } from './push.ts'
@@ -325,7 +325,7 @@ export function createPaper(db: DatabaseSync) {
          a zero in the expectancy under the table. `priced()` guarantees `long === stop < entry` for
          every non-null plan, which is what makes the geometry the authority here. */
       const dir = row.plan.stop < row.plan.entry ? 'long' as const : 'short' as const
-      if (row.agree < d.setupAgree) continue
+      if (row.agree < SETUP_AGREE) continue
       const bar = b[interval]?.at(-1)
       if (!bar) continue
       const was = scanRead(a, lastBarOff(b), horizon, interval, orbMode, d.fee)

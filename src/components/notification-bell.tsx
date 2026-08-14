@@ -4,10 +4,10 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { closeWatch, dismissAlerts, openWatch, setMarketAsset, useStash } from '@/lib/store'
-import { ASSETS, fetchMoves, fetchNew, fetchPrices, fetchStockHours, fetchTrending, type Trend } from '@/lib/market'
+import { ASSETS, fetchMoves, fetchPrices, fetchStockHours } from '@/lib/market'
 import { useVenue } from '@/lib/venue'
 import {
-  alarmAlerts, alerts, moverAlerts, nakedAlerts, resultAlerts, trendAlerts, watchAlerts, watchProgress,
+  alarmAlerts, alerts, moverAlerts, nakedAlerts, resultAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
 } from '@/lib/notify'
 
@@ -156,25 +156,9 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   }, [])
   const naked = useMemo(() => nakedAlerts(exch), [exch])
 
-  /* the memecoin end, on the same timer. This is the half that has to be a poll rather than the
-     movers' one-shot: a pool that opened twenty minutes ago stops being news within the hour, and
-     an answer fetched when the tab opened is no answer at all. Keyless, so it costs nothing to ask. */
-  const [trends, setTrends] = useState<Trend[]>([])
-  useEffect(() => {
-    let on = true
-    /* Both lists, because the interesting launch is the one that has not trended yet — by the time a
-       pool is on the trending list, the hour that made it worth telling you about has gone. Same
-       rule over both (trendAlerts, with its liquidity floor), and a pool on both lists produces the
-       same id twice, so the map is what stops it being two rows saying one thing. */
-    // one list failing must not silence the other: Promise.all rejects on the first, and the two
-    // are separate calls to a feed that rate-limits
-    const tick = () => Promise.all([fetchTrending().catch(() => []), fetchNew().catch(() => [])])
-      .then(([a, b]) => { if (on) setTrends([...a, ...b]) })
-      .catch(() => {})   // a feed that is down says nothing, rather than nagging about a guess
-    tick()
-    const h = setInterval(tick, POLL)
-    return () => { on = false; clearInterval(h) }
-  }, [])
+  /* The memecoin poll stood here — both pool lists on a minute, fed to trendAlerts. It went with
+     the Trending panel: the knock's only destination was that list, and a pool has no ASSETS id to
+     open a chart on instead. Two keyless requests a minute per open tab, back to none. */
 
   /* Silenced, and it stays silenced on the phone too: the decision lives in the document the sync
      carries, as the moment the alert may speak again — a day off for a swipe. Nothing is silenced
@@ -183,13 +167,8 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
      with. */
   const gone = (id: string) => (s.dismissed[id] ?? 0) > Date.now()
 
-  /* Every market reading worded at once, against the thresholds this document carries. A pool on
-     both the trending and the new list produces the same id twice, so the map is what stops it
-     being two rows saying one thing. */
-  const market = useMemo(() => [
-    ...moverAlerts([...movers, ...stockMovers], s.dials),
-    ...new Map(trendAlerts(trends, s.dials).map((x) => [x.id, x])).values(),
-  ], [movers, stockMovers, trends, s.dials])
+  // every market reading worded at once, against the thresholds market.ts holds
+  const market = useMemo(() => moverAlerts([...movers, ...stockMovers]), [movers, stockMovers])
 
   const shown = [...stateAlerts, ...naked, ...setups, ...rung, ...done, ...market].filter((a) => !gone(a.id))
   const drop = dismissAlerts

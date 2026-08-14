@@ -507,10 +507,11 @@ const tools: Record<string, {
     run: async (a) => {
       const mode = String(a.mode ?? 'trending')
       if (mode !== 'trending' && mode !== 'new') throw new Error(`no such mode: ${mode}`)
-      const s = await pull()
       const rows = mode === 'new' ? await market.fetchNew() : await market.fetchTrending()
-      // the floor is yours, not a constant: it is the dial the panel and the bell already read
-      const floor = mode === 'new' ? s.dials.newLiq : 0
+      /* A constant now, not a dial. It was the same floor the Markets panel filtered its New list
+         by; the panel is gone and this tool is the last reader, and a number only an MCP client
+         ever sees has no business being a field in Settings. */
+      const floor = mode === 'new' ? market.NEW_POOL_LIQ : 0
       const kept = rows.filter((t) => t.liq >= floor)
       // a dozen, the shortlist the panel shows — `count` says what was left off rather than
       // letting a cut list read as the whole feed

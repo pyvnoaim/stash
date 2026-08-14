@@ -37,7 +37,7 @@ globalThis.fetch = ((url: string) => {
   seen.push(url)
   return Promise.resolve({ json: () => Promise.resolve([]) })
 }) as typeof fetch
-const { ASSETS, fetchCandles, fetchPoolLine, fetchPrices, fetchTrending } = await import('./market.ts')
+const { ASSETS, fetchCandles, fetchPrices, fetchTrending } = await import('./market.ts')
 const asked = async (fn: () => Promise<unknown>) => {
   seen.length = 0
   await fn().catch(() => {})
@@ -69,18 +69,13 @@ for (const url of priceUrls) assert.ok(!cached(url), `prices must never be serve
    candles may be cached — the same line the venues' own endpoints are held to above. */
 assert.ok(priceUrls.some((u) => u.includes('/api/mexc/price')), 'the MEXC relay is not being asked for prices')
 
-/* Trending pools are on the same footing as the ticker, and for the same reason: the bell alerts
-   off this list. A cached one would announce a launch that already happened and a mover that has
-   since died — the two things a memecoin alert is least able to survive being wrong about.
-   Asserted non-empty, or a fetcher that quietly stopped asking would pass this by saying nothing. */
+/* Trending pools are on the same footing as the ticker. The bell that alerted off this list is
+   gone and only the MCP tool reads it now, which does not go through a service worker at all — but
+   the fetcher still ships in the client bundle, and a route that started caching it would answer an
+   agent with a list of pools that have since died. Asserted non-empty, or a fetcher that quietly
+   stopped asking would pass this by saying nothing. */
 const trendUrls = await asked(() => fetchTrending())
 assert.ok(trendUrls.length, 'fetchTrending asked for nothing')
 for (const url of trendUrls) assert.ok(!cached(url), `trending must never be served from cache: ${url}`)
-
-// the row sparkline rides the same feed and is on the same footing: these pools live hours, and a
-// cached line is a picture of a market that has since happened
-const lineUrls = await asked(() => fetchPoolLine('SomePoolAddress'))
-assert.ok(lineUrls.length, 'fetchPoolLine asked for nothing')
-for (const url of lineUrls) assert.ok(!cached(url), `pool lines must never be served from cache: ${url}`)
 
 console.log('sw routes ok')

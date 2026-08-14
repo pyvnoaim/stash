@@ -516,41 +516,35 @@ function ExchangeSection() {
 
 /** One dial: a number, what it is, and the unit it is in. */
 const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string, scale?: number }[] = [
-  { k: 'floor', label: 'Worth saying at all', unit: '%',
-    hint: 'Under this in an hour, nothing is said however quiet the day was.' },
-  { k: 'bite', label: 'Share of the day', unit: '%', scale: 100,
-    hint: 'How much of the day\'s whole range the hour has to cover. The dial to raise first if the bell is loud — 2% is a remarkable hour for gold and a quiet one for Dogecoin, and this is what lets one number serve both.' },
-  { k: 'trendMove', label: 'Pool move', unit: '%',
-    hint: 'A memecoin pool\'s move in the last hour before it is worth a word.' },
-  { k: 'trendFresh', label: 'Still counts as new', unit: 'h',
-    hint: 'How long after a pool opens it is still news that it exists.' },
-  { k: 'trendLiq', label: 'Pool liquidity', unit: '$',
-    hint: 'Dollars in the pool before either reading counts. This is the one that separates a market from a rug with a chart on it — raise it first.' },
-  { k: 'newLiq', label: 'New list floor', unit: '$',
-    hint: 'And the floor the New list on the Markets page is filtered by, which is a shortlist rather than an interruption, so it can afford to be lower.' },
-  { k: 'funding', label: 'Perp funding', unit: '%/8h',
-    hint: 'What holding a leveraged position quietly costs: this share of the notional per 8 hours comes off every position\'s read-out. One flat rate for everything — 0.01 is the venues\' calm-market baseline. Zero turns the estimate off.' },
   { k: 'fee', label: 'Taker fee', unit: '% a side',
     hint: 'What crossing the spread costs, each way. Every setup\'s risk-to-reward is quoted after it — paid once getting in and once getting out, which is why a stop costs a little more than 1R and a target pays a little less — and so is every euro figure beside one, on the bell, the record and the calendar alike. 0.05 is the standard perp tier; a maker rebate or a spot account is lower. Zero shows the gross ratio every other chart tool quotes.' },
-  { k: 'setupAgree', label: 'Setups worth a knock', unit: 'of 6',
-    hint: 'The scan reads every keyless chart on all six timeframes and grades the ones whose entry is here right now. This is how many of the six have to lean that way before your phone hears about it — the setup\'s own timeframe always counts itself, so 1 is every one of them and 0 is off. Raise it if the bell is loud: a "Buy now" only the fastest chart can see is the one most likely to be noise. Held back by the quiet hours, unlike a level you saved yourself.' },
-  { k: 'openIn', label: 'Before a market opens', unit: 'min',
-    hint: 'A push that much before London or NY opens — where the volume that moves gold and crypto arrives. Zero is off, and it ships off. Asia opens in the middle of the European night and is held back by the quiet hours like anything else.' },
+  { k: 'funding', label: 'Perp funding', unit: '%/8h',
+    hint: 'What holding a leveraged position quietly costs: this share of the notional per 8 hours comes off every position\'s read-out. One flat rate for everything — 0.01 is the venues\' calm-market baseline. Zero turns the estimate off.' },
 ]
 
 /**
- * The numbers behind every market alert. They were constants in the source with "bell too loud?
- * raise this" written beside them, which is a redeploy for a threshold that depends on what the
- * chain did that week. They ride the document, so the bell in the tab and the one that reaches a
- * shut phone read the same answer — a threshold kept in two places is two thresholds a month later.
+ * What your venue charges you, and nothing else.
+ *
+ * This was ten fields under "When the bell rings" — how big an hour has to be, how much money a
+ * pool needs, how many timeframes have to agree, how long before an open to knock. Every one of
+ * them was a threshold for something you could not see the effect of, so getting them right was a
+ * guess made once and never revisited, and the screen of them read as work to do before the app
+ * would behave. They are constants in the source now (MOVER_BITE, SETUP_AGREE, OPEN_IN); the bell
+ * behaves as it always did and there is one line to change if it turns out loud.
+ *
+ * These two are here because nobody else can know them. A fee and a funding rate are what your
+ * account is charged, they differ per venue and per tier, and they are inside every money figure
+ * the desk prints — the R:R on a setup, the euros on a position, the total under the record. That
+ * is the whole test of whether a number belongs in Settings.
  */
 function Dials() {
   const { dials } = useStash()
   return (
     <Section
-      title="When the bell rings"
-      hint="What counts as worth interrupting you for. Changes take on the spot, here and on your
-        phone — the alerts are re-read against these, not re-fetched."
+      title="What your venue charges"
+      hint="The two costs only you know, and they are in every money figure on the desk — the
+        risk-to-reward on a setup, the euros on a position, the total under the record. Changes
+        take on the spot, here and on your phone."
       action={<Button variant="outline" size="sm" onClick={resetDials}><RotateCcw /> Defaults</Button>}
     >
       {DIAL_FIELDS.map(({ k, label, unit, hint, scale = 1 }) => (

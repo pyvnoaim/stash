@@ -126,31 +126,31 @@ assert.ok(!alertsOf(ten, 0, {}, halfTen).some((a) => a.key.startsWith('at-')))
 
 /* ---------- a market about to open ---------- */
 
-/* 08:45 in London on a Monday, which is 06:45 UTC: a quarter of an hour before XETRA. The
-   dial is the whole switch — at zero, which is what it ships as, none of this is said at all. */
+/* 08:45 in London on a Monday, which is 06:45 UTC: a quarter of an hour before XETRA. The window
+   was a dial and is OPEN_IN, a constant set to fifteen minutes — so these cases are the fixed
+   window rather than the switch, and the one that used to prove "off is off" is now the minute
+   either side of the edge. */
 const mon = Date.parse('2026-08-03T06:45:00Z')
-const warn = (openIn: number, when = mon) =>
-  alertsOf({ dials: { openIn } }, 0, {}, when).filter((a) => a.key.startsWith('open-'))
+const warn = (when = mon) => alertsOf({}, 0, {}, when).filter((a) => a.key.startsWith('open-'))
 
-assert.deepEqual(warn(0), [], 'off is off, and off is the default')
-assert.deepEqual(warn(15).map((a) => a.key), ['open-London-20260803'])
-assert.equal(warn(15)[0].title, 'London opens in 15 minutes')
-assert.equal(warn(15)[0].target, 'market')
-// ten minutes' warning does not reach back fifteen
-assert.deepEqual(warn(10), [])
+assert.deepEqual(warn().map((a) => a.key), ['open-London-20260803'])
+assert.equal(warn()[0].title, 'London opens in 15 minutes')
+assert.equal(warn()[0].target, 'market')
+// the window is fifteen minutes and not sixteen — a minute earlier is outside it
+assert.deepEqual(warn(Date.parse('2026-08-03T06:44:00Z')), [])
 // nor does it fire once the bell has gone: the open is behind us at 09:01
-assert.deepEqual(warn(15, Date.parse('2026-08-03T07:01:00Z')), [])
+assert.deepEqual(warn(Date.parse('2026-08-03T07:01:00Z')), [])
 
 // NY is five and a half hours behind London in August, and gets its own key that day
-assert.deepEqual(warn(15, Date.parse('2026-08-03T13:20:00Z')).map((a) => a.key), ['open-NY-20260803'])
+assert.deepEqual(warn(Date.parse('2026-08-03T13:20:00Z')).map((a) => a.key), ['open-NY-20260803'])
 
 // the exchanges are shut at the weekend, whatever the clock says
-assert.deepEqual(warn(15, Date.parse('2026-08-01T06:45:00Z')), [])
-assert.deepEqual(warn(15, Date.parse('2026-08-02T06:45:00Z')), [])
+assert.deepEqual(warn(Date.parse('2026-08-01T06:45:00Z')), [])
+assert.deepEqual(warn(Date.parse('2026-08-02T06:45:00Z')), [])
 
 /* The day in the key is the market's own, not the server's: a NY open is still yesterday's
    date in NY while it is already tomorrow in Berlin. */
-assert.equal(warn(60, Date.parse('2026-08-03T13:20:00Z'))[0].key, 'open-NY-20260803')
+assert.equal(warn(Date.parse('2026-08-03T13:20:00Z'))[0].key, 'open-NY-20260803')
 
 /* ---------- what is moving ---------- */
 

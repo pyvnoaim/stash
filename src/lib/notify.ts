@@ -1,7 +1,7 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
 import { isPosition, nextCharge, RESULT_FRESH, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
-import { ASSETS, assetOf, DIALS, fmtPrice, MAINT, moverMove, venueName, type Dials, type Trend } from './market.ts'
+import { ASSETS, assetOf, DIALS, fmtPrice, MAINT, moverMove, venueName, type Dials } from './market.ts'
 import { today } from './parse.ts'
 
 export type Alert = {
@@ -489,7 +489,7 @@ export type Mover = {
 
 /**
  * The listed assets that are actually moving, right now — the rule is moverMove, in market.ts,
- * because the push server answers with the same one. Pure, like watchAlerts and trendAlerts: the
+ * because the push server answers with the same one. Pure, like watchAlerts: the
  * bell does the fetching and hands the numbers in.
  *
  * This used to read the 24-hour change once, when the app started. Both halves of that were wrong:
@@ -497,12 +497,12 @@ export type Mover = {
  * a two-hour run shows up in a 24-hour percentage it is over. It is asked every minute now, about
  * the hour just gone.
  */
-export function moverAlerts(rows: Mover[], d: Dials = DIALS): Alert[] {
+export function moverAlerts(rows: Mover[]): Alert[] {
   const out = new Map<string, Alert>()
   // shortest window first: a spike hot enough for the hour is also hot over four, and the sharper
   // sentence is the one to keep. Same id either way — the run is one story, told once.
   for (const m of [...rows].sort((a, b) => (a.hours ?? 1) - (b.hours ?? 1))) {
-    const mv = moverMove(m.open, m.last, m.high, m.low, d)
+    const mv = moverMove(m.open, m.last, m.high, m.low)
     if (!mv) continue
     // the direction is in the id, so dismissing a run up doesn't silence the give-back after it
     const id = `mkt-${m.asset}-${mv.up ? 'up' : 'down'}`
@@ -520,47 +520,10 @@ export function moverAlerts(rows: Mover[], d: Dials = DIALS): Alert[] {
   return [...out.values()]
 }
 
-/* The thresholds for the memecoin bell live in market.ts now, beside the movers' — see Dials. They
-   are turned in Settings → Markets, because the numbers that read as "worth interrupting you"
-   depend entirely on what the chain is doing that week. Of the three, liquidity is the one to raise
-   first: it is what separates a market from a rug with a chart on it. */
-
-/**
- * The trending pools, turned into things worth looking up from whatever you were doing. Two of
- * them qualify: something moved hard in the last hour, or something opened in the last few hours
- * and already has real money in it. Pure, like watchAlerts — the bell fetches and passes them in.
- *
- * No `asset`: a memecoin has no ASSETS id, and setMarketAsset with a pool address would land the
- * desk on Bitcoin (see the note on State.marketAsset). The alert opens Markets, where the panel
- * lists it with a link out to the pool — which is as far as this app can honestly take you.
- */
-export function trendAlerts(trends: Trend[], d: Dials = DIALS): Alert[] {
-  return trends.flatMap((t): Alert[] => {
-    if (t.liq < d.trendLiq) return []
-    const moved = Math.abs(t.h1) >= d.trendMove
-    const fresh = t.age <= d.trendFresh
-    if (!moved && !fresh) return []
-    const up = t.h1 >= 0
-    const liq = '$' + Math.round(t.liq).toLocaleString()
-    /* a move reads over a launch when both are true: a pool four hours old dumping 40% is not a
-       new coin to look at, it is one being left, and "New pool" would be the wrong word for it */
-    const a = moved
-      ? {
-        id: 'move',
-        title: `${t.symbol} ${up ? 'up' : 'down'} ${Math.abs(t.h1).toFixed(0)}%`,
-        detail: `last hour · ${liq} liquidity`,
-        tone: up ? ('info' as const) : ('warn' as const),
-      }
-      : {
-        id: 'new',
-        title: `${t.symbol} is new`,
-        detail: `${t.age < 1 ? 'under an hour' : `${Math.round(t.age)}h`} old · ${liq} liquidity`,
-        tone: 'info' as const,
-      }
-    // the pool and the reading are both in the id, so dismissing the launch doesn't silence the dump
-    return [{ id: `trend-${t.pool}-${a.id}`, title: a.title, detail: a.detail, tone: a.tone, target: MARKET }]
-  })
-}
+/* The memecoin bell stood here: the trending pools turned into knocks, gated on liquidity, a hard
+   hour or a fresh pool. It went with the panel it pointed at — the alert's whole destination was
+   the Markets page listing the pool with a link out to it, and with that list gone the knock had
+   nowhere to send anyone. A memecoin has no ASSETS id, so there was never a chart to open instead. */
 
 /** Overdue/today tasks first (most urgent), then subscriptions charging within three days. */
 export function alerts(s: State, at = Date.now()): Alert[] {

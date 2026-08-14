@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict'
 // type-only, so it's erased and store still loads lazily below, after the globals are stubbed
 import type { Alarm, Item, Result, State, Watch } from './store.ts'
-import type { Trend } from './market.ts'
 
 // notify imports store, which touches localStorage and listeners at import time
 Object.assign(globalThis, {
@@ -11,7 +10,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, cashAt, liqOf, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, cashAt, liqOf, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, moverAlerts } = await import('./notify.ts')
 const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
@@ -295,49 +294,18 @@ assert.equal(isReal({ ...result, id: 'mexc-HBARUSDT-1700000000000' }), true)
 
 console.log('notify ok')
 
-// trendAlerts: the memecoin bell. Liquidity is the gate, then hard move or fresh pool.
-const mc = (over: Partial<Trend> = {}): Trend => ({
-  symbol: 'CATE', pool: 'pool1', price: 0.029, h1: 0, h24: 0, vol24: 1e6,
-  liq: 500_000, age: 100, url: 'https://example.test/pool1', ...over,
-})
+/* trendAlerts and its dial cases stood here — the memecoin bell, gated on liquidity, a hard hour
+   or a fresh pool. Both the alert and the panel it pointed at are gone; MOVER_BITE and MOVER_FLOOR
+   are constants in market.ts and moverMove reads them directly, which is what the block below now
+   holds the rule to. */
 
-// a thin pool says nothing however violently it moves — that is a chart, not a market
-assert.deepEqual(trendAlerts([mc({ h1: 900, liq: DIALS.trendLiq - 1 })]), [])
-// nor does a liquid pool that is neither moving nor new
-assert.deepEqual(trendAlerts([mc()]), [])
-
-// a hard hour, both ways round
-const [up] = trendAlerts([mc({ h1: DIALS.trendMove + 5 })])
-assert.equal(up.tone, 'info')
-assert.match(up.title, /CATE up 30%/)
-const [down] = trendAlerts([mc({ h1: -(DIALS.trendMove + 5) })])
-assert.equal(down.tone, 'warn')
-assert.match(down.title, /CATE down 30%/)
-
-// a fresh pool with money in it is worth a word even while it sits still
-const [fresh] = trendAlerts([mc({ age: DIALS.trendFresh - 1 })])
-assert.match(fresh.title, /is new/)
-assert.match(fresh.detail, /5h old/)
-assert.match(trendAlerts([mc({ age: 0.5 })])[0].detail, /under an hour/)
-
-// both true at once reads as the move: a four-hour-old pool dumping 40% is being left, not launched
-assert.match(trendAlerts([mc({ age: 1, h1: -40 })])[0].title, /down 40%/)
-
-// ids carry the pool and the reading, so dismissing one doesn't silence the other
-assert.equal(trendAlerts([mc({ h1: 40 })])[0].id, 'trend-pool1-move')
-assert.equal(trendAlerts([mc({ age: 1 })])[0].id, 'trend-pool1-new')
-// and none of them claims an asset — no ASSETS id exists, so the desk must not be pointed anywhere
-assert.equal(trendAlerts([mc({ h1: 40 })])[0].asset, undefined)
-
-/* The dials are the whole point of being able to turn them: the same pool, past a raised bar, says
-   nothing. Read through dialsOf the way both bells read them, so the clamping is on this path too. */
-const loud = mc({ h1: 40, liq: 60_000 })
-assert.equal(trendAlerts([loud], dialsOf({ dials: { trendLiq: 100_000 } })).length, 0)
-assert.equal(trendAlerts([loud], dialsOf({ dials: { trendMove: 50 } })).length, 0)
-assert.equal(trendAlerts([loud], dialsOf({ dials: { trendLiq: 10_000 } })).length, 1)
-// a dial set to something the bell has no wording for is the default, not the file's word
-assert.equal(dialsOf({ dials: { bite: 0 } }).bite, DIALS.bite)
-assert.equal(dialsOf({ dials: { trendLiq: 'lots' } }).trendLiq, DIALS.trendLiq)
+// what is left of the dials: two costs, clamped, and anything else in the file read past
+assert.equal(dialsOf({ dials: { fee: 0.02 } }).fee, 0.02)
+// out of range is the default, not the file's word — these two are inside every money figure
+assert.equal(dialsOf({ dials: { fee: 9 } }).fee, DIALS.fee)
+assert.equal(dialsOf({ dials: { funding: 'lots' } }).funding, DIALS.funding)
+// a retired dial rides along in an old document and is simply not read
+assert.deepEqual(dialsOf({ dials: { bite: 0.9, trendLiq: 1 } }), DIALS)
 assert.deepEqual(dialsOf(null), DIALS)
 
 /* moverAlerts: the listed assets, measured against their own day. The first case is the one this
