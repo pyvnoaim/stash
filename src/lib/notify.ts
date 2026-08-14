@@ -1,6 +1,6 @@
 // In-app alerts derived from state — no storage, always current. Two sources here (subscriptions
 // charging soon, tasks due/overdue); the Markets movers are fetched live in the bell component.
-import { isPosition, nextCharge, RESULT_FRESH, SUBS, MARKET, type Alarm, type Result, type State, type Watch } from './store.ts'
+import { isPosition, nextCharge, RESULT_FRESH, SUBS, MARKET, type Result, type State, type Watch } from './store.ts'
 import { ASSETS, assetOf, DIALS, fmtPrice, MAINT, moverMove, venueName, type Dials } from './market.ts'
 import { today } from './parse.ts'
 
@@ -91,29 +91,6 @@ export function watchAlerts(
     }[hit]
     // the level is in the id, so dismissing "at entry" doesn't also silence the stop that follows
     return [{ id: `watch-${w.id}-${hit}`, ...a, target: MARKET, asset: w.asset }]
-  })
-}
-
-/**
- * The bare alarms against the live price: set below and reached from underneath, or set above and
- * fallen to — the side was written down when the alarm was made, so a level crossed and crossed
- * back doesn't flap between meanings. Pure like everything here; the bell hands the prices in.
- * The alert repeats while the price stands past the level; dismissing buys the usual day of quiet,
- * and deleting the alarm (in the popover that made it) is how it stops for good.
- */
-export function alarmAlerts(alarms: Alarm[], prices: Record<string, number>): Alert[] {
-  return alarms.flatMap((a) => {
-    const p = prices[a.asset]
-    if (typeof p !== 'number' || !isFinite(p)) return []
-    if (a.above ? p < a.price : p > a.price) return []
-    return [{
-      id: `alarm-${a.id}`,
-      title: `${a.label} crossed ${fmtPrice(a.price)}`,
-      detail: `${fmtPrice(p)} now — the level you asked about, from ${a.above ? 'below' : 'above'}`,
-      tone: 'due' as const,
-      target: MARKET,
-      asset: a.asset,
-    }]
   })
 }
 

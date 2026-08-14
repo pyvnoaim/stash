@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AlarmClock, ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
+import { ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -22,7 +22,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { addAlarm, clearResults, closeWatch, isPosition, isReal, removeAlarm, removeWatch, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
+import { clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, uid, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -912,7 +912,6 @@ export default function MarketPage() {
                 </span>
               </Hint>
             )}
-            <AlarmButton asset={current.id} label={current.label} price={price ?? null} />
             {/* the price above is the last bar the feed gave us, and off the network that bar is however
                 old the cache is — say which, rather than let a stale number pass for the current one */}
             {stale && candles.length > 0 && (
@@ -2421,57 +2420,6 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
         )}
       </CardContent>
     </Card>
-  )
-}
-
-/**
- * A bare level on this asset — "tell me at 100k" without the ceremony of an entry, a stop and a
- * target. Which side it fires from is decided here, from where price stands as it is set, so a
- * level crossed and crossed back doesn't flap between meanings. The bell and the phone both ring
- * it; deleting it here is how it stops for good.
- */
-function AlarmButton({ asset, label, price }: { asset: string; label: string; price: number | null }) {
-  const { alarms } = useStash()
-  const mine = alarms.filter((a) => a.asset === asset)
-  const [v, setV] = useState('')
-  const lvl = Number(v.replace(',', '.'))
-  // a level the price already stands on would fire on the next tick and mean nothing
-  const ok = price != null && isFinite(lvl) && lvl > 0 && lvl !== price
-  const set = () => {
-    if (!ok) return
-    addAlarm({ id: uid(), asset, label, price: lvl, above: lvl > price!, ts: Date.now() })
-    setV('')
-  }
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Price alarms"
-          className={cn('text-muted-foreground hover:text-foreground', mine.length > 0 && 'text-foreground')}>
-          <AlarmClock className="size-4" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="grid w-64 gap-2">
-        <p className="text-sm font-medium">Alarm on {label}</p>
-        <p className="text-muted-foreground text-xs">
-          One knock when price crosses the level, from whichever side it stands on now — here and on the phone.
-        </p>
-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); set() }}>
-          <Input inputMode="decimal" aria-label="Alarm level" placeholder={price != null ? String(price) : 'Level'}
-            value={v} onChange={(e) => setV(e.target.value)} />
-          <Button type="submit" size="sm" disabled={!ok}>Set</Button>
-        </form>
-        {mine.map((a) => (
-          <div key={a.id} className="flex items-center justify-between text-sm">
-            <span className="tabular-nums">
-              {fmtPrice(a.price)} <span className="text-muted-foreground text-xs">from {a.above ? 'below' : 'above'}</span>
-            </span>
-            <Button variant="ghost" size="icon-xs" aria-label="Remove alarm" onClick={() => removeAlarm(a.id)}>
-              <X className="size-3.5" />
-            </Button>
-          </div>
-        ))}
-      </PopoverContent>
-    </Popover>
   )
 }
 

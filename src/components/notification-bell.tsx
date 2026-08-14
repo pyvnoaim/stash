@@ -7,7 +7,7 @@ import { closeWatch, dismissAlerts, openWatch, setMarketAsset, useStash } from '
 import { ASSETS, fetchMoves, fetchPrices } from '@/lib/market'
 import { useVenue } from '@/lib/venue'
 import {
-  alarmAlerts, alerts, moverAlerts, nakedAlerts, resultAlerts, watchAlerts, watchProgress,
+  alerts, moverAlerts, nakedAlerts, resultAlerts, watchAlerts, watchProgress,
   type Alert, type Mover,
 } from '@/lib/notify'
 
@@ -69,8 +69,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   // saved setups, re-priced on a timer. The joined ids are the dep so the poll only restarts when
   // the set of watched assets actually changes, not on every unrelated write to the store.
   const [live, setLive] = useState<Record<string, number>>({})
-  // the alarms' assets ride the same poll: a level is watched with the same clock as a setup
-  const assets = [...new Set([...s.watches.map((w) => w.asset), ...s.alarms.map((a) => a.asset)])].sort().join(',')
+  const assets = [...new Set(s.watches.map((w) => w.asset))].sort().join(',')
   useEffect(() => {
     if (!assets) { setLive({}); return }
     // and which book to price them on, or a MEXC reader's alerts would sit on Bitget's numbers for
@@ -101,8 +100,6 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   }, [live, s.watches])
 
   const done = useMemo(() => resultAlerts(s.results, s.stake, undefined, s.dials), [s.results, s.stake, s.dials])
-
-  const rung = useMemo(() => alarmAlerts(s.alarms, live), [s.alarms, live])
 
   /* The exchange rows, for the one thing the bell has to say about them: a position with no stop
      resting. Polled here as well as on the Markets page because the bell is always mounted and the
@@ -138,7 +135,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   // every market reading worded at once, against the thresholds market.ts holds
   const market = useMemo(() => moverAlerts(movers), [movers])
 
-  const shown = [...stateAlerts, ...naked, ...setups, ...rung, ...done, ...market].filter((a) => !gone(a.id))
+  const shown = [...stateAlerts, ...naked, ...setups, ...done, ...market].filter((a) => !gone(a.id))
   const drop = dismissAlerts
 
   return (

@@ -1,7 +1,7 @@
 // npm test — the bell count comes from here, so a wrong alert is a wrong nudge
 import assert from 'node:assert/strict'
 // type-only, so it's erased and store still loads lazily below, after the globals are stubbed
-import type { Alarm, Item, Result, State, Watch } from './store.ts'
+import type { Item, Result, State, Watch } from './store.ts'
 
 // notify imports store, which touches localStorage and listeners at import time
 Object.assign(globalThis, {
@@ -10,7 +10,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, cashAt, liqOf, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, moverAlerts } = await import('./notify.ts')
+const { alerts, cashAt, liqOf, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, moverAlerts } = await import('./notify.ts')
 const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
@@ -23,7 +23,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], chart: 'line', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', calView: 'month', watches: [], alarms: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
+  subView: 'expense', calView: 'month', watches: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
   marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
@@ -160,18 +160,7 @@ assert.equal(pos(89)[0].title, 'Bitcoin · Trading liquidated')
 // a plan nobody took cannot be liquidated, however wide its stop
 assert.equal(watchAlerts([{ ...long, stop: 85 }], { BTCUSDT: 84 })[0].title, 'Bitcoin · Trading setup broken')
 
-/* ---------- bare alarms, and positions with nothing resting ---------- */
-
-// set below 100 and waiting for a rise: quiet under the level, one alert at and past it
-const alarm: Alarm = { id: 'al1', asset: 'BTCUSDT', label: 'Bitcoin', price: 100, above: true, ts: 0 }
-assert.deepEqual(alarmAlerts([alarm], { BTCUSDT: 99 }), [])
-assert.equal(alarmAlerts([alarm], { BTCUSDT: 100 })[0].id, 'alarm-al1')
-assert.ok(alarmAlerts([alarm], { BTCUSDT: 101 })[0].title.includes('Bitcoin crossed'))
-// the side was written down at creation, so the same level set from above reads the other way
-assert.deepEqual(alarmAlerts([{ ...alarm, above: false }], { BTCUSDT: 101 }), [])
-assert.equal(alarmAlerts([{ ...alarm, above: false }], { BTCUSDT: 99 }).length, 1)
-// no price says nothing, the same rule every alert here holds to
-assert.deepEqual(alarmAlerts([alarm], {}), [])
+/* ---------- positions with nothing resting ---------- */
 
 // a position with no stop resting is the alert; one with a stop is not a word
 const naked = nakedAlerts([

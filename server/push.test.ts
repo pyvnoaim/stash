@@ -63,13 +63,6 @@ assert.ok(at(held, { BTCUSDT: 120 })[0].body.includes('+€49.75'))
    of notional and €2 of fee off the €400 it would have paid. */
 assert.ok(at({ ...long, stake: 200 }, { BTCUSDT: 120 })[0].body.includes('+€398.00 had you taken it'))
 
-/* ---------- the bare alarms ---------- */
-
-const alarmed = { alarms: [{ id: 'al1', asset: 'BTCUSDT', label: 'Bitcoin', price: 100, above: true }] }
-assert.deepEqual(at(alarmed, { BTCUSDT: 99 }), [])   // still under the level: not a word
-assert.equal(at(alarmed, { BTCUSDT: 101 })[0].key, 'alarm-al1')
-assert.ok(at(alarmed, { BTCUSDT: 101 })[0].title.includes('Bitcoin crossed'))
-
 /* ---------- the morning digest ---------- */
 
 const items = {

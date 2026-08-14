@@ -111,17 +111,6 @@ assert.equal(load({ sel: 'a' }).sel, 'today')
 assert.equal(load({ theme: 'dark' }).theme, 'dark')
 assert.equal(load({ theme: 'neon' }).theme, 'auto')
 
-// alarms: junk prices and duplicate ids are dropped, the label falls back to the asset
-const al = load({ alarms: [
-  { id: 'a', asset: 'BTCUSDT', price: '5' },
-  { id: 'b', asset: 'ETHUSDT', price: 0 },       // a level of zero can't be crossed
-  { id: 'a', asset: 'SOLUSDT', price: 2 },       // second 'a' is a duplicate, not a row
-  null,
-] }).alarms
-assert.equal(al.length, 1)
-assert.equal(al[0].price, 5)
-assert.equal(al[0].label, 'BTCUSDT')
-assert.equal(al[0].above, false)
 
 /* ---------- the two actions that could lose items ---------- */
 
@@ -623,16 +612,14 @@ assert.equal(finGeometry('short', 5), 0)          // the distance to it, which i
 assert.equal(finGeometry('long', 95), 1)
 
 /* Gold moved from Binance's XAUT token to Bitget's XAUUSDT perpetual, and every row already
-   written names the old one. An id on no asset list prices at nothing — the alarm never fires and
-   the chart falls back to Bitcoin — so the rows come across on load rather than going quiet. */
+   written names the old one. An id on no asset list prices at nothing — the chart falls back to
+   Bitcoin — so the rows come across on load rather than going quiet. */
 const moved = load({
   watches: [{ id: 'w', asset: 'XAUTUSDT', entry: 4000, stop: 3900, target: 4200 }],
-  alarms: [{ id: 'a', asset: 'XAUTUSDT', price: 4100 }],
   results: [{ id: 'r', asset: 'XAUTUSDT', entry: 4000, stop: 3900, target: 4200, entryAt: 1, closedAt: 2, exit: 4200, r: 2 }],
   marketAsset: 'XAUTUSDT',
 })
 assert.equal(moved.watches[0].asset, 'XAUUSDT')
-assert.equal(moved.alarms[0].asset, 'XAUUSDT')
 assert.equal(moved.results[0].asset, 'XAUUSDT')
 assert.equal(moved.marketAsset, 'XAUUSDT')
 // and nothing else is touched on the way past

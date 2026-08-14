@@ -12,9 +12,7 @@
  * kept in `meta`, and a signed JWT naming the service being asked. node:crypto does all of it.
  *
  * What it decides to knock about:
- *  - a saved Markets setup whose entry, stop or target the live price has reached, and a bare
- *    alarm whose level it has crossed. Crypto and gold only — see the ponytail note in
- *    refreshPrices for why the stocks still aren't priced here.
+ *  - a saved Markets setup whose entry, stop or target the live price has reached.
  *  - a listed asset that has just moved hard, whether or not anything was ever saved on it. The
  *    same rule and the same two numbers the in-app bell uses, imported rather than copied.
  *  - a resting order that has become a position: the desk's own book, read off the stored key. The
@@ -213,22 +211,6 @@ export function alertsOf(
       body: (hit === 'entry' ? `${fmtPrice(p)} — the ${side} entry ${fmtPrice(w.entry)} is here`
         : hit === 'target' ? `${fmtPrice(p)} — the ${side} target ${fmtPrice(w.target)} is reached`
           : `${fmtPrice(p)} — through the ${side} stop ${fmtPrice(w.stop)}`) + paid,
-      target: 'market',
-    })
-  }
-
-  /* The bare alarms, the same crossing test the bell reads: the side was written down when the
-     alarm was made, so a level crossed and crossed back doesn't flap. The key is the alarm's own
-     id — one knock per alarm, however long price stays past it. */
-  for (const a of Array.isArray(s?.alarms) ? s.alarms : []) {
-    const p = prices[a?.asset]
-    const lvl = Number(a?.price)
-    if (typeof p !== 'number' || !isFinite(p) || !isFinite(lvl) || lvl <= 0) continue
-    if (a.above ? p < lvl : p > lvl) continue
-    out.push({
-      key: `alarm-${a.id}`,
-      title: `${a.label || a.asset} crossed ${fmtPrice(lvl)}`,
-      body: `${fmtPrice(p)} now — the level you asked about`,
       target: 'market',
     })
   }
@@ -448,8 +430,7 @@ export function createPush(db: DatabaseSync) {
     if (!row) return []
     try {
       const doc = JSON.parse(row.json)
-      // the alarms watch prices the same way the setups do, so they ride the same fetch
-      return [...(doc.watches ?? []), ...(doc.alarms ?? [])]
+      return doc.watches ?? []
     } catch { return [] }
   }
 
