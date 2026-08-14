@@ -324,8 +324,12 @@ function Spend({ items, total, onOpen }: {
            rank rather than by value: the values are a long tail (a third of the spend down to
            under a percent), so a ramp on the number itself leaves everything below the top two
            sharing one tone. Area already says how big; this only has to separate neighbours, and
-           it runs the same direction as the area so the two never disagree. */
-        const tone = tiles.length > 1 ? (1 - i / (tiles.length - 1)) * 26 : 13
+           it runs the same direction as the area so the two never disagree.
+           Mixed into the card rather than `--muted`, and over a shorter range: on muted the whole
+           frame was a grey slab that arrived before the page did. Starting at the card's own tone
+           means the smallest tiles disappear into the surface and the ramp is the only thing
+           lifting the big ones. */
+        const tone = tiles.length > 1 ? (1 - i / (tiles.length - 1)) * 14 : 7
         // three tiers by real tile size so content fills the space instead of overflowing it: tiny
         // tiles get just the amount, roomy ones the full name + amount + share, the big ones larger.
         // Each bound is what the type inside actually measures — an amount is ~50px at text-xs, the
@@ -351,8 +355,8 @@ function Spend({ items, total, onOpen }: {
                   it, and the first thing you saw was the chart rather than anything on the page you
                   came to read. The thin bars and dots elsewhere keep the full-contrast foreground,
                   where it is a few pixels and reads as ink rather than as a lamp.
-                  Muted rather than the card's own colour so a tile still reads as a tile, with a
-                  border to hold its edge against its neighbour across the 1px gap. Brightness can't
+                  The border is what holds a tile's edge against its neighbour across the 1px gap,
+                  now that the fill starts at the card's own tone. Brightness can't
                   lift a flat fill far, so the hover cue stays a scale + an inset ring, now in the
                   foreground since that is the tone the fill is no longer wearing.
                   The `tone` ramp above replaced a diagonal sheen that sat on every tile: a gradient
@@ -360,7 +364,7 @@ function Spend({ items, total, onOpen }: {
                   just a smear across the one place the name and the amount go. A fill that already
                   differs from its neighbour does not need to be told it is a surface. */}
               <span
-                style={{ backgroundColor: `color-mix(in oklab, var(--foreground) ${tone}%, var(--muted))` }}
+                style={{ backgroundColor: `color-mix(in oklab, var(--foreground) ${tone}%, var(--card))` }}
                 className={cn('text-foreground ring-foreground relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm border text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
                 {mid && (
                   <>

@@ -138,11 +138,18 @@ export function Markdown({ text, onToggle, links }: {
     if (!list) return
     // a list where every item is a box is a checklist, not a bullet list — drop the discs
     const boxes = list.items.every((it) => it.box !== undefined)
+    /* A disc, a number and a checkbox are all drawn, not written: `::marker` and an `<input>` are
+       outside the text, so selecting a list and copying it used to hand over bare lines with the
+       structure stripped off. Each item carries its marker as real hidden text so the clipboard
+       gets the markdown back — clipped, not `display:none`, since a selection only picks up text
+       that is still laid out. `aria-hidden` because a screen reader already says "list item". */
+    const marker = (s: string) => <span aria-hidden className="sr-only">{s}</span>
     const items = list.items.map((it, i) => (
       it.box === undefined
-        ? <li key={i}>{inline(it.text, links)}</li>
+        ? <li key={i}>{marker(list!.ordered ? `${i + 1}. ` : '- ')}{inline(it.text, links)}</li>
         : (
             <li key={i} className="-ml-5 flex list-none items-start gap-2">
+              {marker(it.box ? '- [x] ' : '- [ ] ')}
               <input
                 type="checkbox"
                 checked={it.box}
