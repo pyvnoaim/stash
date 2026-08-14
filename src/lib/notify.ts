@@ -349,19 +349,34 @@ export const netOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev' | 'entryA
 }
 
 /**
- * Where the exchange takes the position away — entry ± entry/lev, the price at which the move
- * against you equals the margin you put in. Only a position has one; a watched plan cannot be
- * liquidated. `> 0` also throws out the 1× long, whose "liquidation" is the asset at zero.
+ * A venue's maintenance margin: the slice of the position it keeps back, so it closes you while
+ * there is still something to close rather than at the price where the margin is exactly gone.
  *
- * ponytail: no maintenance margin — a real exchange pulls the plug a little before this price,
- * not at it. Close enough to be worth a buzz; a rate per exchange if the few percent matters.
+ * ponytail: one flat rate for every venue, asset and size — a real one steps up in tiers with the
+ * notional, and the tables differ per exchange. Half a percent is the low tier on the majors at
+ * both venues here. The direction is what matters more than the number: an alert on this price has
+ * to arrive *before* the exchange acts, and the bare margin price arrives after.
+ */
+const MAINT = 0.005
+
+/**
+ * Where the exchange takes the position away — entry ± entry × (1/lev − maintenance). Only a
+ * position has one; a watched plan cannot be liquidated. The bare margin price below also throws
+ * out the 1× long, whose "liquidation" is the asset at zero.
  */
 export const liqOf = (w: Pick<Watch, 'entry' | 'dir' | 'size' | 'lev'>) => {
   // lev > 0 as well as set: the form holds it to ≥ 1, but this reads a stored document, and a
   // negative leverage would put a long's "liquidation" above its entry — nonsense that would fire
   if (!isPosition(w) || w.lev! <= 0) return null
-  const liq = w.entry * (1 + (w.dir === 'long' ? -1 : 1) / w.lev!)
-  return isFinite(liq) && liq > 0 ? liq : null
+  const away = w.dir === 'long' ? -1 : 1
+  /* Whether there is a liquidation at all is the zero-margin question, asked without the
+     maintenance rate: it is what makes the 1× long's answer the asset at zero, and moving the
+     price in first would turn that into a liquidation half a percent under the entry. */
+  const bare = w.entry * (1 + away / w.lev!)
+  if (!isFinite(bare) || bare <= 0) return null
+  // never more than half the margin, so leverage past 1/MAINT (200×) cannot push a long's
+  // liquidation above its own entry and fire the instant the position is opened
+  return w.entry * (1 + away * (1 / w.lev! - Math.min(MAINT, 1 / w.lev! / 2)))
 }
 
 /** Signed, so a loss reads as one rather than as a number that happens to be smaller. */

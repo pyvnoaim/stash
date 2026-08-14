@@ -11,7 +11,7 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alarmAlerts, alerts, cashAt, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
+const { alarmAlerts, alerts, cashAt, liqOf, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, trendAlerts, moverAlerts } = await import('./notify.ts')
 const { isReal } = await import('./store.ts')
 const { today } = await import('./parse.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
@@ -131,8 +131,18 @@ assert.ok(run(105, 200)[0].detail.includes('+€200'))
 // half a position is no position: without both numbers it falls back to the stake, as it always did
 assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€200'))
 
-/* Liquidation: at 10× the long from 100 dies at 90. A stop inside that (95) ends the trade first
+/* Liquidation: at 10× the long from 100 has its margin gone at 90 and is closed a little before,
+   at 90.5 — the exchange keeps half a percent back. A stop inside that (95) ends the trade first
    and reads as the stop it was; a stop set beyond it (85) is one the exchange never lets fire. */
+assert.equal(liqOf({ entry: 100, dir: 'long', size: 100, lev: 10 }), 90.5)
+assert.equal(liqOf({ entry: 100, dir: 'short', size: 100, lev: 10 }), 109.5)
+// the warning has to land before the exchange does, on both sides
+assert.ok(liqOf({ entry: 100, dir: 'long', size: 100, lev: 10 })! > 90)
+assert.ok(liqOf({ entry: 100, dir: 'short', size: 100, lev: 10 })! < 110)
+// a 1× long is not liquidated half a percent under its entry — it has no liquidation at all
+assert.equal(liqOf({ entry: 100, dir: 'long', size: 100, lev: 1 }), null)
+// and past 200× the maintenance slice cannot swallow the whole distance and cross the entry
+assert.ok(liqOf({ entry: 100, dir: 'long', size: 100, lev: 500 })! < 100)
 const wide: Watch = { ...position, stop: 85 }
 assert.equal(watchAlerts([wide], { BTCUSDT: 89 })[0].title, 'Bitcoin · Trading liquidated')
 assert.ok(watchAlerts([wide], { BTCUSDT: 89 })[0].detail.includes('€100.00 margin is gone'))

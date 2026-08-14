@@ -31,7 +31,8 @@ export function venue(): Promise<Venue> {
   return asked
 }
 
-/** Test seam and the sign-out path: the next caller asks again. */
+/** Signing in or out changes whose key answers this, so sync.ts drops it on both. The next caller
+ *  asks again. Tests use it to get a clean one. */
 export const forgetVenue = () => { asked = null }
 
 /**

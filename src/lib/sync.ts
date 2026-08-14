@@ -18,6 +18,7 @@ import {
   adoptRemote, adoptShared, getState, KEY, setMe, setOnPersist, sliceOf, uid, type Project,
 } from './store.ts'
 import { disablePush } from './push.ts'
+import { forgetVenue } from './venue.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
 export type SyncStatus = 'init' | 'off' | 'out' | 'busy' | 'ok'
@@ -192,6 +193,11 @@ async function account(path: string, body: object): Promise<string | null> {
     const j = await r.json().catch(() => ({}))
     if (!r.ok) return String(j.error ?? `error ${r.status}`)
     setSnap({ user: asUser(j) })
+    /* Whose exchange key this is has just changed. venue.ts asks once and holds the answer for the
+       life of the tab — which is right while one person is signed in, and wrong the moment the
+       person changes. Nothing here reloads the page, so a tab that read `null` signed out would
+       keep reading Binance's bars for an account whose orders rest on MEXC. */
+    forgetVenue()
     await syncNow()
     return null
   } catch {
@@ -223,6 +229,7 @@ export async function logout(everywhere = false) {
      knock comes back 401, which the worker now says out loud. */
   try { await disablePush() } catch { /* no worker, no push, nothing to drop */ }
   try { await fetch(everywhere ? '/api/logout-all' : '/api/logout', { method: 'POST' }) } catch { /* gone is gone */ }
+  forgetVenue()   // the key that answered it is no longer ours to read — see account() above
   setSnap({ user: null, status: 'out' })
 }
 
