@@ -315,9 +315,17 @@ function Spend({ items, total, onOpen }: {
   const scale = px ? px / W : 0 // css px per layout unit
   return (
     <div ref={setBox} className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
-      {tiles.map(({ item, x, y, w, h }) => {
+      {tiles.map(({ item, x, y, w, h }, i) => {
         const wp = (w / W) * 100
         const hp = (h / H) * 100
+        /* How much foreground is mixed into this tile's fill. Every tile used to be a flat
+           `bg-muted`, which made a dozen of them one grey field with hairlines through it — the
+           border was the only thing saying where one bill stopped and the next began. Ordered by
+           rank rather than by value: the values are a long tail (a third of the spend down to
+           under a percent), so a ramp on the number itself leaves everything below the top two
+           sharing one tone. Area already says how big; this only has to separate neighbours, and
+           it runs the same direction as the area so the two never disagree. */
+        const tone = tiles.length > 1 ? (1 - i / (tiles.length - 1)) * 26 : 13
         // three tiers by real tile size so content fills the space instead of overflowing it: tiny
         // tiles get just the amount, roomy ones the full name + amount + share, the big ones larger.
         // Each bound is what the type inside actually measures — an amount is ~50px at text-xs, the
@@ -346,10 +354,14 @@ function Spend({ items, total, onOpen }: {
                   Muted rather than the card's own colour so a tile still reads as a tile, with a
                   border to hold its edge against its neighbour across the 1px gap. Brightness can't
                   lift a flat fill far, so the hover cue stays a scale + an inset ring, now in the
-                  foreground since that is the tone the fill is no longer wearing. */}
-              <span className={cn('bg-muted text-foreground ring-foreground relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm border text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
-                {/* a faint diagonal sheen off the top-left corner, so a flat fill reads as a surface */}
-                <span aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-br from-foreground/10 via-transparent to-transparent transition-opacity duration-150 group-hover:from-foreground/15" />
+                  foreground since that is the tone the fill is no longer wearing.
+                  The `tone` ramp above replaced a diagonal sheen that sat on every tile: a gradient
+                  meant to keep a flat fill from reading as a sticker, which on the big tiles was
+                  just a smear across the one place the name and the amount go. A fill that already
+                  differs from its neighbour does not need to be told it is a surface. */}
+              <span
+                style={{ backgroundColor: `color-mix(in oklab, var(--foreground) ${tone}%, var(--muted))` }}
+                className={cn('text-foreground ring-foreground relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm border text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
                 {mid && (
                   <>
                     {big && <span className={cn('relative max-w-full truncate font-medium leading-tight', huge ? 'text-base' : 'text-xs')}>{item.name}</span>}
