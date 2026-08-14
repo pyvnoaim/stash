@@ -1142,7 +1142,7 @@ function DeleteAccount() {
             <AlertDialogCancel>Keep it</AlertDialogCancel>
             {/* not AlertDialogAction: that closes on click, and a wrong password has to stay open */}
             <Button variant="destructive" disabled={!pass || busy} onClick={go}>
-              {busy ? 'One moment…' : 'Delete for good'}
+              {busy ? 'One moment…' : 'Delete for ever'}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

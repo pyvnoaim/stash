@@ -231,7 +231,7 @@ export default function App() {
     const undos = ids.map((id) => removeItem(id, hard))
     setMarked([])
     const what = ids.length > 1 ? `${ids.length} items` : 'Item'
-    toast(hard ? `${what} deleted for good` : `${what} moved to the trash`, {
+    toast(hard ? `${what} deleted for ever` : `${what} moved to the trash`, {
       action: { label: 'Undo', onClick: () => undos.reverse().forEach(restoreItem) },
     })
   }
@@ -250,7 +250,7 @@ export default function App() {
     const gone = emptyTrash(ids)
     setMarked([])
     if (!gone) return
-    toast(gone.n > 1 ? `${gone.n} items deleted for good` : 'Item deleted for good', {
+    toast(gone.n > 1 ? `${gone.n} items deleted for ever` : 'Item deleted for ever', {
       action: { label: 'Undo', onClick: gone.undo },
     })
   }

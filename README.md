@@ -117,7 +117,7 @@ repeat, since finishing is what brings the next one round.
 | `t` `s` | due today, or pushed to tomorrow |
 | `space` | finish or reopen a task |
 | `⌘⌫` | delete — into the trash, with an undo in the toast |
-| `⇧⌘⌫` | delete for good, straight past the trash |
+| `⇧⌘⌫` | delete for ever, straight past the trash |
 | `⌥↑` `⌥↓` | move the selected row up or down, where the order is yours to set |
 | `esc` | drop the selection, then the focus |
 
@@ -294,9 +294,13 @@ never leaves a copy behind in either.
 
 The trash is a list like the others: the rows read the same, `↑` `↓` walk them, and shift-click
 takes a run. What you can do with one is the pair a deleted row has — **Restore**, which puts it
-back on the list, and **Delete for good**, which is what `⌘⌫` means in here. Both are on the row's
+back on the list, and **Delete for ever**, which is what `⌘⌫` means in here. Both are on the row's
 own right-click menu and on the bar above the list, which acts on everything you have selected;
 **Empty trash** beside them clears the lot. Every one of those has an undo in its toast.
+
+It is a list like the others in every way but one: nothing new goes into it. The capture field
+says so rather than taking the line — standing in the trash names no project, so what you typed
+would have been filed on a list the trash does not show and vanished the moment it was added.
 
 `⇧⌘⌫` skips the trash from any list — for the row you are certain about, where filing it somewhere
 to be deleted again in a fortnight is a step you did not want.
