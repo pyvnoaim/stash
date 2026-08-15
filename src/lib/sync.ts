@@ -64,6 +64,14 @@ export const getSync = () => snap
 
 let timer: ReturnType<typeof setTimeout> | undefined
 
+/* A timer that is only ever waiting to sync must not be a reason for anything to stay alive. In a
+   browser that is free — the tab outlives every timer in it, and `unref` is not even a method
+   there, which the optional call is for. Under node it is the whole difference between `npm test`
+   finishing and hanging: sync.test.ts runs the real engine against the real server, and the poll
+   below plus whichever retry was pending held the process open long after the last assertion —
+   the suite printed `sync ok` and then sat there until it was killed. */
+const loose = <T,>(t: T): T => { (t as { unref?: () => void }).unref?.(); return t }
+
 /* A failed sync has nothing standing behind it but the next edit, a focus, or an `online` event —
    and a phone left open on one screen produces none of the three. Worse, `online` never fires for
    the failures that don't change what the browser thinks of the network: a captive portal, a VPN
@@ -74,7 +82,7 @@ let backoff = RETRY_MIN
 function retry() {
   if (!snap.user) return
   clearTimeout(timer)
-  timer = setTimeout(syncNow, backoff)
+  timer = loose(setTimeout(syncNow, backoff))
   backoff = Math.min(backoff * 2, RETRY_MAX)
 }
 const settled = () => { backoff = RETRY_MIN } // the connection answered; the next failure starts over
@@ -90,7 +98,7 @@ function schedule() {
   rev++
   setMeta({ ...meta(), dirty: true })
   clearTimeout(timer)
-  timer = setTimeout(syncNow, 2000)
+  timer = loose(setTimeout(syncNow, 2000))
 }
 
 let inflight: Promise<void> | undefined
@@ -596,6 +604,6 @@ export function startSync() {
      offline sits it out too, where `retry` owns the schedule and a minute would undo its backoff.
      ponytail: a fixed minute, and `syncNow` joins whatever is in flight rather than stacking.
      A push channel is the upgrade if a minute ever reads as stale. */
-  setInterval(() => { if (snap.user && snap.status !== 'off' && !document.hidden) syncNow() }, 60_000)
+  loose(setInterval(() => { if (snap.user && snap.status !== 'off' && !document.hidden) syncNow() }, 60_000))
   void me()
 }
