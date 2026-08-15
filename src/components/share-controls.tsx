@@ -69,22 +69,6 @@ export function ShareControls({ p }: { p: Project }) {
         Everyone here sees this project and the items filed under it — nothing else of yours.
       </p>
 
-      {/* Said before the form rather than after the members, because it is the answer to the
-          question someone opens this dialog with: it looks unshared and it is not. Read-only —
-          the share belongs to the parent, and two places to revoke one thing is one too many. */}
-      {through.length > 0 && (
-        <p className="text-xs">
-          Already shared with{' '}
-          <span className="text-foreground font-medium">
-            {through.map((m) => m.name).join(', ')}
-          </span>{' '}
-          <span className="text-muted-foreground">
-            through {parent?.name ?? 'the project above'}, which is shared with its sub-projects
-            included. Change it there; adding someone below shares this one on its own.
-          </span>
-        </p>
-      )}
-
       <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); add() }}>
         <Label htmlFor="share-user">Share with</Label>
         <div className="flex gap-2">
@@ -128,8 +112,31 @@ export function ShareControls({ p }: { p: Project }) {
         {error && <p className="text-destructive text-xs">{error}</p>}
       </form>
 
-      {members.length > 0 && (
+      {(members.length > 0 || through.length > 0) && (
         <div className="grid gap-1">
+          {/* On the project without being on it: the share row sits on the parent, and this one
+              travels inside its slice. Dimmed and with nothing to press, because everything that
+              could be pressed belongs to the project above — two places to revoke one share is
+              one too many. Listed all the same: an empty list is what a private project looks
+              like, and this is not one. */}
+          {through.map((m) => (
+            <Hint key={`up:${m.name}`} label={`Shared through ${parent?.name ?? 'the project above'} — change it there`}>
+              <div className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm opacity-60">
+                {m.avatar
+                  ? <img src={m.avatar} alt="" className="size-6 shrink-0 rounded-md object-cover" />
+                  : (
+                      <span className="bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-md text-xs uppercase">
+                        {m.name.slice(0, 1)}
+                      </span>
+                    )}
+                <span className="text-muted-foreground truncate">{m.name}</span>
+                <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 text-xs">
+                  {m.edit ? <Pencil className="size-3.5" /> : <Eye className="size-3.5" />}
+                  {parent?.name}
+                </span>
+              </div>
+            </Hint>
+          ))}
           {members.map((m) => (
             <div key={m.name} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
               {m.avatar

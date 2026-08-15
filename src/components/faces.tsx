@@ -36,12 +36,15 @@ export function Faces({ p }: { p: Project }) {
   if (here.length < 2) return null   // alone on it is not company, and the header already says whose it is
 
   return (
-    <div className="flex shrink-0 -space-x-1.5">
+    /* Overlapped, so a project with five people on it is still a name and not a row of faces —
+       and pulled apart on hover, since half a face is not one you can pick out. The gap is on the
+       children, so the transition goes there too; the parent only says when. */
+    <div className="flex shrink-0 -space-x-1.5 hover:space-x-0.5">
       {here.map((f) => (
         <Hint key={f.name} label={f.name === user?.name ? `${f.name} — you` : f.name}>
           {/* focusable, or the name is a thing only a mouse can read */}
           <span tabIndex={0} role="img" aria-label={f.name}
-            className="ring-background focus-visible:ring-ring inline-flex rounded-md ring-2 outline-none"
+            className="ring-background focus-visible:ring-ring inline-flex rounded-md ring-2 outline-none transition-[margin] duration-150 ease-out"
           >
             <Avatar name={f.name} avatar={f.avatar} className="size-6 text-[11px]" />
           </span>
