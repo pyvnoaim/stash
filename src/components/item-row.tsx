@@ -74,16 +74,20 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   const filedPath = filed
     ? [upper?.name, filed.name].filter(Boolean).join('/')
     : ''
-  /* The label wears the project's own colour, the same one the sidebar dot does — a mixed list is
-     read by which project each row is in, and grey said that in words only. A sub-project coloured
-     differently from its parent gets both: the path runs from the parent's colour to its own,
-     which is the same thing the `parent/child` slash says, in colour. */
+  /* The label wears the project's own colour, the same one the sidebar bar does — a mixed list is
+     read by which project each row is in, and grey said that in words only.
+     A path with two ends fades between them: parent's colour to child's, painted through the
+     letters, which is the `parent/child` slash said in colour. Grey counts as an end — a parent
+     with no colour fades out of ordinary muted text rather than borrowing its child's, the way its
+     own bar in the sidebar stays grey. Nothing to fade between and it is one flat colour: a
+     top-level project, or a child that matches its parent. */
   const up = upper?.color ?? null
   const own = filed?.color ?? null
-  const grad = !!up && !!own && up !== own
-  const tint = grad
-    ? { backgroundImage: `linear-gradient(90deg, ${up}, ${own})` }
-    : (own ?? up) ? { color: own ?? up! } : undefined
+  /* Grey is a colour here: a parent with none fades out of the ordinary muted text into its
+     child's colour, rather than switching at the slash — the two ends are what they are, and the
+     fade is the path between them. Both the same, or both unset, and there is nothing to fade. */
+  const grad = !!upper && up !== own
+  const end = (c: string | null) => c ?? 'var(--muted-foreground)'
   // blank lines are spacing, not content — they must not inflate the "there is more" count
   const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
   const t = today()
@@ -209,12 +213,14 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onProject(filed.id) }}
-                  style={tint}
+                  style={grad
+                    ? { backgroundImage: `linear-gradient(90deg, ${end(up)}, ${end(own)})` }
+                    : own ? { color: own } : undefined}
                   className={cn(
                     'max-w-40 cursor-pointer truncate font-mono text-xs',
-                    // a gradient is painted through the letters, so the text itself has no colour of its own
+                    // a gradient is painted through the letters, so the text has no colour of its own
                     grad ? 'bg-clip-text text-transparent hover:opacity-80'
-                      : tint ? 'hover:opacity-80' : 'text-muted-foreground hover:text-foreground',
+                      : own ? 'hover:opacity-80' : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
                   @{filedPath.toLowerCase()}
