@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Avatar } from '@/components/settings-dialog'
 import { Hint } from '@/components/ui/tooltip'
 import { getSync, roster as allFaces, subscribeSync, type Face } from '@/lib/sync'
+import { membersOf } from '@/lib/members'
 import type { Project } from '@/lib/store'
 
 /**
@@ -15,13 +16,7 @@ export function useMembers(p: Project | undefined): Face[] {
 
   useEffect(() => { void allFaces().then(setRoster) }, [p?.id, user?.name])
 
-  if (!p) return []
-  // a project id belongs to whoever owns it: theirs if it was shared with you, otherwise yours
-  const owner = p.share?.by ?? user?.name
-  const on = (pid: string, subs = false) =>
-    roster.filter((f) => f.pid === pid && f.owner === owner && (!subs || f.subs))
-  // a sub-project is not in the table itself — it is on the parent's share, when that share carries it
-  return on(p.id).length ? on(p.id) : p.parent ? on(p.parent, true) : []
+  return p ? membersOf(roster, p, user?.name) : []
 }
 
 /**

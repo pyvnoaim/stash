@@ -65,10 +65,6 @@ export function ShareControls({ p }: { p: Project }) {
 
   return (
     <div className="grid gap-2 border-t pt-4">
-      <p className="text-muted-foreground text-xs">
-        Everyone here sees this project and the items filed under it — nothing else of yours.
-      </p>
-
       <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); add() }}>
         <Label htmlFor="share-user">Share with</Label>
         <div className="flex gap-2">
@@ -176,9 +172,14 @@ export function ShareControls({ p }: { p: Project }) {
               </Hint>
             </div>
           ))}
+          {/* The one thing about a shared project that surprises people, said where the editors
+              are. What happens, then what survives it — deliberately not "restore it in Settings →
+              Versions": that panel rolls your whole stash back to a moment, which is not the offer
+              anyone would hear in a sentence about one item. */}
           <p className="text-muted-foreground pt-1 text-xs">
-            Two people editing the same item in the same moment: the last write wins, and the one
-            it replaced stays in the project's history.
+            Two people saving the same item at once: the later save is the one that stands. Neither
+            copy is lost — the server keeps the last fifty snapshots of this project, and fifty of
+            your own stash.
           </p>
         </div>
       )}
