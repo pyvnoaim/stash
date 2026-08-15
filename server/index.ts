@@ -32,6 +32,7 @@ import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, pending as mexcPending, positions as mexcPositions } from './mexc.ts'
+import { desk, place, type Cred } from './trade.ts'
 import { createStash } from './mcp.ts'
 import { BARS, MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -1213,6 +1214,66 @@ export function start({
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
+    }
+
+    /* The desk, and the one thing on this server that can move money.
+       GET says what the account has and whether its key may trade at all; POST places one order,
+       with its stop and target riding it. Bitget only — MEXC's futures place-order endpoint has
+       been shut since 2022, so there is nothing to call and the app offers no button for it.
+       Both refuse without a stored key, the same 501 the positions route answers with. */
+    if (path === '/api/trade') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const raw = (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget
+      if (!raw) return send(res, 501, { error: 'no Bitget key on this account' })
+      const cred = JSON.parse(raw) as Cred
+      // the symbol travels in a URL and into a signed request path: an allowlist of what a
+      // perpetual is ever called, so nothing else can be appended to a query this server signs
+      const ok = (s: unknown) => /^[A-Z0-9]{4,20}$/.test(String(s ?? ''))
+      if (req.method === 'GET') {
+        const symbol = String(new URL(req.url ?? '/', 'http://x').searchParams.get('symbol') ?? '').toUpperCase()
+        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
+        try { return send(res, 200, await desk(cred, symbol)) }
+        catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
+      }
+      if (req.method === 'POST') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const symbol = String(b?.symbol ?? '').toUpperCase()
+        const side = b?.side === 'short' ? 'short' as const : 'long' as const
+        /* Every number checked here rather than at the exchange: this is the request that spends
+           money, and a NaN margin or a leverage typed with a trailing letter must not reach a
+           signed call. The caps are the sane end of each range, not the venue's — the contract's
+           own maximum is checked in trade.ts, against the spec. */
+        const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : NaN }
+        const margin = n(b?.margin), leverage = n(b?.leverage)
+        const level = (v: unknown) => (v == null || v === '' ? null : n(v))
+        const entry = level(b?.entry), stop = level(b?.stop), target = level(b?.target)
+        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
+        if (!(margin > 0)) return send(res, 400, { error: 'margin has to be a number over zero' })
+        // whole multipliers only: the venue takes nothing else, and "3.5" would be refused after
+        // the leverage call had already changed the account's setting for the symbol
+        if (!Number.isInteger(leverage) || !(leverage >= 1 && leverage <= 125)) {
+          return send(res, 400, { error: 'leverage is a whole number, 1 to 125' })
+        }
+        for (const [what, v] of [['entry', entry], ['stop', stop], ['target', target]] as const) {
+          if (v !== null && !(v > 0)) return send(res, 400, { error: `${what} has to be a price over zero` })
+        }
+        /* A ceiling on how fast this can go wrong. Ten orders in a quarter of an hour is far past
+           how anyone here trades, and it is the blast radius for the two ways this route ever
+           fires without a person: a loop in the client, or a session someone else is holding.
+           Last of the checks, so a malformed request costs its sender rather than the account. */
+        if (limited(`trade:${user.id}`)) return send(res, 429, { error: 'ten orders in fifteen minutes is the limit — wait it out' })
+        try {
+          const done = await place(cred, { symbol, side, margin, leverage, entry, stop, target })
+          // in the log beside the sign-ins: this is the event anyone auditing the server wants
+          log(`trade ${side} ${symbol} ${done.size}@${done.price} ${leverage}x`, user.name, via(req))
+          return send(res, 200, done)
+        } catch (e) {
+          return send(res, 502, { error: String((e as Error).message) })
+        }
+      }
+      return send(res, 405, { error: 'method not allowed' })
     }
 
     /* What the exchanges have already closed, so a trade files itself into the record at the price

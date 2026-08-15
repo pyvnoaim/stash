@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
+import { ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -11,6 +11,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { GuideDialog } from '@/components/guide-dialog'
+import { TradeDialog } from '@/components/trade-dialog'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
@@ -218,6 +219,13 @@ export default function MarketPage() {
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
   const [guide, setGuide] = useState<Signal | null>(null) // the reading whose explainer is open
+  /* The order dialog, holding the plan as it stood when the button was pressed. Not a boolean:
+     `plan` is recomputed off every tick, and passing its levels straight in re-ran the dialog's
+     own set-up on each one — the margin you had typed thrown away twice a second, and a confirm
+     button that meant a different price than the one under it. What is placed is what was shown. */
+  const [trading, setTrading] = useState<
+    { side: 'long' | 'short', entry: number, stop: number, target: number | null } | null
+  >(null)
   const [showWhy, setShowWhy] = useState(false) // the readings behind the verdict, folded by default
   /* The unbroken swings, the range they span, and the gaps price has not come back for. On by
      default — they are the levels every other reading on this page is quietly measured against, and
@@ -1078,8 +1086,10 @@ export default function MarketPage() {
             </Hint>
           ) : !inIt ? (
             <p className="text-muted-foreground mt-2 text-xs">
-              Nothing to press — the desk files what it endorses on the Paper tab, even with every
-              device here shut. Nothing is ever traded.
+              The desk files what it endorses on the Paper tab, even with every device here shut —
+              nothing there is ever traded. {feed === 'bitget'
+                ? 'Take this trade is the one thing in this app that places a real order, and it asks twice.'
+                : 'Nothing here places an order.'}
             </p>
           ) : held && (
             /* The card knew the position was there — it draws its levels — and still read the paper
@@ -1093,6 +1103,29 @@ export default function MarketPage() {
                 {held.side === side ? '' : ' — the other side of this card'}
               </p>
             </Hint>
+          )}
+          {/* The only order button in the app. Bitget only — MEXC's futures place-order endpoint
+              has been shut since 2022 — and never over a position that is already on: this card
+              plans an entry, and pressing it while holding one would be adding to a trade the plan
+              knows nothing about. The dialog does the arithmetic and asks twice. */}
+          {/* `side` is 'flat' where the chart has no lean — there is no order to place on that,
+              and the plan card above is already showing nothing to act on */}
+          {feed === 'bitget' && !holding && !held && side !== 'flat' && (
+            <Button
+              size="sm" className="mt-3"
+              onClick={() => setTrading({
+                side, entry: plan.entry, stop: plan.stop,
+                target: plan.target > plan.entry || side === 'short' ? plan.target : null,
+              })}
+            >
+              <Zap /> Take this trade
+            </Button>
+          )}
+          {trading && (
+            <TradeDialog
+              open onOpenChange={(v) => { if (!v) setTrading(null) }}
+              symbol={current.id} coin={coin} {...trading}
+            />
           )}
           {against && (
             <p className="text-amber-600 dark:text-amber-500 mt-2 text-xs">

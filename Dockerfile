@@ -9,7 +9,7 @@ RUN npm run build
 FROM node:24-alpine
 WORKDIR /app
 COPY --from=build /app/dist ./dist
-COPY server/index.ts server/push.ts server/paper.ts server/cal.ts server/blob.ts server/bitget.ts server/mexc.ts server/mcp.ts ./server/
+COPY server/index.ts server/push.ts server/paper.ts server/cal.ts server/blob.ts server/bitget.ts server/mexc.ts server/trade.ts server/mcp.ts ./server/
 # What the server shares with the app: the market maths for push.ts, and — for the hosted /mcp
 # route — the store, the parser and the hotkey table the store leans on. store.ts imports react
 # (one hook, never called out here), which is why a single dependency rides into the image.

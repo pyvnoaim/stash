@@ -1,4 +1,5 @@
 import { memo, useState } from 'react'
+import { toast } from 'sonner'
 import {
   CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo, Maximize2,
   PencilLine, Repeat, RotateCcw, Share2, StickyNote, Trash2,
@@ -25,20 +26,21 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
 }
 
 /**
- * One row through the machine's own share sheet: the line, the note under it, and the day it is
- * due if it has one. Words, not a link — there is nothing to publish and nothing to take back,
- * which is the whole reason this is a menu item and not a decision.
- * Cancelling the sheet rejects with an AbortError, and a cancelled share is not an error to report.
+ * A link straight to the row — `/?item=<id>`, read in main.tsx — on the clipboard, rather than the
+ * machine's own share sheet standing between the click and the thing it was for. It opens the row
+ * for whoever already has it: your own stash on another device, or a project shared with the
+ * person you sent it to.
  */
-const shareItem = (it: Item) =>
-  navigator.share({
-    title: it.text || 'Untitled',
-    text: [
-      it.text,
-      it.due && `${dayLabel(it.due)}${it.at ? ` at ${it.at}` : ''}`,
-      it.note,
-    ].filter(Boolean).join('\n\n'),
-  }).catch(() => {})
+const shareItem = (it: Item) => {
+  const url = `${location.origin}/?item=${it.id}`
+  // no clipboard outside a secure context, and a toast saying "copied" over nothing is a lie —
+  // the link itself instead, to take by hand
+  if (!navigator.clipboard) return void toast(url)
+  void navigator.clipboard.writeText(url).then(
+    () => toast('Link copied'),
+    () => toast(url),
+  )
+}
 
 function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete, onRestore }: {
   it: Item
@@ -68,9 +70,20 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   const [lifting, setLifting] = useState(false)
   const filed = projects.find((p) => p.id === it.pid)
   // a sub-project shows its parent too, the same path the sidebar reads: parent/child
+  const upper = filed?.parent ? projects.find((p) => p.id === filed.parent) : undefined
   const filedPath = filed
-    ? [filed.parent && projects.find((p) => p.id === filed.parent)?.name, filed.name].filter(Boolean).join('/')
+    ? [upper?.name, filed.name].filter(Boolean).join('/')
     : ''
+  /* The label wears the project's own colour, the same one the sidebar dot does — a mixed list is
+     read by which project each row is in, and grey said that in words only. A sub-project coloured
+     differently from its parent gets both: the path runs from the parent's colour to its own,
+     which is the same thing the `parent/child` slash says, in colour. */
+  const up = upper?.color ?? null
+  const own = filed?.color ?? null
+  const grad = !!up && !!own && up !== own
+  const tint = grad
+    ? { backgroundImage: `linear-gradient(90deg, ${up}, ${own})` }
+    : (own ?? up) ? { color: own ?? up! } : undefined
   // blank lines are spacing, not content — they must not inflate the "there is more" count
   const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
   const t = today()
@@ -196,7 +209,13 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onProject(filed.id) }}
-                  className="text-muted-foreground hover:text-foreground max-w-40 cursor-pointer truncate font-mono text-xs"
+                  style={tint}
+                  className={cn(
+                    'max-w-40 cursor-pointer truncate font-mono text-xs',
+                    // a gradient is painted through the letters, so the text itself has no colour of its own
+                    grad ? 'bg-clip-text text-transparent hover:opacity-80'
+                      : tint ? 'hover:opacity-80' : 'text-muted-foreground hover:text-foreground',
+                  )}
                 >
                   @{filedPath.toLowerCase()}
                 </button>
@@ -387,16 +406,10 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           Copy text
         </ContextMenuItem>
 
-        {/* The machine's own share sheet — Mail, Messages, WhatsApp, AirDrop, whatever is installed.
-            A snapshot of the words rather than a link to the row: nothing here is published, no
-            token is cut, and the other side needs no account. Only where the browser has one; the
-            Copy text above is what the others already had. */}
-        {'share' in navigator && (
-          <ContextMenuItem onSelect={() => void shareItem(it)}>
-            <Share2 />
-            Share…
-          </ContextMenuItem>
-        )}
+        <ContextMenuItem onSelect={() => shareItem(it)}>
+          <Share2 />
+          Copy link
+        </ContextMenuItem>
 
         <ContextMenuItem variant="destructive" onSelect={onDelete}>
           <Trash2 />

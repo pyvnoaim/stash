@@ -9,7 +9,7 @@ import { LoginGate } from './components/login-gate.tsx'
 import { LinkPage } from './components/link-page.tsx'
 import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
-import { addShared, getState, select } from './lib/store.ts'
+import { addShared, focus, getState, select } from './lib/store.ts'
 import { applyTheme } from './lib/utils.ts'
 import { refreshPush } from './lib/push.ts'
 import { holdRegistration } from './lib/update.ts'
@@ -80,6 +80,21 @@ async function hardReload() {
   if (landed) {
     history.replaceState(null, '', location.pathname + location.hash)
     select(landed)
+  }
+}
+
+/* A link to one row — `/?item=<id>`, what Copy link on a row puts on the clipboard. It opens the
+   list the row is in and selects it, which is the whole of it: the row has to already be here,
+   because a link carries an id and not the row itself. Someone who is not on the project sees
+   their own stash, unmoved.
+   ponytail: read once, at boot. A link opened while the project is still syncing in finds nothing
+   — re-select once the row lands if that ever bites. */
+{
+  const wanted = new URLSearchParams(location.search).get('item')
+  if (wanted) {
+    history.replaceState(null, '', location.pathname + location.hash)
+    const it = getState().items.find((i) => i.id === wanted)
+    if (it) { select(it.pid ?? 'inbox'); focus(it.id) }
   }
 }
 

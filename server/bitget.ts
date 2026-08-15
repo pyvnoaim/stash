@@ -58,9 +58,10 @@ const BASE = 'https://api.bitget.com'
 const TTL = 30_000
 
 /** ACCESS-SIGN: base64 HMAC-SHA256 over timestamp + METHOD + path, query string and all — what is
- *  being asked for, not only where. GET only, which is every call this module makes. */
-export const sign = (secret: string, ts: string, method: string, path: string) =>
-  createHmac('sha256', secret).update(ts + method.toUpperCase() + path).digest('base64')
+ *  being asked for, not only where. The body goes in too, which is what `trade.ts` needs of it and
+ *  what every call from this module leaves empty. */
+export const sign = (secret: string, ts: string, method: string, path: string, body = '') =>
+  createHmac('sha256', secret).update(ts + method.toUpperCase() + path + body).digest('base64')
 
 const authed = (key: string, secret: string, pass: string, path: string) => {
   const ts = String(Date.now())
