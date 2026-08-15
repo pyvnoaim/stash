@@ -28,13 +28,20 @@ export function ShareControls({ p }: { p: Project }) {
   const [name, setName] = useState('')
   const [edit, setEdit] = useState(false)
   const [subs, setSubs] = useState(false)
+  /* Who is on this project without being on it: a sub-project travels inside its parent's slice
+     when the parent's "Include its sub-projects" is ticked, and the share row stays on the parent.
+     This dialog listed members by their own project id, so a sub-project someone was reading right
+     then showed an empty Share with and nothing else — indistinguishable from private. */
+  const [through, setThrough] = useState<Member[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const parent = p.parent ? s.projects.find((x) => x.id === p.parent) : undefined
 
   const load = () => void shares().then(({ mine }) => {
     const here = mine.filter((m) => m.pid === p.id)
     setMembers(here)
     if (here.length) setSubs(!!here[0].subs)      // whatever the project already says
+    setThrough(p.parent ? mine.filter((m) => m.pid === p.parent && m.subs) : [])
   })
   // mounted only while the dialog holding it is open, so this runs exactly when it used to
   useEffect(() => {
@@ -61,6 +68,22 @@ export function ShareControls({ p }: { p: Project }) {
       <p className="text-muted-foreground text-xs">
         Everyone here sees this project and the items filed under it — nothing else of yours.
       </p>
+
+      {/* Said before the form rather than after the members, because it is the answer to the
+          question someone opens this dialog with: it looks unshared and it is not. Read-only —
+          the share belongs to the parent, and two places to revoke one thing is one too many. */}
+      {through.length > 0 && (
+        <p className="text-xs">
+          Already shared with{' '}
+          <span className="text-foreground font-medium">
+            {through.map((m) => m.name).join(', ')}
+          </span>{' '}
+          <span className="text-muted-foreground">
+            through {parent?.name ?? 'the project above'}, which is shared with its sub-projects
+            included. Change it there; adding someone below shares this one on its own.
+          </span>
+        </p>
+      )}
 
       <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); add() }}>
         <Label htmlFor="share-user">Share with</Label>
