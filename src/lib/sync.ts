@@ -112,8 +112,8 @@ export function syncNow(): Promise<void> {
  * An exchange guaranteed to have begun after this call. For the few places that have just changed
  * something on the *server* — taking a link's invitation, sharing a project, cutting a link — where
  * joining the one already going is the wrong answer: it read /api/shares before the change existed,
- * so it comes back without it, and with no sync on a timer in this app the next look could be hours
- * away. Waking on focus deliberately does not use this; catching up is what the joining above is
+ * so it comes back without it, and the poll in `startSync` would not look again for a minute.
+ * Waking on focus deliberately does not use this; catching up is what the joining above is
  * for, and a wake that fired two exchanges is the thing that rule exists to prevent.
  */
 export function syncFresh(): Promise<void> {
@@ -589,5 +589,13 @@ export function startSync() {
   // a phone coming back to the app fires this and does not reliably fire focus; it is dispatched
   // at the document and bubbles, so the window hears it too
   addEventListener('visibilitychange', () => { if (!document.hidden) wake() })
+  /* A tab left open and looked at learns nothing on its own: every wake above is a return to the
+     app, and someone reading the stash while another device — or the MCP server, which writes over
+     HTTP and never touches this browser's storage — changes it underneath is already here. So the
+     one case the wakes cannot cover gets a poll. Hidden tabs sit it out, the return wakes them;
+     offline sits it out too, where `retry` owns the schedule and a minute would undo its backoff.
+     ponytail: a fixed minute, and `syncNow` joins whatever is in flight rather than stacking.
+     A push channel is the upgrade if a minute ever reads as stale. */
+  setInterval(() => { if (snap.user && snap.status !== 'off' && !document.hidden) syncNow() }, 60_000)
   void me()
 }
