@@ -37,6 +37,24 @@ assert.deepEqual(
 assert.deepEqual(membersOf(roster, project({ id: 'alone' }), 'leon'), [])
 assert.deepEqual(membersOf([], project({ id: 'business' }), 'leon'), [])
 
+/* A sub-project published as a public link keeps one row of its own — the owner's, so the link has
+   a document to point at. That row is not company, and it must not stand in for the parent's
+   people: the header went empty on a project two people were reading. */
+const linked: Face[] = [...roster, { pid: 'itsys', owner: 'leon', name: 'leon', avatar: null, subs: 0 }]
+assert.deepEqual(
+  membersOf(linked, project({ id: 'itsys', parent: 'business' }), 'leon').map((f) => f.name),
+  ['leon', 'toad'],
+)
+// and the owner is named once, not once per row that carries them
+assert.equal(membersOf(linked, project({ id: 'itsys', parent: 'business' }), 'leon').length, 2)
+
+// someone put on the sub-project directly stands beside the ones who came through the parent
+const both: Face[] = [...roster, { pid: 'itsys', owner: 'leon', name: 'ada', avatar: null, subs: 0 }]
+assert.deepEqual(
+  membersOf(both, project({ id: 'itsys', parent: 'business' }), 'leon').map((f) => f.name),
+  ['ada', 'leon', 'toad'],
+)
+
 /* Shared with you: the id belongs to its owner, so that is whose rows to read — your own name
    would find nothing, and the same id under your account is a different project entirely. */
 assert.deepEqual(

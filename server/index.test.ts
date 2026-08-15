@@ -154,10 +154,13 @@ assert.deepEqual(users.map((u: any) => [u.name, u.admin]), [['leon', 1], ['mia',
 assert.ok(users[0].synced && users[1].synced && !users[2].synced)
 
 /* the roster the share fields complete against: everyone but yourself, and nothing about them
-   beyond the name you would have typed anyway. Never to someone who is not signed in. */
+   beyond the name you would have typed anyway and the face already shown beside it wherever they
+   are on a project with you. Never to someone who is not signed in. */
 assert.equal((await get('/api/users')).status, 401)
-assert.deepEqual(await (await get('/api/users', leon)).json(), { users: ['kim', 'mia'] })
-assert.deepEqual(await (await get('/api/users', mia)).json(), { users: ['kim', 'leon'] })
+assert.deepEqual(await (await get('/api/users', leon)).json(),
+  { users: [{ name: 'kim', avatar: null }, { name: 'mia', avatar: null }] })
+assert.deepEqual(await (await get('/api/users', mia)).json(),
+  { users: [{ name: 'kim', avatar: null }, { name: 'leon', avatar: null }] })
 
 /* the Desk: only accounts that switched it on, and only what a trade is — never what it cost or
    paid anyone. Leon leaves his off, so mia's desk stays empty while his reads hers.

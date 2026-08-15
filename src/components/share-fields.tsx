@@ -1,4 +1,6 @@
 import { Eye, Pencil } from 'lucide-react'
+import { Avatar } from '@/components/settings-dialog'
+import type { Person } from '@/lib/sync'
 
 /**
  * The two bits every "share with" field needs, in one place because both the new-project dialog
@@ -31,24 +33,27 @@ export function AccessToggle({ edit, onChange }: { edit: boolean, onChange: (v: 
  * it drops out of. Picking one adds that person; nothing shows until there is something to show.
  */
 export function PeopleSuggest({ names, q, onPick }: {
-  names: string[]
+  names: Person[]
   q: string
   onPick: (name: string) => void
 }) {
   const v = q.trim().toLowerCase()
   // an exact match is already in the field — offering it back is a row that does nothing
-  const hits = v ? names.filter((n) => n.includes(v) && n !== v).slice(0, 5) : []
+  const hits = v ? names.filter((p) => p.name.includes(v) && p.name !== v).slice(0, 5) : []
   if (!hits.length) return null
   return (
     <div className="grid gap-0.5 rounded-md border p-1">
-      {hits.map((n) => (
+      {hits.map((p) => (
         <button
-          key={n}
+          key={p.name}
           type="button"
-          onClick={() => onPick(n)}
-          className="hover:bg-accent rounded-sm px-2 py-1 text-left text-sm"
+          onClick={() => onPick(p.name)}
+          // the face beside the name, because two accounts an editing distance apart are told
+          // apart by it faster than by reading — and it is the same face the project will wear
+          className="hover:bg-accent flex items-center gap-2 rounded-sm px-2 py-1 text-left text-sm"
         >
-          {n}
+          <Avatar name={p.name} avatar={p.avatar} className="size-5 text-[10px]" />
+          {p.name}
         </button>
       ))}
     </div>

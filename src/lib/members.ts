@@ -20,6 +20,13 @@ export function membersOf(roster: Face[], p: Project, me: string | undefined): F
   const owner = p.share?.by ?? me
   const on = (pid: string, subs = false) =>
     roster.filter((f) => f.pid === pid && f.owner === owner && (!subs || f.subs))
-  // a sub-project is not in the table itself — it is on the parent's share, when that share carries it
-  return on(p.id).length ? on(p.id) : p.parent ? on(p.parent, true) : []
+  /* Both, not one or the other. A sub-project is not in the table itself — its people come off the
+     parent's share, when that share carries its sub-projects — but it can have rows of its own too,
+     and having any of them used to mean the parent's were never looked at.
+     What that cost: a project published as a public link keeps one row, the owner's, so the link
+     has a document to point at. That is a row, so the parent's people were dropped, and the one
+     row left was the owner alone — which `Faces` draws as nobody. A sub-project with a link on it
+     showed an empty header while two people were reading it. */
+  const all = [...on(p.id), ...(p.parent ? on(p.parent, true) : [])]
+  return all.filter((f, i) => all.findIndex((x) => x.name === f.name) === i)
 }

@@ -442,7 +442,7 @@ export function start({
       from users u order by u.id`),
     /* everyone but you, for the share fields to complete against. Names only, and a name here is
        already public to anyone you might share with — it is what they type to reach you. */
-    people: db.prepare('select name from users where id <> ? order by name'),
+    people: db.prepare('select name, avatar from users where id <> ? order by name'),
     /* Everyone else's latest document, for the Desk. The one query that reads across accounts —
        what it may hand out is decided row by row in the route, off what each document itself says.
        The `like` is a pre-filter and not the decision: a document is a few hundred KB, and parsing
@@ -1388,7 +1388,8 @@ export function start({
     if (path === '/api/users' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      return send(res, 200, { users: (q.people.all(user.id) as { name: string }[]).map((u) => u.name) })
+      // name and face, since every place that offers this list draws both
+      return send(res, 200, { users: q.people.all(user.id) })
     }
 
     /* The Desk: how everyone else's trades went, and what they are in now. Opt-in per account —

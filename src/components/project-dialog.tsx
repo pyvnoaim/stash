@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/select'
 import { Hint } from '@/components/ui/tooltip'
 // `people` is the list being built on this form, so the roster of everyone comes in under its own name
-import { getSync, people as roster, share, subscribeSync, syncNow } from '@/lib/sync'
+import { getSync, people as roster, share, subscribeSync, syncNow, type Person } from '@/lib/sync'
 import { useStash } from '@/lib/store'
 
 /** One dialog for both "New project" and "Edit project" — same fields, same rules. */
@@ -45,7 +45,7 @@ export function ProjectDialog({
   const [people, setPeople] = useState<{ name: string, edit: boolean }[]>([])
   const [who, setWho] = useState('')
   const [edit, setEdit] = useState(true)   // what the next name added may do
-  const [all, setAll] = useState<string[]>([])
+  const [all, setAll] = useState<Person[]>([])
   useEffect(() => {
     if (!open) return
     setName(initial ?? '')
@@ -166,7 +166,7 @@ export function ProjectDialog({
             </div>
             {/* everyone but the ones already on the list below, so a name cannot be added twice */}
             <PeopleSuggest
-              names={all.filter((n) => !people.some((p) => p.name === n))}
+              names={all.filter((a) => !people.some((p) => p.name === a.name))}
               q={who}
               onPick={addPerson}
             />

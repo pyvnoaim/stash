@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Copy, Eye, Link2, Pencil, Trash2 } from 'lucide-react'
+import { Copy, Eye, Link2, Pencil, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { AccessToggle, PeopleSuggest } from '@/components/share-fields'
+import { Avatar } from '@/components/settings-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Hint } from '@/components/ui/tooltip'
 import {
-  dropLink, linkUrl, links, makeLink, people, share, shares, unshare, syncFresh, type Member,
+  dropLink, linkUrl, links, makeLink, people, share, shares, unshare, syncFresh, type Member, type Person,
 } from '@/lib/sync'
 import { childProjects, useStash, type Project } from '@/lib/store'
 
@@ -24,7 +25,7 @@ export function ShareControls({ p }: { p: Project }) {
   const s = useStash()
   const kids = childProjects(s, p.id)
   const [members, setMembers] = useState<Member[]>([])
-  const [roster, setRoster] = useState<string[]>([])
+  const [roster, setRoster] = useState<Person[]>([])
   const [name, setName] = useState('')
   const [edit, setEdit] = useState(false)
   const [subs, setSubs] = useState(false)
@@ -65,8 +66,12 @@ export function ShareControls({ p }: { p: Project }) {
 
   return (
     <div className="grid gap-2 border-t pt-4">
+      {/* Two blocks under Edit project, and they wear the same heading so they read as siblings:
+          the people you name, and the link that names nobody. */}
       <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); add() }}>
-        <Label htmlFor="share-user">Share with</Label>
+        <Label htmlFor="share-user" className="flex items-center gap-1.5">
+          <Users className="size-3.5" /> People
+        </Label>
         <div className="flex gap-2">
           {/* no autoFocus: the name at the top of the form is what you came to Edit for */}
           <Input id="share-user" placeholder="their name"
@@ -76,7 +81,7 @@ export function ShareControls({ p }: { p: Project }) {
         </div>
         {/* everyone already on the project is left out — they are on the list below */}
         <PeopleSuggest
-          names={roster.filter((n) => !members.some((m) => m.name === n))}
+          names={roster.filter((r) => !members.some((m) => m.name === r.name))}
           q={name}
           onPick={add}
         />
@@ -100,7 +105,7 @@ export function ShareControls({ p }: { p: Project }) {
             <span>
               Include its {kids.length === 1 ? 'sub-project' : `${kids.length} sub-projects`}
               <span className="text-muted-foreground block text-xs">
-                {kids.map((k) => k.name).join(', ')} — and everything filed under them.
+                {kids.map((k) => k.name).join(', ')}
               </span>
             </span>
           </label>
@@ -118,13 +123,7 @@ export function ShareControls({ p }: { p: Project }) {
           {through.map((m) => (
             <Hint key={`up:${m.name}`} label={`Shared through ${parent?.name ?? 'the project above'} — change it there`}>
               <div className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm opacity-60">
-                {m.avatar
-                  ? <img src={m.avatar} alt="" className="size-6 shrink-0 rounded-md object-cover" />
-                  : (
-                      <span className="bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-md text-xs uppercase">
-                        {m.name.slice(0, 1)}
-                      </span>
-                    )}
+                <Avatar name={m.name} avatar={m.avatar} className="size-6 text-[11px]" />
                 <span className="text-muted-foreground truncate">{m.name}</span>
                 <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1.5 text-xs">
                   {m.edit ? <Pencil className="size-3.5" /> : <Eye className="size-3.5" />}
@@ -135,13 +134,7 @@ export function ShareControls({ p }: { p: Project }) {
           ))}
           {members.map((m) => (
             <div key={m.name} className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm">
-              {m.avatar
-                ? <img src={m.avatar} alt="" className="size-6 shrink-0 rounded-md object-cover" />
-                : (
-                    <span className="bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-md text-xs uppercase">
-                      {m.name.slice(0, 1)}
-                    </span>
-                  )}
+              <Avatar name={m.name} avatar={m.avatar} className="size-6 text-[11px]" />
               <span className="truncate">{m.name}</span>
               <Hint label={m.edit ? 'Can edit — click for view only' : 'Can view — click to allow editing'}>
                 <Button
@@ -173,13 +166,10 @@ export function ShareControls({ p }: { p: Project }) {
             </div>
           ))}
           {/* The one thing about a shared project that surprises people, said where the editors
-              are. What happens, then what survives it — deliberately not "restore it in Settings →
-              Versions": that panel rolls your whole stash back to a moment, which is not the offer
-              anyone would hear in a sentence about one item. */}
+              are — and said once. Not "restore it in Settings → Versions": that panel rolls the
+              whole stash back to a moment, which is not the offer to make in a line about one item. */}
           <p className="text-muted-foreground pt-1 text-xs">
-            Two people saving the same item at once: the later save is the one that stands. Neither
-            copy is lost — the server keeps the last fifty snapshots of this project, and fifty of
-            your own stash.
+            Same item saved twice at once: the later save stands. Fifty snapshots are kept.
           </p>
         </div>
       )}
@@ -281,8 +271,7 @@ function LinkShare({ pid }: { pid: string }) {
                 <span>
                   Let them join and edit
                   <span className="text-muted-foreground block text-xs">
-                    Off, the link only reads. On, anyone with an account here who opens it can add
-                    themselves to the project — the same as if you had named them.
+                    Off, it only reads. On, anyone signed in here can add themselves.
                   </span>
                 </span>
               </label>
