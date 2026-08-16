@@ -52,6 +52,24 @@ export function LinkPage({ token, onEnter }: { token: string, onEnter: (pid: str
   }
   if (!view) return <Shell><Loader2 className="text-muted-foreground size-6 animate-spin" /></Shell>
 
+  /* A link to one row: the row, and nothing around it. Same page, one section long — a sidebar and
+     a project heading over a single note would be a frame around an empty room. */
+  if (view.item) {
+    const [it] = load({ items: [view.item] }).items    // someone else's JSON, through the same door
+    return (
+      <div className="mx-auto h-full w-full max-w-2xl overflow-y-auto px-4 py-10">
+        <div className="mb-6 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="font-heading text-2xl capitalize">{it?.type ?? 'Shared'}</h1>
+          <span className="text-muted-foreground text-sm">shared by {view.owner}</span>
+          <span className="text-muted-foreground ml-auto flex items-center gap-1.5 text-xs">
+            <Eye className="size-3.5" /> view only
+          </span>
+        </div>
+        {it ? <ul className="grid gap-1"><Row item={it} /></ul> : null}
+      </div>
+    )
+  }
+
   /* Through load(), like every other document that arrives from somewhere else — adoptShared does
      the same with this exact slice. It is someone else's JSON: a row with no tags array or a due
      that is a number is a white screen here otherwise, and this page has no app around it to

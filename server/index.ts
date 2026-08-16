@@ -385,13 +385,17 @@ const SCHEMA = `
      The joinable flag adds one thing on top: whoever opens it while signed in may put themselves on the
      project, with edit — the only thing joining could usefully mean.
      One per project: a second link to the same project is the same link, so there is one row to
-     revoke and one string to have leaked. */
+     revoke and one string to have leaked.
+     The item flag turns the same row into a link to one row of the document instead: pid then holds
+     the item's id, and the reader is served that item alone, read out of the owner's own document
+     at the moment they ask — nothing is published for it, and an edit is live on the next open. */
   create table if not exists links (
     token text primary key,
     owner integer not null references users(id) on delete cascade,
     pid text not null,
     joinable integer not null default 0,
     ts integer not null,
+    item integer not null default 0,
     unique (owner, pid)
   );
 `
@@ -442,6 +446,9 @@ export function start({
   // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
   // than sitting in the file forever unread
   try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
+  // a link to one row rather than a project. Added rather than the table rebuilt: dropping this one
+  // would revoke every link already handed out.
+  try { db.exec('alter table links add column item integer not null default 0') } catch { /* already there */ }
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
@@ -551,15 +558,18 @@ export function start({
     dropPdoc: db.prepare('delete from pdocs where owner = ? and pid = ?'),
 
     /* links */
-    addLink: db.prepare(`insert into links (token, owner, pid, joinable, ts) values (?, ?, ?, ?, ?)
+    addLink: db.prepare(`insert into links (token, owner, pid, joinable, ts, item) values (?, ?, ?, ?, ?, ?)
       on conflict (owner, pid) do update set joinable = excluded.joinable`),
-    /** The link for one project, if there is one — also what says "this project is still reachable". */
-    linkOf: db.prepare('select token, joinable from links where owner = ? and pid = ?'),
+    /** The link for one project, if there is one — also what says "this project is still reachable".
+     *  A project's, only: an item link is keyed by the item's id, which no project answers to. */
+    linkOf: db.prepare('select token, joinable from links where owner = ? and pid = ? and item = 0'),
     /** Every link you have handed out, for the list that revokes them. */
-    myLinks: db.prepare('select token, pid, joinable, ts from links where owner = ? order by ts desc'),
+    myLinks: db.prepare('select token, pid, joinable, ts, item from links where owner = ? order by ts desc'),
+    /** Whether this row already has a link, so a second Share publicly hands back the same string. */
+    itemLinkOf: db.prepare('select token from links where owner = ? and pid = ? and item = 1'),
     dropLink: db.prepare('delete from links where owner = ? and pid = ?'),
     /** The token, which is the whole credential: one row, and the owner's name to show for it. */
-    byToken: db.prepare(`select l.owner, l.pid, l.joinable, u.name as owner_name
+    byToken: db.prepare(`select l.owner, l.pid, l.joinable, l.item, u.name as owner_name
       from links l join users u on u.id = l.owner where l.token = ?`),
     /** The project's sub-project setting, taken off any row on it — it is the same on every one. */
     shareSubs: db.prepare('select subs from shares where owner = ? and pid = ? limit 1'),
@@ -1786,8 +1796,19 @@ export function start({
     if (path === '/api/link' && req.method === 'GET') {
       const token = new URL(req.url ?? '/', 'http://x').searchParams.get('t') ?? ''
       const l = q.byToken.get(token) as
-        { owner: number, pid: string, joinable: number, owner_name: string } | undefined
+        { owner: number, pid: string, joinable: number, item: number, owner_name: string } | undefined
       if (!l) return send(res, 404, { error: 'this link is not live' })
+      /* One row: read straight out of the owner's own document, which is the copy their devices
+         keep pushing — so the reader gets what it says now rather than what it said when the link
+         was cut, and nothing had to be published to make that true. */
+      if (l.item) {
+        const mine = q.latest.get(l.owner) as { json: string } | undefined
+        const doc = mine ? JSON.parse(mine.json) : null
+        const it = (doc?.items ?? []).find((i: { id: string }) => i.id === l.pid)
+        // deleted since — it left `items` for the trash, and there is nothing behind the link now
+        if (!it) return send(res, 404, { error: 'this link is not live' })
+        return send(res, 200, { pid: l.pid, owner: l.owner_name, item: it })
+      }
       const row = q.pdoc.get(l.owner, l.pid) as { json: string } | undefined
       /* Signed in and already on this project? Then the link is just a fast way in and their own
          rights are what count — an editor opening a view-only link is still an editor, and being
@@ -1812,6 +1833,30 @@ export function start({
       try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
       const pid = String(b?.pid ?? '')
       if (!pid) return send(res, 400, { error: 'which project' })
+      /* One row of your own document, read live out of it — so there is nothing to publish, nothing
+         to share, and no project involved. The id is checked against the document rather than taken
+         on trust: a token to a row that is not there is a link that only ever 404s. */
+      if (b?.item) {
+        const mine = q.latest.get(user.id) as { json: string } | undefined
+        const doc = mine ? JSON.parse(mine.json) : null
+        const it = (doc?.items ?? []).find((i: { id: string }) => i.id === pid) as
+          { pid: string | null } | undefined
+        if (!it) return send(res, 404, { error: 'sync this device first' })
+        /* A row in a project someone shared with you is in your document too, and it is still
+           theirs — the same rule the named share follows, one row down. The walk goes up the
+           parents: a sub-project carries no share row of its own, it travels inside its parent's. */
+        const tree = (doc?.projects ?? []) as { id: string, parent?: string | null }[]
+        for (let up = it.pid, seen = new Set<string>(); up && !seen.has(up);) {
+          if (q.notMine.get(up, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
+          seen.add(up)
+          up = tree.find((p) => p.id === up)?.parent ?? null
+        }
+        const token = (q.itemLinkOf.get(user.id, pid) as { token: string } | undefined)?.token
+          ?? randomBytes(16).toString('hex')
+        q.addLink.run(token, user.id, pid, 0, Date.now(), 1)
+        log('link', `item ${pid} by ${user.name}`, via(req))
+        return send(res, 200, { token, joinable: false })
+      }
       // the same rule the named share follows: a project you are only a member of is not yours to hand on
       if (q.notMine.get(pid, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
       const joinable = b?.joinable ? 1 : 0
@@ -1822,7 +1867,7 @@ export function start({
       // link someone already sent — revoking is the deliberate act that changes the string
       const token = (q.linkOf.get(user.id, pid) as { token: string } | undefined)?.token
         ?? randomBytes(16).toString('hex')
-      q.addLink.run(token, user.id, pid, joinable, now)
+      q.addLink.run(token, user.id, pid, joinable, now, 0)
       log('link', `${pid} by ${user.name}${joinable ? ' (joinable)' : ''}`, via(req))
       return send(res, 200, { token, joinable: !!joinable })
     }
@@ -1834,8 +1879,9 @@ export function start({
       try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
       const pid = String(b?.pid ?? '')
       q.dropLink.run(user.id, pid)
-      // revoked, and with nobody else on it the project stops being published at all
-      retire(pid, user.id)
+      // revoked, and with nobody else on it the project stops being published at all. An item link
+      // published nothing in the first place — there is no document of its own to retire.
+      if (!b?.item) retire(pid, user.id)
       log('unlink', `${pid} by ${user.name}`, via(req))
       return send(res, 200, { links: q.myLinks.all(user.id) })
     }

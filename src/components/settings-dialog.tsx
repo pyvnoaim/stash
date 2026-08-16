@@ -1006,23 +1006,32 @@ function LinksPanel() {
   return (
     <Section
       title="Shared links"
-      hint="Anyone holding one can read that project without an account. A join link lets
-        anyone signed in here add themselves."
+      hint="Anyone holding one can read that project — or that one row — without an account. A join
+        link lets anyone signed in here add themselves."
     >
       {!list && <p className="text-muted-foreground text-sm">Asking the server…</p>}
       {list?.length === 0 && (
         <p className="text-muted-foreground text-sm">
-          No links out. You make one in a project's Edit dialog, under Share.
+          No links out. You make one in a project's Edit dialog, under Share — or on a row, with
+          Copy public link.
         </p>
       )}
       {list?.map((l) => {
-        // the project's name is in the local document; a link to one since deleted still lists
-        const name = s.projects.find((p) => p.id === l.pid)?.name ?? 'Deleted project'
+        // the name is in the local document; a link to something since deleted still lists
+        const name = l.item
+          ? s.items.find((i) => i.id === l.pid)?.text ?? 'Deleted item'
+          : s.projects.find((p) => p.id === l.pid)?.name ?? 'Deleted project'
         const url = linkUrl(l.token)
         return (
           <div key={l.token} className="grid gap-1.5 rounded-md border px-3 py-2">
             <div className="flex items-center gap-2">
               <span className="truncate text-sm">{name}</span>
+              {/* a row's text and a project's name read alike in a list — this says which it is */}
+              {!!l.item && (
+                <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase">
+                  one row
+                </span>
+              )}
               {!!l.joinable && (
                 <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px] uppercase">
                   can join
@@ -1038,7 +1047,7 @@ function LinksPanel() {
                 variant="ghost" size="icon" className="size-7"
                 aria-label={`Revoke the link to ${name}`}
                 onClick={async () => {
-                  const err = await dropLink(l.pid)
+                  const err = await dropLink(l.pid, !!l.item)
                   toast(err ?? 'Link revoked')
                   void links().then(setList)
                 }}

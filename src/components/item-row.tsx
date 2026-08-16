@@ -1,14 +1,14 @@
 import { memo, useState } from 'react'
 import { toast } from 'sonner'
 import {
-  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo, Maximize2,
-  PencilLine, Repeat, RotateCcw, Share2, StickyNote, Trash2,
+  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Globe, Inbox, Lightbulb, ListTodo,
+  Maximize2, PencilLine, Repeat, RotateCcw, Share2, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
 import { Avatar } from '@/components/settings-dialog'
 import { useWhoIsOn } from '@/components/faces'
-import { getSync } from '@/lib/sync'
+import { getSync, linkUrl, makeItemLink, syncNow } from '@/lib/sync'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
   ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
@@ -32,15 +32,32 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
  * for whoever already has it: your own stash on another device, or a project shared with the
  * person you sent it to.
  */
-const shareItem = (it: Item) => {
-  const url = `${location.origin}/?item=${it.id}`
-  // no clipboard outside a secure context, and a toast saying "copied" over nothing is a lie —
-  // the link itself instead, to take by hand
+const shareItem = (it: Item) => copy(`${location.origin}/?item=${it.id}`)
+
+/**
+ * The other kind: a URL that opens the row itself, for anyone at all. No account, no sign-in page,
+ * nothing else of yours — the server reads this one row out of your document when the link is
+ * opened, so what they see is what it says now rather than a copy taken when you sent it.
+ *
+ * Revoked in Settings → Shared links, beside the project ones. Asking twice hands back the same
+ * URL rather than cutting a second.
+ */
+const publishItem = async (it: Item) => {
+  // the server reads the row out of the document it holds, so a row typed a moment ago has to land
+  // there first — otherwise it answers, correctly, that there is no such row
+  await syncNow()
+  const token = await makeItemLink(it.id)
+  if (!token) return void toast('Could not make the link')
+  copy(linkUrl(token), 'Public link copied')
+}
+
+// no clipboard outside a secure context, and a toast saying "copied" over nothing is a lie — the
+// link itself instead, to take by hand.
+// ponytail: Safari can refuse a write that lands after an await, and drops into that same fallback.
+// The promise-shaped ClipboardItem is the fix if it ever actually bites.
+const copy = (url: string, said = 'Link copied') => {
   if (!navigator.clipboard) return void toast(url)
-  void navigator.clipboard.writeText(url).then(
-    () => toast('Link copied'),
-    () => toast(url),
-  )
+  void navigator.clipboard.writeText(url).then(() => toast(said), () => toast(url))
 }
 
 function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete, onRestore }: {
@@ -434,6 +451,15 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           <Share2 />
           Copy link
         </ContextMenuItem>
+
+        {/* Only with a session behind it: the link is cut on the server, and there is nothing to
+            cut one against on a device working offline on its own data. */}
+        {getSync().user && (
+          <ContextMenuItem onSelect={() => void publishItem(it)}>
+            <Globe />
+            Copy public link
+          </ContextMenuItem>
+        )}
 
         <ContextMenuItem variant="destructive" onSelect={onDelete}>
           <Trash2 />

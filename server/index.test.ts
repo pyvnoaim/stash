@@ -751,6 +751,46 @@ assert.equal((await pdoc('p3', ada)).status, 404, 'the last way in went and the 
 // and a project you are only a member of is not yours to link
 assert.equal((await post('/api/link', { pid: 'p2' }, bo)).status, 403)
 
+/* ---------- a link to one row ---------- */
+
+// its own account, because this one hands its whole document over to the test
+const pia = jar(await post('/api/signup', { user: 'pia', pass: 'longenough', invite: server.invite() }))
+const piav = async () => (await (await get('/state', pia)).json()).version
+await put(pia, 0, { items: [{ id: 'i1', text: 'hello' }, { id: 'i2', text: 'private' }] })
+
+r = await post('/api/link', { pid: 'i1', item: true }, pia)
+assert.equal(r.status, 200)
+const itok = (await r.json()).token
+// anyone at all, no cookie: that row, and nothing else of pia's — no document, no second item
+lv = await (await linkOf(itok)).json()
+assert.deepEqual(lv.item, { id: 'i1', text: 'hello' })
+assert.equal(lv.owner, 'pia')
+assert.equal(lv.state, undefined)
+// read out of the document each time, so an edit is live rather than a copy from when it was cut
+await put(pia, await piav(), { items: [{ id: 'i1', text: 'edited' }] })
+assert.equal((await (await linkOf(itok)).json()).item.text, 'edited')
+// asking twice is the same string, the way a project's link is
+assert.equal((await (await post('/api/link', { pid: 'i1', item: true }, pia)).json()).token, itok)
+// a row this server has never seen cannot be linked, and one deleted since reaches nothing
+assert.equal((await post('/api/link', { pid: 'nope', item: true }, pia)).status, 404)
+/* a row of someone else's project is in your document and still not yours to hand out — through a
+   sub-project too, which carries no share row of its own */
+assert.equal((await post('/api/share', { pid: 'ap', user: 'pia' }, ada)).status, 200)
+await put(pia, await piav(), {
+  projects: [{ id: 'ap' }, { id: 'asub', parent: 'ap' }],
+  items: [{ id: 'i1' }, { id: 'i3', pid: 'ap' }, { id: 'i4', pid: 'asub' }],
+})
+assert.equal((await post('/api/link', { pid: 'i3', item: true }, pia)).status, 403)
+assert.equal((await post('/api/link', { pid: 'i4', item: true }, pia)).status, 403)
+await put(pia, await piav(), { items: [{ id: 'i1', text: 'edited' }] })
+await put(pia, await piav(), { items: [] })
+assert.equal((await linkOf(itok)).status, 404)
+// listed beside the project ones, marked as what it is, and revoked the same way
+assert.deepEqual((await (await get('/api/links', pia)).json()).links.map((l: any) => [l.pid, l.item]),
+  [['i1', 1]])
+assert.equal((await del2('/api/link', { pid: 'i1', item: true }, pia)).status, 200)
+assert.deepEqual((await (await get('/api/links', pia)).json()).links, [])
+
 /* deleting your own account: the password again, and never the last admin — a server nobody can
    cut an invite on can never let anyone in again. Everything of theirs goes on the cascade. */
 const bye = jar(await post('/api/signup', { user: 'zed', pass: 'longenough', invite: server.invite() }))

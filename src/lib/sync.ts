@@ -393,18 +393,23 @@ export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[], lin
 
 /* ---------- public links ---------- */
 
-export interface Link { pid: string, token: string, joinable: number, ts: number }
+/** `item` set means `pid` holds a row's id rather than a project's — one note, task or idea. */
+export interface Link { pid: string, token: string, joinable: number, ts: number, item?: number }
 
 /** What a link looks like from the outside — the project, and what this visitor may do with it. */
 export interface LinkView {
   pid: string
   owner: string
-  joinable: boolean
+  /** The one row, on an item link. Read out of the owner's document as it stands, so it is current. */
+  item?: unknown
+  /* The rest is a project link's answer, and an item link carries none of it: there is nothing to
+     join, nobody is a member of one row, and the document it came out of stays private. */
+  joinable?: boolean
   /** Already on the project: the link is a fast way in, and their own rights apply. */
-  member: boolean
-  edit: boolean
-  signedIn: boolean
-  state: { projects: Project[], items: unknown[] } | null
+  member?: boolean
+  edit?: boolean
+  signedIn?: boolean
+  state?: { projects: Project[], items: unknown[] } | null
 }
 
 /** The URL to hand out. A query rather than a path: the server has no SPA fallback, so `/l/xyz`
@@ -419,9 +424,20 @@ export const makeLink = (pid: string, joinable: boolean): Promise<string | null>
   call('/api/link', { method: 'POST', body: JSON.stringify({ pid, joinable }) })
     .then((j) => j.token as string).catch(() => null)
 
-export const dropLink = (pid: string) =>
-  call('/api/link', { method: 'DELETE', body: JSON.stringify({ pid }) })
+export const dropLink = (pid: string, item = false) =>
+  call('/api/link', { method: 'DELETE', body: JSON.stringify({ pid, item }) })
     .then(() => null).catch(errorOf)
+
+/**
+ * The same link, pointed at one row instead of a project — what Share publicly on a note, task or
+ * idea hands out. Read-only and account-free, like the project one, and it reads the row out of
+ * this account's document each time it is opened, so it is never a stale copy.
+ *
+ * Asking twice returns the string already handed out; revoking is `dropLink(id, true)`.
+ */
+export const makeItemLink = (id: string): Promise<string | null> =>
+  call('/api/link', { method: 'POST', body: JSON.stringify({ pid: id, item: true }) })
+    .then((j) => j.token as string).catch(() => null)
 
 /** Open one, signed in or not. Throws with the server's word for it when the link is dead. */
 export const openLink = (t: string): Promise<LinkView> =>
@@ -553,8 +569,10 @@ async function syncShares() {
   const owned = new Map(mine.map((m) => [m.pid, !!m.subs]))
   /* A project whose only reader is a public link is still a published one — without this it would
      have a link pointing at a document nobody ever pushed. Set only where a member has not already
-     answered: they carry the project's sub-project setting and a link does not. */
-  for (const l of links) if (!owned.has(l.pid)) owned.set(l.pid, false)
+     answered: they carry the project's sub-project setting and a link does not.
+     A link to one row is not one of these: it names an item, publishes nothing, and asking for the
+     project of that id would only ever come back empty. */
+  for (const l of links) if (!l.item && !owned.has(l.pid)) owned.set(l.pid, false)
   // a project someone shared with you must exist locally before its slice can land in it
   for (const s of with_me) {
     if (!getState().projects.some((p) => p.id === s.pid)) {
