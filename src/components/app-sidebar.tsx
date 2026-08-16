@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
-  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Trash2, UserMinus, Users,
+  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Trash2, UserMinus, Users, Waypoints,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -34,10 +34,16 @@ import { toast } from 'sonner'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
-  addProject, CALENDAR, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
-  canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, TRASH,
-  useStash, VIEWS, type Item, type Project, type ProjectSort, type ViewId,
+  addProject, CALENDAR, GRAPH, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
+  canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, TOOLS,
+  toolOn, TRASH, useStash, VIEWS, type Item, type Project, type ProjectSort, type ViewId,
 } from '@/lib/store'
+
+/** The picture for each, kept out of `TOOLS` so a plain module never has to import lucide. */
+const TOOL_ICONS: Record<string, React.ElementType> = {
+  [CALENDAR]: CalendarRange, [SUBS]: Wallet, [MARKET]: CandlestickChart, [PDF]: FileText,
+  [GRAPH]: Waypoints,
+}
 
 const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
   // custom first: it is the one the drag writes, so it is the one you land back on
@@ -538,37 +544,28 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
         )}
         {/* neither of these is a list of items — one is a dashboard and one is a document editor,
             so they sit apart from the views rather than being mistaken for two more of them */}
-        <SidebarGroup>
-          <SidebarGroupLabel className={GROUP}>Tools</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === CALENDAR} onClick={() => go(CALENDAR)}>
-                  <CalendarRange />
-                  <span>Calendar</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === SUBS} onClick={() => go(SUBS)}>
-                  <Wallet />
-                  <span>Subscriptions</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === MARKET} onClick={() => go(MARKET)}>
-                  <CandlestickChart />
-                  <span>Markets</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === PDF} onClick={() => go(PDF)}>
-                  <FileText />
-                  <span>PDF editor</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {/* Only the ones switched on, and no heading standing over an empty space when that is
+            none of them. The names come off `TOOLS` so this and Settings cannot disagree. */}
+        {TOOLS.some((t) => toolOn(s, t.id)) && (
+          <SidebarGroup>
+            <SidebarGroupLabel className={GROUP}>Tools</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {TOOLS.filter((t) => toolOn(s, t.id)).map(({ id, name }) => {
+                  const Icon = TOOL_ICONS[id]
+                  return (
+                    <SidebarMenuItem key={id}>
+                      <SidebarMenuButton isActive={s.sel === id} onClick={() => go(id)}>
+                        <Icon />
+                        <span>{name}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       {/* who you are and where your data stands — the account and Settings live in its menu */}

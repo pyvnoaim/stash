@@ -21,7 +21,7 @@ assert.equal(spanOpen('Body: `Sehr geehrte Damen und Herren,\n\nVielen Dank.`'),
 assert.equal(spanOpen('run `npm test` first'), false)
 assert.equal(spanOpen('no ticks here'), false)
 
-import { resolveWiki, safeHref, safeSrc, wikiKey, wikiLinks } from './markdown.ts'
+import { blocksOf, replaceBlock, resolveWiki, safeHref, safeSrc, wikiKey, wikiLinks } from './markdown.ts'
 
 // safe schemes pass through, trimmed
 assert.equal(safeHref('https://example.com'), 'https://example.com')
@@ -113,3 +113,40 @@ assert.ok(!isDivider('---|---'))               // no leading pipe, so not a tabl
 assert.ok(!isDivider('| --- | b |'))           // one real cell and it is prose
 
 console.log('markdown: ok')
+
+/* The note cut into the pieces the page edits one at a time — everything drawn except the one
+   somebody is standing in. What has to hold: the pieces cover every line exactly once and in
+   order, or a click lands on the wrong text and typing rewrites a line nobody was looking at. */
+{
+  const shape = (note: string) => blocksOf(note).map((b) => [b.from, b.to, b.text])
+
+  // a paragraph is its run of lines, and the blank between two of them is its own place to stand
+  assert.deepEqual(shape('one\ntwo\n\nthree'), [[0, 1, 'one\ntwo'], [2, 2, ''], [3, 3, 'three']])
+
+  // a heading stands alone, or editing the title would open the prose under it too
+  assert.deepEqual(shape('## Title\nbody'), [[0, 0, '## Title'], [1, 1, 'body']])
+
+  // a fence holds everything to its close, blank lines included — inside one, nothing is markdown
+  assert.deepEqual(shape('```\na\n\nb\n```\nafter'),
+    [[0, 4, '```\na\n\nb\n```'], [5, 5, 'after']])
+  // and an unclosed one runs to the end rather than swallowing nothing
+  assert.deepEqual(shape('```\na\nb'), [[0, 2, '```\na\nb']])
+
+  // a list is one block: it is the unit somebody means when they click into it
+  assert.deepEqual(shape('- a\n- b'), [[0, 1, '- a\n- b']])
+
+  // an empty note is still one place to put the cursor
+  assert.deepEqual(shape(''), [[0, 0, '']])
+
+  // every line accounted for, once and in order, on something with one of everything in it
+  const note = '# H\n\npara one\nstill it\n\n- a\n- b\n\n```\ncode\n```\n\nend'
+  const blocks = blocksOf(note)
+  assert.deepEqual(blocks.flatMap((b) => note.split('\n').slice(b.from, b.to + 1)), note.split('\n'))
+  assert.deepEqual(blocks.map((b) => b.from), [...blocks].sort((a, b) => a.from - b.from).map((b) => b.from))
+
+  // typing into one puts exactly its lines back, and leaves the rest of the note alone
+  const para = blocks.find((b) => b.text.startsWith('para'))!
+  assert.equal(replaceBlock(note, para, 'rewritten'), note.replace('para one\nstill it', 'rewritten'))
+  // a block that grows into two lines pushes the rest down rather than overwriting it
+  assert.equal(replaceBlock('a\nb', { from: 0, to: 0, text: 'a' }, 'a\nnew'), 'a\nnew\nb')
+}

@@ -10,6 +10,7 @@ import { Hint } from '@/components/ui/tooltip'
 import {
   dropLink, linkUrl, links, makeLink, people, share, shares, unshare, syncFresh, type Member, type Person,
 } from '@/lib/sync'
+import { throughParent } from '@/lib/members'
 import { childProjects, useStash, type Project } from '@/lib/store'
 
 /**
@@ -42,7 +43,8 @@ export function ShareControls({ p }: { p: Project }) {
     const here = mine.filter((m) => m.pid === p.id)
     setMembers(here)
     if (here.length) setSubs(!!here[0].subs)      // whatever the project already says
-    setThrough(p.parent ? mine.filter((m) => m.pid === p.parent && m.subs) : [])
+    // the same rule the faces are drawn from, and it lives in one place now — see members.ts
+    setThrough(throughParent(mine, p))
   })
   // mounted only while the dialog holding it is open, so this runs exactly when it used to
   useEffect(() => {

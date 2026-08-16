@@ -7,6 +7,7 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
 import { Avatar } from '@/components/settings-dialog'
+import { useWhoIsOn } from '@/components/faces'
 import { getSync } from '@/lib/sync'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
@@ -68,6 +69,10 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
 }) {
   const [over, setOver] = useState<'above' | 'below' | null>(null)
   const [lifting, setLifting] = useState(false)
+  /* Somebody standing on this row right now. Every row asks, which is why the store behind it only
+     wakes them when the room actually changes — a beat that finds the same people re-renders none
+     of this. */
+  const on = useWhoIsOn(it.id)
   const filed = projects.find((p) => p.id === it.pid)
   // a sub-project shows its parent too, the same path the sidebar reads: parent/child
   const upper = filed?.parent ? projects.find((p) => p.id === filed.parent) : undefined
@@ -240,6 +245,19 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 </button>
               </Hint>
             ))}
+
+            {/* Someone has this open this second. Its own mark rather than a third case of the
+                two below: who a row is for and who last touched it are both things that stay
+                true, and this one stops being true in a few seconds. */}
+            {on && (
+              <Hint label={`${on.name} is on this now`}>
+                <span tabIndex={0} role="img" aria-label={`${on.name} is on this now`}
+                  className="ring-foreground focus-visible:ring-ring inline-flex rounded-md ring-1 outline-none focus-visible:ring-2"
+                >
+                  <Avatar name={on.name} avatar={on.avatar} className="size-5 text-[10px]" />
+                </span>
+              </Hint>
+            )}
 
             {/* who it is for beats who last touched it: one says what happens next, the other
                 what already happened. Shown even when it is you — "assigned to me" is the case

@@ -347,6 +347,9 @@ export interface State {
   projectSort: ProjectSort
   /** Parent projects folded shut in the sidebar. */
   collapsed: string[]
+  /** Tools switched off in Settings — see `TOOLS`. Off rather than on, so nothing has to be
+   *  written into every existing document for the four of them to keep showing. */
+  hidden: string[]
   chart: ChartStyle
   /** Only the bindings that were changed; anything missing is the default in `HOTKEYS`. Local,
    *  like the theme — a keyboard is a property of the machine, not of the stash. */
@@ -456,12 +459,41 @@ export const CALENDAR = 'calendar'
 export const PDF = 'pdf'
 export const SUBS = 'subs'
 export const MARKET = 'market'
-const PAGES: string[] = [OVERVIEW, CALENDAR, SUBS, MARKET, PDF]
+export const GRAPH = 'graph'
+const PAGES: string[] = [OVERVIEW, CALENDAR, SUBS, MARKET, PDF, GRAPH]
 export const isPage = (id: string) => PAGES.includes(id)
 
-/** Everything `sel` is allowed to be, which is also everything the URL hash may name. */
-export const isRoute = (s: Pick<State, 'projects'>, id: string) =>
-  isPage(id) || isView(id) || s.projects.some((p) => p.id === id)
+/**
+ * The four that are switched off as easily as on, in the order the sidebar lists them. A stash
+ * kept for the shopping is not one that wants a candlestick chart in the corner of it, and four
+ * tools nobody opens are four things to read past every time.
+ *
+ * Overview is not among them: it is where the app opens, and a home you can delete is a bug.
+ * Names live here rather than beside each icon, so the sidebar and Settings cannot drift apart on
+ * what a thing is called.
+ */
+export const TOOLS = [
+  { id: CALENDAR, name: 'Calendar' },
+  { id: SUBS, name: 'Subscriptions' },
+  { id: MARKET, name: 'Markets' },
+  { id: PDF, name: 'PDF editor' },
+  { id: GRAPH, name: 'Graph' },
+]
+
+/** Off, not on: a document written before this existed lists none, and shows all four — and a
+ *  tool added later is on for everyone until they say otherwise, which is the kinder default. */
+export const toolOn = (s: Pick<State, 'hidden'>, id: string) => !s.hidden.includes(id)
+export const setTool = (id: string, on: boolean) => set((s) => ({
+  ...s,
+  hidden: on ? s.hidden.filter((h) => h !== id) : [...s.hidden, id],
+  // switched off while you are standing on it, which is otherwise a page with no way back to it
+  sel: !on && s.sel === id ? OVERVIEW : s.sel,
+}))
+
+/** Everything `sel` is allowed to be, which is also everything the URL hash may name. A tool that
+ *  is switched off is not a route, so a bookmark or a stale hash to one lands on Overview. */
+export const isRoute = (s: Pick<State, 'projects' | 'hidden'>, id: string) =>
+  ((isPage(id) && toolOn(s, id)) || isView(id) || s.projects.some((p) => p.id === id))
 
 /**
  * What the URL names: the view, and the search laid over it — `#all?%23audio%20%40kova`. One
@@ -485,7 +517,7 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
   v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], chart: 'line', hotkeys: {},
+  projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', hotkeys: {},
   subSort: 'recent', subView: 'expense', calView: 'month',
   watches: [], results: [], stake: 0, desk: false,
   // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
@@ -695,6 +727,12 @@ export function load(data: unknown): State {
   // publishing is a decision, so only the word yes counts as one — anything else is private
   st.desk = st.desk === true
 
+  /* Before the route check below, which reads it: a document carrying anything but an array here
+     would throw on the first `includes` and take the whole load with it. Only real tool ids are
+     kept, so a name that stopped being one cannot switch off a page nobody can find again. */
+  st.hidden = Array.isArray(st.hidden)
+    ? st.hidden.map(String).filter((h) => TOOLS.some((t) => t.id === h))
+    : []
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'

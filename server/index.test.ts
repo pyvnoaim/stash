@@ -566,6 +566,111 @@ assert.deepEqual((await (await get('/api/roster', bo)).json()).roster.map((f: an
 assert.deepEqual((await (await get('/api/roster', dee)).json()).roster, [])
 assert.equal((await fetch(url + '/api/roster')).status, 401)
 
+/* Who is in the room, and word that a document moved — one stream, told rather than asked for.
+   Presence is only ever about a project you are on: a stranger is told nothing, and never that
+   there was nothing to tell. */
+const here = (b: object, cookie: string) => post('/api/here', b, cookie)
+assert.equal((await fetch(url + '/api/here', { method: 'POST', body: '{}' })).status, 401)
+assert.equal((await fetch(url + '/api/live')).status, 401)
+
+/** One open stream, read as the events arrive. `next` waits for the one after the call that
+ *  caused it, which is how a push is tested without sleeping on a guess. */
+async function listen(cookie: string, device = '') {
+  const ac = new AbortController()
+  const r = await fetch(`${url}/api/live?device=${device}`, { headers: { cookie }, signal: ac.signal })
+  assert.equal(r.headers.get('content-type'), 'text/event-stream')
+  assert.equal(r.headers.get('x-accel-buffering'), 'no')   // or nginx holds every event in a buffer
+  const reader = r.body!.getReader()
+  let buf = ''
+  const queue: { event: string, data: any }[] = []
+  let wake: (() => void) | undefined
+  void (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) return
+        buf += new TextDecoder().decode(value)
+        for (let cut = buf.indexOf('\n\n'); cut >= 0; cut = buf.indexOf('\n\n')) {
+          const frame = buf.slice(0, cut)
+          buf = buf.slice(cut + 2)
+          const ev = /^event: (.+)$/m.exec(frame)
+          const data = /^data: (.+)$/m.exec(frame)
+          if (ev && data) { queue.push({ event: ev[1], data: JSON.parse(data[1]) }); wake?.() }
+        }
+      }
+    } catch { /* aborted at the end of the test */ }
+  })()
+  return {
+    stop: () => ac.abort(),
+    /** Frames until one matches. Not "the next frame": every stream opening or closing stirs the
+     *  room for everyone, so counting them is a test that breaks whenever a case is added beside
+     *  it. The timeout is so a push that never arrives fails here rather than hanging the run. */
+    until: async (fn: (f: { event: string, data: any }) => boolean, what = 'a frame') => {
+      const stop = Date.now() + 5000
+      for (;;) {
+        while (!queue.length) {
+          if (Date.now() > stop) throw new Error(`waited 5s for ${what}`)
+          await Promise.race([
+            new Promise<void>((ok) => { wake = ok }),
+            new Promise<void>((ok) => setTimeout(ok, 250)),
+          ])
+        }
+        const f = queue.shift()!
+        if (fn(f)) return f
+      }
+    },
+  }
+}
+const room = (f: { event: string, data: any }) => f.event === 'here'
+
+// bo opens a stream on p1 and is told the room straight away — empty, since bo is alone in it
+const boLive = await listen(bo)
+assert.deepEqual((await boLive.until(room, 'the opening room')).data, [])
+
+// cy walks in, and bo hears it without asking
+assert.equal((await here({ owner: 'ada', root: 'p1', pid: 'p1', id: 'i7' }, cy)).status, 200)
+assert.deepEqual((await boLive.until((f) => room(f) && f.data[0]?.id === 'i7', 'cy on i7')).data,
+  [{ name: 'cy', avatar: null, owner: 'ada', pid: 'p1', id: 'i7' }])
+
+/* A sub-project has no share row of its own — it travels inside the parent's slice — so the
+   project carrying the share is what the claim is checked against, and the one being looked at is
+   what comes back. The trap this file has now watched claim two bugs. */
+assert.equal((await here({ owner: 'ada', root: 'p1', pid: 'p1kid', id: 'i9' }, cy)).status, 200)
+assert.deepEqual((await boLive.until((f) => room(f) && f.data[0]?.id === 'i9', 'cy on the sub')).data,
+  [{ name: 'cy', avatar: null, owner: 'ada', pid: 'p1kid', id: 'i9' }])
+
+/* dee is on nothing and says they are on p1 anyway. The part that needs a check is not what dee
+   learns — nothing, and the room they asked about is filtered on the way out — but that dee does
+   not appear to anyone else. A place you name is not a place you are: unchecked, it puts a
+   stranger's face in a project header, which is a lie about who is in the room. */
+assert.equal((await here({ owner: 'ada', root: 'p1', pid: 'p1', id: 'i7' }, dee)).status, 200)
+assert.deepEqual((await boLive.until(room, 'the room after dee')).data.map((h: any) => h.name), ['cy'])
+
+// a write on the shared document reaches everyone on it, with the number to compare against
+const was = (await (await pdoc('p1', ada)).json()).version
+assert.equal((await putPdoc('p1', was, { items: ['a', 'b', 'c'] }, cy, 'ada')).status, 200)
+const ev = await boLive.until((f) => f.event === 'moved', 'word that the document moved')
+assert.deepEqual([ev.data.owner, ev.data.pid, ev.data.v > was], ['ada', 'p1', true])
+
+/* Your own document, between your own devices — the case the minute-long poll used to be the only
+   answer to. The browser that wrote it is not told about its own writing, or every debounced
+   keystroke would come straight back as a pull. */
+const boPhone = await listen(bo, 'phone')
+assert.equal((await fetch(`${url}/state`, {
+  method: 'PUT',
+  headers: { cookie: bo, 'if-match': String((await (await get('/state', bo)).json()).version) },
+  body: JSON.stringify({ state: { items: ['written on the laptop'] }, device: 'laptop' }),
+})).status, 200)
+const heard = await boPhone.until((f) => f.event === 'state', 'word that our own document moved')
+assert.equal(heard.data.v > 0, true)
+boPhone.stop()
+
+// and the room empties when the person in it goes, said by the socket closing rather than by them
+const cyLive = await listen(cy)
+cyLive.stop()
+assert.deepEqual((await boLive.until((f) => room(f) && !f.data.length, 'the room emptying')).data, [])
+boLive.stop()
+
 // a member can leave, and takes nothing with them
 assert.equal((await del2('/api/share', { pid: 'p1', owner: 'ada' }, bo)).status, 200)
 assert.equal((await pdoc('p1', bo, 'ada')).status, 404)

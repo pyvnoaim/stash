@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
-  Plus, StickyNote, Trash2, Upload, Wallet,
+  Plus, StickyNote, Trash2, Upload, Wallet, Waypoints,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
   CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
-  SUBS, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
+  GRAPH, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
@@ -35,6 +35,7 @@ const PAGES = [
   { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
   { id: PDF, name: 'PDF editor', icon: FileText },
   { id: SUBS, name: 'Subscriptions', icon: Wallet },
+  { id: GRAPH, name: 'Graph', icon: Waypoints },
 ]
 
 const trim = (t: string) => (t.length > 28 ? t.slice(0, 28) + '…' : t)
@@ -145,8 +146,10 @@ export function CommandPalette({
         <CommandList className="max-h-[60vh]">
           <CommandEmpty>Nothing matches that.</CommandEmpty>
 
+          {/* a tool switched off is not offered here either — hiding it in one list and leaving it
+              findable in the other is the same as not hiding it */}
           <CommandGroup heading="Pages">
-            {PAGES.map(({ id, name, icon: Icon }) => (
+            {PAGES.filter(({ id }) => toolOn(s, id)).map(({ id, name, icon: Icon }) => (
               <CommandItem key={id} value={`page ${name}`} onSelect={run(() => select(id))}>
                 <Icon />
                 <span>{name}</span>

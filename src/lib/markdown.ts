@@ -99,3 +99,67 @@ export function toggleBox(text: string, line: number): string {
     `${a}${box === ' ' ? 'x' : ' '}${b}`)
   return lines.join('\n')
 }
+
+/* ---------- the note as blocks, for the editor that renders everything but the line you are on ---------- */
+
+/** One run of source lines that reads as a single thing: a paragraph, a heading, a fence, a gap. */
+export interface Block { from: number, to: number, text: string }
+
+/**
+ * The note cut into the pieces the page edits one at a time.
+ *
+ * Not the renderer's own parse, and deliberately coarser than it: this only has to answer "which
+ * lines belong together", so that clicking a rendered paragraph opens exactly those lines as source
+ * and leaves everything around them drawn. The renderer is then handed each piece on its own and
+ * does what it always did — no line numbers threaded through it, no second parser to keep in step.
+ *
+ * The rules, in the order they are checked:
+ *  - a ``` fence holds everything to its closing fence, blank lines and all, because inside one
+ *    nothing is markdown. An unclosed fence runs to the end, which is what the renderer does too.
+ *  - a heading is its own block. `## Title` with prose under it is two things on the page and has
+ *    to be two things here, or editing the title would open the paragraph beneath it as well.
+ *  - a blank line is its own block. It is what sits between paragraphs, and clicking the space
+ *    between two of them has to put the cursor somewhere.
+ *  - anything else joins the run above it. A list, a quote and a wrapped paragraph are each one
+ *    block, which is the unit somebody means when they click into one.
+ */
+export function blocksOf(note: string): Block[] {
+  const lines = note.split('\n')
+  const out: Block[] = []
+  let run: string[] | null = null
+  let from = 0
+  const close = () => {
+    if (!run) return
+    out.push({ from, to: from + run.length - 1, text: run.join('\n') })
+    run = null
+  }
+  const alone = (n: number, text: string) => { close(); out.push({ from: n, to: n, text }) }
+
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n]
+    if (line.trim().startsWith('```')) {
+      close()
+      const open = n
+      const held = [line]
+      while (++n < lines.length) {
+        held.push(lines[n])
+        if (lines[n].trim().startsWith('```')) break
+      }
+      out.push({ from: open, to: Math.min(n, lines.length - 1), text: held.join('\n') })
+      continue
+    }
+    if (!line.trim()) { alone(n, line); continue }
+    if (/^#{1,3}\s/.test(line.trim())) { alone(n, line); continue }
+    if (!run) { run = []; from = n }
+    run.push(line)
+  }
+  close()
+  // an empty note is still one place to put the cursor, rather than nothing to click at all
+  return out.length ? out : [{ from: 0, to: 0, text: '' }]
+}
+
+/** The note with one block's lines swapped for what was typed into it. */
+export const replaceBlock = (note: string, b: Block, text: string) => {
+  const lines = note.split('\n')
+  return [...lines.slice(0, b.from), ...text.split('\n'), ...lines.slice(b.to + 1)].join('\n')
+}

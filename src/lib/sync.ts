@@ -55,6 +55,11 @@ const listeners = new Set<() => void>()
 const setSnap = (s: Partial<Sync>) => {
   snap = { ...snap, ...s }
   setMe(snap.user?.name ?? null)   // the store signs what you write with it
+  /* The stream follows the session: opened by whichever of the three ways in got us a user — boot,
+     sign-in, or a sign-up — and closed on the way out, where one left open would only 401 in a
+     retry loop of its own making. */
+  if (snap.user) join()
+  else leave()
   listeners.forEach((fn) => fn())
 }
 export const subscribeSync = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
@@ -568,6 +573,98 @@ async function syncShares() {
   }
 }
 
+/* ---------- who is here ---------- */
+
+/** One person and where they are looking: the project, and the item inside it if they opened one. */
+export interface Here { name: string, avatar: string | null, owner: string, pid: string, id: string }
+
+/* A store of its own rather than a field on `snap`. Every row in a list wants to know whether
+   somebody is standing on it, and `snap` changes on every status flicker — one shared store and
+   each would re-render on a sync going busy. This one changes when the room does. */
+let room: Here[] = []
+const inRoom = new Set<() => void>()
+export const subscribeHere = (fn: () => void) => { inRoom.add(fn); return () => { inRoom.delete(fn) } }
+export const getHere = () => room
+const setRoom = (next: Here[]) => {
+  // same room, same array: an event that changes nothing must not re-render everyone in it
+  const same = next.length === room.length
+    && next.every((h, i) => h.name === room[i].name && h.pid === room[i].pid && h.id === room[i].id)
+  if (same) return
+  room = next
+  inRoom.forEach((fn) => fn())
+}
+
+/* Where this device is. `root` is the project that carries the share — a sub-project's is its
+   parent's — and an empty one means nowhere anybody else can see, which is most of the app. */
+let spot = { owner: '', root: '', pid: '', id: '' }
+const say = () => void call('/api/here', { method: 'POST', body: JSON.stringify(spot) }).catch(() => {})
+
+/**
+ * The stream: who else is in this project, and word that a document has moved — both the moment
+ * they are true. Nothing polls for either. One idle socket for the session replaces a request
+ * every few seconds, and an edit made anywhere arrives here rather than waiting to be asked for.
+ *
+ * Open for as long as somebody is signed in, not only on a shared project: it carries your own
+ * document between your own devices too, which is what the minute-long poll used to be for. A
+ * browser allows six connections to one origin over HTTP/1.1 — which is what this is until a TLS
+ * proxy puts HTTP/2 in front — so it is one per tab and no more.
+ *
+ * `EventSource` reconnects on its own, which is the whole reason for it over a socket of our own:
+ * no backoff to write, no retry to get wrong. The server forgets us when the connection goes, so
+ * every `open` — the first and every reconnection after — says where we are again.
+ */
+let stream: EventSource | undefined
+function join() {
+  /* Not everywhere this module runs is a page. `sync.test.ts` drives the real engine under node,
+     and node has no `EventSource` — without this the throw lands inside `setSnap`, and signing in
+     fails with "no connection" from a browser API rather than from the network. */
+  if (stream || !snap.user || typeof EventSource === 'undefined') return
+  // named, so our own writes are not sent back to us as somebody's news
+  const es = stream = new EventSource(`/api/live?device=${encodeURIComponent(device)}`)
+  es.addEventListener('open', () => { if (spot.root) say() })
+  /* An `EventSource` retries a dropped connection on its own, but a refused one — a 401 on a
+     session that expired while the laptop was shut, a 429 — it fails for good and never tries
+     again. Left as it is, `stream` stays set and nothing here would ever open another: the tab
+     goes quiet for the rest of its life. Cleared instead, so the next sign of life reopens it. */
+  es.addEventListener('error', () => {
+    if (es.readyState === EventSource.CLOSED) { stream = undefined; setRoom([]) }
+  })
+  es.addEventListener('here', (e) => setRoom(JSON.parse(e.data)))
+  /* Their number against ours, on the same key the exchange files them under. The document itself
+     is fetched by the sync this starts, and only for the project that actually moved — the device
+     that wrote it already holds that number and stays where it is. */
+  es.addEventListener('moved', (e) => {
+    const r = JSON.parse(e.data) as { owner: string, pid: string, v: number }
+    if (r.v > (pv.get(`${r.owner === snap.user?.name ? '' : r.owner}:${r.pid}`) ?? 0)) void syncFresh()
+  })
+  // your own document, written on another of your devices — or by the MCP server, which has none
+  es.addEventListener('state', (e) => {
+    if ((JSON.parse(e.data) as { v: number }).v > meta().v) void syncFresh()
+  })
+}
+
+/** Signing out: the socket goes, and the server drops the room entry that was hanging off it. */
+function leave() {
+  stream?.close()
+  stream = undefined
+  setRoom([])
+}
+
+/**
+ * Called on every move. A tab that is merely hidden stays in the room — an open tab on a project
+ * is a fair account of where somebody is, and it is the connection dying that ends it, not a
+ * guess about attention.
+ */
+export function lookingAt(owner: string, root: string, pid: string, id: string) {
+  if (owner === spot.owner && root === spot.root && pid === spot.pid && id === spot.id) return
+  spot = { owner, root, pid, id }
+  /* Walking out of every shared project empties the room here rather than waiting to be told: the
+     server has just been asked to forget us, and its answer is a message we would only be drawing
+     stale faces until. The stream stays open — it is the session's, not this project's. */
+  if (!root) setRoom([])
+  say()
+}
+
 export type { Project }
 
 /** Who does the server think we are? Only an explicit 401 means "nobody" — that raises the gate. */
@@ -599,13 +696,20 @@ export function startSync() {
   // a phone coming back to the app fires this and does not reliably fire focus; it is dispatched
   // at the document and bubbles, so the window hears it too
   addEventListener('visibilitychange', () => { if (!document.hidden) wake() })
-  /* A tab left open and looked at learns nothing on its own: every wake above is a return to the
-     app, and someone reading the stash while another device — or the MCP server, which writes over
-     HTTP and never touches this browser's storage — changes it underneath is already here. So the
-     one case the wakes cannot cover gets a poll. Hidden tabs sit it out, the return wakes them;
-     offline sits it out too, where `retry` owns the schedule and a minute would undo its backoff.
-     ponytail: a fixed minute, and `syncNow` joins whatever is in flight rather than stacking.
-     A push channel is the upgrade if a minute ever reads as stale. */
-  loose(setInterval(() => { if (snap.user && snap.status !== 'off' && !document.hidden) syncNow() }, 60_000))
+  /* The backstop, and nothing more. A tab left open used to learn about another device's writing
+     only by asking every minute; the stream tells it now, the instant it happens, whichever
+     document moved. What is left here is the case a stream cannot report on: itself. A socket that
+     dies in a way the browser does not notice, or an event written into one that was already gone,
+     leaves a tab quietly stale forever — and quietly stale forever is the worst thing a notebook
+     can be. Five minutes turns that into five minutes.
+     Hidden tabs sit it out, the return wakes them; offline sits it out too, where `retry` owns the
+     schedule. ponytail: a fixed five minutes rather than watching the stream's own health, which
+     is more code than the poll it would replace. */
+  loose(setInterval(() => {
+    if (!snap.user || snap.status === 'off' || document.hidden) return
+    syncNow()
+    // and the same beat puts the stream back if it was refused rather than merely dropped
+    join()
+  }, 5 * 60_000))
   void me()
 }

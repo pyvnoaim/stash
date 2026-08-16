@@ -1,6 +1,6 @@
 // npm test — which faces belong to a project, and to a sub-project that has none of its own.
 import assert from 'node:assert/strict'
-import { membersOf } from './members.ts'
+import { membersOf, throughParent } from './members.ts'
 import type { Face } from './sync.ts'
 import type { Project } from './store.ts'
 
@@ -68,3 +68,23 @@ assert.deepEqual(
     .map((f) => f.name),
   ['leon', 'toad'],
 )
+
+/* The rule on its own, which is what the Share dialog reads it as: the parent's rows, and only
+   where that share carries its sub-projects. It listed nobody for a project two people were in,
+   because this was written a second time over there and only the copy here was ever tested. */
+{
+  const rows = [
+    { pid: 'business', subs: 1, name: 'toad' },
+    { pid: 'business', subs: 1, name: 'leon' },
+    { pid: 'private', subs: 0, name: 'mia' },
+    { pid: 'itsys', subs: 0, name: 'ada' },
+  ]
+  assert.deepEqual(
+    throughParent(rows, project({ id: 'itsys', parent: 'business' })).map((r) => r.name),
+    ['toad', 'leon'],
+  )
+  // the parent's share leaves its sub-projects out: nobody comes down it
+  assert.deepEqual(throughParent(rows, project({ id: 'notes', parent: 'private' })), [])
+  // no parent to come through, and rows of its own are not "through" anything
+  assert.deepEqual(throughParent(rows, project({ id: 'itsys' })), [])
+}

@@ -1101,3 +1101,34 @@ console.log('store: ok')
   assert.deepEqual(visible({ ...st, sel: 'trash' }, 'bank').map((i) => i.id), ['b'])
   assert.deepEqual(visible({ ...st, sel: 'trash' }, '').map((i) => i.id), ['a', 'b'])
 }
+
+/* The four tools, switched off and on. What a switch has to do is more than not draw a button:
+   the page stops being somewhere `sel` may point, or a hash bookmarked when it was on opens a
+   view with nothing in it and no way back. */
+{
+  const { TOOLS, toolOn, isRoute, setTool, MARKET, CALENDAR } = await import('./store.ts')
+
+  // nothing stored: every one of them on, which is what every document written before this says
+  const fresh = load({})
+  assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length)
+  assert.equal(isRoute(fresh, MARKET), true)
+
+  // switched off, it is not a route — and a document naming it as the open view opens elsewhere
+  const off = load({ hidden: [MARKET] })
+  assert.equal(toolOn(off, MARKET), false)
+  assert.equal(isRoute(off, MARKET), false)
+  assert.equal(load({ hidden: [MARKET], sel: MARKET }).sel, 'today')
+  assert.equal(load({ hidden: [CALENDAR], sel: MARKET }).sel, MARKET)   // the others are untouched
+
+  // junk in the field is not a switch: only real ids, and anything else is no ids at all
+  assert.deepEqual(load({ hidden: 'market' as unknown as string[] }).hidden, [])
+  assert.deepEqual(load({ hidden: [MARKET, 'nonsense', 7 as unknown as string] }).hidden, [MARKET])
+
+  // switching one off while standing on it moves you off it, rather than leaving a blank page
+  select(MARKET)
+  assert.equal(getState().sel, MARKET)
+  setTool(MARKET, false)
+  assert.equal(getState().sel, 'overview')
+  setTool(MARKET, true)
+  assert.equal(toolOn(getState(), MARKET), true)
+}

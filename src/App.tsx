@@ -7,7 +7,8 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
-import { Faces } from '@/components/faces'
+import { Faces, useHere } from '@/components/faces'
+import { GraphPage } from '@/components/graph-page'
 import { ProjectHeader, ProjectProgress } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -28,7 +29,7 @@ import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { hit } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
+  addProject, CALENDAR, emptyTrash, flatProjects, focus, GRAPH, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
   openIn, readHash, redo, removeItem, restoreItem, restoreTrash, select, tagCounts, toggleDone,
   TRASH, TRASH_DAYS, undo, useStash, viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
@@ -166,6 +167,17 @@ export default function App() {
   }, [s.sel, query])
   // the open page is an item; if it's gone (deleted, filtered out) fall back to the list
   const paged = pageItem ? s.items.find((i) => i.id === pageItem) : undefined
+
+  /* Where we are, for everyone else on the project. A note open full page names its own project —
+     that page is reached from a search or from Everything as often as from the project itself, and
+     "reading the list" is not what is happening on it.
+     Otherwise it is whatever the side panel is showing, and only while that row is in the project
+     being reported: `focus` is a stored field, so it survives the view changing and a reload both,
+     and reporting it unchecked puts your face on a row in a project you walked out of. */
+  useHere(
+    paged ? s.projects.find((p) => p.id === paged.pid) : openProject,
+    paged ? pageItem : (selected?.pid === openProject?.id ? s.focus : null),
+  )
 
   /* a view was picked — the sidebar, ⌘K, an Overview tile, the back button. A search overlays
      every list and both pages, so leaving it up makes the new view look like it never took.
@@ -519,6 +531,7 @@ export default function App() {
 
           {page === SUBS && <SubsPage />}
           {page === MARKET && <MarketPage />}
+          {page === GRAPH && <GraphPage onOpen={jumpTo} onProject={goTo} />}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would

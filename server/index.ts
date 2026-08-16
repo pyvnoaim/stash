@@ -293,6 +293,23 @@ const REFUSED_FOR = 5 * 60_000
    ponytail: clear-all past 64, the same as every other cache here — the roster is ten people. */
 const closedCache = new Map<number, { at: number, rows: Closed[] }>()
 
+/** One message down one stream. A socket that died between the check and the write is not an
+ *  error worth having: the close handler is what clears it up, and it has already been scheduled. */
+const wire = (res: ServerResponse, event: string, data: unknown) => {
+  /* Wrapped, and it matters more than it looks: this also carries the keepalive, which runs on a
+     timer. A write to a socket the peer has already dropped throws, and a throw inside a timer has
+     nothing above it to catch — it takes the process down and every other person's session with it.
+     No event name is the comment line browsers ignore, which is what a keepalive is. */
+  try {
+    res.write(event ? `event: ${event}\ndata: ${JSON.stringify(data)}\n\n` : ': ping\n\n')
+  } catch { /* gone; the close handler clears it up and has already been scheduled */ }
+}
+
+/* A stream left open through nginx proxy manager is closed at its sixty-second read timeout, and
+   a comment line is the cheapest thing that resets it. It is also the only way this side learns a
+   socket has quietly died — a write to it fails, and the close handler runs. */
+const PING = 25_000
+
 const DUMMY_SALT = randomBytes(16)
 /**
  * On the threadpool rather than scryptSync on the event loop. At N=2^15 one hash is a tenth of a
@@ -557,6 +574,71 @@ export function start({
     if (members || q.linkOf.get(owner, pid)) return
     q.dropShares.run(pid, owner)
     q.dropPdoc.run(owner, pid)
+  }
+
+  /**
+   * Who is looking at what, right now — and the open streams it is told down.
+   *
+   * In memory and nowhere else. A restart forgets the whole room, and every browser's `EventSource`
+   * reconnects on its own a second later and says where it is again. Presence lives exactly as long
+   * as the connection carrying it: no expiry to guess at, no beat from the client to keep an entry
+   * warm, and a closed laptop leaves the room when its socket goes rather than twenty seconds after.
+   *
+   * One entry per person, not per tab: two windows of your own are still one of you, and the later
+   * move wins. The streams are per tab, because a message has to be written to one of them.
+   *
+   * ponytail: one process holds both, which is what the deploy is — two of them and each would only
+   * ever see half the room; a shared table, or a channel between them, is the upgrade. And `stir`
+   * is every stream against every entry, which at a roster of ten is nothing.
+   */
+  const live = new Set<{ user: number, name: string, device: string, res: ServerResponse }>()
+  const present = new Map<string, { owner: string, root: string, pid: string, id: string }>()
+
+  /** Every project an account is on, keyed the way an entry names one, with the faces to draw. */
+  const reach = (user: number) => {
+    const rows = q.roster.all(user) as { pid: string, owner: string, name: string, avatar: string | null }[]
+    return { on: new Set(rows.map((r) => `${r.owner}:${r.pid}`)), face: new Map(rows.map((r) => [r.name, r.avatar])) }
+  }
+  /* The same account twice over is the same answer twice over, and two tabs and a phone are three
+     sockets on one of them. Held for the length of one fanout only — a share granted between two
+     events must still be seen by the next one. */
+  const reachOnce = () => {
+    const held = new Map<number, ReturnType<typeof reach>>()
+    return (user: number) => {
+      let r = held.get(user)
+      if (!r) held.set(user, r = reach(user))
+      return r
+    }
+  }
+
+  /* Everyone's view of the room, sent to everyone, because one person moving changes what every
+     other person on that project should see. Each stream is told its own answer: what you may know
+     about who is where is exactly the set of projects you are on.
+     Two tabs of one person are one entry, so a stream only ever hears a name once. */
+  const stir = () => {
+    const seen = reachOnce()
+    for (const l of live) {
+      const { on, face } = seen(l.user)
+      wire(l.res, 'here', [...present]
+        .filter(([name, e]) => name !== l.name && (on.has(`${e.owner}:${e.root}`) || on.has(`${e.owner}:${e.pid}`)))
+        .map(([name, e]) => ({ name, avatar: face.get(name) ?? null, owner: e.owner, pid: e.pid, id: e.id })))
+    }
+  }
+
+  /** A shared document moved: everyone on it hears the number, and fetches it only if it is news. */
+  const moved = (owner: string, pid: string, v: number) => {
+    const seen = reachOnce()
+    for (const l of live) if (seen(l.user).on.has(`${owner}:${pid}`)) wire(l.res, 'moved', { owner, pid, v })
+  }
+
+  /* Your own document moved, on another of your devices or through the MCP server — which writes
+     over HTTP and never touches a browser. The same word, sent only to you.
+     Not to the browser that wrote it: `pv` is what keeps a shared project from echoing back at its
+     own author, and a personal document has no such ledger — without the device named here, every
+     two-second debounced keystroke would come straight back as a pull. Two tabs of one browser
+     share the device, and already learn from each other through storage events. */
+  const own = (user: number, v: number, from: string) => {
+    for (const l of live) if (l.user === user && l.device !== from) wire(l.res, 'state', { v })
   }
 
   /* The rule tested forward against itself: every setup the desk endorses, filed the moment it
@@ -1545,6 +1627,94 @@ export function start({
       return send(res, 200, { roster: q.roster.all(user.id) }, { 'cache-control': 'private, max-age=30' })
     }
 
+    /**
+     * The stream, and the only thing here with a person on the other end of it.
+     *
+     * Held open for as long as the tab is on a shared project, and told two things: who else is in
+     * here, and that a document has moved. Nobody polls for either — the second is what makes
+     * somebody's edit land the moment they make it rather than at the next minute's sync, and it
+     * costs one idle connection instead of a request every few seconds forever.
+     *
+     * `x-accel-buffering` is not decoration: nginx proxy manager terminates TLS in front of this,
+     * and nginx buffers a proxied response by default — every event would sit in that buffer until
+     * enough of them piled up to flush. The header turns it off for this response alone, which
+     * beats asking whoever deploys this to go and edit an nginx config.
+     */
+    if (path === '/api/live' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      /* Before a single header goes out, because the refusal is itself a response: writing the
+         stream's headers first and then answering 429 is two responses on one socket, which node
+         throws on. One page holds one of these, so a dozen per account is a dozen tabs and
+         anything past that is not a person — and an unbounded set of sockets, each with a timer on
+         it, is the cheapest denial of service this server offers. */
+      if ([...live].filter((o) => o.user === user.id).length >= 12) {
+        return send(res, 429, { error: 'too many open streams' })
+      }
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-store',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      })
+      // which browser this is, so its own writes are not sent back to it as news
+      const device = (new URL(req.url ?? '/', 'http://x').searchParams.get('device') ?? '').slice(0, 128)
+      const l = { user: user.id, name: user.name, device, res }
+      live.add(l)
+      /* A comment line, now: it is what makes the browser call the connection open, and until it
+         does an `EventSource` sits in CONNECTING with nothing to show for itself. */
+      res.write(': hello\n\n')
+      /* Unref'd, like every other timer here: a stream nobody closed must not be the reason a
+         process stays up. The listening socket is what holds this server open. */
+      const ping = setInterval(() => wire(res, '', ''), PING)
+      ping.unref?.()
+      /* `close` fires on a tab closing, a navigation, a laptop sleeping long enough for the socket
+         to go, and on the reconnect that replaces this stream. The entry goes with the last stream
+         holding it up — another tab of the same person keeps them in the room. */
+      req.on('close', () => {
+        clearInterval(ping)
+        live.delete(l)
+        if (![...live].some((o) => o.name === user.name)) present.delete(user.name)
+        stir()
+      })
+      stir()
+      return
+    }
+
+    /**
+     * Where I am now. The one thing the stream cannot carry, since it only goes one way — and the
+     * only request in this feature, sent when somebody actually moves rather than on a timer.
+     */
+    if (path === '/api/here' && req.method === 'POST') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      let b: any
+      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+
+      /* `root` is the project carrying the share, `pid` is where they actually are. The two differ
+         on a sub-project travelling inside its parent's slice, which has no share row of its own to
+         be checked against — the trap this codebase has now fallen into twice. Both travel, and
+         either one granting access is enough, so a sub-project shared in its own right works the
+         same way.
+         Checked against the same list that decides what goes out, and for the same reason. A place
+         someone names is not a place they are: reading is already filtered, so an unchecked claim
+         leaks nothing — it puts a face in a stranger's project header, which is a lie about who is
+         in the room and worth exactly as much care as a leak.
+         No root at all is stepping out of every room. */
+      const { on } = reach(user.id)
+      /* Held in memory until the socket goes, so the length is capped where it arrives rather
+         than trusted: an id is a `uid()`, and eight megabytes of one is not a place anybody is. */
+      const said = (v: unknown, fallback = '') => String(v ?? fallback).slice(0, 128)
+      const root = said(b?.root)
+      const owner = said(b?.owner, user.name)
+      const pid = said(b?.pid, root)
+      if (root && (on.has(`${owner}:${root}`) || on.has(`${owner}:${pid}`))) {
+        present.set(user.name, { owner, root, pid, id: said(b?.id) })
+      } else present.delete(user.name)
+      stir()
+      return send(res, 200, {})
+    }
+
     if (path === '/api/share' && req.method === 'POST') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
@@ -1742,6 +1912,10 @@ export function start({
         if (now && now.json === pjson) return send(res, 200, { version: now.v })
         const w = q.addPdoc.run(owner, pid, Date.now(), String(body.device ?? ''), pjson)
         q.prunePdoc.run(owner, pid, owner, pid, KEEP)
+        /* Everyone on it hears the new number the moment it exists. The writer's own devices are
+           among them on purpose — the laptop that wrote it is not the phone that wants it — and
+           the one that did write compares the number against what it already holds and stays put. */
+        moved(ownerName || user.name, pid, Number(w.lastInsertRowid))
         return send(res, 200, { version: Number(w.lastInsertRowid) })
       }
       return send(res, 405, { error: 'method not allowed' })
@@ -1782,6 +1956,8 @@ export function start({
         if (now && now.json === json) return send(res, 200, { version: now.v })
         const w = q.insert.run(user.id, Date.now(), String(body.device ?? ''), json)
         q.prune.run(user.id, user.id, KEEP)
+        // your other devices, and a tab sitting open on what the MCP server just wrote underneath it
+        own(user.id, Number(w.lastInsertRowid), String(body.device ?? ''))
         return send(res, 200, { version: Number(w.lastInsertRowid) })
       }
       return send(res, 405, { error: 'method not allowed' })

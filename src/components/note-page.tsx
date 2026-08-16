@@ -1,14 +1,15 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import {
-  ArrowLeft, Bold, Code, Eye, Heading, Image, Italic, Link2, Pencil, Quote, Strikethrough, Underline,
+  ArrowLeft, Bold, Code, FolderOpen, Heading, Italic, Link2, Quote, Strikethrough, Underline,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { Faces } from '@/components/faces'
 import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { resolveWiki, toggleBox, wikiKey } from '@/lib/markdown'
-import { patch, useStash, type Item } from '@/lib/store'
+import { blocksOf, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
+import { patch, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 
 /**
@@ -24,7 +25,13 @@ export function NotePage({ it, onBack, onOpen }: {
   onOpen: (id: string) => void
 }) {
   const s = useStash()
-  const [editing, setEditing] = useState(!it.note.trim())
+  const filed = s.projects.find((p) => p.id === it.pid)
+  /* The note is always rendered. `edit` is the one piece of it showing its own source instead —
+     `null` while nothing is, which is most of the time. Its range is held here rather than looked
+     up again on every keystroke: typing a blank line into a paragraph splits it in two, and a
+     block found afresh each time would be yanked out from under the cursor mid-sentence. */
+  const [edit, setEdit] = useState<Block | null>(null)
+  const blocks = blocksOf(it.note)
   const taRef = useRef<HTMLTextAreaElement>(null)
   // the selection toolbar, placed where the drag ended (relative to the editor wrapper)
   const [bar, setBar] = useState<{ top: number; left: number } | null>(null)
@@ -36,14 +43,27 @@ export function NotePage({ it, onBack, onOpen }: {
     setBar({ top: Math.max(4, e.clientY - box.top - 44), left: Math.max(4, e.clientX - box.left) })
   }
 
+  /** What every edit on this page goes through: the open block's new text, put back where it came
+   *  from. The range moves with it, since what was typed may be more lines than were there. */
+  const writeBlock = (text: string) => {
+    if (!edit) return
+    patch(it.id, { note: replaceBlock(it.note, edit, text) })
+    setEdit({ from: edit.from, to: edit.from + text.split('\n').length - 1, text })
+  }
+
+  /** Open one for editing — the cursor lands at its end, not where the click did: the rendered
+   *  text and its source share no offsets, and mapping between them is a parser's worth of work
+   *  for a caret that is one arrow key away.
+   *  ponytail: end of the block. `caretPositionFromPoint` against a source map is the upgrade. */
+  const open = (b: Block) => setEdit(b)
+
   /** Wrap the current selection, then keep the original text selected inside the new marks. */
   const wrap = (before: string, after = before, selectFrom?: number, selectLen?: number) => {
     const ta = taRef.current
     if (!ta) return
     const { selectionStart: a, selectionEnd: b, value } = ta
     const mid = value.slice(a, b)
-    const next = value.slice(0, a) + before + mid + after + value.slice(b)
-    patch(it.id, { note: next })
+    writeBlock(value.slice(0, a) + before + mid + after + value.slice(b))
     const from = selectFrom ?? a + before.length
     const len = selectLen ?? mid.length
     // after React re-commits the controlled value, restore the selection
@@ -61,16 +81,15 @@ export function NotePage({ it, onBack, onOpen }: {
   }
 
   /** Rewrite the start of the selection's line — headings cycle 1→2→3→off, quote toggles. */
-  const line = (edit: (current: string) => string) => {
+  const line = (rule: (current: string) => string) => {
     const ta = taRef.current
     if (!ta) return
     const { selectionStart: a, value } = ta
     const start = value.lastIndexOf('\n', a - 1) + 1
     const rest = value.slice(start)
     const prefix = rest.match(/^(#{1,3}\s+|>\s+)/)?.[0] ?? ''
-    const next = edit(prefix)
-    const merged = value.slice(0, start) + next + rest.slice(prefix.length)
-    patch(it.id, { note: merged })
+    const next = rule(prefix)
+    writeBlock(value.slice(0, start) + next + rest.slice(prefix.length))
     const shift = next.length - prefix.length
     setTimeout(() => { ta.focus(); ta.setSelectionRange(a + shift, a + shift) }, 0)
     setBar(null)
@@ -78,23 +97,29 @@ export function NotePage({ it, onBack, onOpen }: {
   const heading = () => line((p) => (p.startsWith('###') ? '' : p.startsWith('#') ? '#'.repeat(p.trim().length + 1) + ' ' : '# '))
   const quote = () => line((p) => (p.startsWith('>') ? '' : '> '))
 
-  /** Drop text in where the cursor is, leaving it after what was written. */
+  /** Drop text in where the cursor is, leaving it after what was written. With no block open —
+   *  a paste onto the page itself — it goes on the end, which is where a picture belongs when
+   *  nobody has said otherwise. */
   const insert = (text: string) => {
     const ta = taRef.current
-    if (!ta) return
+    if (!ta || !edit) {
+      patch(it.id, { note: it.note + (it.note.endsWith('\n') || !it.note ? '' : '\n') + text })
+      return
+    }
     const { selectionStart: a, selectionEnd: b, value } = ta
-    patch(it.id, { note: value.slice(0, a) + text + value.slice(b) })
+    writeBlock(value.slice(0, a) + text + value.slice(b))
     const at = a + text.length
     setTimeout(() => { ta.focus(); ta.setSelectionRange(at, at) }, 0)
   }
 
   /**
-   * Pictures land by paste, by drop, or off the button in the header — the three ways one actually
-   * arrives, the last of them because a phone has neither of the first two.
+   * Pictures land by paste. Only by paste: the button and the drop target both went, because three
+   * ways to do one thing is two things to explain and a screenshot is already on the clipboard by
+   * the time anybody thinks about it.
    *
-   * All of them upload together and are written in as one edit: inserting each as it lands would
-   * read the textarea's value between renders, and the second picture would be placed against the
-   * text as it stood before the first. One insert is also one step for undo.
+   * They upload together and are written in as one edit: inserting each as it lands would read the
+   * textarea's value between renders, and the second picture would be placed against the text as it
+   * stood before the first. One insert is also one step for undo.
    */
   const [busy, setBusy] = useState(false)
   const addPictures = async (files: File[]) => {
@@ -114,8 +139,6 @@ export function NotePage({ it, onBack, onOpen }: {
     if (failed) toast(String((failed as PromiseRejectedResult).reason?.message ?? 'that did not upload'))
   }
 
-  const pickFile = useRef<HTMLInputElement>(null)
-
   /**
    * `[[` opens a picker. A wiki link is matched on the whole title, so without one you would be
    * typing another item's title out of memory and getting a dead link when you were a word off.
@@ -134,11 +157,20 @@ export function NotePage({ it, onBack, onOpen }: {
     setWikiQ(frag === null || frag.includes(']]') || frag.includes('\n') ? null : frag)
   }
 
+  /* Everything a [[link]] may name. Projects stand beside items here: a note about a job belongs
+     pointed at the job, and until now the only things with titles worth typing were the rows. They
+     wear a project's own shape — an id and the name people call it — so `resolveWiki` takes them
+     unchanged, and `open` below is what knows the difference.
+     Items first: two things can share a title, and the row is the more particular of the two. */
+  const wikiTargets = [
+    ...s.items.filter((o) => o.id !== it.id && o.text.trim()),
+    ...s.projects.map((p) => ({ id: p.id, text: p.name, done: false, project: true as const })),
+  ]
   const wikiHits = (() => {
     if (wikiQ === null) return []
     const q = wikiKey(wikiQ)
-    return s.items
-      .filter((o) => o.id !== it.id && o.text.trim() && (!q || wikiKey(o.text).includes(q)))
+    return wikiTargets
+      .filter((o) => !q || wikiKey(o.text).includes(q))
       // what starts with the words typed before what merely contains them
       .sort((a, b) => Number(wikiKey(b.text).startsWith(q)) - Number(wikiKey(a.text).startsWith(q)))
       .slice(0, 6)
@@ -156,15 +188,29 @@ export function NotePage({ it, onBack, onOpen }: {
     el.style.height = `${el.scrollHeight}px`
   }, [it.text, it.id])
 
+  /* The same for the open block, which grows and shrinks a line at a time as it is typed into. And
+     the cursor at the end of it on the way in: `autoFocus` alone leaves it wherever the browser
+     feels like, which is the start in some of them and a note you type backwards into. */
+  useLayoutEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [edit?.text])
+  useLayoutEffect(() => {
+    const el = taRef.current
+    if (el) el.setSelectionRange(el.value.length, el.value.length)
+  }, [edit?.from])
+
   /** Finish the `[[` being typed with a whole title, and put the caret past the closing brackets. */
-  const pickWiki = (target: Item) => {
+  const pickWiki = (target: { text: string }) => {
     const ta = taRef.current
     if (!ta) return
     const at = ta.selectionStart
-    const open = ta.value.slice(0, at).lastIndexOf('[[')
-    if (open < 0) return
-    patch(it.id, { note: `${ta.value.slice(0, open + 2)}${target.text}]]${ta.value.slice(at)}` })
-    const caret = open + 2 + target.text.length + 2
+    const from = ta.value.slice(0, at).lastIndexOf('[[')
+    if (from < 0) return
+    writeBlock(`${ta.value.slice(0, from + 2)}${target.text}]]${ta.value.slice(at)}`)
+    const caret = from + 2 + target.text.length + 2
     setWikiQ(null)
     setTimeout(() => { ta.focus(); ta.setSelectionRange(caret, caret) }, 0)
   }
@@ -180,6 +226,130 @@ export function NotePage({ it, onBack, onOpen }: {
     { icon: Link2, label: 'Link', run: linkUp },
   ]
 
+  /* The open block, as a plain textarea holding only its own lines. Keyed on where it starts, so
+     moving to another block mounts a fresh one — which is what puts the cursor in it. */
+  const editor = edit && (
+    <div key={`edit-${edit.from}`} className="relative">
+      <textarea
+        ref={taRef}
+        autoFocus
+        rows={1}
+        value={edit.text}
+        onChange={(e) => { writeBlock(e.target.value); readCaret(e.currentTarget) }}
+        // the caret also moves without the text changing — arrows, a click, a selection
+        onKeyUp={(e) => readCaret(e.currentTarget)}
+        onMouseUp={(e) => { onSelect(e); readCaret(e.currentTarget) }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { e.preventDefault(); setEdit(null); setWikiQ(null); return }
+          /* Off the top or the bottom of this block and into the next one along. A textarea would
+             otherwise stop dead at its own first and last line, and the only way on would be the
+             mouse — on a page whose whole point is that the keyboard never leaves the text. */
+          const ta = e.currentTarget
+          const up = e.key === 'ArrowUp', down = e.key === 'ArrowDown'
+          if (!up && !down) return
+          const before = ta.value.slice(0, ta.selectionStart)
+          if (up ? before.includes('\n') : ta.value.slice(ta.selectionEnd).includes('\n')) return
+          const next = blocks.filter((b) => (up ? b.to < edit.from : b.from > edit.to))
+          const to = up ? next.at(-1) : next[0]
+          if (!to) return
+          e.preventDefault()
+          open(to)
+        }}
+        /* Focus leaving closes it. Without this a block you clicked away from — to the title, to
+           the sidebar, to another window — sat there in its own source while everything around it
+           was drawn, which is the one thing this page is not supposed to do. The toolbar and the
+           [[ strip both hold focus with `preventDefault` on mousedown, so neither trips it. */
+        onBlur={() => { setBar(null); setWikiQ(null); setEdit(null) }}
+        aria-label="Note"
+        // text-base until md, like every other field: under 16px iOS zooms the page in on focus
+        // and never zooms back out, which leaves the header off the left edge
+        className="w-full resize-none overflow-hidden bg-transparent font-mono text-base leading-relaxed outline-none md:text-sm"
+      />
+      {bar && (
+        <div
+          style={{ top: bar.top, left: bar.left }}
+          className="bg-popover ring-foreground/10 absolute z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-md p-0.5 shadow-md ring-1"
+        >
+          {TOOLS.map(({ icon: Icon, label, run }) => (
+            <Hint key={label} label={label}>
+              <button
+                type="button"
+                aria-label={label}
+                // hold the textarea's focus/selection instead of stealing it on click
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={run}
+                className="text-muted-foreground hover:text-foreground hover:bg-muted flex size-7 items-center justify-center rounded-sm [&>svg]:size-4"
+              >
+                <Icon />
+              </button>
+            </Hint>
+          ))}
+        </div>
+      )}
+      {/* what the [[ being typed could mean, in flow under the block rather than following the
+          caret about: the strip is a fixed row that appears and goes, which is steadier. */}
+      {wikiHits.length > 0 && (
+        <div className="bg-popover mt-1 flex flex-wrap gap-1 rounded-md border p-1 shadow-md">
+          {wikiHits.map((o) => (
+            <button
+              key={o.id}
+              type="button"
+              // mousedown, or the textarea blurs and the caret this reads is gone
+              onMouseDown={(e) => { e.preventDefault(); pickWiki(o) }}
+              title={o.text}
+              className={cn(
+                'hover:bg-accent flex max-w-full items-center gap-1 rounded-sm px-2 py-1 text-left text-xs',
+                o.done && 'text-muted-foreground line-through',
+              )}
+            >
+              {/* a project and a row can wear the same title, so the strip says which is which */}
+              {'project' in o && <FolderOpen className="size-3 shrink-0 opacity-60" />}
+              <span className="block truncate">{o.text}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+  /* Every block drawn, with the editor standing where the open one is. Blocks inside that range
+     are the pieces typing has just split off — they are in the editor already, so drawing them
+     here as well would show the same sentence twice. */
+  const pieces: React.ReactNode[] = []
+  let placed = false
+  for (const b of blocks) {
+    if (edit && b.from >= edit.from && b.to <= edit.to) {
+      if (!placed) { pieces.push(editor); placed = true }
+      continue
+    }
+    pieces.push(
+      <div
+        key={b.from}
+        /* A link, a checkbox and an image are things to press; everything else is text to put the
+           cursor in. Without this, following a [[link]] would open the block it was written in. */
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('a, input, button')) return
+          open(b)
+        }}
+        // a blank line renders as nothing, and nothing is not something you can click into
+        className={cn('cursor-text', !b.text.trim() && 'h-[1.2em]')}
+      >
+        <Markdown
+          text={b.text}
+          onToggle={(l) => patch(it.id, { note: toggleBox(it.note, b.from + l) })}
+          /* A link lands on whichever it named: a row opens its own page, a project is simply
+             selected — there is no page of a project to open, the list is it. */
+          links={{
+            find: (label) => resolveWiki(wikiTargets, label),
+            open: (target) => ('project' in target ? select(target.id) : onOpen(target.id)),
+          }}
+        />
+      </div>,
+    )
+  }
+  // the open block sits past the last one drawn — a note ending in what is being typed
+  if (edit && !placed) pieces.push(editor)
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
@@ -187,44 +357,10 @@ export function NotePage({ it, onBack, onOpen }: {
           <ArrowLeft />
         </Button>
         <span className="text-muted-foreground font-heading text-sm tracking-wide uppercase">Page</span>
-        {/* the only way in on a phone, where there is no drag and a paste is a fight */}
-        {editing && (
-          <Hint label={busy ? 'Adding…' : 'Add a picture'}>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="ml-auto"
-              disabled={busy}
-              onClick={() => pickFile.current?.click()}
-              aria-label="Add a picture"
-            >
-              <Image />
-            </Button>
-          </Hint>
-        )}
-        <input
-          ref={pickFile}
-          type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
-          multiple
-          hidden
-          onChange={(e) => {
-            void addPictures([...(e.currentTarget.files ?? [])])
-            // cleared, or picking the same file twice in a row fires no change the second time
-            e.currentTarget.value = ''
-          }}
-        />
-        <Hint label={editing ? 'Preview' : 'Edit'}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className={editing ? undefined : 'ml-auto'}
-            onClick={() => setEditing((e) => !e)}
-            aria-label={editing ? 'Preview' : 'Edit'}
-          >
-            {editing ? <Eye /> : <Pencil />}
-          </Button>
-        </Hint>
+        {/* Who else is in the project this note is filed under — and lit, if they are in it now.
+            The list header has carried these since sharing existed; this page is where a document
+            is actually read and written, which makes it the one place the question is urgent. */}
+        {filed && <Faces p={filed} />}
       </div>
 
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-3 px-6 py-6">
@@ -237,103 +373,50 @@ export function NotePage({ it, onBack, onOpen }: {
           rows={1}
           value={it.text}
           onChange={(e) => patch(it.id, { text: e.target.value })}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); taRef.current?.focus() } }}
+          // Enter leaves the title for the note, which now means opening its first piece
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); open(blocks[0]) } }}
           placeholder="Untitled"
           aria-label="Title"
           className="placeholder:text-muted-foreground shrink-0 resize-none overflow-hidden bg-transparent text-2xl font-medium outline-none"
         />
-        {editing ? (
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <textarea
-              ref={taRef}
-              // mounts fresh on every entry to edit, so native autoFocus lands the cursor
-              autoFocus
-              value={it.note}
-              onChange={(e) => { patch(it.id, { note: e.target.value }); readCaret(e.currentTarget) }}
-              // the caret also moves without the text changing — arrows, a click, a selection
-              onKeyUp={(e) => readCaret(e.currentTarget)}
-              onMouseUp={(e) => { onSelect(e); readCaret(e.currentTarget) }}
-              onScroll={() => setBar(null)}
-              /* A pasted or dropped picture is the one paste that is not text. Everything else
-                 falls through to the browser's own handling, so pasting a screenshot works and
-                 pasting a paragraph is untouched. */
-              onPaste={(e) => {
-                const files = [...e.clipboardData.files]
-                if (!files.some((f) => f.type.startsWith('image/'))) return
-                e.preventDefault()
-                void addPictures(files)
-              }}
-              // only files: dragging a row out of the list still means what it always did
-              onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault() }}
-              onDrop={(e) => {
-                const files = [...e.dataTransfer.files]
-                if (!files.some((f) => f.type.startsWith('image/'))) return
-                e.preventDefault()
-                void addPictures(files)
-              }}
-              placeholder="Write… markdown supported"
-              aria-label="Note"
-              // text-base until md, like every other field: under 16px iOS zooms the page in on
-              // focus and never zooms back out, which leaves the header off the left edge
-              className="placeholder:text-muted-foreground min-h-0 flex-1 resize-none bg-transparent font-mono text-base leading-relaxed outline-none md:text-sm"
-            />
-            {bar && (
-              <div
-                style={{ top: bar.top, left: bar.left }}
-                className="bg-popover ring-foreground/10 absolute z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-md p-0.5 shadow-md ring-1"
-              >
-                {TOOLS.map(({ icon: Icon, label, run }) => (
-                  <Hint key={label} label={label}>
-                    <button
-                      type="button"
-                      aria-label={label}
-                      // hold the textarea's focus/selection instead of stealing it on click
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={run}
-                      className="text-muted-foreground hover:text-foreground hover:bg-muted flex size-7 items-center justify-center rounded-sm [&>svg]:size-4"
-                    >
-                      <Icon />
-                    </button>
-                  </Hint>
-                ))}
-              </div>
-            )}
-            {/* what the [[ being typed could mean. In flow under the editor rather than floating:
-                the strip is a fixed row that appears and goes, and the textarea gives up its last
-                line for it, which is steadier than a box that follows the caret about. */}
-            {wikiHits.length > 0 && (
-              <div className="bg-popover mt-1 flex shrink-0 flex-wrap gap-1 rounded-md border p-1 shadow-md">
-                {wikiHits.map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    // mousedown, or the textarea blurs and the caret this reads is gone
-                    onMouseDown={(e) => { e.preventDefault(); pickWiki(o) }}
-                    title={o.text}
-                    className={cn(
-                      'hover:bg-accent max-w-full rounded-sm px-2 py-1 text-left text-xs',
-                      o.done && 'text-muted-foreground line-through',
-                    )}
-                  >
-                    <span className="block truncate">{o.text}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {it.note.trim()
-              ? (
-                  <Markdown
-                    text={it.note}
-                    onToggle={(line) => patch(it.id, { note: toggleBox(it.note, line) })}
-                    links={{ find: (label) => resolveWiki(s.items, label), open: (t) => onOpen(t.id) }}
-                  />
-                )
-              : <p className="text-muted-foreground text-sm">Nothing written yet.</p>}
-          </div>
-        )}
+        {/* Everything rendered, all the time — except the one piece the cursor is in, which shows
+            its own source. That is the whole page: reading a note and working on it stopped being
+            two modes with a button between them.
+            The paste sits out here rather than on the editor, so a screenshot lands whether or not
+            anything is open — with nothing open it goes on the end. */}
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          onPaste={(e) => {
+            /* A picture is the one paste that is not text. Everything else falls through to the
+               browser's own handling, so pasting a screenshot works and pasting a paragraph is
+               untouched.
+               `items` as well as `files`: a screenshot copied out of some apps arrives as a
+               clipboard item of kind file with `files` left empty, and reading only the one list
+               is why a paste sometimes did nothing at all. */
+            const pics = [
+              ...e.clipboardData.files,
+              ...[...e.clipboardData.items]
+                .filter((i) => i.kind === 'file')
+                .map((i) => i.getAsFile())
+                .filter((f): f is File => !!f),
+            ]
+            if (!pics.some((f) => f.type.startsWith('image/'))) return
+            e.preventDefault()
+            void addPictures(pics)
+          }}
+        >
+          {pieces}
+          {/* an empty note renders as nothing at all, which is nothing to aim at either */}
+          {!it.note && !edit && (
+            <button
+              type="button"
+              onClick={() => open(blocks[0])}
+              className="text-muted-foreground w-full cursor-text text-left text-sm"
+            >
+              Write… markdown supported
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

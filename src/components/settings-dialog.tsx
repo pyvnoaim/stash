@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Bell, BellOff, CalendarDays, CandlestickChart, ChartLine, Copy, Database, Download, Eraser,
   History, Info, Keyboard, Link2, Lock, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen,
-  Users,
+  Users, Wrench,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
@@ -27,8 +27,8 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  clearDone, hotkey, resetDials, resetHotkeys, setChart, setDesk, setDial, setHotkey,
-  setStake, useStash, type ChartStyle,
+  CALENDAR, clearDone, hotkey, MARKET, resetDials, resetHotkeys, setChart, setDesk, setDial,
+  setHotkey, setStake, setTool, TOOLS, toolOn, useStash, type ChartStyle,
 } from '@/lib/store'
 import { type Dials as DialSet } from '@/lib/market'
 import {
@@ -71,6 +71,7 @@ export function SettingsDialog({ open, onOpenChange }: {
   onOpenChange: (v: boolean) => void
 }) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const s = useStash()
   const [at, setAt] = useState('account')
   // every open starts at the top of the list, rather than wherever the last one wandered to
   useEffect(() => { if (open) setAt('account') }, [open])
@@ -82,14 +83,18 @@ export function SettingsDialog({ open, onOpenChange }: {
   const SECTIONS = [
     ...(user ? [{ id: 'account', label: 'Account', icon: UserPen }] : []),
     { id: 'alerts', label: 'Alerts', icon: Bell },
+    { id: 'tools', label: 'Tools', icon: Wrench },
     ...(user
       ? [
-          { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+          ...(toolOn(s, CALENDAR) ? [{ id: 'calendar', label: 'Calendar', icon: CalendarDays }] : []),
           { id: 'links', label: 'Sharing', icon: Link2 },
           ...(user.admin ? [{ id: 'people', label: 'People', icon: Users }] : []),
         ]
       : []),
-    { id: 'markets', label: 'Markets', icon: CandlestickChart },
+    /* A tool that is switched off takes its own settings with it: a feed to subscribe to a
+       calendar you cannot open, or the fee your venue charges on a desk that is not there, is
+       exactly the reading-past this whole switch exists to stop. */
+    ...(toolOn(s, MARKET) ? [{ id: 'markets', label: 'Markets', icon: CandlestickChart }] : []),
     { id: 'data', label: 'Data', icon: Database },
     { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
@@ -143,7 +148,8 @@ export function SettingsDialog({ open, onOpenChange }: {
               {here === 'account' && user && <AccountPanel name={user.name} avatar={user.avatar} />}
               {/* the bell and the numbers behind it, which used to sit a page apart: the push
                   switch under Account, the thresholds it fires on at the foot of Markets */}
-              {here === 'alerts' && <>{user && <NotificationsPanel />}<Dials /></>}
+              {here === 'alerts' && <>{user && <NotificationsPanel />}{toolOn(s, MARKET) && <Dials />}</>}
+              {here === 'tools' && <ToolsPanel />}
               {here === 'calendar' && <><CalendarFeed /><CalendarSub /></>}
               {here === 'links' && <><LinksPanel /><McpSection /></>}
               {here === 'people' && user && <PeoplePanel me={user.name} />}
@@ -195,9 +201,8 @@ function DataPanel({ onDone }: { onDone: () => void }) {
     <>
       <Section
         title="Backup"
-        hint="One JSON file with everything in it — items, projects, subscriptions, alerts. The
-          Markets key stays behind, so a backup is never a copy of a secret. Importing replaces
-          what is here rather than merging into it."
+        hint="One JSON file: items, projects, subscriptions, alerts. No keys. Importing
+          replaces what is here rather than merging."
       >
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={exportBackup}>
@@ -223,8 +228,7 @@ function DataPanel({ onDone }: { onDone: () => void }) {
       <Section
         title="Finished items"
         hint={done
-          ? `Clearing takes them out of Done for good. There is an undo on the message, and a
-            backup is the other one.`
+          ? 'Out of Done for good, with an undo on the message.'
           : 'Nothing finished to clear.'}
         action={done
           ? (
@@ -253,8 +257,7 @@ function DataPanel({ onDone }: { onDone: () => void }) {
         title="Storage"
         hint={room?.kept
           ? 'This browser has agreed to keep the stash through its own cleanups.'
-          : `This browser has not promised to keep it — an export is the only copy that cannot be
-            swept up. Safari drops unused sites after about a week.`}
+          : 'Nothing promises to keep it — Safari drops unused sites after about a week.'}
       >
         <p className="text-sm tabular-nums">
           {room
@@ -287,6 +290,41 @@ function DataPanel({ onDone }: { onDone: () => void }) {
   )
 }
 
+/**
+ * Which of the four tools are in the sidebar at all.
+ *
+ * A stash kept for the shopping does not want a candlestick chart in the corner of it. Switching
+ * one off takes it out of the sidebar, out of ⌘K, and out of Settings where it had a page of its
+ * own — and off the list of things `sel` may be, so a bookmark to it lands on Overview rather
+ * than on a page with no way back.
+ *
+ * Nothing is deleted. A subscription, a saved setup, a calendar feed all sit where they were and
+ * come back the moment the switch goes on again: this hides a tool, it does not throw anything
+ * out. Stored with the document, so switching Markets off on the laptop switches it off on the
+ * phone — which is the point, and the opposite of the theme.
+ */
+function ToolsPanel() {
+  const s = useStash()
+  return (
+    <Section
+      title="What is in the sidebar"
+      hint="Off takes it out of the sidebar, ⌘K and these settings. Nothing is deleted."
+    >
+      {TOOLS.map(({ id, name }) => (
+        <label key={id} className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={toolOn(s, id)}
+            className="accent-foreground size-3.5 shrink-0"
+            onChange={(e) => setTool(id, e.target.checked)}
+          />
+          {name}
+        </label>
+      ))}
+    </Section>
+  )
+}
+
 /** What this build is, and the other half of the update prompt: a way to go and look now. */
 function AboutPanel() {
   const [checking, setChecking] = useState(false)
@@ -294,9 +332,7 @@ function AboutPanel() {
   return (
     <Section
       title="This build"
-      hint="A new one downloads in the background and waits, and says so rather than swapping
-        itself in under an open tab. Checked every quarter hour and whenever you come back to the
-        window."
+      hint="A new one downloads and waits rather than swapping itself in under an open tab."
       action={(
         <Button
           variant="outline"
@@ -350,10 +386,8 @@ function MarketsPanel() {
 
       <Section
         title="What a setup is worth"
-        hint="The euros you would have had at risk on one saved setup. It is the only number
-          behind “had you taken it” on the record of how they went: that R times this, less the
-          taker fee on the position such a risk implies. Nothing is ever bought here, and left
-          empty the record simply reads in R."
+        hint="What “had you taken it” is worth on the record: the euros at risk on one setup.
+          Empty, the record reads in R."
       >
         {/* a comma is what a German keyboard types and what the Subscriptions header shows back */}
         <Input
@@ -368,9 +402,8 @@ function MarketsPanel() {
 
       <Section
         title="The others"
-        hint="Puts your finished setups and the ones you are in on everyone else's Markets page,
-          the way theirs land on yours. A trade your exchange is holding goes over whole — the
-          running dollars, what it is worth and where it liquidates. Finished ones stay in R."
+        hint="Puts your setups on everyone else's Markets page, the way theirs land on yours.
+          Open trades go over whole; finished ones stay in R."
       >
         <div className="grid grid-cols-2 gap-1.5">
           {([[false, 'Private', Lock], [true, 'On the desk', Users]] as const).map(([on, label, Icon]) => (
@@ -403,9 +436,9 @@ const VENUES = [
      an order off the book with a key that may only look at it. A key that can cancel can also open
      a position, so this says what it is rather than leaving it to be discovered. */
   { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
-    hint: 'From Bitget → API Management: Read permission is enough for the positions panel. Add Trade only if you want auto-cancel to take resting orders off the book itself — the same right lets a key open positions, so it is a deliberate choice. Bitget cuts a key in three parts — the passphrase is the one you chose making it.' },
+    hint: 'From Bitget → API Management. Read is enough; add Trade only for auto-cancel, which is the same right that opens positions. Three parts — the passphrase is the one you chose.' },
   { id: 'mexc', name: 'MEXC', route: '/api/mexc', passphrase: false,
-    hint: 'Read-only, from MEXC → API Management: futures Read permission only. Trade rights would buy nothing here — MEXC has kept its futures place-order and cancel-order endpoints closed since 2022, so auto-cancel can only tell you to do it by hand.' },
+    hint: 'From MEXC → API Management, futures Read only. Trade rights buy nothing here: MEXC has kept those endpoints closed since 2022.' },
 ] as const
 
 /**
@@ -461,9 +494,7 @@ function ExchangeSection() {
   return (
     <Section
       title="Exchange key"
-      hint={`${v.hint} It signs requests, so it lives on the server with your account rather than
-        on this machine, and it is never shown back — the market page grows a card of what you
-        actually hold, across every venue with a key here. Nothing here can trade.`}
+      hint={`${v.hint} Kept on the server, never shown back. Nothing here can trade.`}
       action={
         <Button size="sm" disabled={busy || !whole} onClick={() => save(key.trim(), secret.trim(), pass.trim())}>
           Save
@@ -502,9 +533,9 @@ function ExchangeSection() {
 /** One dial: a number, what it is, and the unit it is in. */
 const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string, scale?: number }[] = [
   { k: 'fee', label: 'Taker fee', unit: '% a side',
-    hint: 'What crossing the spread costs, each way. Every setup\'s risk-to-reward is quoted after it — paid once getting in and once getting out, which is why a stop costs a little more than 1R and a target pays a little less — and so is every euro figure beside one, on the bell, the record and the calendar alike. 0.05 is the standard perp tier; a maker rebate or a spot account is lower. Zero shows the gross ratio every other chart tool quotes.' },
+    hint: 'Charged getting in and getting out, so every ratio here is quoted after it. 0.05 is the standard perp tier; zero shows the gross one.' },
   { k: 'funding', label: 'Perp funding', unit: '%/8h',
-    hint: 'What holding a leveraged position quietly costs: this share of the notional per 8 hours comes off every position\'s read-out. One flat rate for everything — 0.01 is the venues\' calm-market baseline. Zero turns the estimate off.' },
+    hint: 'Comes off every open position\'s read-out. 0.01 is the calm-market baseline; zero turns the estimate off.' },
 ]
 
 /**
@@ -527,9 +558,7 @@ function Dials() {
   return (
     <Section
       title="What your venue charges"
-      hint="The two costs only you know, and they are in every money figure on the desk — the
-        risk-to-reward on a setup, the euros on a position, the total under the record. Changes
-        take on the spot, here and on your phone."
+      hint="The two costs only you know. They are inside every money figure on the desk."
       action={<Button variant="outline" size="sm" onClick={resetDials}><RotateCcw /> Defaults</Button>}
     >
       {DIAL_FIELDS.map(({ k, label, unit, hint, scale = 1 }) => (
@@ -632,9 +661,8 @@ function HotkeysPanel() {
 
       <Section
         title="Fixed"
-        hint="Moving through a list and stepping back out of it are the shape of the keyboard
-          rather than a setting, so these stay as they are. None of it acts while a field has
-          focus, or on the Overview, Calendar and PDF tabs."
+        hint="The shape of the keyboard rather than a setting. None of it acts while a field
+          has focus."
       >
         <dl className="grid gap-1.5">
           {FIXED.map(([key, what]) => (
@@ -761,13 +789,11 @@ function NotificationsPanel() {
   useEffect(() => { void pushState().then(setState) }, [])
 
   const hint = state === 'unsupported'
-    ? `This browser has no push. On an iPhone that changes the moment Stash is added to the home
-       screen — Safari only offers it to an installed app.`
+    ? 'This browser has no push. On an iPhone, add Stash to the home screen first.'
     : state === 'blocked'
       ? 'Notifications are blocked for this site. The browser’s own site settings are the way back.'
-      : `A saved Markets setup reaching its entry, stop or target, and once each morning what is
-         due and what is about to be charged. Nothing else, and nothing while the app is open —
-         the bell in the header already has that.`
+      : `A saved setup reaching its entry, stop or target, and one morning summary. Nothing
+         while the app is open — the bell in the header has that.`
 
   const go = async (on: boolean) => {
     setBusy(true)
@@ -827,9 +853,8 @@ function CalendarFeed() {
   return (
     <Section
       title="Calendar feed"
-      hint="A read-only link your calendar can subscribe to: every dated item and every
-        subscription charge for a year ahead, as all-day events with a nine o'clock alert. Anyone
-        holding the link can read it, so a new link is how you take an old one back."
+      hint="A read-only link your calendar can subscribe to: every dated item and charge for a
+        year ahead. A new link takes an old one back."
       action={(
         <div className="flex flex-wrap gap-2">
           {token && (
@@ -902,9 +927,8 @@ function CalendarSub() {
   return (
     <Section
       title="Subscribed calendar"
-      hint="One read-only .ics link — the private address out of Google, Apple or anything else that
-        offers one. Its events sit on the Calendar page beside what is due. Nothing is written back
-        to it, and none of it is kept in your stash."
+      hint="One read-only .ics link — the private address out of Google or Apple. Its events sit
+        on the Calendar page; nothing is written back."
       action={url
         ? (
             <Button
@@ -957,9 +981,8 @@ function McpSection() {
   return (
     <Section
       title="Claude"
-      hint="Run this once in a terminal and Claude Code can read and write this stash — capture,
-        edit, projects, the markets desk. It signs in as you, shows up under Account → Sessions,
-        and stops working when your password changes. Put your password where the placeholder is."
+      hint="Run this once and Claude Code can read and write this stash. It signs in as you —
+        put your password where the placeholder is."
     >
       <div className="flex items-center gap-2">
         <Input readOnly value={cmd} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
@@ -983,8 +1006,8 @@ function LinksPanel() {
   return (
     <Section
       title="Shared links"
-      hint="Anyone holding one of these can read that project without an account. A link marked
-        join lets anyone signed in here put themselves on the project and edit it."
+      hint="Anyone holding one can read that project without an account. A join link lets
+        anyone signed in here add themselves."
     >
       {!list && <p className="text-muted-foreground text-sm">Asking the server…</p>}
       {list?.length === 0 && (
@@ -1043,8 +1066,7 @@ function Devices() {
   return (
     <Section
       title="Devices"
-      hint="For one you have lost or lent out: every session ends, this one included, and each
-        device keeps whatever it already holds."
+      hint="Every session ends, this one included. Each device keeps what it already holds."
       action={(
         <Button variant="outline" size="sm" onClick={() => logout(true)}>
           <LogOut /> Sign out everywhere
@@ -1091,9 +1113,8 @@ function DeleteAccount() {
     <Section
       danger
       title="Delete account"
-      hint="Your account, every device signed into it, the synced history and every project you
-        have shared — gone from this server and not recoverable. What is already on this machine
-        stays in this browser, yours to export."
+      hint="Account, devices, synced history and every project you shared — gone from this
+        server, not recoverable. What is on this machine stays."
     >
       <AlertDialog
         open={open}
@@ -1153,8 +1174,7 @@ function PasswordForm() {
     <form onSubmit={change}>
       <Section
         title="Password"
-        hint="Eight characters at least. Your other devices stay signed in — use Sign out
-          everywhere below if that is not what you want."
+        hint="Eight characters at least. Your other devices stay signed in."
         action={(
           <Button type="submit" size="sm" disabled={!current || next.length < 8 || busy}>
             {busy ? 'One moment…' : 'Change password'}
@@ -1198,8 +1218,8 @@ function HistoryPanel({ onDone }: { onDone: () => void }) {
   return (
     <Section
       title="Versions"
-      hint="Every sync is a version, the last fifty kept. Restoring brings one back as a new
-        version, so you can always come forward again."
+      hint="Every sync is a version, the last fifty kept. Restoring makes a new one, so you can
+        come forward again."
     >
       {!list
         ? <p className="text-muted-foreground text-sm">Reading the history…</p>
