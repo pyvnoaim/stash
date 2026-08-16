@@ -348,7 +348,7 @@ function Spend({ items, total, onOpen }: {
               onClick={onOpen}
               aria-label={`${item.name}, ${euro(item.v)} per month`}
               style={{ left: `${(x / W) * 100}%`, top: `${(y / H) * 100}%`, width: `${wp}%`, height: `${hp}%` }}
-              className="group absolute p-[1px] transition-[z-index] group-hover:z-10 hover:z-10"
+              className="group absolute p-[1px] hover:z-10"
             >
               {/* The tile goes with the page, not against it: light tiles on a light page, dark on a
                   dark one. Inverted it was a slab of white light on a 0.145 page — half a card of
@@ -357,15 +357,17 @@ function Spend({ items, total, onOpen }: {
                   where it is a few pixels and reads as ink rather than as a lamp.
                   The border is what holds a tile's edge against its neighbour across the 1px gap,
                   now that the fill starts at the card's own tone. Brightness can't
-                  lift a flat fill far, so the hover cue stays a scale + an inset ring, now in the
-                  foreground since that is the tone the fill is no longer wearing.
+                  lift a flat fill far, so the hover cue is a scale + an inset ring + a foreground
+                  wash on `before`, which lifts every tile by the same amount whatever tone it
+                  started on — a percentage brightness would move the big tiles and leave the small
+                  ones where they were.
                   The `tone` ramp above replaced a diagonal sheen that sat on every tile: a gradient
                   meant to keep a flat fill from reading as a sticker, which on the big tiles was
                   just a smear across the one place the name and the amount go. A fill that already
                   differs from its neighbour does not need to be told it is a surface. */}
               <span
                 style={{ backgroundColor: `color-mix(in oklab, var(--foreground) ${tone}%, var(--card))` }}
-                className={cn('text-foreground ring-foreground relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm border text-center ring-0 ring-inset transition-[transform,box-shadow] duration-150 group-hover:scale-[1.015] group-hover:shadow-md group-hover:ring-1', big ? 'p-2' : 'p-1')}>
+                className={cn('text-foreground ring-foreground/50 before:bg-foreground/0 group-hover:before:bg-foreground/8 relative flex size-full flex-col items-center justify-center gap-0.5 overflow-hidden rounded-sm border text-center ring-0 ring-inset transition-[transform,box-shadow] duration-200 ease-out before:absolute before:inset-0 before:transition-colors before:duration-200 group-hover:scale-[1.03] group-hover:shadow-lg group-hover:ring-2 group-active:scale-[0.995] group-active:duration-75', big ? 'p-2' : 'p-1')}>
                 {mid && (
                   <>
                     {big && <span className={cn('relative max-w-full truncate font-medium leading-tight', huge ? 'text-base' : 'text-xs')}>{item.name}</span>}
