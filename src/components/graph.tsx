@@ -14,8 +14,12 @@ const SIZE = 1000
  * across the page, and a cluster hanging off nothing is a project nobody has touched since making
  * it. Neither is a number anywhere in the app.
  *
- * Drawn once per change, not animated: `layout` runs to a settled answer and hands back positions.
- * A wobbling graph is a nice ten seconds and then it is a thing you are waiting for.
+ * Drawn once per change, not simulated: `layout` runs to a settled answer and hands back positions.
+ * A wobbling graph is a nice ten seconds and then it is a thing you are waiting for. The only
+ * movement is the way it arrives — dots fading up in a quick stagger and the ties after them, once,
+ * on the mount the panel does when it is scrolled to. Nothing moves; it just is not there and then
+ * it is. A dot added later fades in on its own for the same reason, since the animation is the
+ * element's own entrance rather than anything this component keeps track of.
  *
  * It sits in a panel on Overview, so it fills whatever box it is given rather than the page.
  */
@@ -94,7 +98,7 @@ export function Graph({ onOpen, onProject }: {
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden">
       {/* A count, because the picture itself never says how big it is */}
-      <p className="text-muted-foreground pointer-events-none absolute top-3 left-4 z-10 font-mono text-xs">
+      <p className="text-muted-foreground animate-in fade-in duration-700 motion-reduce:animate-none pointer-events-none absolute top-3 left-4 z-10 font-mono text-xs">
         {placed.length} {placed.length === 1 ? 'thing' : 'things'}, {edges.length}{' '}
         {edges.length === 1 ? 'tie' : 'ties'} · drag to move, pinch to zoom
       </p>
@@ -123,6 +127,7 @@ export function Graph({ onOpen, onProject }: {
         onPointerUp={() => { drag.current = null }}
         onPointerCancel={() => { drag.current = null }}
       >
+        {/* The ties settle in behind the dots, once there are dots for them to be between */}
         {edges.map((e, i) => {
           const a = spots.get(e.a)!, b = spots.get(e.b)!
           const lit = !near || (near.has(e.a) && near.has(e.b))
@@ -132,18 +137,31 @@ export function Graph({ onOpen, onProject }: {
               x1={a.x} y1={a.y} x2={b.x} y2={b.y}
               stroke="currentColor"
               strokeWidth={1}
-              className={cn('text-muted-foreground transition-opacity', lit ? 'opacity-30' : 'opacity-5')}
+              strokeLinecap="round"
+              className={cn(
+                'text-muted-foreground animate-in fade-in fill-mode-backwards delay-200 duration-700 motion-reduce:animate-none transition-opacity',
+                lit ? (near ? 'opacity-60' : 'opacity-25') : 'opacity-[0.06]',
+              )}
             />
           )
         })}
         {placed.map((n) => {
           const lit = !near || near.has(n.id)
+          const on = hover === n.id
           // a hub is bigger, and a project bigger again: size is the one thing readable while zoomed out
           const r = (n.kind === 'project' ? 9 : 5) + Math.min(8, n.ties)
+          /* Out from the middle rather than in array order, and capped: the picture grows from its
+             own centre, where the projects are, instead of filling in wherever the list happens to
+             have put things. Past the cap it is one arrival, not a queue of a hundred. */
+          const delay = `${Math.min(400, Math.hypot(n.x - SIZE / 2, n.y - SIZE / 2) * 0.7)}ms`
           return (
             <g
               key={n.id}
-              className={cn('cursor-pointer transition-opacity', lit ? 'opacity-100' : 'opacity-20')}
+              style={{ animationDelay: delay }}
+              className={cn(
+                'animate-in fade-in fill-mode-backwards cursor-pointer duration-500 ease-out motion-reduce:animate-none transition-opacity',
+                lit ? 'opacity-100' : 'opacity-20',
+              )}
               onPointerEnter={() => setHover(n.id)}
               onPointerLeave={() => setHover((h) => (h === n.id ? null : h))}
               onClick={() => open(n)}
@@ -151,18 +169,39 @@ export function Graph({ onOpen, onProject }: {
               <circle
                 cx={n.x} cy={n.y} r={r}
                 fill={n.color ?? 'currentColor'}
-                className={n.color ? undefined : 'text-muted-foreground'}
-                stroke="currentColor"
-                strokeWidth={hover === n.id ? 3 : 0}
+                /* An item borrows its project's colour but sits under it, so a cluster reads as one
+                   family with its project as the solid thing at the middle of it. Only where there
+                   is a colour to sit under: a plain grey dot dimmed further is just a fainter dot. */
+                fillOpacity={n.kind === 'item' && n.color ? 0.6 : 1}
+                /* A ring in the page's own colour, so a dot crossed by three lines still has an
+                   edge — the lines used to run right up under it and the dot lost its shape. */
+                strokeWidth={on ? 2.5 : 1.5}
+                // fill-box, or the scale is about the top-left of the whole picture rather than the dot
+                style={{ transformBox: 'fill-box', transformOrigin: 'center', animationDelay: delay }}
+                className={cn(
+                  'animate-in zoom-in-50 fill-mode-backwards duration-500 ease-out motion-reduce:animate-none transition-[stroke,stroke-width]',
+                  on ? 'stroke-foreground' : 'stroke-background',
+                  !n.color && 'text-muted-foreground',
+                )}
               />
               {/* Labels only where they can be read: every one at once, zoomed out, is a grey smear
                   over the shape you came here to see. The hovered one always shows. */}
-              {(hover === n.id || view.k > 1.6 || n.kind === 'project') && (
+              {(on || view.k > 1.6 || n.kind === 'project') && (
                 <text
                   x={n.x} y={n.y + r + 14}
                   textAnchor="middle"
-                  className="fill-foreground pointer-events-none"
-                  style={{ fontSize: 13 / view.k * (view.k > 1 ? 1 : 1.4) }}
+                  /* Stroked in the background colour and painted stroke-first: a label lying across
+                     a tie was two greys crossing each other, and now it sits in its own gap. */
+                  className={cn(
+                    'stroke-background pointer-events-none',
+                    on || n.kind === 'project' ? 'fill-foreground' : 'fill-muted-foreground',
+                  )}
+                  style={{
+                    fontSize: 13 / view.k * (view.k > 1 ? 1 : 1.4),
+                    fontWeight: n.kind === 'project' ? 500 : 400,
+                    strokeWidth: 3 / view.k,
+                    paintOrder: 'stroke',
+                  }}
                 >
                   {n.label.length > 28 ? `${n.label.slice(0, 28)}…` : n.label}
                 </text>
