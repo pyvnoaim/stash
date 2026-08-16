@@ -434,10 +434,13 @@ export const dropLink = (pid: string, item = false) =>
  * this account's document each time it is opened, so it is never a stale copy.
  *
  * Asking twice returns the string already handed out; revoking is `dropLink(id, true)`.
+ *
+ * The server's word for a refusal comes back rather than a bare null: "sync this device first" and
+ * "not yours to share" are both things the person clicking can act on.
  */
-export const makeItemLink = (id: string): Promise<string | null> =>
+export const makeItemLink = (id: string): Promise<{ token?: string, error?: string }> =>
   call('/api/link', { method: 'POST', body: JSON.stringify({ pid: id, item: true }) })
-    .then((j) => j.token as string).catch(() => null)
+    .then((j) => ({ token: j.token as string })).catch((e) => ({ error: errorOf(e) }))
 
 /** Open one, signed in or not. Throws with the server's word for it when the link is dead. */
 export const openLink = (t: string): Promise<LinkView> =>

@@ -8,7 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
 import { Avatar } from '@/components/settings-dialog'
 import { useWhoIsOn } from '@/components/faces'
-import { getSync, linkUrl, makeItemLink, syncNow } from '@/lib/sync'
+import { getSync, linkUrl, makeItemLink, syncFresh } from '@/lib/sync'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
   ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
@@ -43,11 +43,13 @@ const shareItem = (it: Item) => copy(`${location.origin}/?item=${it.id}`)
  * URL rather than cutting a second.
  */
 const publishItem = async (it: Item) => {
-  // the server reads the row out of the document it holds, so a row typed a moment ago has to land
-  // there first — otherwise it answers, correctly, that there is no such row
-  await syncNow()
-  const token = await makeItemLink(it.id)
-  if (!token) return void toast('Could not make the link')
+  /* The server reads the row out of the document it holds, so a row typed a moment ago has to land
+     there first — otherwise it answers, correctly, that there is no such row. `syncFresh` and not
+     `syncNow`: an exchange already in the air began before this row existed and would push a
+     document without it. */
+  await syncFresh()
+  const { token, error } = await makeItemLink(it.id)
+  if (!token) return void toast(error ?? 'Could not make the link')
   copy(linkUrl(token), 'Public link copied')
 }
 
@@ -453,8 +455,9 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
         </ContextMenuItem>
 
         {/* Only with a session behind it: the link is cut on the server, and there is nothing to
-            cut one against on a device working offline on its own data. */}
-        {getSync().user && (
+            cut one against on a device working offline on its own data. And not on a row of
+            somebody else's project — theirs to hand out, not yours, which the server says too. */}
+        {getSync().user && !filed?.share && !upper?.share && (
           <ContextMenuItem onSelect={() => void publishItem(it)}>
             <Globe />
             Copy public link

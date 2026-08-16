@@ -785,11 +785,18 @@ assert.equal((await post('/api/link', { pid: 'i4', item: true }, pia)).status, 4
 await put(pia, await piav(), { items: [{ id: 'i1', text: 'edited' }] })
 await put(pia, await piav(), { items: [] })
 assert.equal((await linkOf(itok)).status, 404)
+/* one id, one kind of link: both live in one table under one unique key, so the other half says so
+   rather than upserting over the row that is there and handing back a token it never stored */
+assert.equal((await post('/api/link', { pid: 'i1' }, pia)).status, 409)
 // listed beside the project ones, marked as what it is, and revoked the same way
 assert.deepEqual((await (await get('/api/links', pia)).json()).links.map((l: any) => [l.pid, l.item]),
   [['i1', 1]])
 assert.equal((await del2('/api/link', { pid: 'i1', item: true }, pia)).status, 200)
 assert.deepEqual((await (await get('/api/links', pia)).json()).links, [])
+// and the same refusal the other way round
+assert.equal((await post('/api/link', { pid: 'pp' }, pia)).status, 200)
+await put(pia, await piav(), { items: [{ id: 'pp', text: 'one id, two things' }] })
+assert.equal((await post('/api/link', { pid: 'pp', item: true }, pia)).status, 409)
 
 /* deleting your own account: the password again, and never the last admin — a server nobody can
    cut an invite on can never let anyone in again. Everything of theirs goes on the cascade. */

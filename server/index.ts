@@ -348,6 +348,10 @@ const SCHEMA = `
     user integer not null references users(id) on delete cascade,
     ts integer not null, device text, json text not null
   );
+  /* "the newest one this account has" is the hottest question in the file — every sync asks it, and
+     so does every open of a link to one row. Without this it is a scan of every version of
+     everyone's document to answer. */
+  create index if not exists docs_key on docs (user, v desc);
   /* Who may reach a shared project, and whether they may write to it. The owner gets a row too,
      with edit — so one query answers "may this person touch it" for everyone involved. */
   create table if not exists shares (
@@ -567,6 +571,8 @@ export function start({
     myLinks: db.prepare('select token, pid, joinable, ts, item from links where owner = ? order by ts desc'),
     /** Whether this row already has a link, so a second Share publicly hands back the same string. */
     itemLinkOf: db.prepare('select token from links where owner = ? and pid = ? and item = 1'),
+    /** Either kind, because one id may only wear one: the two share a `unique (owner, pid)`. */
+    anyLinkOf: db.prepare('select token, item from links where owner = ? and pid = ?'),
     dropLink: db.prepare('delete from links where owner = ? and pid = ?'),
     /** The token, which is the whole credential: one row, and the owner's name to show for it. */
     byToken: db.prepare(`select l.owner, l.pid, l.joinable, l.item, u.name as owner_name
@@ -1800,11 +1806,16 @@ export function start({
       if (!l) return send(res, 404, { error: 'this link is not live' })
       /* One row: read straight out of the owner's own document, which is the copy their devices
          keep pushing — so the reader gets what it says now rather than what it said when the link
-         was cut, and nothing had to be published to make that true. */
+         was cut, and nothing had to be published to make that true.
+         ponytail: that is a parse of the whole document to hand back one row of it, on a route with
+         no session behind it. A few hundred KB and a handful of readers, so it is nothing; if a
+         link is ever hammered, the lever is a small cache keyed by the document's version. */
       if (l.item) {
         const mine = q.latest.get(l.owner) as { json: string } | undefined
         const doc = mine ? JSON.parse(mine.json) : null
-        const it = (doc?.items ?? []).find((i: { id: string }) => i.id === l.pid)
+        // a document is whatever was PUT into it — this route is public, and a hand-edited one
+        // must come back as "nothing here" rather than as a 500 for whoever holds the link
+        const it = (Array.isArray(doc?.items) ? doc.items : []).find((i: { id: string }) => i?.id === l.pid)
         // deleted since — it left `items` for the trash, and there is nothing behind the link now
         if (!it) return send(res, 404, { error: 'this link is not live' })
         return send(res, 200, { pid: l.pid, owner: l.owner_name, item: it })
@@ -1839,26 +1850,36 @@ export function start({
       if (b?.item) {
         const mine = q.latest.get(user.id) as { json: string } | undefined
         const doc = mine ? JSON.parse(mine.json) : null
-        const it = (doc?.items ?? []).find((i: { id: string }) => i.id === pid) as
-          { pid: string | null } | undefined
+        const it = (Array.isArray(doc?.items) ? doc.items : [])
+          .find((i: { id: string }) => i?.id === pid) as { pid?: unknown } | undefined
         if (!it) return send(res, 404, { error: 'sync this device first' })
         /* A row in a project someone shared with you is in your document too, and it is still
            theirs — the same rule the named share follows, one row down. The walk goes up the
            parents: a sub-project carries no share row of its own, it travels inside its parent's. */
-        const tree = (doc?.projects ?? []) as { id: string, parent?: string | null }[]
-        for (let up = it.pid, seen = new Set<string>(); up && !seen.has(up);) {
+        const tree = (Array.isArray(doc?.projects) ? doc.projects : []) as { id?: unknown, parent?: unknown }[]
+        // `typeof` rather than a truth test: none of this is validated on the way in, and a pid that
+        // is not a string is not a project — it is a document somebody hand-edited
+        for (let up = it.pid, seen = new Set<unknown>(); typeof up === 'string' && up && !seen.has(up);) {
           if (q.notMine.get(up, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
           seen.add(up)
-          up = tree.find((p) => p.id === up)?.parent ?? null
+          up = tree.find((p) => p?.id === up)?.parent ?? null
         }
-        const token = (q.itemLinkOf.get(user.id, pid) as { token: string } | undefined)?.token
-          ?? randomBytes(16).toString('hex')
+        /* Both kinds live in one table under one `unique (owner, pid)`, and ids are seven random
+           characters — so a project of this account could, once in a very long while, wear the same
+           string as one of its rows. Said out loud rather than upserted over: the insert below would
+           keep the row that is there and hand back a token that was never stored. */
+        const held = q.anyLinkOf.get(user.id, pid) as { token: string, item: number } | undefined
+        if (held && !held.item) return send(res, 409, { error: 'a project here already has that id' })
+        const token = held?.token ?? randomBytes(16).toString('hex')
         q.addLink.run(token, user.id, pid, 0, Date.now(), 1)
         log('link', `item ${pid} by ${user.name}`, via(req))
         return send(res, 200, { token, joinable: false })
       }
       // the same rule the named share follows: a project you are only a member of is not yours to hand on
       if (q.notMine.get(pid, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
+      // the other side of the collision above, for the same reason
+      const held = q.anyLinkOf.get(user.id, pid) as { item: number } | undefined
+      if (held?.item) return send(res, 409, { error: 'a row here already has that id' })
       const joinable = b?.joinable ? 1 : 0
       const now = Date.now()
       // the owner's own access row, so the document below has somewhere to be written from
