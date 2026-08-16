@@ -4,8 +4,9 @@ import { toast } from 'sonner'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { cn } from '@/lib/utils'
 import { dayLabel, parseCapture, parseList, repeatLabel, type Parsed } from '@/lib/parse'
-import { addItem, addItems, itemOf, project, TRASH, useStash, type Item, type ItemType } from '@/lib/store'
+import { addItem, addItems, itemOf, project, tagsFor, TRASH, useStash, type Item, type ItemType } from '@/lib/store'
 
 const TYPES = [
   { id: 'task', label: 'Task', icon: ListTodo },
@@ -29,14 +30,60 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
     ...parsed.tags.map((t) => '#' + t),
   ].filter(Boolean) as string[]
 
+  /** The project a line lands in: the one it names, or the one you are standing in. */
+  const pidOf = (line: Parsed) => line.pid ?? (project(s, s.sel) ? s.sel : null)
+
   // a line off the clipboard brought its own checkbox, a typed one is whatever the toggle says
   const make = (line: Parsed, done: boolean | null = null): Item => itemOf(line, {
     type: done === null ? type : 'task',
-    // the line names a project or the one you are standing in does
-    pid: line.pid ?? (project(s, s.sel) ? s.sel : null),
+    pid: pidOf(line),
     done: !!done,
     doneAt: done ? Date.now() : null,
   })
+
+  /* # and @ finish themselves here the same way they do in the search field: the word being typed
+     is matched against the tags and projects that exist, so filing something is not a memory test.
+     Tags come from `tagsFor`, so the ones this project's family already uses are offered first. */
+  const [at, setAt] = useState(0)
+  const hints = useMemo(() => {
+    const word = raw.toLowerCase().split(/\s+/).at(-1) ?? ''
+    const rest = word.slice(1)
+    if (word[0] === '#') {
+      return tagsFor(s, pidOf(parsed), parsed.tags).filter((t) => t.startsWith(rest) && t !== rest)
+        .slice(0, 6).map((t) => '#' + t)
+    }
+    if (word[0] === '@') {
+      // a name typed out in full is not a suggestion, it is the answer — offering it back would
+      // mean Enter completed what you had already finished instead of filing the line
+      return s.projects.map((p) => p.name.toLowerCase())
+        .filter((name) => name.startsWith(rest) && name !== rest).slice(0, 6).map((name) => '@' + name)
+    }
+    return []
+  }, [raw, s, parsed])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Which one is up. Clamped rather than trusted: the list can shrink under a walked cursor — a
+     sync from another device is enough — and picking past the end would file the word "undefined". */
+  const sel = Math.min(at, hints.length - 1)
+
+  /** The half-typed word swapped for the whole one, with a space to carry on from. */
+  const pick = (v: string) => {
+    setRaw(raw.replace(/\S*$/, v) + ' ')
+    setAt(0)
+    inputRef.current?.focus()
+  }
+
+  /* Enter picks while the drop is open — it is the key your hand is already on, and a tag you were
+     halfway through is not a line you meant to file. Tab does the same, arrows walk it. */
+  const keys = (e: React.KeyboardEvent) => {
+    if (!hints.length) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      setAt((n) => (Math.min(n, hints.length - 1) + (e.key === 'ArrowDown' ? 1 : hints.length - 1)) % hints.length)
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      pick(hints[sel])
+    }
+  }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -112,7 +159,8 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
         <InputGroupInput
           ref={inputRef}
           value={raw}
-          onChange={(e) => setRaw(e.target.value)}
+          onChange={(e) => { setRaw(e.target.value); setAt(0) }}
+          onKeyDown={keys}
           onPaste={paste}
           aria-label="Add an item"
           disabled={locked}
@@ -140,6 +188,32 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
             </kbd>
           )}
         </InputGroupAddon>
+
+        {/* absolute, so it opens over the list rather than pushing it down a row at a time.
+            Same shape as the popovers elsewhere — ring rather than border, and it fades in from
+            just above so it reads as coming out of the field. */}
+        {hints.length > 0 && (
+          <div className="bg-popover text-popover-foreground ring-foreground/10 animate-in fade-in-0 slide-in-from-top-1 motion-reduce:animate-none absolute top-full left-0 z-20 mt-1.5 min-w-52 rounded-lg p-1 shadow-md ring-1 duration-150">
+            {hints.map((v, n) => (
+              <button
+                key={v}
+                type="button"
+                // mousedown, or the field's blur closes the drop before the click lands
+                onMouseDown={(e) => { e.preventDefault(); pick(v) }}
+                onMouseEnter={() => setAt(n)}
+                className={cn(
+                  'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left font-mono text-xs transition-colors',
+                  n === sel ? 'bg-accent text-foreground' : 'text-muted-foreground',
+                )}
+              >
+                {/* the marker stays muted so the part you are actually reading is the name */}
+                <span className="text-muted-foreground">{v[0]}</span>
+                <span className="truncate">{v.slice(1)}</span>
+                {n === sel && <CornerDownLeft className="text-muted-foreground ml-auto size-3 shrink-0" />}
+              </button>
+            ))}
+          </div>
+        )}
       </InputGroup>
     </form>
   )
