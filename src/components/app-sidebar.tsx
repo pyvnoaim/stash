@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
-  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Trash2, UserMinus, Users, Waypoints,
+  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Trash2, UserMinus, Users,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -34,7 +34,7 @@ import { toast } from 'sonner'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
-  addProject, CALENDAR, GRAPH, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
+  addProject, CALENDAR, MARKET, moveProject, OVERVIEW, patch, patchProject, PDF, project, removeProject, SUBS,
   canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, TOOLS,
   toolOn, TRASH, useStash, VIEWS, type Item, type Project, type ProjectSort, type ViewId,
 } from '@/lib/store'
@@ -42,7 +42,6 @@ import {
 /** The picture for each, kept out of `TOOLS` so a plain module never has to import lucide. */
 const TOOL_ICONS: Record<string, React.ElementType> = {
   [CALENDAR]: CalendarRange, [SUBS]: Wallet, [MARKET]: CandlestickChart, [PDF]: FileText,
-  [GRAPH]: Waypoints,
 }
 
 const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [

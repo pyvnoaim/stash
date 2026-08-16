@@ -5,9 +5,10 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn, MONEY_IN } from '@/lib/utils'
 import { fetchHours } from '@/lib/market'
 import { addDays, dayLabel, today } from '@/lib/parse'
-import { MARKET, monthlyCost, setMarketAsset, SUBS, useStash } from '@/lib/store'
+import { MARKET, monthlyCost, setMarketAsset, SUBS, useStash, type Item } from '@/lib/store'
 import { ASSETS, fmtPrice } from '@/lib/market'
 import { ExchangePositions } from '@/components/market-page'
+import { Graph } from '@/components/graph'
 import { treemap } from '@/lib/treemap'
 
 const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
@@ -381,7 +382,42 @@ function Spend({ items, total, onOpen }: {
   )
 }
 
-export default function Overview({ onNavigate }: { onNavigate: (id: string) => void }) {
+/**
+ * The graph, but not until somebody has scrolled to it.
+ *
+ * `layout` is every pair against every other pair on the main thread — budgeted, but still tens of
+ * milliseconds on a full stash — and this panel is the last thing on a page that is where the app
+ * opens. Drawn on mount it would be a cost every cold start pays for a picture under the fold.
+ * IntersectionObserver, not a scroll handler: the browser already knows, and it only has to answer
+ * once. A 200px margin so it is drawn by the time it is looked at rather than while.
+ */
+function GraphPanel({ onOpen, onProject }: {
+  onOpen: (it: Item) => void
+  onProject: (id: string) => void
+}) {
+  const [seen, setSeen] = useState(false)
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!box || seen) return
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) setSeen(true) }, { rootMargin: '200px' })
+    io.observe(box)
+    return () => io.disconnect()
+  }, [box, seen])
+  return (
+    <Panel title="Graph" sub="Every project and titled row, and a line wherever one names another">
+      {/* fixed height either way, so reaching it doesn't shove the rest of the page about */}
+      <div ref={setBox} className="flex h-105">
+        {seen && <Graph onOpen={onOpen} onProject={onProject} />}
+      </div>
+    </Panel>
+  )
+}
+
+export default function Overview({ onNavigate, onOpen }: {
+  onNavigate: (id: string) => void
+  /** the graph panel opens rows, which is a jump to the item and not to a view */
+  onOpen: (it: Item) => void
+}) {
   const s = useStash()
   const t = today()
 
@@ -507,6 +543,10 @@ export default function Overview({ onNavigate }: { onNavigate: (id: string) => v
       >
         <Trend data={made} label={(d) => short(d)} />
       </Panel>
+
+      {/* A tool of its own for one picture was a tab you opened once. It answers a question the
+          tiles above can't — what the stash keeps pointing back at — so it belongs beside them. */}
+      <GraphPanel onOpen={onOpen} onProject={onNavigate} />
 
       {/* Open by project / by tag / by kind used to sit here as three panels of bars. Everything
           they counted is single digits, and a bar drawn to a max of 5 encodes nothing the number

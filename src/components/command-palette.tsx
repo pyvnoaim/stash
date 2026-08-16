@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
-  Plus, StickyNote, Trash2, Upload, Wallet, Waypoints,
+  Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
   CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
-  GRAPH, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
+  SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
@@ -35,7 +35,6 @@ const PAGES = [
   { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
   { id: PDF, name: 'PDF editor', icon: FileText },
   { id: SUBS, name: 'Subscriptions', icon: Wallet },
-  { id: GRAPH, name: 'Graph', icon: Waypoints },
 ]
 
 const trim = (t: string) => (t.length > 28 ? t.slice(0, 28) + '…' : t)

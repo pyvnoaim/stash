@@ -8,7 +8,6 @@ import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
 import { Faces, useHere } from '@/components/faces'
-import { GraphPage } from '@/components/graph-page'
 import { ProjectHeader, ProjectProgress } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -29,7 +28,7 @@ import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { hit } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, emptyTrash, flatProjects, focus, GRAPH, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
+  addProject, CALENDAR, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
   openIn, readHash, redo, removeItem, restoreItem, restoreTrash, select, tagCounts, toggleDone,
   TRASH, TRASH_DAYS, undo, useStash, viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
@@ -525,13 +524,12 @@ export default function App() {
           )}
 
           {/* it draws its own bars now, so there is nothing heavy left to split off */}
-          {page === OVERVIEW && <Overview onNavigate={goTo} />}
+          {page === OVERVIEW && <Overview onNavigate={goTo} onOpen={jumpTo} />}
 
           {page === CALENDAR && <CalendarPage onOpen={jumpTo} />}
 
           {page === SUBS && <SubsPage />}
           {page === MARKET && <MarketPage />}
-          {page === GRAPH && <GraphPage onOpen={jumpTo} onProject={goTo} />}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would

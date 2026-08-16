@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { graphOf, layout, type Placed } from '@/lib/graph'
 import { useStash, type Item } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -16,8 +16,10 @@ const SIZE = 1000
  *
  * Drawn once per change, not animated: `layout` runs to a settled answer and hands back positions.
  * A wobbling graph is a nice ten seconds and then it is a thing you are waiting for.
+ *
+ * It sits in a panel on Overview, so it fills whatever box it is given rather than the page.
  */
-export function GraphPage({ onOpen, onProject }: {
+export function Graph({ onOpen, onProject }: {
   onOpen: (it: Item) => void
   /** a project has no page of its own — its list is it */
   onProject: (id: string) => void
@@ -48,6 +50,32 @@ export function GraphPage({ onOpen, onProject }: {
     return set
   }, [hover, edges])
 
+  /* Zoom about the middle of what is on screen, so the thing you were looking at is still the thing
+     you are looking at. Clamped, or one hard scroll leaves you inside a dot or so far out that the
+     whole stash is a full stop.
+     Only when a modifier is down — which is what a trackpad pinch sends, so the natural gesture is
+     the one that works. A panel on a page that scrolls cannot eat a plain wheel: the graph is 420px
+     of the screen, and swallowing the scroll there is a page that stops dead under the cursor.
+     Bound by hand rather than via onWheel because React attaches that one passively, and a passive
+     listener's preventDefault is ignored — the zoom would scroll Overview out from under it. */
+  const svg = useRef<SVGSVGElement>(null)
+  useEffect(() => {
+    const el = svg.current
+    if (!el) return
+    const zoom = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      setView((v) => {
+        const k = Math.min(6, Math.max(0.3, v.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
+        const was = SIZE / v.k, now = SIZE / k
+        return { k, x: v.x + (was - now) / 2, y: v.y + (was - now) / 2 }
+      })
+    }
+    el.addEventListener('wheel', zoom, { passive: false })
+    return () => el.removeEventListener('wheel', zoom)
+    // there is no svg at all until the first dot exists — see the empty state below
+  }, [placed.length])
+
   const open = (n: Placed) => {
     if (n.kind === 'project') return onProject(n.id)
     const it = s.items.find((i) => i.id === n.id)
@@ -68,11 +96,17 @@ export function GraphPage({ onOpen, onProject }: {
       {/* A count, because the picture itself never says how big it is */}
       <p className="text-muted-foreground pointer-events-none absolute top-3 left-4 z-10 font-mono text-xs">
         {placed.length} {placed.length === 1 ? 'thing' : 'things'}, {edges.length}{' '}
-        {edges.length === 1 ? 'tie' : 'ties'} · drag to move, scroll to zoom
+        {edges.length === 1 ? 'tie' : 'ties'} · drag to move, pinch to zoom
       </p>
       <svg
+        ref={svg}
         viewBox={`${view.x} ${view.y} ${box} ${box}`}
-        className="size-full cursor-grab touch-none active:cursor-grabbing"
+        /* pan-y, not none: a finger dragged up the graph scrolls the page past it, the way it does
+           over every other panel. `none` was right when this was the whole page and there was
+           nothing behind it to scroll; here it is a 420px hole a thumb falls into. The cost is that
+           a touch pan moves the picture sideways only — the browser claims the vertical drag, and
+           fires pointercancel when it does, which is the other half of this. */
+        className="size-full cursor-grab touch-pan-y active:cursor-grabbing"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId)
           drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
@@ -84,17 +118,10 @@ export function GraphPage({ onOpen, onProject }: {
           const per = box / e.currentTarget.getBoundingClientRect().width
           setView((v) => ({ ...v, x: d.vx - (e.clientX - d.x) * per, y: d.vy - (e.clientY - d.y) * per }))
         }}
+        /* cancel as well as up: the scroller taking the gesture never sends an up, and a drag left
+           standing means the next pointer to cross the graph pans it without being held */
         onPointerUp={() => { drag.current = null }}
-        onWheel={(e) => {
-          /* Zoom about the middle of what is on screen, so the thing you were looking at is still
-             the thing you are looking at. Clamped, or one hard scroll leaves you inside a dot or
-             so far out that the whole stash is a full stop. */
-          setView((v) => {
-            const k = Math.min(6, Math.max(0.3, v.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
-            const was = SIZE / v.k, now = SIZE / k
-            return { k, x: v.x + (was - now) / 2, y: v.y + (was - now) / 2 }
-          })
-        }}
+        onPointerCancel={() => { drag.current = null }}
       >
         {edges.map((e, i) => {
           const a = spots.get(e.a)!, b = spots.get(e.b)!

@@ -459,8 +459,7 @@ export const CALENDAR = 'calendar'
 export const PDF = 'pdf'
 export const SUBS = 'subs'
 export const MARKET = 'market'
-export const GRAPH = 'graph'
-const PAGES: string[] = [OVERVIEW, CALENDAR, SUBS, MARKET, PDF, GRAPH]
+const PAGES: string[] = [OVERVIEW, CALENDAR, SUBS, MARKET, PDF]
 export const isPage = (id: string) => PAGES.includes(id)
 
 /**
@@ -477,7 +476,6 @@ export const TOOLS = [
   { id: SUBS, name: 'Subscriptions' },
   { id: MARKET, name: 'Markets' },
   { id: PDF, name: 'PDF editor' },
-  { id: GRAPH, name: 'Graph' },
 ]
 
 /** Off, not on: a document written before this existed lists none, and shows all four — and a
