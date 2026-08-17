@@ -575,8 +575,13 @@ The key is typed in the browser but kept on the server, because it signs request
 credential this app holds, and it never comes back out: the server will only say whether one is set,
 and saving again replaces it. The server signs the requests and joins in the mark prices; each
 exchange is asked at most every thirty seconds per key however many tabs poll; and the card renders
-nothing at all when you are flat or have no key saved. Every venue answers or none of them do: one
+nothing at all when no key is saved. Every venue answers or none of them do: one
 feed failing while the other answered would read as its positions having closed.
+
+Flat, the card is one line: **Flat**, and the balance the venue reports — which is what equity is
+when nothing is open against it. The number was always on the card and only ever printed beside
+rows, so *what is in the account* was unanswerable on exactly the days there was nothing else to
+read. Several venues sum into one figure, the way they do with a position open.
 
 The percentage is price move, not return on margin: leverage is not in a read-only feed's scope,
 and a made-up ROE would be worse than none. Where a feed vouches for a liquidation price — Bitget's

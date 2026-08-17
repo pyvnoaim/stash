@@ -2350,6 +2350,19 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
      the two is a number no rate ever produced. */
   const usd = (n: number) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const atRisk = [risk.exch > 0 && usd(risk.exch), risk.mine > 0 && euro(risk.mine)].filter(Boolean)
+  /* The balance, which the card used to keep to itself: it was only ever printed beside rows, so
+     the one number that is true every day of the year was invisible on every day nothing was
+     open — which is most of them. Flat, it is the wallet balance, and the hint says so rather
+     than repeating a sentence about positions there are none of. */
+  const equityTag = equity == null ? null : (
+    <Hint label={rows.length
+      ? 'Account equity as the venue reports it — wallet balance plus what is open, before fees'
+      : 'What the venue says is in the account, with nothing open against it'}>
+      <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
+        equity {usd(equity)}
+      </span>
+    </Hint>
+  )
   /* Nothing yet. The book is a network call and the rest of the page is not, so this card used to
      arrive a second late and shove everything under it down the screen. The last look is already
      kept in localStorage (see fileClosed), so the shape of it is known before the answer is: hold
@@ -2357,7 +2370,19 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
      Only the shape, never the numbers — a P&L from last night printed as if it were current is a
      lie about money, and the whole point of the card is that it isn't. Nobody who has never held a
      position gets a placeholder for one. */
-  if (!rows.length && !orders.length) return loading ? <PositionsPlaceholder /> : null
+  if (!rows.length && !orders.length) {
+    if (loading) return <PositionsPlaceholder />
+    // no key, or a venue that would not answer: nothing to say, and the card stays gone
+    if (!equityTag) return null
+    return (
+      <Card className="py-3">
+        <CardContent className="flex items-baseline gap-2 px-3 text-sm">
+          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Flat</p>
+          {equityTag}
+        </CardContent>
+      </Card>
+    )
+  }
   /* The strip that answers "am I fine?" without opening a single row: how many are open, and the
      nearest liquidation as a distance — the worst number on the desk, said first. Only where a
      feed vouches for a liq price; an estimate has no place next to real money. */
@@ -2386,13 +2411,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
               {nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
             </span>
           </Hint>
-          {equity != null && (
-            <Hint label="Account equity as the venue reports it — wallet balance plus what is open, before fees">
-              <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
-                equity ${equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </Hint>
-          )}
+          {equityTag}
         </div>
         {/* The one thing the desk never said. It answers "should I buy this" all day, and nearest
             liquidation answers the worst single row — this is the question that only makes sense

@@ -506,7 +506,7 @@ export default function Overview({ onNavigate, onOpen }: {
         </Panel>
       )}
 
-      {/* the same card the desk shows — renders nothing unless a key is saved and something is open */}
+      {/* the same card the desk shows — nothing without a key, one line with the balance when flat */}
       <ExchangePositions onOpen={(id) => { setMarketAsset(id); onNavigate(MARKET) }} />
 
       <Panel title="Markets" sub="Biggest 24-hour moves · tap one through to the desk">
