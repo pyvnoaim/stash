@@ -210,7 +210,9 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           </span>
 
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className={cn('truncate text-sm', it.done && 'text-muted-foreground line-through')}>
+            {/* the strike lifts under the cursor: it is what says "finished" across a whole list at
+                a glance, and the one thing it cannot do is let you read the row it is drawn on */}
+            <span className={cn('truncate text-sm', it.done && 'text-muted-foreground line-through group-hover:no-underline')}>
               {it.text}
             </span>
             {/* the note itself, not a marker for one — first line is usually the whole point, and

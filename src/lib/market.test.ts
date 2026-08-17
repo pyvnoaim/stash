@@ -1,8 +1,8 @@
 // npm test — the signals drive what the Markets tool tells you, so wrong maths is a wrong call
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence,
-  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, fetchTrending, priceDigits, fmtPrice, DEMOS, GUIDES, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, structureBreak, swings, standingSwings, topDown,
+  ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, fetchTrending, priceDigits, fmtPrice, DEMOS, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, liquiditySweep, structureBreak, swings, standingSwings, topDown,
   heikin, heikinRun, toll } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
@@ -452,18 +452,16 @@ const dvBars = [...pre, ...steep, ...gentle].map((p, i) => ({ t: i, o: p, h: p +
 assert.equal(divergence(dvBars, rsi(dvBars.map((b) => b.c))), 'bull')
 assert.equal(divergence(dvBars.slice(0, 5), rsi([1, 2, 3, 4, 5])), null) // too few bars → null
 
-/* Every guide opens with a chart of its own pattern, drawn from DEMOS by the same code the live
-   chart uses. So each fixture has to actually contain the thing it illustrates — otherwise the
-   picture quietly becomes a drawing of nothing, which is worse than no picture at all. */
+/* One fixture per signal kind, each holding the textbook case of that reading. So each fixture has
+   to actually contain the thing it is named for, or the assertion below is checking nothing. */
 const closesOf = (d: { candles: { c: number }[] }) => d.candles.map((b) => b.c)
 const labelsOf = (d: { candles: Parameters<typeof signals>[0]; ma?: [number, number] }) =>
   signals(d.candles, { fast: d.ma?.[0] ?? 3, slow: d.ma?.[1] ?? 8, srWindow: 10 }).signals.map((s) => s.label)
 
 assert.equal(lastCross(sma(closesOf(DEMOS['ma-cross']), 3), sma(closesOf(DEMOS['ma-cross']), 8))?.dir, 'up')
 assert.ok(labelsOf(DEMOS.trend).includes('Uptrend'))
-assert.ok(rsi(closesOf(DEMOS.rsi), DEMO_RSI).at(-1)! >= 70) // the stretched reading the guide describes
+assert.ok(rsi(closesOf(DEMOS.rsi), DEMO_RSI).at(-1)! >= 70) // the stretched reading it is named for
 assert.ok(labelsOf(DEMOS.sr).includes('Near support'))
-// at the period the guide's own panel draws, so the picture shows the claim
 const demoRsi = (d: { candles: { c: number }[]; rsiPeriod?: number }) => rsi(closesOf(d), d.rsiPeriod ?? DEMO_RSI)
 assert.equal(divergence(DEMOS.divergence.candles, demoRsi(DEMOS.divergence)), 'bull')
 // but a single slide straddling the halfway line is not one: a hammer at bar 14 and a marginally
@@ -473,7 +471,7 @@ const oneMove = Array.from({ length: 30 }, (_, i) => {
   return { t: i, o: cl + 0.5, h: cl + 1, l: i === 14 ? 90 : i === 15 ? 89 : cl - 1, c: cl }
 })
 assert.equal(divergence(oneMove, rsi(oneMove.map((x) => x.c))), null)
-// asserted at the periods the dialog actually draws, not the live chart's — see DEMO_MACD
+// asserted at the fixture's own periods, not the live chart's — see DEMO_MACD
 const demoMacd = (d: { candles: { c: number }[] }) => macd(closesOf(d), ...DEMO_MACD)
 assert.equal(lastCross(demoMacd(DEMOS.macd).line, demoMacd(DEMOS.macd).signal)?.dir, 'up')
 assert.ok(atr(DEMOS.atr.candles)! > 3) // the loud half of the fixture dominates a quiet start
@@ -527,6 +525,28 @@ const stair = [10, 11, 12, 10.5, 10.2, 10.4, 13, 14, 15, 13.5, 13.2, 13.4, 16, 1
   .map((c, i, a) => ({ t: i * 9e5, o: i ? a[i - 1] : c, h: c + 0.1, l: c - 0.1, c }))
 assert.equal(standingSwings(stair).high, null)
 assert.equal(standingSwings(stair).low?.price, 13.1)
+
+/* A sweep is the raid a break is not: through the level by the wick, back inside by the close. The
+   fixture's swing high at 104 is taken by bar 6's wick to 105, which closes at 101.8. */
+const swept = liquiditySweep(DEMOS.sweep.candles)
+assert.deepEqual([swept?.side, swept?.level], ['high', 104])
+assert.equal(swept?.ago, DEMOS.sweep.candles.length - 1 - DEMOS.sweep.mark![1]) // the raiding bar
+// close through the same level instead and there is no sweep left to report — it is a break, and
+// standingSwings no longer holds the level at all
+const broken = [...DEMOS.sweep.candles.slice(0, 6), { ...DEMOS.sweep.candles[6], c: 104.5 }]
+assert.equal(standingSwings(broken).high, null) // closed through, so the level is spent
+assert.equal(liquiditySweep(broken), null)
+// mirrored, the lows get taken and the reading turns over with them
+const sweptLow = liquiditySweep(mirrorDemo(DEMOS.sweep).candles)
+assert.equal(sweptLow?.side, 'low')
+assert.equal(liquiditySweep(DEMOS.sweep.candles.slice(0, 4)), null) // too few bars to confirm a pivot
+assert.equal(liquiditySweep([]), null)
+
+/* The gap that stopped holding. The fixture gaps up to 100–104, trades back into it, then closes
+   under its floor — so the box price is coming back to is resistance now, not support. */
+const invertedBoxes = fvg(DEMOS.ifvg.candles).filter((x) => x.inverted)
+assert.equal(invertedBoxes.length, 1)
+assert.deepEqual([invertedBoxes[0].dir, invertedBoxes[0].bottom, invertedBoxes[0].top], ['up', 100, 104])
 
 /* deskSignals is what stops the page, the Scan and server/mcp.ts answering the same question three
    different ways — mcp.ts had already dropped the VWAP card and could hand out a side the screen
@@ -812,10 +832,10 @@ const g = (o: number, h: number, l: number, c: number, t = 0) => ({ t, o, h, l, 
 /* Three bars where the middle one runs: bar 0's high is 10 and bar 2's low is 12, so nothing
    traded between them and the box is 10..12, anchored on the bar that did the travelling. */
 const upGap = [g(9, 10, 8, 10), g(10, 13, 10, 13), g(13, 14, 12, 13.5)]
-assert.deepEqual(fvg(upGap), [{ i: 1, top: 12, bottom: 10, dir: 'up', filled: false }])
+assert.deepEqual(fvg(upGap), [{ i: 1, top: 12, bottom: 10, dir: 'up', filled: false, inverted: false }])
 // mirrored, a bar that drops away from the one before it leaves the same box facing the other way
 const downGap = [g(13, 14, 12, 12.5), g(12, 12, 9, 9), g(9, 10, 8, 8.5)]
-assert.deepEqual(fvg(downGap), [{ i: 1, top: 12, bottom: 10, dir: 'down', filled: false }])
+assert.deepEqual(fvg(downGap), [{ i: 1, top: 12, bottom: 10, dir: 'down', filled: false, inverted: false }])
 
 // bars that merely touch left nothing behind: 10 to 10 is not a stretch of prices
 assert.deepEqual(fvg([g(9, 10, 8, 10), g(10, 13, 10, 13), g(13, 14, 10, 13.5)]), [])
@@ -831,6 +851,15 @@ assert.equal(fvg(nearMiss)[0].filled, false)
 // touching the very edge counts as trading it: 12 is in the box
 assert.equal(fvg([...upGap, g(13.5, 14, 12, 13)])[0].filled, true)
 
+/* Inverted is a *close* past the far side, not a wick through it — the box stopped holding, which
+   is what makes it a level again facing the other way. A trip inside it is only a fill. */
+assert.equal(fvg(revisited)[0].inverted, false) // traded back into the box, still above its floor
+assert.equal(fvg([...upGap, g(13.5, 14, 9, 11)])[0].inverted, false) // wicked under 10, closed over it
+assert.equal(fvg([...upGap, g(13.5, 14, 9, 9.5)])[0].inverted, true) // closed under the floor
+// and the mirror: a down gap inverts on a close above its top
+assert.equal(fvg([...downGap, g(8.5, 13, 8, 12.5)])[0].inverted, true)
+assert.equal(fvg([...downGap, g(8.5, 13, 8, 11.5)])[0].inverted, false) // 11.5 is inside the box, not past it
+
 /* The unfilled set is what the chart draws, and it has to stay a handful rather than a wall —
    measured on real feeds, 1000 bars produce a couple of hundred gaps and under twenty survive. */
 const many = Array.from({ length: 200 }, (_, i) => g(100 + i, 101 + i, 99 + i, 100.5 + i, i * 9e5))
@@ -841,16 +870,16 @@ assert.ok(fvg(many).every((x) => x.dir === 'up'))
 // the opening-range demo is drawn as a band and a break, so it has to break
 const orbDemo = DEMOS.orb.candles
 assert.ok(orbDemo.at(-1)!.c > Math.max(...orbDemo.slice(0, 4).map((b) => b.h)))
-/* One fixture serves both directions: the bearish reading gets it mirrored, so "Downtrend" is not
-   illustrated by a rising chart. Mirroring has to actually invert the reading, not just look flipped. */
+/* One fixture serves both directions of a concept, mirrored. Mirroring has to actually invert the
+   reading, not just look flipped. */
 const flipped = (k: keyof typeof DEMOS) => mirrorDemo(DEMOS[k])
 assert.equal(trend(flipped('trend').candles, 8), 'down')
 assert.equal(trend(DEMOS.trend.candles, 8), 'up')
 assert.equal(lastCross(sma(closesOf(flipped('ma-cross')), 3), sma(closesOf(flipped('ma-cross')), 8))?.dir, 'down')
 assert.equal(divergence(flipped('divergence').candles, demoRsi(flipped('divergence'))), 'bear')
 assert.ok(candlePatterns(flipped('candle').candles).some((s) => s.label === 'Bearish engulfing'))
-// RSI is the exception it flips on: its *bearish* reading is overbought, which is a rally
-assert.equal(DEMOS.rsi.flipOn, 'bull')
+// RSI is the exception: its *bearish* reading is overbought, which is a rally, so the mirror of
+// the stretched fixture is the oversold one
 assert.ok(rsi(closesOf(flipped('rsi')), DEMO_RSI).at(-1)! <= 30)
 assert.equal(lastCross(demoMacd(flipped('macd')).line, demoMacd(flipped('macd')).signal)?.dir, 'down')
 assert.equal(structureBreak(flipped('structure').candles)?.dir, 'down')
@@ -860,10 +889,10 @@ const before = DEMOS.trend.candles, after = flipped('trend').candles
 assert.equal(Math.min(...before.map((b) => b.l)).toFixed(6), Math.min(...after.map((b) => b.l)).toFixed(6))
 assert.ok(after.every((b) => b.h >= b.l)) // highs and lows swap on the way through
 
-/* The demos are drawn as candlesticks, so they have to read as candlesticks: every bar needs a body
-   you can see and a wick outside it. The first version opened each bar exactly at the previous
-   close, which makes the body *be* the price change — in a downtrend every green bar collapsed to a
-   cross, and twelve guides all looked like the same picture. */
+/* The fixtures have to read as real candles: every bar needs a body and a wick outside it. The
+   first version opened each bar exactly at the previous close, which makes the body *be* the price
+   change — in a downtrend every green bar collapsed to a cross, and the candle patterns read off
+   these bars were being asserted against shapes no feed would produce. */
 for (const key of Object.keys(DEMOS) as (keyof typeof DEMOS)[]) {
   const cs = DEMOS[key].candles
   const height = Math.max(...cs.map((b) => b.h)) - Math.min(...cs.map((b) => b.l))
@@ -876,17 +905,16 @@ for (const key of Object.keys(DEMOS) as (keyof typeof DEMOS)[]) {
   assert.ok(green > 0 && green < cs.length, `${key}: every bar the same colour`)
 }
 
-/* The fvg fixture has to actually hold an unfilled gap, or the guide illustrates nothing — the
-   same rule every other demo here is held to. The marked bars are the three that make it. */
+/* The fvg fixture has to actually hold an unfilled gap — the same rule every other fixture here is
+   held to. The marked bars are the three that make it. */
 const demoGap = fvg(DEMOS.fvg.candles)
 assert.equal(demoGap.length, 1)
 assert.equal(demoGap[0].filled, false)
 assert.deepEqual([demoGap[0].bottom, demoGap[0].top], [100, 104])
 assert.equal(demoGap[0].i, DEMOS.fvg.mark![0] + 1) // anchored on the bar that did the travelling
 
-// every guide key has both a written guide and a demo — a new signal kind can't ship half-documented
-for (const key of Object.keys(GUIDES) as (keyof typeof GUIDES)[]) {
-  assert.ok(GUIDES[key].length > 80, `guide ${key} too thin`)
+// every signal kind has a fixture — a new kind can't ship with nothing exercising it
+for (const key of Object.keys(DEMOS) as (keyof typeof DEMOS)[]) {
   assert.ok(DEMOS[key].candles.length >= 5, `demo ${key} too short`)
 }
 

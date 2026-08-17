@@ -983,9 +983,51 @@ export function standingSwings(c: Candle[], k = 2): { high: Swing | null; low: S
   return { high, low }
 }
 
+/** A level whose wick was taken and whose close was not. `ago` counts back from the last bar. */
+export type Sweep = { side: 'high' | 'low'; level: number; ago: number }
+
+/**
+ * The stop hunt: price traded through a standing swing and closed back inside it. Resting orders
+ * sit just past an obvious high or low — stops of everyone short, and the breakout buyers' entries
+ * — which is the liquidity the SMC crowd means by the word, and taking it is how a move gets filled
+ * before going the other way. The reading is a failed break, which is why it points *against* the
+ * side that was raided: the highs went and the close did not hold up there.
+ *
+ * It reads standingSwings, so it is the same pivots the chart draws and the structure card breaks —
+ * and the two readings are exact opposites by construction: a close through the level is a break
+ * (structure), a wick through it that closes back is a sweep. A level cannot be both, and whichever
+ * happened last is the one still standing.
+ *
+ * The most recent raid on either side wins, since an older one is a fact the bars after it have
+ * already answered.
+ */
+export function liquiditySweep(c: Candle[], k = 2): Sweep | null {
+  const { high, low } = standingSwings(c, k)
+  let out: Sweep | null = null
+  for (const s of [high, low]) {
+    if (!s) continue
+    // backwards from the last bar: the newest raid is the only one still saying anything
+    for (let j = c.length - 1; j >= s.i + k; j--) {
+      if (s.kind === 'high' ? c[j].h > s.price : c[j].l < s.price) {
+        const ago = c.length - 1 - j
+        if (!out || ago < out.ago) out = { side: s.kind, level: s.price, ago }
+        break
+      }
+    }
+  }
+  return out
+}
+
 /** One three-bar imbalance. `i` is the middle bar — the one that did the travelling — and the box
  *  runs from `bottom` to `top`, the prices nobody actually traded on the way past. */
-export type Gap = { i: number; top: number; bottom: number; dir: 'up' | 'down'; filled: boolean }
+export type Gap = {
+  i: number; top: number; bottom: number; dir: 'up' | 'down'; filled: boolean
+  /** Closed clean through, the far side out: a later bar *closed* past the edge the box was meant
+   *  to hold. The SMC crowd calls what is left an inverse FVG and reads it the other way round —
+   *  support that failed is resistance on the way back. A close rather than a wick, because a wick
+   *  through a level is the sweep reading below, and the two say opposite things about the level. */
+  inverted: boolean
+}
 
 /**
  * Fair value gaps: the window price jumped over without trading in it. Three bars, and the middle
@@ -1015,10 +1057,15 @@ export function fvg(c: Candle[]): Gap[] {
      one button. Ordinary data never noticed, which is exactly why it needed measuring. */
   const maxH = new Array<number>(c.length)
   const minL = new Array<number>(c.length)
-  let mh = -Infinity, ml = Infinity
+  // and the same over closes, which is all `inverted` needs: one later close past the far edge
+  const maxC = new Array<number>(c.length)
+  const minC = new Array<number>(c.length)
+  let mh = -Infinity, ml = Infinity, mc = -Infinity, nc = Infinity
   for (let j = c.length - 1; j >= 0; j--) {
     mh = Math.max(mh, c[j].h); maxH[j] = mh
     ml = Math.min(ml, c[j].l); minL[j] = ml
+    mc = Math.max(mc, c[j].c); maxC[j] = mc
+    nc = Math.min(nc, c[j].c); minC[j] = nc
   }
   for (let i = 1; i < c.length - 1; i++) {
     const before = c[i - 1], after = c[i + 1]
@@ -1042,22 +1089,25 @@ export function fvg(c: Candle[]): Gap[] {
         if (c[j].l <= top && c[j].h >= bottom) { filled = true; break }
       }
     }
-    out.push({ i, top, bottom, dir: up ? 'up' : 'down', filled })
+    // one suffix read, no scan: a box is inverted the moment any later close sits past the side it
+    // was supposed to hold — under an up gap, over a down one
+    const inverted = i + 2 < c.length && (up ? minC[i + 2] < bottom : maxC[i + 2] > top)
+    out.push({ i, top, bottom, dir: up ? 'up' : 'down', filled, inverted })
   }
   return out
 }
 
-/* ---------- demo data for the guides ----------
-   Each guide opens with a small chart of the thing it describes. The bars below are synthetic, but
-   nothing about the picture is: the demo chart runs the same sma/rsi/macd/orb code the live one
-   does, so if a fixture stopped producing its pattern the drawing would stop showing it — and a
-   test asserts exactly that, per guide, so these can't quietly drift into illustrations of nothing. */
+/* ---------- one worked fixture per signal kind ----------
+   Synthetic bars that each hold exactly one of the patterns the readings above are looking for, and
+   the test asserts that per kind — so a change to sma/rsi/macd/orb that stops finding its own
+   textbook case fails there rather than on a live chart. They were drawn under the signal guides
+   the page used to open; the guides are gone, the fixtures are the test suite's. */
 
 /**
  * A deterministic wobble — summed sines rather than a random number, so the bars vary the way real
  * ones do while staying identical on every render, which is what lets the tests assert on them.
  * Without this the fixtures were smooth ramps: every body the same height, every bar green, and
- * twelve guides that all looked like the same picture.
+ * sixteen patterns that were all the same shape.
  */
 const wob = (i: number) => Math.sin(i * 2.1) * 0.6 + Math.sin(i * 5.7) * 0.3 + Math.sin(i * 11.3) * 0.1
 
@@ -1103,7 +1153,7 @@ const walk = (closes: number[], vary = true): Candle[] => {
   })
 }
 
-/** Volumes attached to an existing run of bars, for the guide whose subject is the volume. */
+/** Volumes attached to an existing run of bars, for the fixtures whose subject is the volume. */
 const withVolume = (candles: Candle[], vols: number[]): Candle[] =>
   candles.map((c, i) => ({ ...c, v: vols[i] ?? c.v }))
 
@@ -1114,52 +1164,39 @@ const ohlc = (rows: [number, number, number, number][], vols?: number[]): Candle
 const ramp = (n: number, from: number, step: number) => Array.from({ length: n }, (_, i) => from + i * step)
 
 /**
- * The demo charts run shorter indicator periods than the live one: a fixture is a few dozen bars,
- * and a 26-bar EMA has barely warmed up by the end of one — the guide would illustrate a cross with
- * a line that has not started yet. Exported so the dialog draws and the test asserts the same thing.
+ * The fixtures are read at shorter indicator periods than the live chart: a fixture is a few dozen
+ * bars, and a 26-bar EMA has barely warmed up by the end of one — the cross being asserted would
+ * happen on a line that has not started yet.
  */
 export const DEMO_RSI = 8
 export const DEMO_MACD: [number, number, number] = [4, 9, 4]
 
 export type Demo = {
   candles: Candle[]
-  /**
-   * Which tone wants the picture flipped upside down. One fixture serves both directions of a
-   * concept — a golden cross mirrored is a death cross — so a bearish reading gets a falling chart
-   * instead of a rising one captioned "Downtrend". RSI is the exception: its bearish reading is
-   * *overbought*, which is a rally, so that one flips on the bullish tone instead.
-   */
-  flipOn?: 'bull' | 'bear'
-  /** Moving-average periods to draw over the price, fast then slow. */
+  /** Moving-average periods the pattern is defined at, fast then slow. */
   ma?: [number, number]
-  /** Draw the high/low band of the last `band` bars. */
-  band?: number
-  /** A second little panel under the price with the indicator that guide is about. */
-  panel?: 'rsi' | 'macd' | 'volume'
-  /** RSI period for that panel. Divergence is claimed at the live chart's 14 over a long fixture;
-   *  the short fixtures need a faster one to have warmed up at all. */
+  /** RSI period. Divergence is claimed at the live chart's 14 over a long fixture; the short
+   *  fixtures need a faster one to have warmed up at all. */
   rsiPeriod?: number
-  /** Bars to spotlight — the engulfing pair, the opening hour. */
+  /** The bars the pattern is made of — the engulfing pair, the opening hour, the gap's three. */
   mark?: [number, number]
-  /** Draw the fixture smoothed. Only the Heikin Ashi guide, whose subject is the drawing itself. */
-  ha?: true
 }
 
-export const DEMOS: Record<GuideKey, Demo> = {
+export const DEMOS: Record<SignalKind, Demo> = {
   // a slide that turns into a rally: the fast average crosses up through the slow one
   'ma-cross': { candles: walk([...wave(13, 116, -2, 2.8), ...wave(15, 91, 2.4, 3.2)]), ma: [3, 8] },
   trend: { candles: walk([...wave(9, 100, 0.4, 1.2), ...wave(17, 104, 1.7, 2)]), ma: [3, 8] },
   // a hard run up leaves RSI stretched above 70; flipped, the same shape is oversold
-  rsi: { candles: walk([...wave(8, 100, 0.3, 1.1), ...wave(20, 102, 2.5, 2.6)]), panel: 'rsi', flipOn: 'bull' },
+  rsi: { candles: walk([...wave(8, 100, 0.3, 1.1), ...wave(20, 102, 2.5, 2.6)]) },
   // three touches of the same floor and ceiling, and price back at the floor
-  sr: { candles: walk([100, 108, 112, 106, 100, 103, 111, 112, 105, 101, 100, 104, 110, 106, 101, 100]), band: 16 },
+  sr: { candles: walk([100, 108, 112, 106, 100, 103, 111, 112, 105, 101, 100, 104, 110, 106, 101, 100]) },
   // a steep low, then a lower low made gently — the second one with more buyers left
   divergence: {
     candles: walk([...ramp(20, 80, 0.3), 100, 92, 82, 72, 62, 55, 51, 50, 55, 60, 64, 67, 69, 70, 70,
       69, 68, 67, 66, 64, 62, 60, 58, 56, 54, 52, 50, 49, 48, 48], false),
-    panel: 'rsi', rsiPeriod: 14,
+    rsiPeriod: 14,
   },
-  macd: { candles: walk([...wave(16, 132, -1.9, 1.6), ...wave(18, 102, 1.8, 1.5)]), panel: 'macd' },
+  macd: { candles: walk([...wave(16, 132, -1.9, 1.6), ...wave(18, 102, 1.8, 1.5)]) },
   // quiet bars, then bars that travel several times as far — same chart, different normal
   atr: {
     candles: ohlc([
@@ -1175,7 +1212,6 @@ export const DEMOS: Record<GuideKey, Demo> = {
   // wide swings that coil into a flat stretch: the squeeze is the quiet part
   squeeze: {
     candles: walk([...Array.from({ length: 24 }, (_, i) => 100 + (i % 2 ? 9 : -9) + wob(i) * 2), ...Array(14).fill(100)]),
-    band: 14,
   },
   volume: {
     candles: withVolume(
@@ -1183,7 +1219,6 @@ export const DEMOS: Record<GuideKey, Demo> = {
       // quiet participation all the way along, then the bar everyone turned up for
       [...Array(12).fill(9), 11, 38],
     ),
-    panel: 'volume',
   },
   // a red bar, then a green one whose body swallows it whole
   candle: {
@@ -1196,7 +1231,7 @@ export const DEMOS: Record<GuideKey, Demo> = {
   // the session's opening candle sets the band; price leaves it later in the day
   orb: {
     candles: walk([100, 103, 101, 102.5, 102, 101.4, 102.2, 101.6, 102.8, 103.4, 104.6, 105.2, 106.1, 105.6, 106.8]),
-    band: 15, mark: [0, 3],
+    mark: [0, 3],
   },
   // most of the session's size changed hands down at the open, so the average paid stays well under
   // a price that has since walked away from it
@@ -1205,7 +1240,6 @@ export const DEMOS: Record<GuideKey, Demo> = {
       walk([100, 99.4, 100.2, 99.6, 100.5, 101.3, 102.1, 102.6, 103.3, 104.1]),
       [31, 35, 27, 25, 12, 9, 7, 6, 5, 5],
     ),
-    panel: 'volume',
   },
   // a climb, a dip that holds above the slow average, then the climb resumes — price on the up side
   htf: { candles: walk([...wave(10, 100, 1.2, 2), ...wave(6, 112, -0.9, 1.6), ...wave(14, 107, 1.1, 2.2)]), ma: [4, 12] },
@@ -1230,26 +1264,46 @@ export const DEMOS: Record<GuideKey, Demo> = {
     ]),
     mark: [0, 2], // the three bars that make the gap
   },
+  /* A swing high, then a bar that runs past it and closes back under: the orders resting above the
+     obvious level were taken and the break never happened. The pivot has to stay standing — no
+     close above it anywhere after — or this is a structure break wearing the wrong label. */
+  sweep: {
+    candles: ohlc([
+      [100, 101, 99, 100.5], [100.5, 102, 100, 101.5], [101.5, 104, 101, 103.5],
+      [103.5, 103.8, 102, 102.5], [102.5, 103, 101, 101.5], [101.5, 102.5, 100.5, 102],
+      [102, 105, 101.5, 101.8], [101.8, 102.2, 100, 100.5],
+    ]),
+    mark: [2, 6], // the swing high, and the bar that raided it
+  },
+  /* A gap up, traded back into, then closed clean through the bottom of: the imbalance that was the
+     floor under the move is prices overhead now. The last bars sit back under the box, which is
+     where the reading is about to be tested. */
+  ifvg: {
+    candles: ohlc([
+      [97, 100, 96, 98], [98, 106, 97.5, 105], [105, 108, 104, 107],
+      [107, 107.5, 103, 103.5], [103.5, 104, 98.5, 99], [99, 100.5, 98, 98.5],
+    ]),
+    mark: [0, 2], // the three bars that made the gap it later gave up
+  },
   /* A climb noisy enough that the raw chart prints red bars all the way up it. Drawn smoothed, so
      the picture is the point of the transform rather than a description of it: those red bars are
      averaged into their neighbours and the run comes out one colour. */
-  heikin: { candles: walk(wave(20, 100, 1.1, 3.6)), ha: true },
+  heikin: { candles: walk(wave(20, 100, 1.1, 3.6)) },
 }
 
 /** The same fixture upside down, mirrored through the middle of its own range: a rally becomes a
- *  sell-off, a golden cross becomes a death cross, and the guide for a bearish reading stops
- *  illustrating it with a chart going the other way. */
+ *  sell-off and a golden cross a death cross — one fixture per concept, tested both ways round. */
 export const mirrorDemo = (d: Demo): Demo => {
   const vals = d.candles.flatMap((c) => [c.h, c.l])
   const m = Math.min(...vals) + Math.max(...vals) // reflect about the midpoint, keeping the range
   return { ...d, candles: d.candles.map((c) => ({ ...c, o: m - c.o, c: m - c.c, h: m - c.l, l: m - c.h })) }
 }
 
-/** Which concept a signal belongs to — the key its guide is written against. */
-export type GuideKey =
+/** Which concept a signal belongs to. */
+export type SignalKind =
   | 'ma-cross' | 'trend' | 'rsi' | 'sr' | 'divergence' | 'macd'
   | 'atr' | 'squeeze' | 'volume' | 'candle' | 'orb' | 'htf' | 'vwap' | 'structure' | 'fvg'
-  | 'heikin'
+  | 'ifvg' | 'sweep' | 'heikin'
 
 /** How far price stands from a gap's box, and 0 when it is inside it. */
 export const gapAway = (g: Gap, p: number) => (p > g.top ? p - g.top : p < g.bottom ? g.bottom - p : 0)
@@ -1257,7 +1311,7 @@ export const gapAway = (g: Gap, p: number) => (p > g.top ? p - g.top : p < g.bot
 /** How many bars a moving-average cross keeps its vote. See the note where it is used. */
 export const FRESH_CROSS = 20
 
-export type Signal = { label: string; tone: 'bull' | 'bear' | 'flat'; detail: string; kind: GuideKey }
+export type Signal = { label: string; tone: 'bull' | 'bear' | 'flat'; detail: string; kind: SignalKind }
 
 /**
  * The bull/bear count and the side it comes out on. Here rather than in the page because the desk
@@ -1299,39 +1353,6 @@ export const deskSignals = (
   ...own,
 ]
 
-/**
- * What each reading is, what it's claiming, and when it turns up — for the guide that opens under a
- * signal. Written to be read by someone who hasn't done this before, and to say where the idea is
- * weak, because every one of these is a rule of thumb that a lot of people watch, not a law.
- */
-export const GUIDES: Record<GuideKey, string> = {
-  'ma-cross':
-    'A moving average is the average price over the last N bars, redrawn each bar — it smooths the jitter so a direction is visible. When the faster one crosses above the slower one it means recent prices have pulled ahead of older ones, which is what people call a bullish cross (the 50 over the 200 gets the name "golden cross"; the other way round is the "death cross"). It appears after a trend has already turned, never before — averages look backwards by construction — so it confirms a move rather than predicting one, and it whipsaws badly when price is going sideways.',
-  trend:
-    'Simply which side of the slow average price is sitting on. Above it, buyers have been in charge over that window; below it, sellers have. It is the crudest reading here and the most reliable, because almost everything else works better when taken in this direction. It tells you nothing about how far the move has left to run.',
-  rsi:
-    'RSI compares the size of recent gains to recent losses on a 0–100 scale. Above 70 is called overbought — the rally has been one-sided — and below 30 oversold. The classic mistake is reading those as sell and buy signals: in a strong trend RSI can sit above 70 for weeks while price keeps climbing, so it is best used for spotting exhaustion in a range, not for fighting a trend.',
-  sr: 'Support is the lowest price over the recent window, resistance the highest. They matter because other traders can see them too and put their orders there, which is what makes the level act like a floor or a ceiling. Price sitting close to one is where reversals and breakouts both start; the level tells you where the action is, not which way it will go.',
-  divergence:
-    'Price makes a new low but the momentum reading does not — the selling that made the low was weaker than the selling before it. That mismatch is called a divergence, and it often shows up shortly before a turn, which makes it one of the earliest cues available. It is also the least reliable: momentum can weaken for a long time while price grinds further against you, so it is a reason to pay attention, not a reason to act on its own.',
-  macd: 'The gap between a fast and a slow exponential average, plotted against its own average. When that gap crosses its signal line, momentum has changed gear. It reacts sooner than a plain moving-average cross but for the same reason gives more false starts, so it is usually read as confirmation of something else rather than as the trigger.',
-  atr: 'The average true range: how far this asset typically travels in one bar, in price. It is not directional — it answers "how much movement is normal here", which is what a stop needs to respect. A stop tighter than one ATR will be taken out by ordinary noise on a day when nothing happened, which is the most common way a correct call still loses money.',
-  squeeze:
-    'The bands around price have contracted to their tightest in a hundred bars, meaning the recent range is unusually small. Quiet periods tend to be followed by loud ones, so this is the classic warning that a move is being loaded. It says nothing whatsoever about direction, and the first break out of a squeeze is often the false one.',
-  volume:
-    'How much was traded on the latest bar against the recent average. A breakout on heavy volume means many people acted on it; the same break on thin volume often means very few did and it gets given back. Volume confirms, it never leads.',
-  candle:
-    'The shape of one or two bars. A body that swallows the previous bar in the other colour (engulfing) says the side that was winning got overwhelmed within a single bar; a long wick with a small body (hammer, shooting star) says an extreme was reached and rejected; a body of almost nothing (doji) says the two sides finished level. These are the oldest patterns in the trade and the most local — one bar of evidence, usually worth acting on only where a bigger reason already sits.',
-  orb: 'The opening range is the high and low of the opening candle — the first fifteen minutes of a session, while the day\'s participants arrive and disagree. The play is that a break beyond it sets the day\'s direction — and it is the version of this that survived testing. Over 219 days of Bitcoin and Ethereum, all costs included, anchoring at midnight UTC lost 0.64R a trade; moving to the NY open and widening the range from 15 to 60 minutes cut that to −0.15R; and requiring the daily trend to agree, the range to be at least 1.5× a normal bar, and the break to carry volume brought 148 trades to roughly break-even (+0.05R, 46% winners). Read that honestly: filtering turned a bad rule into a flat one, which is a reason to use the levels as information and not as a system. And read this honestly too: the range drawn here is now the 15-minute opening candle, which is the version everyone trades and the narrower of the two that was measured — the numbers above came off the hour. Gold and crypto never close, so the range here follows whichever of Asia, London and NY opened last — at nine in the morning in Berlin the NY range is sixteen hours old and the levels people are trading around are London\'s. Only the NY one votes in the tally, because it is the only one those numbers were measured on; the others are drawn, described, and left to you.',
-  vwap:
-    'The volume-weighted average price since the session opened — every trade since the bell, each counted for the size it was. It is the number institutional desks are measured against (fill above it on a buy and you did worse than the day), which is a large part of why price keeps returning to it: size that has to be worked leans against the line rather than chasing away from it. Above it the buyers who showed up today are in front, below it the sellers are. Two things separate it from the moving averages here — it starts fresh at the open instead of dragging the last fifty bars behind it, and it weights the busy hour over the dead one. It is also why it decays: by the end of a long session it has averaged so much that it stops moving, and overnight it means nothing at all, which is why this one goes quiet once its session is more than eight hours behind. Gold and crypto have no closing bell, so the session here is whichever of Asia, London and NY opened last.',
-  structure:
-    'Market structure is the sequence of swing highs and swing lows — a swing being a bar whose high or low stands past its neighbours on both sides, which means it only exists in hindsight, a couple of bars after it happened. An uptrend is higher highs and higher lows; when price closes through the last swing low, that sequence has broken. A break against the standing direction is called a change of character (CHoCH) — the earliest structural sign of a turn. A break that extends the standing direction is a break of structure (BOS) — plain continuation, and deliberately quieter news. Two honest caveats: swings confirm bars after the fact, so this label always arrives late by construction; and a move in the trend\'s own direction, however violent, prints no character change at all — a huge drop inside a downtrend is the trend working, not the trend turning.',
-  htf: 'The trend on the timeframe one step above the one you are looking at. A cross on the hourly means something different depending on whether the daily is climbing or falling, and trades taken against the bigger timeframe need to be right about timing as well as direction. It is the oldest filter there is and the one most often skipped.',
-  heikin:
-    'Heikin Ashi — "average bar" in Japanese — redraws the chart with each candle averaged into the one before it: the close becomes that bar\'s own mean of open, high, low and close, and the open is the midpoint of the previous drawn bar rather than a real one. The effect is that a trend which alternates red and green comes out as one unbroken run of colour, and the count of that run is the whole reading: it says a direction has held without a break, and the wick says whether anything traded back against it inside the last bar. Now the parts people get hurt by. The prices on these bars are not prices — no exchange ever quoted that open, so an entry, a stop or a backtest filled against one is measuring arithmetic, which is why everything else here is priced off the raw candles. The smoothing is a lag: the bar you are looking at is partly yesterday\'s, so the run is at its longest and cleanest just as the move is ending, and you hand back a piece of it on every turn. It also swallows gaps — the hole where price jumped is averaged into a tidy bar, so stop distances read closer than they are. And in a range it flips colour constantly, which is the same chop the raw chart shows, only slower. Read it as a trend filter and a trailing hold — "am I still in this" — never as the reason to be in it.',
-  fvg: 'A fair value gap is a stretch of prices the market jumped over without trading in. Take three bars: if the first one\'s high never reaches the third one\'s low, the middle bar ran so hard that everything between those two prices went unsold — an imbalance, in the jargon. The claim is that the book has unfinished business there and price tends to come back and trade it, which makes an unfilled gap a level worth knowing about and a filled one a decent explanation of where a move already turned around. Two honest caveats, and they matter. The first is that the same box gets read in opposite directions: this desk treats it as a magnet, because "nobody traded here, so someone will" is the part that follows from the mechanics, while the SMC crowd more often treats an unfilled bullish gap under price as demand to buy the retrace into — and those two readings disagree about which way it pulls. The second is that gaps are common. A thousand bars will hold a couple of hundred of them and almost all get filled quickly, so the only ones drawn here are the ones still open, and the only one that votes is the nearest, and only when it is within one ATR — a gap eight percent away is a fact about the chart rather than a reason to do anything today.',
-}
 
 /**
  * Two bands, not one. The stop belongs to the near swing — the level that, broken, means you were
@@ -1766,7 +1787,7 @@ export function backtest(
   /** `drop` silences those cards in the tally. The point of owning a backtest at all is being able
    *  to ask whether a reading earns its vote, and that question is unanswerable from outside — the
    *  tally is assembled in here. Empty is the rule as it ships. */
-  { window = 400, expiry = 20, drop = [] }: { window?: number; expiry?: number; drop?: GuideKey[] } = {},
+  { window = 400, expiry = 20, drop = [] }: { window?: number; expiry?: number; drop?: SignalKind[] } = {},
 ): Backtest {
   const cfg = HORIZONS[horizon]
   const trades: Trade[] = []
@@ -2140,7 +2161,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
   atr: number | null
   /** The two MACD lines, index-aligned like the MAs. Returned rather than kept local because the
    *  chart could not draw what it was voting on: "MACD turned up 3 bars ago" was a sentence about
-   *  a shape nobody could see, and the guide's demo chart was the only place it was ever plotted. */
+   *  a shape nobody could see. */
   macd: { line: (number | null)[]; signal: (number | null)[] }
   signals: Signal[]
 } {
@@ -2238,6 +2259,37 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     })
   }
 
+  /* Liquidity: the standing swing whose wick was taken and whose close was not. It points against
+     the side that was raided — the highs went, the close did not hold up there — which makes it the
+     exact opposite reading to the structure card above, off the same pivots. Fresh only, on the
+     same clock as the cards above: a raid twenty bars back has been answered by the bars since.
+
+     It votes, and so does the inverse-gap card below, on a walk of this rule over 9 perps with the
+     two cards' votes on and off. Pooled expectancy with them voting against with them dropped:
+     +0.143R vs +0.122R on 600 bars of 1h, +0.111R vs +0.071R on 900, +0.064R vs +0.048R on 500 bars
+     of 4h — and −0.091R vs −0.069R on 300 bars of 4h, the shortest window and the one that
+     disagrees. Per asset the voting version wins 5 to 7 of the 9 on the three that agree. Daily is
+     missing from the run: the 1d feed comes off MEXC through the app's own proxy, so a walk of it
+     needs the browser, and Bitget's 90 bars cannot fill the window.
+     That is a weak positive, and it is written down as one — three windows out of four, deltas of
+     two to four hundredths of an R, in-sample and gross, which is the same standing every other
+     number in this file has. It is a better showing than the plain gap card managed (it flipped
+     sign across timeframes, which is why it stays flat), and thin enough that the honest next step
+     is a longer walk.
+     ponytail: re-run with `drop: ['sweep']` / `['ifvg']` over a year of bars before trusting the
+     size of any of this — and take the votes off if the 4h result is the one that repeats. */
+  const raid = liquiditySweep(closed)
+  if (raid) {
+    const took = raid.side === 'high', stale = raid.ago > FRESH_CROSS
+    const aged = stale ? ' — long enough ago that it is background, not news' : ''
+    out.push({
+      label: took ? 'Swept the highs' : 'Swept the lows',
+      tone: stale ? 'flat' : took ? 'bear' : 'bull',
+      kind: 'sweep' as const,
+      detail: `price traded through the swing ${took ? 'high' : 'low'} at ${fmtPrice(raid.level, price)} ${raid.ago} bar${raid.ago === 1 ? '' : 's'} ago and closed back ${took ? 'under' : 'over'} it — the orders resting past it were taken and the break did not hold${aged}`,
+    })
+  }
+
   /* The smoothed chart's standing run. Off the closed bars like the reads below it: the forming
      bar's HA colour flips with every tick, and a run that grows and shrinks inside one bar is a
      number about the poll, not the tape. See heikinRun for why it doesn't vote. */
@@ -2278,7 +2330,10 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      the SMC crowd also reads the same box the opposite way — an unfilled bullish gap under price
      as the demand you buy the retrace into — and the two disagree. This takes the reading that can
      be stated without a story: a stretch of prices nobody traded, and price coming back for it. */
-  const openGaps = fvg(closed).filter((g) => !g.filled)
+  // one scan, both cards: this is the costliest read in here and backtest() calls signals() once
+  // per evaluated bar — see the note in fvg()
+  const gaps = fvg(closed)
+  const openGaps = gaps.filter((g) => !g.filled)
   if (openGaps.length && atrValue) {
     const near = openGaps.reduce((best, g) => (gapAway(g, price) < gapAway(best, price) ? g : best))
     const away = gapAway(near, price)
@@ -2301,6 +2356,32 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
     else if (away <= atrValue) out.push(price > near.top
       ? { label: 'Gap below', tone: 'flat', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits under price, inside one ATR — the nearest thing price has left to come back for` }
       : { label: 'Gap above', tone: 'flat', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits over price, inside one ATR — the nearest thing price has left to come back for` })
+  }
+
+  /* The gap that failed, read the other way round. A box price closed clean through has stopped
+     being the thing it was: an up gap was the floor under a move, and a close under it means the
+     floor gave, so the same prices are overhead supply on the way back. That is the inverse FVG,
+     and unlike the plain gap above it has a direction — it takes its side from which way the box
+     flipped, not from where price is standing relative to it.
+     Same two filters as the gap card, for the same reasons: nearest only, and only within an ATR.
+     It votes on the measurement written above the sweep card, where the two were walked together.
+     ponytail: no size floor, same as fvg() — and it bites harder here, because the *nearest*
+     flipped box is often a hairline one a few ticks from price. A floor in ATRs is the obvious
+     next knob and it needs its own walk before it goes in. */
+  const flips = gaps.filter((g) => g.inverted)
+  if (flips.length && atrValue) {
+    const near = flips.reduce((best, g) => (gapAway(g, price) < gapAway(best, price) ? g : best))
+    const away = gapAway(near, price)
+    if (away <= atrValue) {
+      const up = near.dir === 'up'
+      const box = `${fmtPrice(near.bottom, price)}–${fmtPrice(near.top, price)}`
+      out.push({
+        label: up ? 'Failed support' : 'Failed resistance',
+        tone: up ? 'bear' : 'bull',
+        kind: 'ifvg' as const,
+        detail: `price closed clean through the ${box} imbalance, so the ${up ? 'floor under that move is overhead supply' : 'ceiling over that move is a floor'} now — and it is back within one ATR of it (inverse FVG)`,
+      })
+    }
   }
 
   return {
@@ -2488,7 +2569,11 @@ export function orb(c: Candle[]): Range | null {
   /* 24/7 assets never gap, so the session has to be named. It used to be the 00:00-UTC roll, which
      is a date boundary rather than a moment anyone shows up for — backtested over 219 days of BTC
      and ETH it lost 0.64R a trade. The NY open, the same test, was the best of the three
-     candidates by a distance. See GUIDES.orb for the numbers.
+     candidates by a distance: −0.15R on a 60-minute range, and roughly break-even over 148 trades
+     (+0.05R, 46% winners) once the daily trend had to agree, the range had to be at least 1.5× a
+     normal bar and the break had to carry volume. Filtering turned a bad rule into a flat one, so
+     the levels are information, not a system — and the range drawn here is the narrower 15-minute
+     candle everyone trades, not the hour those numbers came off.
      It now follows whichever desk opened last, because at nine in the morning in Berlin the New
      York range is sixteen hours old and the one being traded around is London's. Only the tested
      anchor votes, though — see the tone below. */

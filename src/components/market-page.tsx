@@ -10,7 +10,6 @@ import {
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
-import { GuideDialog } from '@/components/guide-dialog'
 import { TradeDialog } from '@/components/trade-dialog'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
@@ -84,9 +83,9 @@ const TABS = [
 
 /** Whose finished trades. One question, three books — see the note on TABS. */
 const RECORDS = [
-  { id: 'mine', label: 'Yours', hint: 'Every finished trade of yours: what it paid, and a card of it to share. Hit rate and expectancy by rule.' },
-  { id: 'paper', label: 'The rule', hint: 'The rule tested forward: every setup the desk endorsed, filed by the server and followed to its stop or target. Nothing traded.' },
-  { id: 'people', label: 'The others', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
+  { id: 'mine', label: 'Your trades', hint: 'Every finished trade of yours: what it paid, and a card of it to share. Hit rate and expectancy by rule.' },
+  { id: 'people', label: 'Friends trades', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
+  { id: 'paper', label: 'Backtesting', hint: 'The rule tested forward: every setup the desk endorsed, filed by the server and followed to its stop or target. Nothing traded.' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -218,7 +217,6 @@ export default function MarketPage() {
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
-  const [guide, setGuide] = useState<Signal | null>(null) // the reading whose explainer is open
   /* The order dialog, holding the plan as it stood when the button was pressed. Not a boolean:
      `plan` is recomputed off every tick, and passing its levels straight in re-ran the dialog's
      own set-up on each one — the margin you had typed thrown away twice a second, and a confirm
@@ -234,9 +232,8 @@ export default function MarketPage() {
      and a live position, and there are days you want the candles back. */
   const [structure, setStructure] = useState(true)
   /* The second panel under the price. Every one of these was already computed and voting on the
-     verdict while being impossible to see: the guides draw RSI, MACD and volume as pictures and
-     then the live chart handed you "RSI 47" as text. Off by default — the price chart is the
-     subject, and a panel steals a third of its height. */
+     verdict while being impossible to see — the chart handed you "RSI 47" as text and nothing else.
+     Off by default — the price chart is the subject, and a panel steals a third of its height. */
   const [panel, setPanel] = useState<'none' | 'volume' | 'rsi' | 'macd'>('none')
   const online = useOnline()
   /* navigator.onLine only knows whether there is *a* network — a captive wifi or a dead uplink
@@ -1159,21 +1156,20 @@ export default function MarketPage() {
               className="flex w-full items-baseline gap-2 text-left">
               <span className="font-heading text-xs tracking-wide uppercase">Why this call</span>
               <span className="text-muted-foreground text-xs">
-                {bulls} bull · {bears} bear{showWhy ? ' · tap a reading for its guide' : ''}
+                {bulls} bull · {bears} bear
               </span>
               <ChevronDown className={cn('text-muted-foreground ml-auto size-4 self-center transition-transform', showWhy && 'rotate-180')} />
             </button>
             {showWhy && (
               <div className="mt-3 grid gap-x-8 gap-y-2 sm:grid-cols-2">
-                {/* click a reading for its guide: what it's called, what it claims, when it turns up —
-                    over a worked example drawn from the same code that drew the chart above */}
+                {/* the detail is truncated to keep the grid on one line a row, and the dialog that
+                    used to hold the whole sentence is gone — so the sentence is the row's title */}
                 {shownSignals.map((sig, i) => (
-                  <button key={i} type="button" onClick={() => setGuide(sig)}
-                    className="flex min-w-0 items-baseline gap-2 text-left text-sm">
+                  <div key={i} title={sig.detail} className="flex min-w-0 items-baseline gap-2 text-sm">
                     <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
-                    <span className="decoration-muted-foreground/40 shrink-0 underline decoration-dotted underline-offset-4">{sig.label}</span>
+                    <span className="shrink-0">{sig.label}</span>
                     <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
-                  </button>
+                  </div>
                 ))}
                 {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
               </div>
@@ -1734,8 +1730,6 @@ export default function MarketPage() {
           {book === 'people' && <Desk live={tab === 'record'} onPick={goChart} />}
         </div>
       )}
-
-      <GuideDialog signal={guide} onClose={() => setGuide(null)} />
     </div>
   )
 }
