@@ -810,6 +810,15 @@ function save() {
  * browser could not paint until it finished. At most one write every 200ms instead.
  */
 function commit(next: State) {
+  /* A reducer that handed back the state it was given did not edit anything, and the guards that do
+     that say so by returning `s` — `mapItem` above a row that is not there, `closeWatch` on a trade
+     already filed, `patchProject` on a read-only one. Without this they still landed here: a write
+     to disk, and `onPersist` marking the document dirty over nothing.
+     Which is worse than the wasted write. A dirty device pushes instead of pulling, and a push that
+     meets another device's write forces its way past the 409 — so the exchange poll, which files
+     every closed trade it sees once a minute and finds them all already filed, was enough to make a
+     window left open on Overview overwrite a note just typed on somebody's phone. */
+  if (next === state) return
   state = next
   listeners.forEach((fn) => fn())
   if (pending === undefined) pending = setTimeout(save, 200)
@@ -1256,11 +1265,17 @@ export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
   return { ...s, dismissed: pruneDismissed(next, at) }
 })
 
+/* One field, set to a value — and not set at all when it already holds it. The ORB preset pins the
+   interval to 15m from an effect that runs on every mount, which unguarded was a write to disk and
+   a dirty document per mount, for a setting nobody touched. `commit` drops what comes back as `s`. */
+const field = <K extends keyof State>(k: K) => (v: State[K]) =>
+  set((s) => (s[k] === v ? s : { ...s, [k]: v }))
+
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
-export const setMarketAsset = (marketAsset: string) => set((s) => ({ ...s, marketAsset }))
-export const setMarketHorizon = (marketHorizon: State['marketHorizon']) => set((s) => ({ ...s, marketHorizon }))
-export const setMarketInterval = (marketInterval: Interval) => set((s) => ({ ...s, marketInterval }))
-export const setMarketPreset = (marketPreset: State['marketPreset']) => set((s) => ({ ...s, marketPreset }))
+export const setMarketAsset = field('marketAsset')
+export const setMarketHorizon = field('marketHorizon')
+export const setMarketInterval = field('marketInterval')
+export const setMarketPreset = field('marketPreset')
 /** One dial, clamped to what it may be — the same guard a loaded document goes through. */
 export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))

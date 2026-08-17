@@ -714,9 +714,16 @@ export function startSync() {
   }
   addEventListener('focus', wake)
   addEventListener('online', wake)
-  // a phone coming back to the app fires this and does not reliably fire focus; it is dispatched
-  // at the document and bubbles, so the window hears it too
-  addEventListener('visibilitychange', () => { if (!document.hidden) wake() })
+  /* A phone coming back to the app fires this and does not reliably fire focus; it is dispatched
+     at the document and bubbles, so the window hears it too.
+     And the other half: leaving. An edit arms a two-second timer, and switching away inside those
+     two seconds is a page the browser freezes with the push still pending — a note typed and then
+     put down sat on that device until it was opened again, which on a phone can be days. Hiding is
+     the last moment this page is certainly still running, so a dirty one spends it pushing. */
+  addEventListener('visibilitychange', () => {
+    if (!document.hidden) wake()
+    else if (meta().dirty) void syncNow()
+  })
   /* The backstop, and nothing more. A tab left open used to learn about another device's writing
      only by asking every minute; the stream tells it now, the instant it happens, whichever
      document moved. What is left here is the case a stream cannot report on: itself. A socket that

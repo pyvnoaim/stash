@@ -1132,3 +1132,32 @@ console.log('store: ok')
   setTool(MARKET, true)
   assert.equal(toolOn(getState(), MARKET), true)
 }
+
+/* An edit that changes nothing must not reach the disk, and above all must not mark the document
+   dirty: a dirty device pushes instead of pulling, and its push forces past another device's write.
+   The exchange poll files every closed trade it sees once a minute and finds them all filed
+   already — a minute's worth of that, and a window left open overwrites what was typed elsewhere. */
+{
+  const { setOnPersist } = await import('./store.ts')
+  const settle = () => new Promise((r) => setTimeout(r, 250))   // the 200ms save debounce
+  await settle()
+  let saves = 0
+  setOnPersist(() => { saves++ })
+
+  const closed = { ...mkWatch('Filed', 100), id: 'filed', entryAt: 1, closedAt: 2,
+    level: 'stop' as const, exit: 95, r: -1 }
+  addItem(item({ id: 'noop' }))
+  closeWatch(closed, 1)
+  await settle()
+  assert.equal(saves, 1)   // two real changes inside one debounce, one write
+
+  patch('gone', { text: 'a row that is not here' })   // mapItem hands back the state it was given
+  closeWatch(closed, 1)                               // and closeWatch on a trade already filed
+  await settle()
+  assert.equal(saves, 1)
+
+  patch('noop', { text: 'a real one' })
+  await settle()
+  assert.equal(saves, 2)
+  setOnPersist(null)
+}
