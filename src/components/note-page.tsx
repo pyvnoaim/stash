@@ -356,7 +356,7 @@ export function NotePage({ it, onBack, onOpen }: {
         <Button variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to list">
           <ArrowLeft />
         </Button>
-        <span className="text-muted-foreground font-heading text-sm tracking-wide uppercase">Page</span>
+        <span className="text-muted-foreground font-heading text-sm tracking-wide uppercase select-none">Page</span>
         {/* Who else is in the project this note is filed under — and lit, if they are in it now.
             The list header has carried these since sharing existed; this page is where a document
             is actually read and written, which makes it the one place the question is urgent. */}
