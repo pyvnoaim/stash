@@ -65,17 +65,24 @@ assert.equal(getSync().status, 'ok')
 assert.deepEqual(getState().items.map((i) => i.text), ['second', 'first'])
 assert.equal(getState().chart, 'candles')
 
-// both edit while apart: this device pushes into a 409 and wins; the other's write is a snapshot
+/* Both edit while apart: this device pushes into a 409. It used to re-send its own document over
+   theirs, which is the whole of "a note typed on the phone vanished" — anything at all marks a
+   device dirty, a view changed included, so the window left open on Overview was allowed to win.
+   Merged instead: their row and ours both come out the other side. */
+const theirs = { ...getState(), items: [...getState().items, { ...getState().items[0], id: 'theirs', text: 'typed on the phone' }] }
 await real(`${url}/state`, {
   method: 'PUT',
   headers: { cookie, 'if-match': String(JSON.parse(disk.get('stash.sync.v1')!).v) },
-  body: JSON.stringify({ state: { items: [] }, device: 'other' }),
+  body: JSON.stringify({ state: theirs, device: 'other' }),
 })
 add('third')
 await flush()
 await syncNow()
 assert.equal(getSync().status, 'ok')
-assert.deepEqual((await onServer()).items.map((i: any) => i.text), ['third', 'second', 'first'])
+assert.deepEqual((await onServer()).items.map((i: any) => i.text).sort(),
+  ['first', 'second', 'third', 'typed on the phone'])
+// and this device holds the merge it just sent, rather than finding out on some later pull
+assert.ok(getState().items.some((i) => i.text === 'typed on the phone'))
 
 /* the wire drops with an edit in hand: the push fails, the edit stays dirty rather than being
    counted as sent, and the same call that failed carries it once the connection answers. The
@@ -92,7 +99,7 @@ globalThis.fetch = wire
 await syncNow()
 assert.equal(getSync().status, 'ok')
 assert.deepEqual((await onServer()).items.map((i: any) => i.text),
-  ['written on a plane', 'third', 'second', 'first'])
+  ['written on a plane', 'third', 'second', 'first', 'typed on the phone'])
 
 // signed out, the engine goes quiet instead of erroring
 await logout()
@@ -105,7 +112,7 @@ assert.equal(getSync().user, null)
 // ...and the edit waits as dirty for whoever signs in next
 assert.equal(await login('leon', 'longenough'), null)
 assert.deepEqual((await onServer()).items.map((i: any) => i.text),
-  ['offline edit', 'written on a plane', 'third', 'second', 'first'])
+  ['offline edit', 'written on a plane', 'third', 'second', 'first', 'typed on the phone'])
 
 /* Two syncs at once are one sync. A phone coming back to the app fires visibilitychange and focus
    together, and both call in — unguarded that is two pushes of the same edit, the second landing
@@ -177,6 +184,33 @@ assert.equal(await count(), before + 1)
   await syncNow()
   assert.equal(await pdocV(), settledAt)   // nothing changed, so nothing to write
   assert.equal(await count(), stateAt)
+}
+
+/* A failed /api/shares is not the server saying "nothing is shared with you". It used to read as
+   one: the sweep at the end of syncShares took every shared project off this device — its items and
+   its trash with it — and the dirty flag that left behind pushed the deletion out to the server.
+   A 502 from a proxy mid-redeploy is not a reason to lose somebody else's project. */
+{
+  const { adoptShared } = await import('./store.ts')
+  adoptShared('mias', {
+    projects: [{ id: 'mias', name: "Mia's", color: null, parent: null }],
+    items: [{
+      id: 'mias-row', type: 'task', text: 'hers', note: '', pid: 'mias', due: null, at: null,
+      repeat: null, flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
+    }],
+  }, { by: 'mia', edit: true })
+  await flush()
+
+  const up = globalThis.fetch
+  globalThis.fetch = ((path: any, init?: RequestInit) =>
+    String(path).startsWith('/api/shares')
+      ? Promise.resolve(new Response('{"error":"bad gateway"}', { status: 502 }))
+      : up(path, init)) as typeof fetch
+  await syncNow()
+  globalThis.fetch = up
+
+  assert.ok(getState().projects.some((p) => p.id === 'mias'), 'a 502 took the shared project')
+  assert.ok(getState().items.some((i) => i.id === 'mias-row'), 'a 502 took its rows')
 }
 
 server.close()

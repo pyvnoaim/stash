@@ -972,6 +972,71 @@ export function adoptShared(pid: string, slice: unknown, share?: { by: string, e
   })
 }
 
+/* ---------- two documents that both moved since they last agreed ---------- */
+
+/** When a row was last touched — what decides which of two copies of it is the newer. */
+const liveAt = (i: Item) => i.editedAt ?? i.ts
+
+/** Ours, plus every row of theirs we don't have or they touched more recently. */
+const byId = <T extends { id: string }>(mine: T[], theirs: T[], when?: (r: T) => number) => {
+  const out = new Map(mine.map((r) => [r.id, r]))
+  for (const r of theirs) {
+    const ours = out.get(r.id)
+    if (!ours || (when && when(r) > when(ours))) out.set(r.id, r)
+  }
+  return out
+}
+
+/**
+ * Both sides wrote, and one document has to go to the server. Rows are matched by id and the newer
+ * edit wins; a row only one side has is kept either way, so nothing typed on either device is
+ * dropped. A row deleted here and edited there — or the other way round — lands on whichever list
+ * the later of the two acts says it should.
+ *
+ * Everything that is not a row stays ours: the view, the settings, the dials. We are the device
+ * doing the merging, and ours is the edit that just happened.
+ *
+ * ponytail: projects, subs, watches and results carry no edit time, so a row both sides hold keeps
+ * our copy rather than the newer one — union by id, which can lose a rename and never a row. Give
+ * them an `editedAt` and they join the items above.
+ *
+ * ponytail: the trash is the only record that a row was deleted, so emptying it throws the
+ * tombstone away — a device that had not pulled the delete yet brings the row back on the next
+ * merge. It needs a deleted-id list with a life of its own to close, and the window is one device
+ * being behind at the moment the other empties its trash.
+ */
+export function mergeRemote(mine: State, theirs: unknown): State {
+  const t = load(theirs)
+  const items = byId(mine.items, t.items, liveAt)
+  const trash = byId(mine.trash, t.trash, (r) => r.delAt)
+  // deleted on one device, edited on the other: the later act decides which list it ends up on
+  for (const [id, gone] of trash) {
+    const live = items.get(id)
+    if (!live) continue
+    if (liveAt(live) > gone.delAt) trash.delete(id)
+    else items.delete(id)
+  }
+  return {
+    ...mine,
+    projects: [...byId(mine.projects, t.projects).values()],
+    subs: [...byId(mine.subs, t.subs).values()],
+    watches: [...byId(mine.watches, t.watches).values()],
+    results: [...byId(mine.results, t.results).values()],
+    items: [...items.values()],
+    trash: [...trash.values()],
+  }
+}
+
+/** The same rule, on the slice a shared project travels as — which carries no trash of its own. */
+export function mergeSlice(mine: Slice, theirs: unknown): Slice {
+  const raw = theirs as Partial<Slice> | null
+  const t = load({ projects: raw?.projects ?? [], items: raw?.items ?? [] })
+  return {
+    projects: [...byId(mine.projects, t.projects).values()],
+    items: [...byId(mine.items, t.items, liveAt).values()],
+  }
+}
+
 /**
  * The server's document takes the place of ours — the same rules as another window writing:
  * the undo history goes with it, and the view, the focus and this machine's API key stay put.

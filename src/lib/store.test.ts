@@ -1161,3 +1161,28 @@ console.log('store: ok')
   assert.equal(saves, 2)
   setOnPersist(null)
 }
+
+/* mergeRemote: what runs when a push meets a 409 and both documents have moved. The union is the
+   easy half; the half worth a test is a row one device deleted while the other was editing it —
+   whichever act came later is the one that stands, and it decides which list the row is on. */
+{
+  const { mergeRemote } = await import('./store.ts')
+  const blank = load(null)
+  const mine = {
+    ...blank,
+    items: [item({ id: 'kept', text: 'ours' }), item({ id: 'edited', editedAt: 300 })],
+    trash: [{ ...item({ id: 'binned' }), delAt: 100 }],
+  }
+  const theirs = {
+    ...blank,
+    items: [item({ id: 'binned', text: 'still here', editedAt: 50 }), item({ id: 'new', text: 'theirs' })],
+    trash: [{ ...item({ id: 'edited' }), delAt: 200 }],
+  }
+  const m = mergeRemote(mine, theirs)
+  const ids = (rows: { id: string }[]) => rows.map((r) => r.id).sort()
+
+  assert.deepEqual(ids(m.items), ['edited', 'kept', 'new'])   // nothing either side typed is dropped
+  assert.deepEqual(ids(m.trash), ['binned'])                  // deleted at 100, their edit was at 50
+  // ...and the row they deleted at 200 stays live, because our edit at 300 came after it
+  assert.equal(m.items.find((i) => i.id === 'edited')?.editedAt, 300)
+}

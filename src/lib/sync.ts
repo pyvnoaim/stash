@@ -4,8 +4,8 @@
  *
  * The rules, in full:
  *  - every local edit marks this device dirty and schedules a push a couple of seconds out
- *  - a push carries `If-Match`; a 409 means another device wrote while we were away — ours is
- *    the newer edit so it wins, and theirs is a server snapshot, not a loss
+ *  - a push carries `If-Match`; a 409 means another device wrote while we were away — the two
+ *    documents are merged row by row and the merge is what goes up, so neither side's work is lost
  *  - a pull (start, focus, coming back online) adopts the server's document unless we are dirty,
  *    in which case the push goes first — local edits are never silently dropped
  *  - no server, no session, no network: the app keeps working from localStorage alone
@@ -14,7 +14,8 @@
  * a closed tab's unpushed edit is pushed by whoever opens the app next.
  */
 import {
-  adoptRemote, adoptShared, getState, KEY, setMe, setOnPersist, sliceOf, uid, type Project,
+  adoptRemote, adoptShared, getState, KEY, mergeRemote, mergeSlice, setMe, setOnPersist, sliceOf,
+  uid, type Project,
 } from './store.ts'
 import { disablePush } from './push.ts'
 import { forgetVenue } from './venue.ts'
@@ -28,15 +29,19 @@ export interface Sync {
 
 const META = 'stash.sync.v1'
 
-const meta = (): { v: number, dirty: boolean } => {
+interface Meta { v: number, dirty: boolean, rev: number }
+const meta = (): Meta => {
   try {
     const m = JSON.parse(localStorage.getItem(META) || '')
-    if (typeof m.v === 'number' && typeof m.dirty === 'boolean') return m
+    if (typeof m.v === 'number' && typeof m.dirty === 'boolean') {
+      return { v: m.v, dirty: m.dirty, rev: typeof m.rev === 'number' ? m.rev : 0 }
+    }
   } catch { /* first run */ }
   // no record yet: data already on this device predates sync, and deserves a push
-  return { v: 0, dirty: localStorage.getItem(KEY) !== null }
+  return { v: 0, dirty: localStorage.getItem(KEY) !== null, rev: 0 }
 }
-const setMeta = (m: { v: number, dirty: boolean }) => localStorage.setItem(META, JSON.stringify(m))
+/** Read-modify-write, so a caller that only means to move one field cannot drop the other two. */
+const setMeta = (m: Partial<Meta>) => localStorage.setItem(META, JSON.stringify({ ...meta(), ...m }))
 
 /** Whether this device has a stash of its own — what makes an offline start worth showing. */
 export const hasLocal = () => localStorage.getItem(KEY) !== null
@@ -96,12 +101,12 @@ const settled = () => { backoff = RETRY_MIN } // the connection answered; the ne
    it. Clearing dirty on the reply marks it sent, and the pull that follows finds the very version
    we just wrote, so there is nothing to adopt and nothing to notice: the note sits on this device
    until some later edit happens to carry it, or another device writes and the pull lands on top of
-   it. Counting edits is the whole fix — bump here, compare across the round trip. */
-let rev = 0
-
+   it. Counting edits is the whole fix — bump here, compare across the round trip.
+   In localStorage beside the dirty flag it guards, not in this module: two tabs share the flag and
+   would not share a counter of their own, so the tab whose push finished cleared a dirty the other
+   tab had set for an edit of its own — and the next pull adopted the server over it. */
 function schedule() {
-  rev++
-  setMeta({ ...meta(), dirty: true })
+  setMeta({ dirty: true, rev: meta().rev + 1 })
   clearTimeout(timer)
   timer = loose(setTimeout(syncNow, 2000))
 }
@@ -144,19 +149,26 @@ async function run(): Promise<void> {
   if (!m.dirty) return pull()
   setSnap({ status: 'busy' })
   try {
-    const at = rev
-    const body = JSON.stringify({ state: getState(), device })
+    const at = m.rev
+    let body = JSON.stringify({ state: getState(), device })
     let r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(m.v) }, body })
     if (r.status === 409) {
-      // another device wrote while we were away. Ours is the newer edit, so it wins —
-      // theirs is a server snapshot, recoverable, not overwritten and gone.
+      /* Another device wrote while we were away. Both writes count: what goes up is the two
+         documents merged row by row, not ours painted over theirs. Anything at all marks this
+         device dirty — a view changed, a sidebar folded — so "ours is the newer edit" was never
+         true enough to overwrite a day's work on somebody's phone with it. */
       const cur = await r.json()
+      if (cur.state) {
+        const merged = mergeRemote(getState(), cur.state)
+        adoptRemote(merged)                 // what we send is what this device holds from now on
+        body = JSON.stringify({ state: merged, device })
+      }
       r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(cur.version) }, body })
     }
     if (r.status === 401) return setSnap({ status: 'out', user: null })
     if (!r.ok) { setSnap({ status: 'off' }); return retry() }
     // still dirty if an edit arrived while this was in the air — schedule() already armed its timer
-    setMeta({ v: (await r.json()).version, dirty: rev !== at })
+    setMeta({ v: (await r.json()).version, dirty: meta().rev !== at })
     settled()
     setSnap({ status: 'ok' })
     await syncShares()
@@ -172,14 +184,14 @@ async function pull(): Promise<void> {
   if (m.dirty) return run()
   setSnap({ status: 'busy' })
   try {
-    const at = rev
+    const at = m.rev
     const r = await fetch('/state')
     if (r.status === 401) return setSnap({ status: 'out', user: null })
     if (!r.ok) { setSnap({ status: 'off' }); return retry() }
     const { version, state } = await r.json()
     // typed into while the answer was on its way: adopting now would paint over it. The version is
     // still recorded, so the push that follows carries our edit forward — ours is the newer one
-    const raced = rev !== at
+    const raced = meta().rev !== at
     if (version !== m.v && state && !raced) adoptRemote(state)
     setMeta({ v: version, dirty: raced })
     settled()
@@ -551,12 +563,18 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
        pushes a /state version and their pdoc, which moves the version again. A loop with no edit
        anywhere behind it, and it is what fills the version list on a quiet day. */
     if (same) return
-    const body = JSON.stringify({ state: local, device })
+    let body = JSON.stringify({ state: local, device })
     let w = await fetch(docUrl(pid, owner), {
       method: 'PUT', headers: { 'if-match': String(version) }, body,
     })
     if (w.status === 409) {
+      // two editors on one project, same as /state above: both sets of rows go up, neither is lost
       const cur = await w.json()
+      if (cur.state) {
+        const merged = mergeSlice(local, cur.state)
+        adoptShared(pid, merged, mine ? undefined : { by: owner ?? '', edit })
+        body = JSON.stringify({ state: merged, device })
+      }
       w = await fetch(docUrl(pid, owner), {
         method: 'PUT', headers: { 'if-match': String(cur.version) }, body,
       })
@@ -567,7 +585,15 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
 
 /** Every project either shared by you or with you, exchanged after the personal document. */
 async function syncShares() {
-  const { mine, with_me, links } = await shares()
+  /* Asked for here rather than through `shares()`, which answers a failure with an empty list —
+     right for the panel that draws it, and the wrong answer entirely for the sweep at the bottom:
+     "nobody shares anything with you" reads as every shared project having gone, so it takes each
+     one off this device — its items and its trash with it — and the dirty flag that leaves behind
+     pushes the deletion to the server. One 502 from a proxy mid-redeploy, and the work is gone
+     everywhere. No answer means nothing to reconcile, so this exchange sits the round out. */
+  const got = await call('/api/shares').catch(() => null)
+  if (!got) return
+  const { mine, with_me, links } = got as { mine: Member[], with_me: SharedWithMe[], links: Link[] }
   // one row per member: the project's own settings are the same on each, so the first will do
   const owned = new Map(mine.map((m) => [m.pid, !!m.subs]))
   /* A project whose only reader is a public link is still a published one — without this it would
