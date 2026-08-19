@@ -11,6 +11,7 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger,
 } from '@/components/ui/select'
 import { TradeDialog } from '@/components/trade-dialog'
+import { cancel as cancelOrder } from '@/lib/trade'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue, type VenueFeed } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
@@ -2026,6 +2027,15 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
 
 /** What the server's sweeper did to a setup, as the app reads it back. */
 
+const oid = (o: RestingOrder) => `${o.venue ?? ''}-${o.id}`
+/* Orders cancelled from this session, held until the poll stops sending them — the venue has taken
+   them off the book and the feed is up to a minute behind. Module-wide rather than a card's own
+   state because the card and the chart poll separately, and one of them cancelling must not leave
+   the other drawing a line at a price nothing rests at any more. Keyed with the venue, like the
+   rows are: two exchanges number their own orders and nothing says they cannot collide.
+   ponytail: never pruned. It holds a short string per cancel anyone makes in one page load. */
+const cancelled = new Set<string>()
+
 /**
  * The exchange feed, polled while something is looking. Only an answered request moves anything:
  * a failed fetch keeps the last state, and — the part that matters — never reaches fileClosed,
@@ -2067,7 +2077,7 @@ function useExchangePositions() {
     const h = window.setInterval(load, 60_000)
     return () => { dead = true; window.clearInterval(h) }
   }, [])
-  return { ...feed, loading }
+  return { ...feed, orders: feed.orders.filter((o) => !cancelled.has(oid(o))), loading }
 }
 
 /** How many tiles the last look held — what to keep room for while this one is still being asked.
@@ -2327,6 +2337,41 @@ function PositionsPlaceholder() {
 }
 
 /**
+ * Take a resting order back off the book from the card it is printed on. Two presses rather than a
+ * dialog — the same arming the trade dialog uses, for the same reason: it is one click beside a
+ * number somebody is reading, and money is committed either way it goes.
+ *
+ * Bitget only. MEXC's futures order endpoints have been shut since 2022, so its rows read out and
+ * nothing here can touch them — the same reason there is no button to place one.
+ */
+function CancelOrder({ order, onGone }: { order: RestingOrder, onGone: () => void }) {
+  const [armed, setArmed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  if (order.venue !== 'bitget') return null
+  const go = async () => {
+    if (!armed) return setArmed(true)
+    setBusy(true)
+    try {
+      await cancelOrder(order.symbol, order.id)
+      cancelled.add(oid(order))
+      toast(`${order.side === 'buy' ? 'Buy' : 'Sell'} ${order.size} ${order.symbol} cancelled`)
+      onGone()
+    } catch (e) {
+      setArmed(false)
+      toast((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Button variant="ghost" size="sm" disabled={busy} onClick={go} onBlur={() => setArmed(false)}
+      className="text-muted-foreground hover:text-destructive ml-auto h-5 px-1.5 text-[11px]">
+      {busy ? <Loader2 className="size-3 animate-spin" /> : armed ? 'sure?' : 'cancel'}
+    </Button>
+  )
+}
+
+/**
  * What the exchanges say is actually open — every venue with a key saved (Settings → Markets),
  * proxied through the server so the keys stay there. Renders nothing at all unless an exchange
  * reports an open position or an order still waiting on one: for everyone else this component is
@@ -2339,6 +2384,9 @@ function PositionsPlaceholder() {
  */
 export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void }) {
   const { rows, orders, equity, loading } = useExchangePositions()
+  // a cancel writes to `cancelled` above, which nothing subscribes to — this is the nudge that
+  // takes the row off the card now rather than on the next poll
+  const [, redraw] = useState(0)
   // levels for the rows that have none — the card's answer to "I opened it and set nothing"
   const atrs = useSuggested(rows)
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
@@ -2453,20 +2501,23 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
         {!!orders.length && (
           <div className="mt-0.5 grid gap-1 border-t pt-1.5">
             {orders.map((o) => (
-              <p key={`${o.venue ?? ''}-${o.id}`} className="text-muted-foreground text-xs tabular-nums">
-                <span className={cn('font-mono uppercase',
-                  o.side === 'buy' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                  {o.side}
-                </span>{' '}
-                {o.size} {o.symbol} at{' '}
-                <CopyNum v={o.price.toFixed(priceDigits(o.price))} className="text-foreground">
-                  {fmtPrice(o.price)}
-                </CopyNum>
-                {venues.size > 1 && ` · ${venueName(o.venue)}`}
-                {/* what the row is not: a close is somebody's exit resting, and a part-filled one
-                    is already a trade in progress rather than an order waiting */}
-                {!o.opens && ' · closing'}
-                {!o.live && ' · part-filled'}
+              <p key={`${o.venue ?? ''}-${o.id}`} className="text-muted-foreground flex items-baseline gap-1 text-xs tabular-nums">
+                <span>
+                  <span className={cn('font-mono uppercase',
+                    o.side === 'buy' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {o.side}
+                  </span>{' '}
+                  {o.size} {o.symbol} at{' '}
+                  <CopyNum v={o.price.toFixed(priceDigits(o.price))} className="text-foreground">
+                    {fmtPrice(o.price)}
+                  </CopyNum>
+                  {venues.size > 1 && ` · ${venueName(o.venue)}`}
+                  {/* what the row is not: a close is somebody's exit resting, and a part-filled one
+                      is already a trade in progress rather than an order waiting */}
+                  {!o.opens && ' · closing'}
+                  {!o.live && ' · part-filled'}
+                </span>
+                <CancelOrder order={o} onGone={() => redraw((n) => n + 1)} />
               </p>
             ))}
           </div>

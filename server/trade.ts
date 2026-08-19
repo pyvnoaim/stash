@@ -113,6 +113,20 @@ export async function canTrade(c: Cred): Promise<boolean> {
   return can
 }
 
+/**
+ * Take one order back off the book — the same call `canTrade` probes with a made-up id, so a
+ * read-only key is refused here for its rights and nothing else has to check first.
+ *
+ * ponytail: no check that the id is one of this account's own. It cannot be anyone else's — the
+ * key decides whose book is touched, and an id off another account's is simply not found.
+ */
+export async function cancel(c: Cred, symbol: string, orderId: string): Promise<void> {
+  const r = await call(c, 'POST', '/api/v2/mix/order/cancel-order', {
+    symbol, productType: PRODUCT, orderId,
+  })
+  if (r?.code !== '00000') throw new Error(String(r?.msg ?? 'the exchange refused the cancel'))
+}
+
 /** The contract's own rules — what the venue will accept as a size and as a price. */
 export function spec(rows: unknown): Pick<Desk, 'sizePlace' | 'min' | 'pricePlace' | 'maxLev'> {
   const c = (Array.isArray(rows) ? rows[0] : null) as Record<string, unknown> | null

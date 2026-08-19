@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { sign } from './bitget.ts'
-import { floorTo, reads, sizeOf, spec } from './trade.ts'
+import { cancel, floorTo, reads, sizeOf, spec } from './trade.ts'
 
 /* The signature covers the body now, or a POST signed like a GET is refused by the exchange —
    and the empty default is what keeps every read in bitget.ts signing exactly as it did. */
@@ -43,3 +43,23 @@ assert.equal(sizeOf(100, 10, 50_000, btc), 0.02)
 assert.equal(sizeOf(33, 7, 50_000, btc), 0.004)   // 0.00462 down to the venue's third place
 // under the venue's floor is a refusal here rather than at the exchange, and it says what to do
 assert.throws(() => sizeOf(1, 1, 50_000, btc), /smallest size/)
+
+/* The one call that can un-commit money, over a stubbed fetch: what it signs and sends, and that a
+   refusal is thrown rather than swallowed — a cancel that quietly did nothing would take the order
+   off the card while it was still resting at the venue. */
+{
+  const real = globalThis.fetch
+  let seen: { url: string, body: unknown } | null = null
+  const answer = (code: string) => async (url: string | URL | Request, init?: RequestInit) => {
+    seen = { url: String(url), body: JSON.parse(String(init?.body ?? 'null')) }
+    return new Response(JSON.stringify({ code, msg: 'The order does not exist' }))
+  }
+  const cred = { key: 'k', secret: 's', passphrase: 'p' }
+  globalThis.fetch = answer('00000') as typeof fetch
+  await cancel(cred, 'LINKUSDT', '123')
+  assert.equal(seen!.url, 'https://api.bitget.com/api/v2/mix/order/cancel-order')
+  assert.deepEqual(seen!.body, { symbol: 'LINKUSDT', productType: 'USDT-FUTURES', orderId: '123' })
+  globalThis.fetch = answer('43001') as typeof fetch
+  await assert.rejects(() => cancel(cred, 'LINKUSDT', '123'), /does not exist/)
+  globalThis.fetch = real
+}

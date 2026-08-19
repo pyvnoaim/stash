@@ -32,7 +32,7 @@ import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, pending as mexcPending, positions as mexcPositions } from './mexc.ts'
-import { desk, place, type Cred } from './trade.ts'
+import { cancel, desk, place, type Cred } from './trade.ts'
 import { createStash } from './mcp.ts'
 import { BARS, MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -1316,8 +1316,9 @@ export function start({
 
     /* The desk, and the one thing on this server that can move money.
        GET says what the account has and whether its key may trade at all; POST places one order,
-       with its stop and target riding it. Bitget only — MEXC's futures place-order endpoint has
-       been shut since 2022, so there is nothing to call and the app offers no button for it.
+       with its stop and target riding it; DELETE takes a resting one back off the book. Bitget
+       only — MEXC's futures order endpoints have been shut since 2022, so there is nothing to
+       call and the app offers no button for it.
        Both refuse without a stored key, the same 501 the positions route answers with. */
     if (path === '/api/trade') {
       const user = auth(req)
@@ -1333,6 +1334,24 @@ export function start({
         if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
         try { return send(res, 200, await desk(cred, symbol)) }
         catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
+      }
+      /* And take one back off. The mirror of POST and the cheaper direction — this only ever
+         un-commits money — so it keeps its own counter rather than spending the ten orders a
+         quarter hour that placing has. */
+      if (req.method === 'DELETE') {
+        const p = new URL(req.url ?? '/', 'http://x').searchParams
+        const symbol = String(p.get('symbol') ?? '').toUpperCase()
+        const id = String(p.get('id') ?? '')
+        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
+        if (!/^[0-9]{1,32}$/.test(id)) return send(res, 400, { error: 'not an order id' })
+        if (limited(`cancel:${user.id}`)) return send(res, 429, { error: 'ten cancels in fifteen minutes is the limit — wait it out' })
+        try {
+          await cancel(cred, symbol, id)
+          log(`cancel ${symbol} ${id}`, user.name, via(req))
+          return send(res, 200, { ok: true })
+        } catch (e) {
+          return send(res, 502, { error: String((e as Error).message) })
+        }
       }
       if (req.method === 'POST') {
         let b: any

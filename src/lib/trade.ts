@@ -46,6 +46,11 @@ export const place = (o: Order): Promise<{ id: string, size: number, price: numb
     body: JSON.stringify(o),
   }).then(json)
 
+/** Take a resting order back off the book. Bitget only, like `place`. */
+export const cancel = (symbol: string, id: string): Promise<{ ok: true }> =>
+  fetch(`/api/trade?symbol=${encodeURIComponent(symbol)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    .then(json)
+
 /**
  * What this trade is, once a margin and a multiplier are typed against a plan.
  *
