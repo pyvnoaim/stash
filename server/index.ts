@@ -515,6 +515,7 @@ export function start({
     versions: db.prepare(`select v, ts, device, length(json) as size from docs
       where user = ? order by v desc`),
     version: db.prepare('select v, json from docs where user = ? and v = ?'),
+    everyVersion: db.prepare('select v, ts, json from docs where user = ? order by v desc'),
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
@@ -950,6 +951,37 @@ export function start({
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       return send(res, 200, { versions: q.versions.all(user.id) })
+    }
+
+    /**
+     * Rows the history remembers and the document has forgotten. A row that was deleted is in the
+     * trash for a fortnight — far longer than fifty versions last — so anything held by an older
+     * snapshot and in neither list now went without anybody deleting it: a merge that dropped it,
+     * a share that took its project's sub-projects with it, a bug not yet found.
+     *
+     * Reading, not writing. What comes back is a list to look at; putting one back is an ordinary
+     * edit made by the device that asked, and goes up the way every other edit does.
+     */
+    if (path === '/api/lost' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const rows = q.everyVersion.all(user.id) as { v: number, ts: number, json: string }[]
+      const doc = (r: { json: string }) => {
+        try { return JSON.parse(r.json) as { items?: unknown[], trash?: unknown[] } } catch { return null }
+      }
+      const now = rows.length ? doc(rows[0]) : null
+      if (!now) return send(res, 200, { lost: [] })
+      const has = new Set([...(now.items ?? []), ...(now.trash ?? [])]
+        .map((i) => (i as { id?: string })?.id).filter(Boolean))
+      // newest first, so the copy kept for each id is the last one the history saw of it
+      const lost = new Map<string, unknown>()
+      for (const r of rows.slice(1)) {
+        for (const i of doc(r)?.items ?? []) {
+          const id = (i as { id?: string })?.id
+          if (id && !has.has(id) && !lost.has(id)) lost.set(id, { ...(i as object), lostAt: r.ts })
+        }
+      }
+      return send(res, 200, { lost: [...lost.values()] })
     }
 
     if (path === '/api/restore' && req.method === 'POST') {

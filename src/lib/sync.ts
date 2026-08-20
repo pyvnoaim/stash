@@ -15,7 +15,7 @@
  */
 import {
   adoptRemote, adoptShared, getState, KEY, mergeRemote, mergeSlice, setMe, setOnPersist, sliceOf,
-  uid, type Project, type Slice,
+  uid, type Item, type Project, type Slice,
 } from './store.ts'
 import { disablePush } from './push.ts'
 import { forgetVenue } from './venue.ts'
@@ -290,6 +290,16 @@ export const deleteAccount = (pass: string) =>
     .then(() => { setSnap({ user: null, status: 'out' }); return null }).catch(errorOf)
 
 export interface Version { v: number, ts: number, device: string, size: number }
+
+/** A row an older snapshot still holds and the document does not, and when it was last seen. */
+export type Lost = Item & { lostAt: number }
+/**
+ * What the history remembers and the document has forgotten. Deleting puts a row in the trash for
+ * a fortnight, which outlasts all fifty versions — so anything on this list left without anybody
+ * deleting it, and is a row to offer back rather than one to explain.
+ */
+export const lost = (): Promise<Lost[]> =>
+  call('/api/lost').then((j) => j.lost as Lost[]).catch(() => [])
 
 export const versions = (): Promise<Version[]> =>
   call('/api/versions').then((j) => j.versions as Version[]).catch(() => [])

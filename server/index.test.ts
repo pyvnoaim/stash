@@ -470,6 +470,24 @@ const nia = jar(await post('/api/signup', { user: 'nia', pass: 'longenough', inv
 assert.equal((await post('/api/restore', { version: vs[0].v }, nia)).status, 404)
 assert.deepEqual(await (await get('/api/versions', nia)).json(), { versions: [] })
 
+/* The rows the history holds and the newest document does not — a task that went without anybody
+   deleting it. Deleting puts a row in the trash, which outlives all fifty versions, so a row in
+   neither list now is one to offer back rather than one to explain. */
+{
+  const row = (id: string) => ({ id, text: id })
+  const push = async (state: unknown) =>
+    put(nia, (await (await get('/state', nia)).json()).version, state)
+  await push({ items: [row('kept'), row('vanished'), row('binned')] })
+  await push({ items: [row('kept')], trash: [row('binned')] })
+  const { lost } = await (await get('/api/lost', nia)).json()
+  assert.deepEqual(lost.map((i: any) => i.id), ['vanished'])   // not the one in the trash
+  assert.ok(typeof lost[0].lostAt === 'number')                // when the history last held it
+  // one account's history, like every other read of it
+  const rex = jar(await post('/api/signup', { user: 'rex', pass: 'longenough', invite: server.invite() }))
+  assert.deepEqual(await (await get('/api/lost', rex)).json(), { lost: [] })
+  assert.equal((await get('/api/lost')).status, 401)
+}
+
 // password: the current one is required, the new one has a floor, and the old one stops working
 assert.equal((await post('/api/password', { current: 'wrong', next: 'newlongenough' }, leon)).status, 401)
 assert.equal((await post('/api/password', { current: 'longenough', next: 'short' }, leon)).status, 400)

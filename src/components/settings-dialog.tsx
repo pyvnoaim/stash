@@ -27,14 +27,14 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  CALENDAR, clearDone, hotkey, MARKET, resetDials, resetHotkeys, setChart, setDesk, setDial,
-  setHotkey, setStake, setTool, TOOLS, toolOn, useStash, type ChartStyle,
+  addItem, CALENDAR, clearDone, hotkey, MARKET, resetDials, resetHotkeys, setChart, setDesk,
+  setDial, setHotkey, setStake, setTool, TOOLS, toolOn, useStash, type ChartStyle,
 } from '@/lib/store'
 import { type Dials as DialSet } from '@/lib/market'
 import {
   calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
-  links, linkUrl, logout, newFeed, restore, setCalendar, subscribeSync, updateAccount, versions,
-  type Device, type Link, type Version,
+  links, linkUrl, logout, lost, newFeed, restore, setCalendar, subscribeSync, updateAccount,
+  versions, type Device, type Link, type Lost, type Version,
 } from '@/lib/sync'
 import { disablePush, enablePush, pushState, type PushState } from '@/lib/push'
 
@@ -285,6 +285,7 @@ function DataPanel({ onDone }: { onDone: () => void }) {
       </Section>
 
       {/* the server's copies of the same data, which had a page of the list to itself for one card */}
+      {user && <LostPanel />}
       {user && <HistoryPanel onDone={onDone} />}
     </>
   )
@@ -1213,6 +1214,72 @@ function PasswordForm() {
 const when = (ts: number) => new Date(ts).toLocaleString(undefined, {
   day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
 })
+
+/**
+ * Rows the history has and the document does not — see `/api/lost`. A deleted row is in the trash
+ * for a fortnight and never reaches this list, so what does reach it went without anybody deleting
+ * it, and the answer is to offer it back rather than to explain it.
+ *
+ * Asked for on a press rather than on open: it reads every snapshot the server holds, which is a
+ * question worth asking when a row is missing and worth nobody's bandwidth when none is.
+ *
+ * Putting one back is an ordinary edit made here — it goes up on the next sync like any other, so
+ * a row recovered on the laptop is on the phone a moment later. Its project may not have survived
+ * it, in which case it lands in Quick notes, where an unfiled row belongs.
+ */
+function LostPanel() {
+  const s = useStash()
+  const [list, setList] = useState<Lost[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  /* Against what this device holds, not only what the server's newest snapshot did: a row typed
+     here and not yet pushed is missing from the history and present in front of you, and adding
+     the id a second time would put two rows on the list wearing one name. */
+  const missing = list?.filter((i) =>
+    !s.items.some((x) => x.id === i.id) && !s.trash.some((x) => x.id === i.id))
+
+  return (
+    <Section title="Lost rows" hint="Rows an older version still has and this document does not.">
+      {!missing
+        ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              className="w-fit"
+              onClick={async () => { setBusy(true); setList(await lost()); setBusy(false) }}
+            >
+              <History />
+              {busy ? 'Looking…' : 'Look through the history'}
+            </Button>
+          )
+        : !missing.length
+            ? <p className="text-muted-foreground text-sm">Nothing missing — every row the history holds is still here.</p>
+            : (
+                <div className="grid gap-0.5">
+                  {missing.map((i) => (
+                    <div key={i.id} className="flex items-center gap-2 text-sm">
+                      <span className="truncate">{i.text || 'Untitled'}</span>
+                      <span className="text-muted-foreground ml-auto shrink-0 text-xs">{when(i.lostAt)}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const { lostAt: _drop, ...row } = i
+                          // its project may be gone too; an unfiled row is one you can still find
+                          addItem({ ...row, pid: s.projects.some((p) => p.id === row.pid) ? row.pid : null })
+                          // and it leaves this list on the spot, being on the other one now
+                          toast(`Back: ${i.text || 'Untitled'}`)
+                        }}
+                      >
+                        Bring back
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+    </Section>
+  )
+}
 
 /**
  * The fifty versions the server keeps, and the way back to one. Restoring writes the old document
