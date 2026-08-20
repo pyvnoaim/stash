@@ -213,6 +213,56 @@ assert.equal(await count(), before + 1)
   assert.ok(getState().items.some((i) => i.id === 'mias-row'), 'a 502 took its rows')
 }
 
+/* A project document that has moved on is not a licence to delete what this device is holding.
+   Two ways it used to:
+    - the slice of a project shared without its sub-projects has none of them in it, so every one
+      of them read as dropped from the share and went, every row inside it with it
+    - a row typed here and not yet pushed was simply painted over by the pull, and the deletion
+      that left behind went up on the next push. It only had to be the first exchange of the
+      session, because the agreed version was held in memory and a fresh page knows nothing. */
+{
+  const { addProject } = await import('./store.ts')
+  const row = (text: string, pid: string) => ({
+    id: text, type: 'task' as const, text, note: '', pid, due: null, at: null, repeat: null,
+    flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
+  })
+  const { id: pid } = addProject('Ours')
+  const kid = addProject('Kid', null, pid)          // a sub-project of our own, not in the share
+  addItem(row('already there', pid))
+  addItem(row('under the sub-project', kid.id))
+  await flush()
+  assert.ok((await (await fetch('/api/share', {
+    method: 'POST', body: JSON.stringify({ pid, user: 'mia', edit: true }),
+  })).json()).members.length)                       // shared without `subs`, so the kid stays home
+  await syncNow()                                   // both sides agree on this project
+
+  // another device writes the project's document — the version moves, and it holds a row of theirs
+  const at = await (await fetch(`/api/pdoc?pid=${pid}`)).json()
+  const w = await fetch(`/api/pdoc?pid=${pid}`, {
+    method: 'PUT',
+    headers: { 'if-match': String(at.version) },
+    body: JSON.stringify({
+      state: { ...at.state, items: [...at.state.items, row('from the other device', pid)] },
+      device: 'other',
+    }),
+  })
+  assert.equal(w.status, 200)
+
+  // ...while this one has a row of its own that has not been pushed to that document yet
+  addItem(row('typed here', pid))
+  await flush()
+  await syncNow()
+
+  const here = getState().items.filter((i) => i.pid === pid || i.pid === kid.id).map((i) => i.text)
+  assert.deepEqual(here.sort(),
+    ['already there', 'from the other device', 'typed here', 'under the sub-project'])
+  assert.ok(getState().projects.some((p) => p.id === kid.id), 'the sub-project itself went')
+  // and what this device kept is what the server holds, rather than something it never sent
+  const ended = await (await fetch(`/api/pdoc?pid=${pid}`)).json()
+  assert.deepEqual(ended.state.items.map((i: any) => i.text).sort(),
+    ['already there', 'from the other device', 'typed here'])
+}
+
 server.close()
 console.log('sync ok')
 

@@ -15,7 +15,7 @@
  */
 import {
   adoptRemote, adoptShared, getState, KEY, mergeRemote, mergeSlice, setMe, setOnPersist, sliceOf,
-  uid, type Project,
+  uid, type Project, type Slice,
 } from './store.ts'
 import { disablePush } from './push.ts'
 import { forgetVenue } from './venue.ts'
@@ -521,8 +521,39 @@ export const unshare = (pid: string, user?: string, owner?: string) =>
   call('/api/share', { method: 'DELETE', body: JSON.stringify({ pid, user, owner }) })
     .then(() => null).catch(errorOf)
 
-/** Versions of the shared-project documents, keyed by owner and project — the same If-Match ledger. */
-const pv = new Map<string, number>()
+/**
+ * What this device last agreed with the server about each shared project, keyed by owner and
+ * project: the document version — the same If-Match ledger — and a fingerprint of the slice that
+ * version stood for. Between them they say which of the two documents has moved since, which is
+ * the whole of deciding what to do with the one that comes back.
+ *
+ * In localStorage, beside the personal document's own version and for the same reason. Held only
+ * in memory, every page load began knowing nothing, and a first exchange that knows nothing has to
+ * treat the server as newer — so the first pull of every session adopted the server's slice over
+ * whatever this device was holding. A row typed into a shared project and pushed to `/state` but
+ * not yet to its project document — the tab closed before its turn came round, or the network went
+ * — was deleted by that pull, and the deletion pushed after it. The task was simply gone.
+ */
+const PDOCS = 'stash.pdoc.v1'
+interface Agreed { v: number, sig: number }
+const pv = ((): Map<string, Agreed> => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PDOCS) || '') as Record<string, Agreed>
+    return new Map(Object.entries(raw).filter(([, a]) =>
+      a && typeof a.v === 'number' && typeof a.sig === 'number'))
+  } catch { return new Map() }
+})()
+const savePv = () => localStorage.setItem(PDOCS, JSON.stringify(Object.fromEntries(pv)))
+
+/** A slice as one number, so what was agreed to costs a field rather than a second copy of it.
+ *  ponytail: djb2. A collision reads as "we did not touch it" and lets the server's copy win —
+ *  one in four billion, against holding every shared project's rows twice on the device. */
+const sig = (s: unknown) => {
+  const j = JSON.stringify(s) ?? ''
+  let h = 5381
+  for (let i = 0; i < j.length; i++) h = Math.imul(h, 33) ^ j.charCodeAt(i)
+  return h | 0
+}
 /* A project id belongs to whoever owns it: the same string under two people is two projects, so
    every request names both. Nobody can reach a document by guessing an id alone. */
 const docUrl = (pid: string, owner?: string) =>
@@ -544,15 +575,28 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
     /* The same document, whichever way it is about to travel. Both sides are `sliceOf` output, so
        the comparison is on the same key order and a match means there is genuinely nothing to do. */
     const same = JSON.stringify(state) === JSON.stringify(local)
-    const behind = version > (pv.get(key) ?? 0)
-    // nothing of ours to send, or someone else's newer write to take: adopt and stop
-    if (behind && state) {
-      pv.set(key, version)
-      /* A project of your own carries no permission, so an identical slice is not news — adopting
-         it would rewrite the store and mark this device dirty over nothing. One shared with you is
-         adopted either way: the slice travels without the share on it, so an unchanged document is
-         still how a permission that changed reaches this device. */
-      if (!same || !mine) adoptShared(pid, state, mine ? undefined : { by: owner ?? '', edit })
+    const mark = mine ? undefined : { by: owner ?? '', edit }
+    /** This device and the server agree again, on whatever is held here now. */
+    const agree = (v: number) => {
+      pv.set(key, { v, sig: sig(sliceOf(getState(), pid, subs)) })
+      savePv()
+    }
+    /* Which of the two documents moved since the last time they agreed. Theirs by the version,
+       ours by the fingerprint. A project never exchanged before knows neither and counts both as
+       moved, which keeps the rows on both sides rather than picking one to lose. */
+    const was = pv.get(key)
+    const theirs = !was || version > was.v
+    const ours = !was || sig(local) !== was.sig
+    /* Only they moved, so there is nothing of ours to protect and their document is simply the
+       newer one. Taken whole, deliberately: a row they deleted is a row missing from the slice and
+       nothing else — no tombstone travels with it — so merging here would carry it straight back.
+       A project of your own carries no permission, so an identical slice is not news: adopting it
+       would rewrite the store and mark this device dirty over nothing. One shared with you is
+       adopted either way, because an unchanged document is still how a permission that changed
+       reaches this device. */
+    if (theirs && !ours) {
+      if (state && (!same || !mine)) adoptShared(pid, state, mark)
+      agree(version)
       return
     }
     if (!edit && !mine) return              // read-only: never push, only ever take
@@ -562,8 +606,14 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
        signal the other devices have. They adopt, which marks their own document dirty, which
        pushes a /state version and their pdoc, which moves the version again. A loop with no edit
        anywhere behind it, and it is what fills the version list on a quiet day. */
-    if (same) return
-    let body = JSON.stringify({ state: local, device })
+    if (same) { agree(version); return }
+    /* Both moved. The same answer the 409 below gives, reached before the push rather than after
+       it: the two sets of rows are merged, this device takes the result, and the result is what
+       goes up — so neither side's work is painted over by the other's. */
+    if (theirs && state) {
+      adoptShared(pid, { ...(state as Slice), items: mergeSlice(local, state).items }, mark)
+    }
+    let body = JSON.stringify({ state: sliceOf(getState(), pid, subs) ?? local, device })
     let w = await fetch(docUrl(pid, owner), {
       method: 'PUT', headers: { 'if-match': String(version) }, body,
     })
@@ -571,15 +621,16 @@ async function syncProject(pid: string, mine: boolean, edit: boolean, subs: bool
       // two editors on one project, same as /state above: both sets of rows go up, neither is lost
       const cur = await w.json()
       if (cur.state) {
-        const merged = mergeSlice(local, cur.state)
-        adoptShared(pid, merged, mine ? undefined : { by: owner ?? '', edit })
-        body = JSON.stringify({ state: merged, device })
+        // what this device holds now, which is not `local` any more if the two were merged above
+        const merged = mergeSlice(sliceOf(getState(), pid, subs) ?? local, cur.state)
+        adoptShared(pid, merged, mark)
+        body = JSON.stringify({ state: sliceOf(getState(), pid, subs) ?? merged, device })
       }
       w = await fetch(docUrl(pid, owner), {
         method: 'PUT', headers: { 'if-match': String(cur.version) }, body,
       })
     }
-    if (w.ok) pv.set(key, (await w.json()).version)
+    if (w.ok) agree((await w.json()).version)
   } catch { /* offline: the next sync tries again */ }
 }
 
@@ -682,7 +733,7 @@ function join() {
      that wrote it already holds that number and stays where it is. */
   es.addEventListener('moved', (e) => {
     const r = JSON.parse(e.data) as { owner: string, pid: string, v: number }
-    if (r.v > (pv.get(`${r.owner === snap.user?.name ? '' : r.owner}:${r.pid}`) ?? 0)) void syncFresh()
+    if (r.v > (pv.get(`${r.owner === snap.user?.name ? '' : r.owner}:${r.pid}`)?.v ?? 0)) void syncFresh()
   })
   // your own document, written on another of your devices — or by the MCP server, which has none
   es.addEventListener('state', (e) => {

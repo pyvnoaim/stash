@@ -910,8 +910,15 @@ export const sliceOf = (s: State, pid: string, subs = false): Slice | null => {
  */
 export function adoptShared(pid: string, slice: unknown, share?: { by: string, edit: boolean } | null) {
   set((s) => {
-    // everything of this project's that is here now: itself, and whatever sits under it
-    const localIds = new Set([pid, ...s.projects.filter((p) => p.parent === pid).map((p) => p.id)])
+    /* This share's footprint on this device: the project, and the sub-projects that are here
+       because of it — the ones carrying a share of their own, which is what an adopted slice
+       marks them with. A sub-project of your own is not part of anybody's share, only filed
+       under a project that is, and sweeping it out with one took every row in it: a project
+       shared without its sub-projects has none of them in the slice, so all of them read as
+       dropped from the share, and the first pull that differed deleted the lot. */
+    const localIds = new Set([
+      pid, ...s.projects.filter((p) => p.parent === pid && p.share).map((p) => p.id),
+    ])
 
     if (slice === null && share === null) {
       /* It stopped being shared with you, so it leaves this device — the trash included. Their
