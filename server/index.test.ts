@@ -479,12 +479,13 @@ assert.deepEqual(await (await get('/api/versions', nia)).json(), { versions: [] 
     put(nia, (await (await get('/state', nia)).json()).version, state)
   await push({ items: [row('kept'), row('vanished'), row('binned')] })
   await push({ items: [row('kept')], trash: [row('binned')] })
-  const { lost } = await (await get('/api/lost', nia)).json()
+  const { lost, since } = await (await get('/api/lost', nia)).json()
   assert.deepEqual(lost.map((i: any) => i.id), ['vanished'])   // not the one in the trash
   assert.ok(typeof lost[0].lostAt === 'number')                // when the history last held it
+  assert.ok(since > 0 && since <= lost[0].lostAt)              // and how far back the looking went
   // one account's history, like every other read of it
   const rex = jar(await post('/api/signup', { user: 'rex', pass: 'longenough', invite: server.invite() }))
-  assert.deepEqual(await (await get('/api/lost', rex)).json(), { lost: [] })
+  assert.deepEqual(await (await get('/api/lost', rex)).json(), { lost: [], since: 0 })
   assert.equal((await get('/api/lost')).status, 401)
 }
 
@@ -688,6 +689,20 @@ const cyLive = await listen(cy)
 cyLive.stop()
 assert.deepEqual((await boLive.until((f) => room(f) && !f.data.length, 'the room emptying')).data, [])
 boLive.stop()
+
+/* The sweep for lost rows reaches into the project documents this account is on, not only its own:
+   a row can go missing out of a shared project without ever having been in a personal one. */
+{
+  const row = (id: string) => ({ id, text: id })
+  const v = (await (await pdoc('p1', ada)).json()).version
+  const v2 = (await (await putPdoc('p1', v, { items: [row('kept'), row('shared-gone')] }, ada)).json()).version
+  assert.equal((await putPdoc('p1', v2, { items: [row('kept')] }, ada)).status, 200)
+  const seen = async (c: string) =>
+    ((await (await get('/api/lost', c)).json()).lost as any[]).map((i) => i.id)
+  assert.deepEqual(await seen(ada), ['shared-gone'])       // its owner
+  assert.deepEqual(await seen(cy), ['shared-gone'])        // and everyone on it
+  assert.ok(!(await seen(leon)).includes('shared-gone'))   // and nobody else at all
+}
 
 // a member can leave, and takes nothing with them
 assert.equal((await del2('/api/share', { pid: 'p1', owner: 'ada' }, bo)).status, 200)

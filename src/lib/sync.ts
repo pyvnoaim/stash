@@ -294,12 +294,19 @@ export interface Version { v: number, ts: number, device: string, size: number }
 /** A row an older snapshot still holds and the document does not, and when it was last seen. */
 export type Lost = Item & { lostAt: number }
 /**
- * What the history remembers and the document has forgotten. Deleting puts a row in the trash for
- * a fortnight, which outlasts all fifty versions — so anything on this list left without anybody
- * deleting it, and is a row to offer back rather than one to explain.
+ * What the history remembers and the document has forgotten, and how far back the looking went —
+ * "nothing missing" means little without it, since the server keeps fifty versions of each
+ * document and fifty busy ones can be an afternoon.
+ *
+ * Deleting puts a row in the trash for a fortnight, which outlasts those fifty — so anything on
+ * this list left without anybody deleting it, and is a row to offer back rather than to explain.
+ *
+ * The error is handed back rather than swallowed: an empty list and a failed request are not the
+ * same answer, and reading as "nothing missing" is the one way this could make things worse.
  */
-export const lost = (): Promise<Lost[]> =>
-  call('/api/lost').then((j) => j.lost as Lost[]).catch(() => [])
+export const lost = (): Promise<{ lost: Lost[], since: number } | { error: string }> =>
+  call('/api/lost').then((j) => ({ lost: j.lost as Lost[], since: Number(j.since) || 0 }))
+    .catch((e) => ({ error: errorOf(e) }))
 
 export const versions = (): Promise<Version[]> =>
   call('/api/versions').then((j) => j.versions as Version[]).catch(() => [])

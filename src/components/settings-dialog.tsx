@@ -27,14 +27,14 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  addItem, CALENDAR, clearDone, hotkey, MARKET, resetDials, resetHotkeys, setChart, setDesk,
-  setDial, setHotkey, setStake, setTool, TOOLS, toolOn, useStash, type ChartStyle,
+  addItem, CALENDAR, clearDone, hotkey, MARKET, readOnly, resetDials, resetHotkeys, setChart,
+  setDesk, setDial, setHotkey, setStake, setTool, TOOLS, toolOn, useStash, type ChartStyle,
 } from '@/lib/store'
 import { type Dials as DialSet } from '@/lib/market'
 import {
   calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
   links, linkUrl, logout, lost, newFeed, restore, setCalendar, subscribeSync, updateAccount,
-  versions, type Device, type Link, type Lost, type Version,
+  versions, type Device, type Link, type Version,
 } from '@/lib/sync'
 import { disablePush, enablePush, pushState, type PushState } from '@/lib/push'
 
@@ -1229,16 +1229,18 @@ const when = (ts: number) => new Date(ts).toLocaleString(undefined, {
  */
 function LostPanel() {
   const s = useStash()
-  const [list, setList] = useState<Lost[] | null>(null)
+  const [got, setGot] = useState<Awaited<ReturnType<typeof lost>> | null>(null)
   const [busy, setBusy] = useState(false)
   /* Against what this device holds, not only what the server's newest snapshot did: a row typed
      here and not yet pushed is missing from the history and present in front of you, and adding
      the id a second time would put two rows on the list wearing one name. */
-  const missing = list?.filter((i) =>
-    !s.items.some((x) => x.id === i.id) && !s.trash.some((x) => x.id === i.id))
+  const missing = got && 'lost' in got
+    ? got.lost.filter((i) => !s.items.some((x) => x.id === i.id) && !s.trash.some((x) => x.id === i.id))
+    : null
 
   return (
     <Section title="Lost rows" hint="Rows an older version still has and this document does not.">
+      {got && 'error' in got && <p className="text-destructive text-sm">{got.error}</p>}
       {!missing
         ? (
             <Button
@@ -1246,14 +1248,21 @@ function LostPanel() {
               size="sm"
               disabled={busy}
               className="w-fit"
-              onClick={async () => { setBusy(true); setList(await lost()); setBusy(false) }}
+              onClick={async () => { setBusy(true); setGot(await lost()); setBusy(false) }}
             >
               <History />
-              {busy ? 'Looking…' : 'Look through the history'}
+              {busy ? 'Looking…' : got ? 'Look again' : 'Look through the history'}
             </Button>
           )
         : !missing.length
-            ? <p className="text-muted-foreground text-sm">Nothing missing — every row the history holds is still here.</p>
+            ? (
+                /* how far back the looking went, because "nothing missing" on its own is not an
+                   answer: fifty versions of a document written all day is an afternoon of it */
+                <p className="text-muted-foreground text-sm">
+                  Nothing missing — every row the history holds is still here.
+                  {got && 'since' in got && got.since > 0 && ` It goes back to ${when(got.since)}.`}
+                </p>
+              )
             : (
                 <div className="grid gap-0.5">
                   {missing.map((i) => (
@@ -1265,8 +1274,11 @@ function LostPanel() {
                         size="sm"
                         onClick={() => {
                           const { lostAt: _drop, ...row } = i
-                          // its project may be gone too; an unfiled row is one you can still find
-                          addItem({ ...row, pid: s.projects.some((p) => p.id === row.pid) ? row.pid : null })
+                          /* its project may be gone too — or be one somebody shares with you
+                             read-only, where the store refuses the write and the row would land
+                             nowhere at all. Unfiled is a row you can still find. */
+                          const filed = s.projects.some((p) => p.id === row.pid) && !readOnly(s, row.pid)
+                          addItem({ ...row, pid: filed ? row.pid : null })
                           // and it leaves this list on the spot, being on the other one now
                           toast(`Back: ${i.text || 'Untitled'}`)
                         }}

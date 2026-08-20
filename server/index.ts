@@ -516,6 +516,12 @@ export function start({
       where user = ? order by v desc`),
     version: db.prepare('select v, json from docs where user = ? and v = ?'),
     everyVersion: db.prepare('select v, ts, json from docs where user = ? order by v desc'),
+    /* Every version of every project document this account may read — its own, and the ones shared
+       with it. Newest first, so the first row of each project is that project's document as it
+       stands and the rest are its history. */
+    everyPdocVersion: db.prepare(`select owner, pid, ts, json from pdocs p where p.owner = ?
+      or exists (select 1 from shares s where s.pid = p.pid and s.owner = p.owner and s.member = ?)
+      order by v desc`),
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
@@ -961,27 +967,62 @@ export function start({
      *
      * Reading, not writing. What comes back is a list to look at; putting one back is an ordinary
      * edit made by the device that asked, and goes up the way every other edit does.
+     *
+     * ponytail: a project document carries no trash of its own, so a row somebody else deleted out
+     * of a project shared with you reads the same as one that went missing, until their deletion
+     * has reached your own trash. A list to look at rather than an alarm, which is why it is a list.
      */
     if (path === '/api/lost' && req.method === 'GET') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const rows = q.everyVersion.all(user.id) as { v: number, ts: number, json: string }[]
-      const doc = (r: { json: string }) => {
-        try { return JSON.parse(r.json) as { items?: unknown[], trash?: unknown[] } } catch { return null }
+      const doc = (json: string) => {
+        try { return JSON.parse(json) as { items?: unknown[], trash?: unknown[] } } catch { return null }
       }
-      const now = rows.length ? doc(rows[0]) : null
-      if (!now) return send(res, 200, { lost: [] })
-      const has = new Set([...(now.items ?? []), ...(now.trash ?? [])]
-        .map((i) => (i as { id?: string })?.id).filter(Boolean))
-      // newest first, so the copy kept for each id is the last one the history saw of it
+      /* Every history this account can read: its own document, and each project document it owns
+         or is on. A row lost out of a shared project is in that project's history whether or not
+         it ever reached this account's own — and a project's document moves less often than a
+         personal one, so its fifty versions usually reach further back.
+         Read a row at a time rather than a list at a time: fifty versions of each of a dozen
+         documents is more of this server's memory than one button press is worth holding, and
+         nothing here needs two of them at once. */
+      const each = function* () {
+        for (const r of q.everyVersion.iterate(user.id) as Iterable<{ ts: number, json: string }>) {
+          yield { key: 'me', ts: r.ts, json: r.json }
+        }
+        for (const r of q.everyPdocVersion.iterate(user.id, user.id) as
+          Iterable<{ owner: number, pid: string, ts: number, json: string }>) {
+          yield { key: `${r.owner}:${r.pid}`, ts: r.ts, json: r.json }
+        }
+      }
+
+      /* Two passes, because the first version of each document is that document as it stands and
+         a row is only missing when every one of them is missing it — so what is still here has to
+         be known in full before a single row can be called lost. */
+      const seen = new Set<string>()
+      const has = new Set<string>()
+      let since = 0
+      for (const r of each()) {
+        since = since ? Math.min(since, r.ts) : r.ts
+        if (seen.has(r.key)) continue
+        seen.add(r.key)
+        // the trash counts as still here: a row somebody deleted is not a row that went missing
+        const d = doc(r.json)
+        for (const i of [...(d?.items ?? []), ...(d?.trash ?? [])]) {
+          const id = (i as { id?: string })?.id
+          if (id) has.add(id)
+        }
+      }
+      // newest first, so the copy kept for each id is the last one any history saw of it
       const lost = new Map<string, unknown>()
-      for (const r of rows.slice(1)) {
-        for (const i of doc(r)?.items ?? []) {
+      const done = new Set<string>()
+      for (const r of each()) {
+        if (!done.has(r.key)) { done.add(r.key); continue }
+        for (const i of doc(r.json)?.items ?? []) {
           const id = (i as { id?: string })?.id
           if (id && !has.has(id) && !lost.has(id)) lost.set(id, { ...(i as object), lostAt: r.ts })
         }
       }
-      return send(res, 200, { lost: [...lost.values()] })
+      return send(res, 200, { lost: [...lost.values()], since })
     }
 
     if (path === '/api/restore' && req.method === 'POST') {
