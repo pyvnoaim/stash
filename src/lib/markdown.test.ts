@@ -21,7 +21,7 @@ assert.equal(spanOpen('Body: `Sehr geehrte Damen und Herren,\n\nVielen Dank.`'),
 assert.equal(spanOpen('run `npm test` first'), false)
 assert.equal(spanOpen('no ticks here'), false)
 
-import { blocksOf, replaceBlock, resolveWiki, safeHref, safeSrc, wikiKey, wikiLinks } from './markdown.ts'
+import { blocksOf, replaceBlock, resolveWiki, safeHref, safeSrc, wikiKey, wikiLinks, type Block } from './markdown.ts'
 
 // safe schemes pass through, trimmed
 assert.equal(safeHref('https://example.com'), 'https://example.com')
@@ -149,4 +149,15 @@ console.log('markdown: ok')
   assert.equal(replaceBlock(note, para, 'rewritten'), note.replace('para one\nstill it', 'rewritten'))
   // a block that grows into two lines pushes the rest down rather than overwriting it
   assert.equal(replaceBlock('a\nb', { from: 0, to: 0, text: 'a' }, 'a\nnew'), 'a\nnew\nb')
+
+  /* Backspace at the start of a block joins it to the one above — the two ranges written back as
+     one. It is the only way a blank line comes out of a note at all: the page edits one block at a
+     time, and a blank line is nothing but a start and an end, so every other key there is dead. */
+  const join = (n: string, a: Block, b: Block) => replaceBlock(n, { ...a, to: b.to }, a.text + b.text)
+  const gap = blocksOf('one\n\n\ntwo')
+  assert.equal(join('one\n\n\ntwo', gap[1], gap[2]), 'one\n\ntwo')   // one of the two blanks goes
+  assert.equal(join('one\n\n\ntwo', gap[2], gap[3]), 'one\n\ntwo')   // and so does the other
+  // text either side of the seam ends up in one block rather than losing a character to the join
+  const head = blocksOf('# H\nbody')
+  assert.equal(join('# H\nbody', head[0], head[1]), '# Hbody')
 }

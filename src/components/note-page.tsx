@@ -43,6 +43,15 @@ export function NotePage({ it, onBack, onOpen }: {
     setBar({ top: Math.max(4, e.clientY - box.top - 44), left: Math.max(4, e.clientX - box.left) })
   }
 
+  /** Leave the caret at `from` once React has re-committed the controlled value — every one of
+   *  these has to wait for that render, or it is set against the text as it stood before. */
+  const put = (from: number, len = 0) => setTimeout(() => {
+    const ta = taRef.current
+    if (!ta) return
+    ta.focus()
+    ta.setSelectionRange(from, from + len)
+  }, 0)
+
   /** What every edit on this page goes through: the open block's new text, put back where it came
    *  from. The range moves with it, since what was typed may be more lines than were there. */
   const writeBlock = (text: string) => {
@@ -57,6 +66,16 @@ export function NotePage({ it, onBack, onOpen }: {
    *  ponytail: end of the block. `caretPositionFromPoint` against a source map is the upgrade. */
   const open = (b: Block) => setEdit(b)
 
+  /** Two neighbouring blocks made one: the line break between them goes and the caret sits at the
+   *  seam, which is what Backspace at the start of a block means everywhere else. The pair opens as
+   *  the single block it now is, so what was two textareas is the one the cursor is already in. */
+  const join = (a: Block, b: Block) => {
+    const text = a.text + b.text
+    patch(it.id, { note: replaceBlock(it.note, { ...a, to: b.to }, text) })
+    setEdit({ from: a.from, to: a.from + text.split('\n').length - 1, text })
+    put(a.text.length)
+  }
+
   /** Wrap the current selection, then keep the original text selected inside the new marks. */
   const wrap = (before: string, after = before, selectFrom?: number, selectLen?: number) => {
     const ta = taRef.current
@@ -64,10 +83,7 @@ export function NotePage({ it, onBack, onOpen }: {
     const { selectionStart: a, selectionEnd: b, value } = ta
     const mid = value.slice(a, b)
     writeBlock(value.slice(0, a) + before + mid + after + value.slice(b))
-    const from = selectFrom ?? a + before.length
-    const len = selectLen ?? mid.length
-    // after React re-commits the controlled value, restore the selection
-    setTimeout(() => { ta.focus(); ta.setSelectionRange(from, from + len) }, 0)
+    put(selectFrom ?? a + before.length, selectLen ?? mid.length)
     setBar(null)
   }
 
@@ -90,8 +106,7 @@ export function NotePage({ it, onBack, onOpen }: {
     const prefix = rest.match(/^(#{1,3}\s+|>\s+)/)?.[0] ?? ''
     const next = rule(prefix)
     writeBlock(value.slice(0, start) + next + rest.slice(prefix.length))
-    const shift = next.length - prefix.length
-    setTimeout(() => { ta.focus(); ta.setSelectionRange(a + shift, a + shift) }, 0)
+    put(a + next.length - prefix.length)
     setBar(null)
   }
   const heading = () => line((p) => (p.startsWith('###') ? '' : p.startsWith('#') ? '#'.repeat(p.trim().length + 1) + ' ' : '# '))
@@ -108,8 +123,7 @@ export function NotePage({ it, onBack, onOpen }: {
     }
     const { selectionStart: a, selectionEnd: b, value } = ta
     writeBlock(value.slice(0, a) + text + value.slice(b))
-    const at = a + text.length
-    setTimeout(() => { ta.focus(); ta.setSelectionRange(at, at) }, 0)
+    put(a + text.length)
   }
 
   /**
@@ -210,9 +224,8 @@ export function NotePage({ it, onBack, onOpen }: {
     const from = ta.value.slice(0, at).lastIndexOf('[[')
     if (from < 0) return
     writeBlock(`${ta.value.slice(0, from + 2)}${target.text}]]${ta.value.slice(at)}`)
-    const caret = from + 2 + target.text.length + 2
     setWikiQ(null)
-    setTimeout(() => { ta.focus(); ta.setSelectionRange(caret, caret) }, 0)
+    put(from + 2 + target.text.length + 2)
   }
 
   const TOOLS = [
@@ -241,19 +254,40 @@ export function NotePage({ it, onBack, onOpen }: {
         onMouseUp={(e) => { onSelect(e); readCaret(e.currentTarget) }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') { e.preventDefault(); setEdit(null); setWikiQ(null); return }
+          const ta = e.currentTarget
+          const prev = () => blocks.filter((b) => b.to < edit.from).at(-1)
+          const after = () => blocks.find((b) => b.from > edit.to)
+          /* Backspace at the very start and Delete at the very end reach out of this block and into
+             the one beside it, joining the two. A textarea holds only its own lines, so without
+             this both keys simply do nothing there — and a blank line, which is nothing but a start
+             and an end, could never be taken out of the note at all. */
+          if (ta.selectionStart === ta.selectionEnd) {
+            const at = ta.selectionStart
+            if (e.key === 'Backspace' && at === 0) {
+              const b = prev()
+              if (b) { e.preventDefault(); join(b, edit) }
+              return
+            }
+            if (e.key === 'Delete' && at === ta.value.length) {
+              const b = after()
+              if (b) { e.preventDefault(); join(edit, b) }
+              return
+            }
+          }
           /* Off the top or the bottom of this block and into the next one along. A textarea would
              otherwise stop dead at its own first and last line, and the only way on would be the
              mouse — on a page whose whole point is that the keyboard never leaves the text. */
-          const ta = e.currentTarget
           const up = e.key === 'ArrowUp', down = e.key === 'ArrowDown'
           if (!up && !down) return
           const before = ta.value.slice(0, ta.selectionStart)
           if (up ? before.includes('\n') : ta.value.slice(ta.selectionEnd).includes('\n')) return
-          const next = blocks.filter((b) => (up ? b.to < edit.from : b.from > edit.to))
-          const to = up ? next.at(-1) : next[0]
+          const to = up ? prev() : after()
           if (!to) return
           e.preventDefault()
           open(to)
+          // downwards lands on the first line, not the last: carrying on in the direction you were
+          // going. Upwards wants the end, which is where a block opens anyway.
+          if (down) put(0)
         }}
         /* Focus leaving closes it. Without this a block you clicked away from — to the title, to
            the sidebar, to another window — sat there in its own source while everything around it
