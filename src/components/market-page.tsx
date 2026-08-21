@@ -1973,12 +1973,17 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
   /* The balance, which the card used to keep to itself: it was only ever printed beside rows, so
      the one number that is true every day of the year was invisible on every day nothing was
      open — which is most of them. Flat, it is the wallet balance, and the hint says so rather
-     than repeating a sentence about positions there are none of. */
-  const equityTag = equity == null ? null : (
+     than repeating a sentence about positions there are none of.
+
+     `right` is the header row, where a heading and a count sit to its left and it belongs at the
+     far end of them. Flat there is nothing to push away from, and pushing anyway put "FLAT" at one
+     edge of a wide window and "equity $22.85" at the other with a metre of nothing between — two
+     words pretending to be a table. There they simply stand together. */
+  const equityTag = (right = false) => equity == null ? null : (
     <Hint label={rows.length
       ? 'Account equity as the venue reports it — wallet balance plus what is open, before fees'
       : 'What the venue says is in the account, with nothing open against it'}>
-      <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
+      <span className={cn('text-muted-foreground font-mono text-xs tabular-nums', right && 'ml-auto')}>
         equity {usd(equity)}
       </span>
     </Hint>
@@ -1992,15 +1997,16 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
      position gets a placeholder for one. */
   if (!rows.length && !orders.length) {
     if (loading) return <PositionsPlaceholder />
-    // no key, or a venue that would not answer: nothing to say, and the card stays gone
-    if (!equityTag) return null
+    /* No key, or a venue that would not answer: nothing to say, and the card stays gone.
+       Nor a card when the answer is "nothing" — a full-width bordered box holding two words reads
+       as a container that lost its contents, which is the opposite of what being flat is. A line,
+       the weight of the toolbar above it. The box comes back with the rows. */
+    if (equity == null) return null
     return (
-      <Card className="py-3">
-        <CardContent className="flex items-baseline gap-2 px-3 text-sm">
-          <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Flat</p>
-          {equityTag}
-        </CardContent>
-      </Card>
+      <p className="flex items-baseline gap-2 px-3 text-sm">
+        <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Flat</span>
+        {equityTag()}
+      </p>
     )
   }
   /* The strip that answers "am I fine?" without opening a single row: how many are open, and the
@@ -2031,7 +2037,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
               {nearestLiq != null && ` · nearest liq ${nearestLiq.toFixed(1)}% away`}
             </span>
           </Hint>
-          {equityTag}
+          {equityTag(true)}
         </div>
         {/* The one thing the desk never said. It answers "should I buy this" all day, and nearest
             liquidation answers the worst single row — this is the question that only makes sense
@@ -2296,16 +2302,10 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
     ? own.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
   const usd = all.some((r) => r.cash != null)
     ? all.reduce((n, r) => n + (r.cash ?? 0), 0) : null
-  const paidTotal = [
-    money !== null && signedEuro(money),
-    usd !== null && `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`,
-  ].filter(Boolean).join(' · ')
-  /* Green or red on what is actually printed, which is not always the R. A week can settle up in
+  /* Each figure is coloured by itself rather than by whichever came first. A week can settle up in
      money and down in R — a small winner at a wide risk and a big loser at a tight one does it —
-     and the total read red while saying +$1.15. Two currencies disagreeing with each other get no
-     colour at all rather than the first one's: neither is the answer on its own. */
-  const upTotal = money !== null && usd !== null && (money >= 0) !== (usd >= 0)
-    ? null : (money ?? usd ?? total) >= 0
+     and one total wearing the other's colour is the record saying the opposite of what it means.
+     Which is also why they get their own cells below rather than one line of three numbers. */
   /* What a row is worth for the purpose of stacking it. Its own money where it has any, and its R
      where it has none — and dollars and euros are compared as the numbers they are, because the
      alternative is a rate this app refuses to invent for a sum and would then invent for a sort.
@@ -2323,37 +2323,17 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
   return (
     <Card className="py-3">
       <CardContent className="px-3">
-        {/* wrapping, because six things do not fit on a phone: a heading, a count, two totals, a
-            three-way sort and a Clear. Unwrapped, the sort tray and the button were pushed off the
-            right edge of the card with nothing to scroll. */}
-        <div className="mb-2 flex flex-wrap items-baseline gap-2">
+        {/* The heading and the two controls, and nothing numeric. This row used to carry six things
+            on one baseline — a heading, a count, two totals in two currencies, a three-way sort and
+            a Clear — with the totals shoved to the far right by an `ml-auto`. On a wide window that
+            is a heading at one edge, "−€6.72 · +$10.27 paid · +1.36R total" at the other, and no
+            way to tell from the row which word belonged to which number. The numbers moved down to
+            a read-out that names each of them. */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="font-heading text-sm tracking-wide uppercase">How they went</span>
-          <span className="text-muted-foreground text-xs">
-            {results.length} finished · {won} hit target
-          </span>
-          {/* Three numbers with no words on them — "−€6.72 · −$2.04 −0.97R" — is what this was, and
-              there is no reading it off the row: two of them are money in two currencies that are
-              deliberately never added together, and the third is not money at all. Each carries its
-              own word now, and the tooltip says why there are two of them. */}
-          <Hint label={[
-            money !== null && `Euros: this app's own arithmetic over the size or stake you typed, net of the ${dials.fee}%-a-side fee and the funding to the close.`,
-            usd !== null && 'Dollars: what a venue actually settled, its fees and funding already inside the figure.',
-            money !== null && usd !== null && 'Never added together — the sum of the two is a number no exchange rate ever produced, and a row is counted in one of them and not the other.',
-            `R is the whole record in units of risk, which is the only unit two trades on two assets add up in. A week can settle up in money and down in R, so each is coloured by itself.`,
-          ].filter(Boolean).join(' ')}>
-            <span className="ml-auto flex items-baseline gap-2 font-mono tabular-nums">
-              <span className={cn('text-sm',
-                upTotal === null ? '' : upTotal ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {paidTotal || rLabel(total)}
-              </span>
-              <span className="text-muted-foreground text-xs">
-                {paidTotal ? `paid · ${rLabel(total)} total` : 'total'}
-              </span>
-            </span>
-          </Hint>
           {/* stacking, not filtering: every row stays, the question is only which end it is read
-              from. Beside the totals because those are what the answer is being compared against. */}
-          <div className="bg-muted/50 -my-1 ml-2 flex gap-1 rounded-lg p-1">
+              from */}
+          <div className="bg-muted/50 ml-auto flex gap-1 rounded-lg p-1">
             {LOG_SORTS.map((o) => (
               <Hint key={o.id} label={o.hint}>
                 <Button size="sm" variant={sort === o.id ? 'secondary' : 'ghost'}
@@ -2368,7 +2348,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
           <Button
             variant="ghost"
             size="sm"
-            className="text-muted-foreground -my-1 h-7"
+            className="text-muted-foreground h-7"
             onClick={() => {
               const gone = clearResults()
               if (gone) toast(`Cleared ${gone.n}`, { action: { label: 'Undo', onClick: gone.undo } })
@@ -2377,20 +2357,61 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             Clear
           </Button>
         </div>
+
+        {/* Every number with its name over it, which is the one thing the old strip could not do:
+            two of these are money in two currencies that are deliberately never added together, and
+            one is not money at all. Read as a run-on line the words trailed the wrong figures.
+
+            max-content tracks packed left, not equal fractions: on a wide window fractions pull five
+            read-outs into five far corners with a hand's width between them, and a row of numbers
+            you sweep your eyes across is not a row. */}
+        <div className="mb-3 grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-[repeat(5,max-content)] sm:gap-x-10">
+          {([
+            ['Finished', String(results.length), '', null,
+              'Every trade of yours that has closed. A setup you only watched is not a trade and never reaches this list.'],
+            ['Hit target', String(won), `${results.length ? Math.round((won / results.length) * 100) : 0}%`, null,
+              'How many came off at the target rather than at the stop or by hand. The percentage is that share of the finished trades.'],
+            money === null ? null : ['Priced here', signedEuro(money), 'euros', money >= 0,
+              `This app's own arithmetic over the size or the stake you typed, net of the ${dials.fee}%-a-side fee at both ends and the funding to the close. Only the trades no venue settled for you — counting one in both currencies would be the same trade twice.`],
+            usd === null ? null : ['Settled', `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`, 'dollars', usd >= 0,
+              'What a venue actually paid out, its own fees and funding already inside the figure. Never added to the euros beside it — the sum of the two is a number no exchange rate ever produced.'],
+            ['Total in R', rLabel(total), 'units of risk', total >= 0,
+              'R is one trade\'s risk — what it would have cost if the stop had hit. It is the only unit two trades on two different assets add up in, which is why the record is kept in it. A week can settle up in money and down in R, so this is coloured by itself and not by the money.'],
+          ].filter(Boolean) as [string, string, string, boolean | null, string][])
+            .map(([label, value, sub, up, hint]) => (
+              <Hint key={label} label={hint}>
+                {/* w-fit: the cell stretches its whole grid track and a tooltip centres on its
+                    trigger, so the arrow landed in the empty space beside the number */}
+                <div className="w-fit">
+                  <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
+                  <p className={cn('font-medium tabular-nums',
+                    up === null ? '' : up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {value}
+                    {sub && <span className="text-muted-foreground ml-1.5 text-xs font-normal">{sub}</span>}
+                  </p>
+                </div>
+              </Hint>
+            ))}
+        </div>
+
         {/* The same trades cut by lane — expectancy per rule is what the record is kept to say. As
             chips rather than as a run-on sentence: three lanes in a row of prose separated by
             middots is one long line where every third word is a number, and the eye has to parse
-            the punctuation to find where one lane ends and the next starts. */}
+            the punctuation to find where one lane ends and the next starts.
+            Spelled out rather than abbreviated: "31× 42% hit +0.04R" reads as a multiplier, a
+            percentage and a total, and only one of those is what it says. */}
         <div className="mb-2 flex flex-wrap gap-1.5 text-xs">
           {lanes.map((l) => (
-            <span key={l.name} className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
-              <span className="font-medium">{l.name}</span>
-              <span className="text-muted-foreground">{l.n}×</span>
-              <span className="text-muted-foreground">{Math.round((l.hit / l.n) * 100)}% hit</span>
-              <span className={l.avg >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
-                {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R
+            <Hint key={l.name} label={`${l.n} finished trade${l.n === 1 ? '' : 's'} on the ${l.name} rule. ${l.hit} of them reached the target. The last figure is what one average trade on this rule returned in units of risk — over enough trades that is the number that says whether the rule pays to keep running.`}>
+              <span className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
+                <span className="font-medium">{l.name}</span>
+                <span className="text-muted-foreground">{l.n} trade{l.n === 1 ? '' : 's'}</span>
+                <span className="text-muted-foreground">{Math.round((l.hit / l.n) * 100)}% hit</span>
+                <span className={l.avg >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
+                  {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R a trade
+                </span>
               </span>
-            </span>
+            </Hint>
           ))}
         </div>
         {/* what each column is, once, instead of the eye working it out from the first row */}
