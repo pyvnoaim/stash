@@ -10,10 +10,15 @@ const SAFE = /^(https?:|mailto:|#|\/(?!\/))/i
  * one answer: the note page's open block wears the same shape as the thing it renders into, or
  * clicking into a heading swaps 20px semibold for 14px regular and the whole note under it jumps.
  * Level 0 is "not a heading", and gets nothing.
+ *
+ * No margin above it: on the note page the space over a heading is the blank line before it, and a
+ * heading that adds its own eats the bottom of that line — you click the gap you can see, land in
+ * the heading's margin instead, and the cursor jumps to the end of the title. Spacing between
+ * blocks is the renderer's `gap-3` and the blank lines themselves, nothing else.
  */
 const HEADING_SIZE = ['', 'text-xl', 'text-lg', 'text-base']
 export const headingClass = (level: number) =>
-  (HEADING_SIZE[level] ? `mt-2 font-semibold ${HEADING_SIZE[level]}` : '')
+  (HEADING_SIZE[level] ? `font-semibold ${HEADING_SIZE[level]}` : '')
 
 /** The href a rendered link is allowed to point at — unsafe schemes collapse to '#'. */
 export const safeHref = (href: string) => (SAFE.test(href.trim()) ? href.trim() : '#')

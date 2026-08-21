@@ -176,7 +176,7 @@ export function Markdown({ text, onToggle, links }: {
   const flushQuote = () => {
     if (!quote) return
     blocks.push(
-      <blockquote key={blocks.length} className="text-muted-foreground border-l-2 pl-3 italic">
+      <blockquote key={blocks.length} className="text-muted-foreground border-foreground/20 border-l-3 pl-3.5 italic">
         {softLines(quote, links)}
       </blockquote>,
     )

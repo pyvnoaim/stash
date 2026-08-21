@@ -378,8 +378,11 @@ export function NotePage({ it, onBack, onOpen }: {
           if ((e.target as HTMLElement).closest('a, input, button')) return
           open(b)
         }}
-        // a blank line renders as nothing, and nothing is not something you can click into
-        className={cn('cursor-text', !b.text.trim() && 'h-[1.2em]')}
+        /* A blank line renders as nothing, and nothing is not something you can click into. It
+           stands exactly as tall as the textarea that opens in its place — 1.2em was shorter than
+           a line of text, so the gap you saw was part blank line and part the leading of the
+           blocks around it, and clicking the middle of an empty line landed in one of them. */
+        className={cn('cursor-text', !b.text.trim() && 'h-[1.625em] text-base md:text-sm')}
       >
         <Markdown
           text={b.text}
@@ -432,7 +435,11 @@ export function NotePage({ it, onBack, onOpen }: {
             The paste sits out here rather than on the editor, so a screenshot lands whether or not
             anything is open — with nothing open it goes on the end. */}
         <div
-          className="min-h-0 flex-1 overflow-y-auto"
+          className="min-h-0 flex-1 cursor-text overflow-y-auto"
+          /* The empty page under the last block reads as more note, so clicking it opens the end
+             of the one there is rather than doing nothing at all. Only when the click landed on
+             this box itself — a click on a block is that block's own. */
+          onClick={(e) => { if (e.target === e.currentTarget) open(blocks[blocks.length - 1]) }}
           onPaste={(e) => {
             /* A picture is the one paste that is not text. Everything else falls through to the
                browser's own handling, so pasting a screenshot works and pasting a paragraph is
