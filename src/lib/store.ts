@@ -332,23 +332,28 @@ export type ChartStyle = 'line' | 'candles'
 
 /**
  * The two colours everything that reads up or down on the chart is painted in — candle bodies and
- * wicks, the volume bars under them, the open gaps behind them, the last-price line.
+ * wicks, the volume bars under them, the open gaps behind them, the last-price line. `wick`, where
+ * a pair carries one, paints the wicks of both sides instead of the body colour.
  *
- * Four pairs rather than a picker: this is the one choice a desk actually makes, and it is made
- * once. Colourblind is the reason the setting exists at all — emerald against red is the pair the
- * most common deficiency cannot separate. Reversed is East Asian convention, where red is the side
- * that went up.
+ * Five pairs rather than a picker: this is the one choice a desk actually makes, and it is made
+ * once. Colourblindness is the reason the setting exists at all — emerald against red is the pair
+ * the most common deficiency cannot separate, and Pastel's blue against yellow is the pair no
+ * common deficiency can confuse.
+ *
+ * The monochrome sides are `var(--foreground)`, not literal white: the theme flips, and a white
+ * candle on the light theme's white card is a candle you cannot see.
  */
 export const CANDLE_PAIRS = [
   { id: 'classic', label: 'Classic', up: '#10b981', down: '#ef4444' },
-  { id: 'neon', label: 'Neon', up: '#0ecb81', down: '#f6465d' },
-  { id: 'colorblind', label: 'Colourblind', up: '#2962ff', down: '#f59e0b' },
-  { id: 'reversed', label: 'Reversed', up: '#ef4444', down: '#10b981' },
+  { id: 'pastel', label: 'Pastel', up: '#8ecae6', down: '#ffd166' },
+  { id: 'ice', label: 'Ice', up: 'var(--foreground)', down: '#3b82f6', wick: 'var(--foreground)' },
+  { id: 'ink', label: 'Ink', up: '#3b82f6', down: 'var(--foreground)' },
+  { id: 'mono', label: 'Mono', up: 'var(--foreground)', down: 'var(--muted-foreground)' },
 ] as const
 export type CandlePair = (typeof CANDLE_PAIRS)[number]['id']
 
 /** The chosen pair, or the one it shipped with — so a document carrying a retired id still draws. */
-export const candlePair = (s: State) =>
+export const candlePair = (s: State): { id: CandlePair; label: string; up: string; down: string; wick?: string } =>
   CANDLE_PAIRS.find((p) => p.id === s.candles) ?? CANDLE_PAIRS[0]
 
 /** Subscriptions view state, kept so it survives leaving the tab. */

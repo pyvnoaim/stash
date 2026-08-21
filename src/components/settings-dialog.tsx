@@ -405,9 +405,11 @@ function MarketsPanel() {
                 variant={candlePair(s).id === p.id ? 'default' : 'outline'}
                 onClick={() => setCandles(p.id)}
               >
+                {/* ring-current so a dot the colour of the button's own text — Mono's up dot on a
+                    selected button — still reads as a dot rather than as nothing. */}
                 <span className="flex gap-0.5">
-                  <span className="size-2.5 rounded-full" style={{ background: p.up }} />
-                  <span className="size-2.5 rounded-full" style={{ background: p.down }} />
+                  <span className="size-2.5 rounded-full ring-1 ring-current/25" style={{ background: p.up }} />
+                  <span className="size-2.5 rounded-full ring-1 ring-current/25" style={{ background: p.down }} />
                 </span>
                 {p.label}
               </Button>

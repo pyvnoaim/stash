@@ -990,8 +990,10 @@ export default function MarketPage() {
                   <defs>
                     {/* fade the area under the price into nothing, tinted by the way it moved */}
                     <linearGradient id="mkt-fill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={up ? hue.up : hue.down} stopOpacity={0.22} />
-                      <stop offset="100%" stopColor={up ? hue.up : hue.down} stopOpacity={0} />
+                      {/* the pair's colours can be CSS vars (see CANDLE_PAIRS), and a var only
+                          resolves through style — as an SVG attribute it is left as text. */}
+                      <stop offset="0%" style={{ stopColor: up ? hue.up : hue.down }} stopOpacity={0.22} />
+                      <stop offset="100%" style={{ stopColor: up ? hue.up : hue.down }} stopOpacity={0} />
                     </linearGradient>
                     {/* an MA too far from price to be worth framing runs out of the box, not off the card */}
                     <clipPath id="mkt-clip"><rect x="0" y="0" width="100" height="100" /></clipPath>
@@ -1052,7 +1054,7 @@ export default function MarketPage() {
                   {visGaps.map((g) => (
                     <rect key={`g-${g.i}`} x={g.x} y={g.y0} width={Math.max(100 - g.x, 0)}
                       height={Math.max(g.y1 - g.y0, 0.3)} stroke="none"
-                      fill={g.dir === 'up' ? hue.up : hue.down} fillOpacity={0.12} />
+                      style={{ fill: g.dir === 'up' ? hue.up : hue.down }} fillOpacity={0.12} />
                   ))}
                   {/* The swing levels nobody has closed through yet — the ones a break would be news
                       about, and the exact levels the structure reading under the chart is talking
@@ -1093,9 +1095,9 @@ export default function MarketPage() {
                         const x = xAt(i), w = n > 1 ? barW : 60
                         const top = y(Math.max(c.o, c.c)), col = c.c >= c.o ? hue.up : hue.down
                         return (
-                          <g key={i} fill={col}>
-                            <line x1={x} x2={x} y1={y(c.h)} y2={y(c.l)} stroke={col} strokeWidth={1} vectorEffect="non-scaling-stroke" />
-                            <rect x={x - w / 2} y={top} width={w} height={Math.max(y(Math.min(c.o, c.c)) - top, 0.4)} stroke="none" />
+                          <g key={i}>
+                            <line x1={x} x2={x} y1={y(c.h)} y2={y(c.l)} style={{ stroke: hue.wick ?? col }} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+                            <rect x={x - w / 2} y={top} width={w} height={Math.max(y(Math.min(c.o, c.c)) - top, 0.4)} style={{ fill: col }} stroke="none" />
                           </g>
                         )
                       })
@@ -1121,7 +1123,7 @@ export default function MarketPage() {
                   )}
                   {/* where the last drawn bar closed, so the tag on the axis has something to sit on */}
                   {price != null && (
-                    <line x1="0" x2="100" y1={y(price)} y2={y(price)} stroke={up ? hue.up : hue.down}
+                    <line x1="0" x2="100" y1={y(price)} y2={y(price)} style={{ stroke: up ? hue.up : hue.down }}
                       strokeWidth={1} strokeOpacity={0.45} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
                   )}
                 </svg>
@@ -1209,7 +1211,7 @@ export default function MarketPage() {
                   {panel === 'volume' && vis.map((c, i) => (
                     <rect key={i} x={xAt(i) - barW / 2} y={py(c.v ?? 0)} width={barW}
                       height={Math.max(100 - py(c.v ?? 0), 0)} stroke="none"
-                      fill={c.c >= c.o ? hue.up : hue.down} fillOpacity={0.55} />
+                      style={{ fill: c.c >= c.o ? hue.up : hue.down }} fillOpacity={0.55} />
                   ))}
                   {panel === 'rsi' && (
                     <path d={pathOf(rsiV, pLo, pHi, xSpan)} className="stroke-violet-500 fill-none"
