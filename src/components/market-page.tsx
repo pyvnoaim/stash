@@ -2362,10 +2362,13 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             two of these are money in two currencies that are deliberately never added together, and
             one is not money at all. Read as a run-on line the words trailed the wrong figures.
 
-            max-content tracks packed left, not equal fractions: on a wide window fractions pull five
+            Packed left and wrapping, not equal fractions: on a wide window fractions pull five
             read-outs into five far corners with a hand's width between them, and a row of numbers
-            you sweep your eyes across is not a row. */}
-        <div className="mb-3 grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-[repeat(5,max-content)] sm:gap-x-10">
+            you sweep your eyes across is not a row. Wrapping rather than five fixed max-content
+            tracks, which is what this was — five tracks that will not shrink and cannot wrap ran
+            past the card's edge somewhere around 660px and clipped "units of risk" to "units of",
+            and since the desk column scrolls vertically it took a horizontal scrollbar with it. */}
+        <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 sm:gap-x-10">
           {([
             ['Finished', String(results.length), '', null,
               'Every trade of yours that has closed. A setup you only watched is not a trade and never reaches this list.'],
@@ -2399,10 +2402,16 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             middots is one long line where every third word is a number, and the eye has to parse
             the punctuation to find where one lane ends and the next starts.
             Spelled out rather than abbreviated: "31× 42% hit +0.04R" reads as a multiplier, a
-            percentage and a total, and only one of those is what it says. */}
+            percentage and a total, and only one of those is what it says.
+
+            The tooltip says "lane", never "rule": the lanes keyed on a horizon, or on nothing at
+            all, are the rows saved before the rules had names of their own, and calling those a
+            rule is the exact claim the grouping above refuses to make. */}
         <div className="mb-2 flex flex-wrap gap-1.5 text-xs">
           {lanes.map((l) => (
-            <Hint key={l.name} label={`${l.n} finished trade${l.n === 1 ? '' : 's'} on the ${l.name} rule. ${l.hit} of them reached the target. The last figure is what one average trade on this rule returned in units of risk — over enough trades that is the number that says whether the rule pays to keep running.`}>
+            <Hint key={l.name} label={`${l.n} finished trade${l.n === 1 ? '' : 's'} in this lane${
+              l.name === '—' ? ', which are the ones saved before the rules had names of their own' : ''
+            }. ${l.hit} of them reached the target. The last figure is what one average trade here returned in units of risk — over enough trades that is the number that says whether the lane pays to keep driving.`}>
               <span className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
                 <span className="font-medium">{l.name}</span>
                 <span className="text-muted-foreground">{l.n} trade{l.n === 1 ? '' : 's'}</span>
