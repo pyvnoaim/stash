@@ -147,8 +147,8 @@ export interface Watch {
    * What you actually put in, in euros, and at what leverage — set only on a setup you took for
    * real. Absent is the old meaning of every row here: a plan being watched, nothing bought.
    * Together they are the position's size: `size × lev` is the notional, and the money at risk
-   * between the entry and the stop is what `stakeOf` turns them into, so a real position reads in
-   * its own money rather than in the hypothetical stake set in Settings.
+   * between the entry and the stop is what `stakeOf` turns them into. A row without them has no
+   * euros on it at all and reads in R.
    */
   size?: number
   lev?: number
@@ -181,9 +181,9 @@ export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev
 
 /**
  * Whether a finished row was a trade that really happened — one you sized yourself, or one a venue
- * closed and settled. A setup that was only ever watched is neither: it has no size, so the record
- * prices it off the hypothetical stake in Settings, which reads as money that moved when nothing
- * did. The Log shows these and only these; the calendar has held to the same rule already.
+ * closed and settled. A setup that was only ever watched is neither: it has no size and so no money
+ * on it, and a log of what happened is not a log of what would have. The Log shows these and only
+ * these; the calendar has held to the same rule already.
  *
  * The id is the third test because an exchange row does not always carry the venue's own figure —
  * the position-diff path files one whenever the history has no matching row — and the id is where
@@ -365,12 +365,6 @@ export interface State {
   /** The ones that finished, newest first. */
   results: Result[]
   /**
-   * What one setup is worth to you: the euros you would have had at risk on it. Money is only ever
-   * this times the R the setup actually did — the app has no positions, no broker and no idea what
-   * you really traded. Zero means say it in R and leave the money out of it.
-   */
-  stake: number
-  /**
    * Whether everyone else with an account on this server may read how your setups went and what
    * you are in now — the Desk. Off until you turn it on: a record is yours before it is a
    * scoreboard. What leaves is the trade and never the money — the size and leverage a position
@@ -517,7 +511,7 @@ const blank = (): State => ({
   v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', hotkeys: {},
   subSort: 'recent', subView: 'expense', calView: 'month',
-  watches: [], results: [], stake: 0, desk: false,
+  watches: [], results: [], desk: false,
   // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
   // not silently move everybody's chart
   marketAsset: 'BTCUSDT', marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard',
@@ -720,8 +714,6 @@ export function load(data: unknown): State {
     .filter((r, i, all) => !all.slice(0, i).some((x) => twice(x, r)))
     .slice(0, KEEP_RESULTS)
 
-  // a stake is money at risk: a real number, never negative. Zero is the answer "say it in R"
-  st.stake = typeof st.stake === 'number' && isFinite(st.stake) && st.stake > 0 ? st.stake : 0
   // publishing is a decision, so only the word yes counts as one — anything else is private
   st.desk = st.desk === true
 
@@ -742,6 +734,9 @@ export function load(data: unknown): State {
      in every document that ever held one, forever, for a feed that no longer exists. Deleted here,
      so the first load after this build is the last one that ever sees it. */
   delete (st as Partial<State> & { apiKey?: unknown }).apiKey
+  /* And the retired stake, for the same reason minus the urgency: no credential in it, but a
+     number nothing reads is a number the next reader has to work out is dead. */
+  delete (st as Partial<State> & { stake?: unknown }).stake
   /* only bindings the app has an action for, and only strings: a hand-edited backup must not be
      able to put a key on the keyboard that nothing will ever answer. */
   st.hotkeys = Object.fromEntries(
@@ -1419,9 +1414,6 @@ export function clearResults() {
   return { n: gone.length, undo: () => set((s) => ({ ...s, results: gone.concat(s.results).slice(0, KEEP_RESULTS) })) }
 }
 
-/** Euros at risk on one setup, or 0 for "say it in R and leave the money out of it". */
-export const setStake = (stake: number) =>
-  set((s) => ({ ...s, stake: isFinite(stake) && stake > 0 ? stake : 0 }))
 export const setDesk = (desk: boolean) => set((s) => ({ ...s, desk }))
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
 export const setCalView = (calView: 'month' | 'week') => set((s) => ({ ...s, calView }))

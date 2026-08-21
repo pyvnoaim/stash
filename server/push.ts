@@ -148,7 +148,7 @@ export function alertsOf(
     const reached = (lvl: number) => (long ? p <= lvl : p >= lvl)
     /* Liquidation first, the same order notify.ts reads in: it only beats the stop when the stop
        was set beyond it, and then the exchange ends the trade before the stop ever could. Longhand
-       like stakeOf below, for the same reason — and longhand is why this one went a commit reading
+       like the money below, for the same reason — and longhand is why this one went a commit reading
        the bare margin price while liqOf had already learned to keep a maintenance slice back. Two
        copies of one number is one of them being wrong for as long as nobody checks. Keep them the
        same: the bare price decides whether there is a liquidation at all (a 1× long has none), the
@@ -177,33 +177,28 @@ export function alertsOf(
       })
       continue
     }
-    /* What it did, and — where a stake is set — what that is in money. The same arithmetic
-       notify.ts does in the app (rOf × stake): R off the plan's own geometry, net of what the
-       trade costs to hold and to make. Only on an outcome; at the entry nothing has happened yet. */
-    /* A setup you took prices itself instead: size × leverage is the notional, and the entry-to-stop
-       distance is the share of it at risk. Same arithmetic as stakeOf in notify.ts — kept here in
-       longhand rather than imported, because market.ts is the one module this process shares with
-       the app and notify.ts would drag the store's world across with it. */
+    /* What it did, and — on a setup that was actually taken — what that is in money. The same
+       arithmetic notify.ts does in the app: size × leverage is the notional, the entry-to-stop
+       distance is the share of it at risk, and R times that is the gain, net of what the trade
+       costs to hold and to make. Kept here in longhand rather than imported, because market.ts is
+       the one module this process shares with the app and notify.ts would drag the store's world
+       across with it. A plan nobody took has no size, so it says its R and no euros.
+       Only on an outcome; at the entry nothing has happened yet. */
     const own = (Number(w.size) * Number(w.lev) * Math.abs(w.entry - w.stop)) / w.entry
     /* isFinite as well as > 0: these numbers come out of a stored document rather than off the
        form that made them, and an entry of zero divides its way to an Infinity that formats as a
        euro sign and a lemniscate. A knock with no money in it beats a knock with nonsense in it. */
-    const stake = took && isFinite(own) ? own : Number(s?.stake) || 0
+    const risk = took && isFinite(own) ? own : 0
     const r = long ? (p - w.entry) / (w.entry - w.stop) : (w.entry - p) / (w.stop - w.entry)
     /* Net of funding on a held position — notional × the funding dial per 8h since the window
        opened, the same arithmetic as fundingOf in notify.ts, longhand for the same reason as the
-       stake above. A watched plan pays none; neither does a dial set to 0. */
+       risk above. A watched plan pays none; neither does a dial set to 0. */
     const fund = took && w.entryAt ? Number(w.size) * Number(w.lev) * (dialsOf(s).funding / 100) * ((at - w.entryAt) / 28_800_000) : 0
-    /* And of the taker fee at both ends — feeOf in notify.ts, longhand for the same reason as the
-       two above. A position states its own notional; a plan's is implied by the stake, which is
-       that stake read back through the entry-to-stop distance it was measured against. */
-    const dist = Math.abs(w.entry - w.stop)
-    const notional = took ? Number(w.size) * Number(w.lev)
-      : dist > 0 && w.entry > 0 && stake > 0 ? (stake * w.entry) / dist : 0
-    const fee = notional * (dialsOf(s).fee / 100) * 2
-    const gain = r * stake - fund - (isFinite(fee) ? fee : 0)
-    const paid = hit !== 'entry' && stake > 0 && isFinite(stake) && isFinite(gain)
-      ? ` · ${gain >= 0 ? '+' : '−'}${euro(Math.abs(gain))}${took ? '' : ' had you taken it'}`
+    // and of the taker fee at both ends — feeOf in notify.ts, longhand for the same reason
+    const fee = took ? Number(w.size) * Number(w.lev) * (dialsOf(s).fee / 100) * 2 : 0
+    const gain = r * risk - fund - (isFinite(fee) ? fee : 0)
+    const paid = hit !== 'entry' && risk > 0 && isFinite(gain)
+      ? ` · ${gain >= 0 ? '+' : '−'}${euro(Math.abs(gain))}`
       : ''
     out.push({
       key: `watch-${w.id}-${hit}`,

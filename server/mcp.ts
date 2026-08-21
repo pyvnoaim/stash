@@ -531,9 +531,8 @@ const tools: Record<string, {
     annotations: READS,
     description: 'What is open at the exchange right now, the saved setups the bell is watching, '
       + 'and the record of the ones that finished — scored in R off the price actually seen when '
-      + 'they ended. A row carrying size and leverage is a position that was really taken and its '
-      + 'money is real; every other row is a plan, and its money is what the stake says it would '
-      + 'have paid.',
+      + 'they ended. A row carrying size and leverage is a position that was really taken and has '
+      + 'money on it; every other row is a plan nobody was in, and says its R alone.',
     schema: { type: 'object', properties: {} },
     run: async () => {
       const s = await pull()
@@ -546,19 +545,25 @@ const tools: Record<string, {
       const held = await api('/api/positions')
         .then((r) => (r.ok ? r.json() as Promise<{ positions: any[] }> : null))
         .catch(() => null)
-      /* One R in euros, per row: a taken position off its own notional, everything else off the
-         stake. The same arithmetic as stakeOf in src/lib/notify.ts — see the note there. */
+      /* One R in euros, per row: a taken position off its own notional. A plan has no size and so
+         no euros. The same arithmetic as stakeOf in src/lib/notify.ts — see the note there. */
       const per = (w: { entry: number, stop: number, size?: number, lev?: number }) => {
         const own = w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : 0
         // a stored entry of zero divides to Infinity, and an answer of Infinity euros is worse
         // than the honest absence of one
-        return isFinite(own) && own > 0 ? own : s.stake
+        return isFinite(own) && own > 0 ? own : 0
       }
       const money = (r: number, at: number) =>
         (at > 0 && isFinite(at * r) ? Number((r * at).toFixed(2)) : undefined)
       const total = s.results.reduce((n, r) => n + r.r, 0)
+      /* Row by row rather than R-times-one-figure: the rows are no longer the same size of money,
+         and the ones with none at all are left out rather than counted as zero. Absent only when
+         not a single row had a figure — a set of trades that all scratched really did pay €0, and
+         `paid || undefined` would have reported that as "no money here at all". Rounded after the
+         sum, because a dozen two-decimal figures added up do not stay at two decimals. */
+      const each = s.results.map((r) => money(r.r, per(r))).filter((m) => m !== undefined)
+      const paid = each.length ? Number(each.reduce((n, m) => n + m, 0).toFixed(2)) : undefined
       return {
-        stake: s.stake || null,
         open: (held?.positions ?? []).map((p) => ({
           // the desk's own word for the symbol where it lists one, the exchange's where it doesn't
           asset: market.ASSETS.find((x) => x.id === p.symbol)?.label ?? p.symbol,
@@ -581,7 +586,7 @@ const tools: Record<string, {
           r: Number(r.r.toFixed(2)), money: money(r.r, per(r)), taken: !!(r.size && r.lev),
           started: new Date(r.entryAt).toISOString(), closedAt: new Date(r.closedAt).toISOString(),
         })),
-        total: { r: Number(total.toFixed(2)), money: money(total, s.stake) },
+        total: { r: Number(total.toFixed(2)), money: paid },
       }
     },
   },

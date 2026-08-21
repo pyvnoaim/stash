@@ -84,7 +84,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     const h = setInterval(tick, POLL)
     return () => { on = false; clearInterval(h) }
   }, [assets, feed])
-  const setups = useMemo(() => watchAlerts(s.watches, live, s.stake, s.dials), [s.watches, live, s.stake, s.dials])
+  const setups = useMemo(() => watchAlerts(s.watches, live, s.dials), [s.watches, live, s.dials])
 
   /* The same prices, written down. A setup whose entry the price has really reached is marked as
      having opened, and one that has since run to its target or its stop leaves the live list for
@@ -99,7 +99,7 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
     closed.forEach(closeWatch)
   }, [live, s.watches])
 
-  const done = useMemo(() => resultAlerts(s.results, s.stake, undefined, s.dials), [s.results, s.stake, s.dials])
+  const done = useMemo(() => resultAlerts(s.results, undefined, s.dials), [s.results, s.dials])
 
   /* The exchange rows, for the one thing the bell has to say about them: a position with no stop
      resting. Polled here as well as on the Markets page because the bell is always mounted and the

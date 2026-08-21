@@ -59,9 +59,8 @@ assert.ok(at(taken, { BTCUSDT: 79 })[0].body.includes('80.5'))
    cents, and the 2R target on €25-per-R pays €50 gross. */
 const held = { watches: [{ ...long.watches[0], size: 50, lev: 5 }] }
 assert.ok(at(held, { BTCUSDT: 120 })[0].body.includes('+€49.75'))
-/* A plan has no size, so the stake implies one: €200 at risk across the 10-point stop is €2,000
-   of notional and €2 of fee off the €400 it would have paid. */
-assert.ok(at({ ...long, stake: 200 }, { BTCUSDT: 120 })[0].body.includes('+€398.00 had you taken it'))
+// a plan has no size, so there is no money on it — it says its level and nothing in euros
+assert.ok(!at(long, { BTCUSDT: 120 })[0].body.includes('€'))
 
 /* ---------- the morning digest ---------- */
 

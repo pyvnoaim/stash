@@ -14,6 +14,7 @@ import {
   AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -28,7 +29,7 @@ import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
   addItem, CALENDAR, clearDone, hotkey, MARKET, readOnly, resetDials, resetHotkeys, setChart,
-  setDesk, setDial, setHotkey, setStake, setTool, TOOLS, toolOn, useStash, type ChartStyle,
+  setDesk, setDial, setHotkey, setTool, TOOLS, toolOn, useStash, type ChartStyle,
 } from '@/lib/store'
 import { type Dials as DialSet } from '@/lib/market'
 import {
@@ -149,9 +150,12 @@ export function SettingsDialog({ open, onOpenChange }: {
               {/* the bell and the numbers behind it, which used to sit a page apart: the push
                   switch under Account, the thresholds it fires on at the foot of Markets */}
               {here === 'alerts' && <>{user && <NotificationsPanel />}{toolOn(s, MARKET) && <Dials />}</>}
-              {here === 'tools' && <ToolsPanel />}
+              {/* the MCP line belongs beside the tool switches: both answer "what can reach this
+                  stash", and it sat under Links only because Links was where the other copyable
+                  URL lived */}
+              {here === 'tools' && <><ToolsPanel /><McpSection /></>}
               {here === 'calendar' && <><CalendarFeed /><CalendarSub /></>}
-              {here === 'links' && <><LinksPanel /><McpSection /></>}
+              {here === 'links' && <LinksPanel />}
               {here === 'people' && user && <PeoplePanel me={user.name} />}
               {here === 'data' && <DataPanel onDone={() => onOpenChange(false)} />}
               {here === 'markets' && <MarketsPanel />}
@@ -311,16 +315,18 @@ function ToolsPanel() {
       title="What is in the sidebar"
       hint="Off takes it out of the sidebar, ⌘K and these settings. Nothing is deleted."
     >
+      {/* the same box the task list uses, rather than a bare input painted with accent-color: that
+          one drew four grey ticks that read as switched off and unswitchable, on a panel whose
+          whole job is saying which of the four are on */}
       {TOOLS.map(({ id, name }) => (
-        <label key={id} className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
+        <div key={id} className="flex items-center gap-2 text-sm">
+          <Checkbox
+            id={`tool-${id}`}
             checked={toolOn(s, id)}
-            className="accent-foreground size-3.5 shrink-0"
-            onChange={(e) => setTool(id, e.target.checked)}
+            onCheckedChange={(on) => setTool(id, on === true)}
           />
-          {name}
-        </label>
+          <Label htmlFor={`tool-${id}`} className="font-normal">{name}</Label>
+        </div>
       ))}
     </Section>
   )
@@ -385,21 +391,11 @@ function MarketsPanel() {
         </div>
       </Section>
 
-      <Section
-        title="What a setup is worth"
-        hint="What “had you taken it” is worth on the record: the euros at risk on one setup.
-          Empty, the record reads in R."
-      >
-        {/* a comma is what a German keyboard types and what the Subscriptions header shows back */}
-        <Input
-          id="stake"
-          inputMode="decimal"
-          placeholder="€ at risk per setup"
-          className="max-w-48"
-          defaultValue={s.stake || ''}
-          onChange={(e) => setStake(parseFloat(e.target.value.replace(',', '.')))}
-        />
-      </Section>
+      {/* A "What a setup is worth" field stood here: euros at risk on one hypothetical setup, which
+          priced every watched plan as if it had been taken. Nothing that reads money shows those
+          rows any more — the Log and the calendar both gate on isReal — so the only thing the
+          number still did was invent euros for a trade nobody was in. A position carries its own
+          size and leverage and prices itself. */}
 
       <Section
         title="The others"

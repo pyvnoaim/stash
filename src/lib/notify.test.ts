@@ -23,7 +23,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', calView: 'month', watches: [], results: [], stake: 0, desk: false, marketAsset: 'BTCUSDT',
+  subView: 'expense', calView: 'month', watches: [], results: [], desk: false, marketAsset: 'BTCUSDT',
   marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
@@ -86,21 +86,16 @@ assert.deepEqual(watchAlerts([long], {}), [])
 assert.deepEqual(watchAlerts([long], { BTCUSDT: NaN }), [])
 
 // the same setup, once its window has actually opened: it stops announcing its entry and starts
-// reporting what it is running at — 1R per 5 of price, and the money only if a stake was set
+// reporting what it is running at — 1R per 5 of price, and no money on a plan nobody took
 const running: Watch = { ...long, entryAt: 1 }
-const run = (p: number, stake = 0) => watchAlerts([running], { BTCUSDT: p }, stake)
+const run = (p: number) => watchAlerts([running], { BTCUSDT: p })
 assert.deepEqual(fire(104), []) // unopened and away from its levels — still nothing to say
 assert.equal(run(105)[0].title, 'Bitcoin · Trading is up 1.00R')
 assert.equal(run(105)[0].id, 'watch-w1-open')
 assert.equal(run(105)[0].tone, 'info')
-assert.ok(run(105)[0].detail.includes('from the long entry at')) // no stake → no euros invented
-/* €200 gross, less the round trip. A plan has no size of its own, so the stake implies one: €200
-   at risk across a 5% stop is €4,000 of notional, and 0.05% a side twice is €4. The fee comes off
-   a plan where funding does not — funding is what holding costs and a plan holds nothing, while
-   the fee is paid the moment you are in and out, at two prices the plan itself already names. */
-assert.ok(run(105, 200)[0].detail.includes('+€196'))
-// half the distance, half the money — but the same trip in and out, so the same €4
-assert.ok(run(102.5, 200)[0].detail.includes('+€96'))
+// a plan holds nothing, so there is no size to price it in euros and none is invented
+assert.ok(run(105)[0].detail.includes('from the long entry at'))
+assert.ok(!run(105)[0].detail.includes('€'))
 // a short runs the other way: open at 100, price 95 is 1R of profit
 const runShort = (p: number) => watchAlerts([{ ...short, entryAt: 1 }], { BTCUSDT: p })
 assert.equal(runShort(95)[0].title, 'Bitcoin · Trading is up 1.00R')
@@ -113,14 +108,14 @@ assert.equal(run(97)[0].title, 'Bitcoin · Trading at entry')  // back in the zo
 assert.equal(run(111)[0].title, 'Bitcoin · Trading hit target')
 assert.equal(run(95)[0].title, 'Bitcoin · Trading setup broken')
 // never opened, and away from every level — still nothing to say, as before
-assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }, 200), [])
+assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }), [])
 
-/* A setup you were actually in prices itself off its own size and leverage, and ignores the stake.
-   Long from 100 with the stop at 95: €100 at 10× is €1,000 on the market, 5% of which is the €50
-   between here and the stop — so 1R is €50 and the sentence stops saying "had you taken it". */
+/* A setup you were actually in prices itself off its own size and leverage — the only row here
+   that has euros at all. Long from 100 with the stop at 95: €100 at 10× is €1,000 on the market,
+   5% of which is the €50 between here and the stop, so 1R is €50. */
 const position: Watch = { ...running, size: 100, lev: 10 }
 // at = the entryAt: nothing has been held for any time yet, so no funding muddies the geometry
-const pos = (p: number, at = 1) => watchAlerts([position], { BTCUSDT: p }, 999, undefined, at)
+const pos = (p: number, at = 1) => watchAlerts([position], { BTCUSDT: p }, undefined, at)
 // €50 gross, less €1 of fee — a position states its own notional, and €1,000 crossed twice at
 // 0.05% is a euro whether it won or lost
 assert.ok(pos(105)[0].detail.includes('+€49'))
@@ -129,14 +124,14 @@ assert.ok(!pos(105)[0].detail.includes('had you taken it'))
 assert.ok(pos(102.5)[0].detail.includes('+€24'))
 // leverage is the part that has to reach the money: the same €100 at 1× is a tenth of it, and its
 // notional is a tenth too, so the fee it pays is ten cents rather than a euro
-assert.ok(pos(105)[0].detail.includes('+€49') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, 999, undefined, 1)[0].detail.includes('+€4.90'))
+assert.ok(pos(105)[0].detail.includes('+€49') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, undefined, 1)[0].detail.includes('+€4.90'))
 /* Funding comes off on top of it, and only on a held position: €1,000 notional at the default
    0.01%/8h is 10 cents a window, three windows in a day — +€49 net of the fee reads +€48.70 held
    for one. Zero the two dials and the gross figure is back. */
 assert.ok(pos(105, 1 + 24 * 3600_000)[0].detail.includes('+€48.70'))
-assert.ok(watchAlerts([position], { BTCUSDT: 105 }, 999, dialsOf({ dials: { funding: 0, fee: 0 } }), 1)[0].detail.includes('+€50'))
-// half a position is no position: without both numbers it falls back to the stake, as it always did
-assert.ok(watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 }, 200)[0].detail.includes('+€196'))
+assert.ok(watchAlerts([position], { BTCUSDT: 105 }, dialsOf({ dials: { funding: 0, fee: 0 } }), 1)[0].detail.includes('+€50'))
+// half a position is no position: without both numbers there is nothing to price it with
+assert.ok(!watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 })[0].detail.includes('€'))
 
 /* Liquidation: at 10× the long from 100 has its margin gone at 90 and is closed a little before,
    at 90.5 — the exchange keeps half a percent back. A stop inside that (95) ends the trade first
@@ -247,29 +242,28 @@ assert.equal(step(88, openShort).closed[0].r, 2.4)             // (100 − 88) /
 assert.equal(step(105, openShort).closed[0].level, 'stop')
 assert.equal(step(105, openShort).closed[0].r, -1)
 
-/* ---------- and what it would have paid ---------- */
+/* ---------- and what it paid ---------- */
 
 const result: Result = { ...long, entryAt: NOW - 7200_000, closedAt: NOW, level: 'target', exit: 110, r: 2, id: 'r1' }
-const one = (stake: number, over: Partial<Result> = {}) =>
-  resultAlerts([{ ...result, ...over }], stake, NOW)[0]
+const one = (over: Partial<Result> = {}) => resultAlerts([{ ...result, ...over }], NOW)[0]
 
-// no stake: the score, and no money it cannot know
-assert.equal(one(0).title, 'Bitcoin · Trading hit target')
-assert.ok(one(0).detail.startsWith('+2.00R'))
-assert.ok(!one(0).detail.includes('€'))
+// a plan nobody took: the score, and no money it cannot know
+assert.equal(one().title, 'Bitcoin · Trading hit target')
+assert.ok(one().detail.startsWith('+2.00R'))
+assert.ok(!one().detail.includes('€'))
 
-// with one, the money is that R times the stake, less the round trip it would have paid — €4 on
-// the €4,000 a €200 risk implies across this stop — and the wording never says it was traded
-assert.ok(one(200).detail.includes('+€396.00'))
-assert.ok(one(200).detail.includes('had you taken it'))
+// one you were in prices itself: €100 at 10× is €1,000 of notional, €50 at risk across the stop,
+// so 2R is €100 — less the €1 round trip at 0.05% a side and 2.5 cents of funding for the two hours
+const took = { size: 100, lev: 10 }
+assert.ok(one(took).detail.includes('+€98.98'))
 // a loss reads as one, sign and all, and the fee is on the losing side of it too
-assert.equal(one(200, { level: 'stop', r: -1, exit: 95 }).title, 'Bitcoin · Trading stopped out')
-assert.ok(one(200, { level: 'stop', r: -1, exit: 95 }).detail.includes('−€204.00'))
-assert.equal(one(200, { level: 'stop', r: -1 }).tone, 'warn')
+assert.equal(one({ ...took, level: 'stop', r: -1, exit: 95 }).title, 'Bitcoin · Trading stopped out')
+assert.ok(one({ ...took, level: 'stop', r: -1, exit: 95 }).detail.includes('−€51.03'))
+assert.equal(one({ level: 'stop', r: -1 }).tone, 'warn')
 
 // it is news for half a day, and a record after that — the desk keeps it, the bell lets it go
-assert.equal(resultAlerts([result], 0, NOW + 11 * 3600_000).length, 1)
-assert.deepEqual(resultAlerts([result], 0, NOW + 13 * 3600_000), [])
+assert.equal(resultAlerts([result], NOW + 11 * 3600_000).length, 1)
+assert.deepEqual(resultAlerts([result], NOW + 13 * 3600_000), [])
 
 /* ---------- and which of them actually happened ---------- */
 

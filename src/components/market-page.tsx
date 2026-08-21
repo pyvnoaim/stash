@@ -782,8 +782,8 @@ export default function MarketPage() {
             No ATR, no buttons. Not for tidiness: with no stop to size against, the dialog's own
             suggestion falls back to a fifth of the whole free balance at 1× (see suggest in
             trade.ts) — so a chart whose feed has not returned enough bars would offer a stopless
-            position sized off the account instead of off the stake. The reading is still worth
-            drawing; the order is not worth offering. */}
+            position sized off the whole account. The reading is still worth drawing; the order is
+            not worth offering. */}
         {feed === 'bitget' && last != null && (
           <CardContent className="border-t px-3 pt-3">
             {view?.atr ? (
@@ -797,7 +797,7 @@ export default function MarketPage() {
                     <Icon /> {label} {coin}
                   </Button>
                 ))}
-                <Hint label="One ATR out and two ATR up from the price, so the order goes on the book with a stop and a take-profit riding it. The dialog sizes that against the stake in Settings and prints what it costs in money, and nothing is placed until a second press.">
+                <Hint label="One ATR out and two ATR up from the price, so the order goes on the book with a stop and a take-profit riding it. The dialog opens with a size to type over and prints what it costs in money, and nothing is placed until a second press.">
                   <span className="text-muted-foreground text-xs">
                     stop {fmt(view.atr)} away · target {fmt(view.atr * 2)}
                   </span>
@@ -2110,7 +2110,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
  * `Watch` row the bell already reads — money and leverage written on it — so nothing downstream
  * needed a second code path: the entry, stop and target alerts fire, the running read-out counts,
  * and when it ends at one of its levels it files itself into the record below. The only difference
- * is that the euros are the ones you put in rather than the hypothetical stake from Settings.
+ * is that it has euros on it at all — the ones you put in.
  *
  * Nothing writes one of these by hand any more: the exchanges do. A form asking for the entry, the
  * size and the leverage of a fill that already happened is the same numbers typed a second time,
@@ -2130,7 +2130,7 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
     const r = price != null ? rOf(held, price) : null
     // net of funding and the round-trip fee, the same subtraction the bell's read-out makes — two
     // numbers for one trade would be a bug report waiting to be filed
-    const money = r != null ? netOf(held, r, 0, dials, Date.now()) : null
+    const money = r != null ? netOf(held, r, dials, Date.now()) : null
     const long = held.dir === 'long'
     return (
       <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-1 border-t px-3 pt-3 text-sm">
@@ -2225,19 +2225,17 @@ const cardOf = (r: Result) => ({
   pnl: r.cash ?? null,
   openedAt: new Date(r.entryAt).toISOString(),
   closedAt: new Date(r.closedAt).toISOString(),
-  // no size: a setup's stake is money where a position's size is coins, and the card prints both in
-  // the same place with no unit. The rule that made it says more about the trade than either.
+  // no size: a position's size is coins where the money beside it is euros, and the card prints
+  // both in the same place with no unit. The rule that made it says more about the trade than either.
   venue: r.rule || r.horizon || undefined,
 })
 
 function Record({ onPick }: { onPick: (asset: string) => void }) {
-  const { results: every, stake, dials } = useStash()
+  const { results: every, dials } = useStash()
   /* Only the trades that really ran. A watched setup files itself here the same way a position does
      — same shape, same two exits — and once it is in the list it is indistinguishable from a trade
-     that cost something, except in the money: it prices off the hypothetical stake in Settings, so
-     a plan nobody took reads as €40 won on an asset never traded. The rows are still kept and the
-     bell still says how a saved setup went; this is the log of what happened, not of what would
-     have. Same gate the calendar has always had. */
+     that cost something. The rows are still kept and the bell still says how a saved setup went;
+     this is the log of what happened, not of what would have. Same gate the calendar has. */
   const all = every.filter(isReal)
   const [sort, setSort] = useState<(typeof LOG_SORTS)[number]['id']>('new')
   // whose card it is — the same byline the Desk signs with, and null signed out
@@ -2263,15 +2261,14 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
 
   const total = all.reduce((n, r) => n + r.r, 0)
   const won = all.filter((r) => r.level === 'target').length
-  /* Row by row rather than off the total, because the rows are no longer all the same kind of
-     money: one you were in prices itself off its own size and leverage, one that was only ever
-     watched off the stake in Settings. Null only when not a single row has a figure at all.
+  /* Row by row rather than off the total: a row prices itself off its own size and leverage, and
+     one with no size has no euros at all. Null only when not a single row has a figure.
      Net of funding to the close and of the fee at both ends, the same subtraction the bell's
      result alert makes. */
-  const cashOf = (r: typeof all[number]) => netOf(r, r.r, stake, dials, r.closedAt)
+  const cashOf = (r: typeof all[number]) => netOf(r, r.r, dials, r.closedAt)
   /* An exchange-closed row prints the venue's own dollars instead: it has no size in euros to be
      priced from, and the figure it does have is the settled one — fees and funding already in it,
-     rather than this app's flat funding rate over a stake that was never at risk on it. */
+     rather than this app's flat rates over a size it never knew. */
   const paid = (r: typeof all[number]) => {
     if (r.cash != null) return `${r.cash >= 0 ? '+' : '−'}$${Math.abs(r.cash).toFixed(2)}`
     const cash = cashOf(r)
@@ -2293,10 +2290,10 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
       avg: rs.reduce((sum, r) => sum + r.r, 0) / rs.length,
     }))
     .sort((a, b) => b.n - a.n)
-  /* Two totals, never one: the euros are this app's own arithmetic over a stake or a size you
-     typed, and the dollars are what a venue actually settled. A row that has the venue's figure is
-     counted there and nowhere else — priced off the hypothetical stake as well, it would be the
-     same trade twice, once in a currency it was never in. */
+  /* Two totals, never one: the euros are this app's own arithmetic over the size you typed, and
+     the dollars are what a venue actually settled. A row that has the venue's figure is counted
+     there and nowhere else — priced here as well, it would be the same trade twice, once in a
+     currency it was never in. */
   const own = all.filter((r) => r.cash == null)
   const money = own.some((r) => cashOf(r) !== null)
     ? own.reduce((n, r) => n + (cashOf(r) ?? 0), 0) : null
@@ -2375,7 +2372,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             ['Hit target', String(won), `${results.length ? Math.round((won / results.length) * 100) : 0}%`, null,
               'How many came off at the target rather than at the stop or by hand. The percentage is that share of the finished trades.'],
             money === null ? null : ['Priced here', signedEuro(money), 'euros', money >= 0,
-              `This app's own arithmetic over the size or the stake you typed, net of the ${dials.fee}%-a-side fee at both ends and the funding to the close. Only the trades no venue settled for you — counting one in both currencies would be the same trade twice.`],
+              `This app's own arithmetic over the size you typed, net of the ${dials.fee}%-a-side fee at both ends and the funding to the close. Only the trades no venue settled for you — counting one in both currencies would be the same trade twice.`],
             usd === null ? null : ['Settled', `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`, 'dollars', usd >= 0,
               'What a venue actually paid out, its own fees and funding already inside the figure. Never added to the euros beside it — the sum of the two is a number no exchange rate ever produced.'],
             ['Total in R', rLabel(total), 'units of risk', total >= 0,
@@ -2551,7 +2548,7 @@ const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => !r.cash || !rs.s
  * that happens to want it.
  *
  * The money is the venue's own settled dollars and only that. A trade someone sized by hand prices
- * itself off their stake and their funding dial, neither of which leaves their device — those rows
+ * itself off a size and a funding dial that never leave their device — those rows
  * print their R and an empty Paid, and the footer's total counts only the ones a venue settled, so
  * it is never half a sum passed off as a whole one.
  */
@@ -2579,7 +2576,7 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
           </DialogTitle>
           <DialogDescription>
             Every trade they were really in, newest first. Paid is what the exchange settled it for;
-            a trade they sized by hand prices itself off a stake that never leaves their device, so
+            a trade they sized by hand prices itself off numbers that never leave their device, so
             those rows say it in R alone.
           </DialogDescription>
         </DialogHeader>
@@ -2648,7 +2645,7 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
  * Everyone else on this server who has switched their desk on: how their trades went, and what they
  * are in right now. Money only where an exchange settled or is marking it — a position's running
  * dollars, a finished trade's settled ones. What somebody typed a size for stays in R: that figure
- * is worked out from a stake and a funding rate this server never receives.
+ * is worked out from a size and a funding rate this server never receives.
  *
  * Trades they were really in, and only those: the server drops watched plans before sending, so a
  * hit rate here is a claim about how someone trades rather than about how their untaken ideas would

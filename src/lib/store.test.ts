@@ -758,12 +758,6 @@ assert.equal(finished({ cash: -4.2 })[0].cash, -4.2)
 assert.equal(finished({ cash: 0 })[0].cash, 0)
 assert.equal(finished({ cash: 'lots' })[0].cash, undefined)
 
-// a stake is money at risk: positive, real, or the answer "say it in R and leave money out of it"
-for (const junk of ['20', -5, NaN, Infinity, null, undefined]) {
-  assert.equal(load({ stake: junk }).stake, 0)
-}
-assert.equal(load({ stake: 250 }).stake, 250)
-
 console.log('store: ok')
 
 /* ---------- sharing: what a read-only project refuses ---------- */

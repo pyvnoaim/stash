@@ -1581,10 +1581,9 @@ export function start({
        numbers at all, so it still leaves as levels and nothing else.
 
        Real trades only, on both lists — sized by hand, or closed and settled by a venue, which is
-       the same test the Log applies to its own rows. A record keeps watched plans beside taken and
-       prices them off a hypothetical stake, which is fine on your own page where the distinction is
-       drawn — and is not fine here, where someone else reads a hit rate as a claim about how the
-       person trades. Nobody scrolls a leaderboard thinking "some of these were never taken". The
+       the same test the Log applies to its own rows. A record keeps watched plans beside taken
+       ones, which is fine on your own page where the distinction is drawn — and is not fine here,
+       where someone else reads a hit rate as a claim about how the person trades. Nobody scrolls a leaderboard thinking "some of these were never taken". The
        filter is here rather than on the page because this is the boundary: a plan somebody never
        took should not leave their document at all, and filtering after it arrived would ship it and
        then hide it. */
@@ -1628,9 +1627,9 @@ export function start({
             level: r?.level === 'target' ? 'target' : 'stop',
             /* The venue's settled dollars where the trade had them — fees and funding already in
                it. The same money the open list already sends as `pnl`, one exit later, so it is
-               the switch's existing promise rather than a wider one. A row priced off their own
-               stake carries none: that figure is this app's arithmetic over a size they typed,
-               and it is not sent. */
+               the switch's existing promise rather than a wider one. A row the app priced itself
+               carries none: that figure is this app's arithmetic over a size they typed, and it is
+               not sent. */
             r: num(r?.r), cash: num(r?.cash), closedAt: num(r?.closedAt) ?? 0,
           })).filter((r: any) => r.r !== null),
           open: arr(s.watches).filter(taken).map((w: any) => ({

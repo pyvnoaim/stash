@@ -10,7 +10,6 @@ import { Label } from '@/components/ui/label'
 import { Hint } from '@/components/ui/tooltip'
 import { liqOf } from '@/lib/notify'
 import { byHand, desk, place, shape, suggest, type Desk } from '@/lib/trade'
-import { useStash } from '@/lib/store'
 import { cn } from '@/lib/utils'
 
 /**
@@ -38,7 +37,6 @@ export function TradeDialog({ open, onOpenChange, symbol, coin, side, entry, sto
   stop: number | null
   target: number | null
 }) {
-  const { stake } = useStash()
   const [d, setDesk] = useState<Desk | null>(null)
   const [error, setError] = useState('')
   const [margin, setMargin] = useState('')
@@ -56,13 +54,13 @@ export function TradeDialog({ open, onOpenChange, symbol, coin, side, entry, sto
       .then((got) => {
         if (!on) return
         setDesk(got)
-        const s = suggest(stake, entry, stop, got.available)
+        const s = suggest(entry, stop, got.available)
         setMargin(String(s.margin))
         setLev(String(s.leverage))
       })
       .catch((e: Error) => { if (on) setError(e.message) })
     return () => { on = false }
-  }, [open, symbol, entry, stop, stake])
+  }, [open, symbol, entry, stop])
 
   const at = limit ? entry : (d?.price ?? entry)
   const m = Number(margin) || 0

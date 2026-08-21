@@ -30,13 +30,13 @@ assert.equal(levFor(100, 40), 1)
 assert.equal(levFor(100, null), 1)     // nothing to size against
 assert.equal(levFor(100, 100), 1)      // a stop at the entry is not a stop
 
-/* The opening numbers: €20 of stake at a 2-away stop is 10 coins, which at 100 needs 1000 of
-   notional — 50 of margin at the 20× the stop affords. */
-assert.deepEqual(suggest(20, 100, 98, 500), { margin: 50, leverage: 20 })
-// never more than the account has free, whatever the stake says
-assert.deepEqual(suggest(2000, 100, 98, 500), { margin: 500, leverage: 20 })
-// no stake set — the app's default, meaning "say it in R" — opens at a fifth of what is free
-assert.deepEqual(suggest(0, 100, 98, 500), { margin: 100, leverage: 20 })
+/* The opening numbers: a fifth of what is free, at the multiplier the stop affords. A starting
+   point to type over — how much of an account one trade is worth is not this app's to say. */
+assert.deepEqual(suggest(100, 98, 500), { margin: 100, leverage: 20 })
+// a wider stop affords less leverage; the margin is the same fifth either way
+assert.deepEqual(suggest(100, 90, 500), { margin: 100, leverage: 5 })
+// no balance answered: nothing to offer rather than a number off an account it cannot see
+assert.deepEqual(suggest(100, 98, null), { margin: 0, leverage: 20 })
 
 // the read-only key's half: the same trade, said as instructions
 assert.equal(

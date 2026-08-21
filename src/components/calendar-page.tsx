@@ -201,16 +201,10 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
      distance from the entry to the stop, net of funding: the exact figure the market page's record
      shows per row.
 
-     Only the ones with real money on them. A setup you merely set an alert on has no size, and the
-     record prices it off the hypothetical stake in Settings — which is a fine thing to say on the
-     record, where the footnote calls it "what the plan would have paid", and the wrong thing
-     entirely on a day in a month, where a euro figure beside a date reads as money that left the
-     account. A day whose only closes were watched plans now says nothing, which is the truth: on
-     that day nothing was won or lost.
-
-     Passing 0 rather than `s.stake` is the second lock. stakeOf ignores it for a real position,
-     so the number is unchanged — but a row that ever slipped past the filter would price to null
-     instead of to a loss nobody took. */
+     Only the ones with real money on them. A setup you merely set an alert on has no size and so
+     no euros at all — a euro figure beside a date reads as money that left the account. A day whose
+     only closes were watched plans says nothing, which is the truth: on that day nothing was won
+     or lost. */
   const pnlByDay = useMemo(() => {
     const m = new Map<string, { cash: number | null; usd: number | null; r: number; unpricedR: number }>()
     for (const r of s.results) {
@@ -223,7 +217,7 @@ export default function CalendarPage({ onOpen }: { onOpen: (it: Item) => void })
          no money against it rather than as nothing at all. */
       if (!isReal(r)) continue
       const key = stamp(new Date(r.closedAt))
-      const cash = r.cash != null ? null : netOf(r, r.r, 0, s.dials, r.closedAt)
+      const cash = r.cash != null ? null : netOf(r, r.r, s.dials, r.closedAt)
       const at = m.get(key) ?? { cash: null, usd: null, r: 0, unpricedR: 0 }
       at.r += r.r
       if (r.cash != null) at.usd = (at.usd ?? 0) + r.cash

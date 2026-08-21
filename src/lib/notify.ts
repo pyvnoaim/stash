@@ -30,7 +30,7 @@ const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits
  * price that hasn't finished yet.
  */
 export function watchAlerts(
-  watches: Watch[], prices: Record<string, number>, stake = 0, d: Dials = DIALS, at = Date.now(),
+  watches: Watch[], prices: Record<string, number>, d: Dials = DIALS, at = Date.now(),
 ): Alert[] {
   return watches.flatMap((w) => {
     const p = prices[w.asset]
@@ -57,16 +57,16 @@ export function watchAlerts(
        its entry or through its stop, and both of those already have the word for it. */
     if (w.entryAt && !hit) {
       // funding comes off the running read-out — the number on a held perp is net of what holding costs
-      const money = netOf(w, rOf(w, p), stake, d, at)
+      const money = netOf(w, rOf(w, p), d, at)
       return [{
         // no level in the id: this one alert is the whole running read-out, and dismissing it is
         // saying "stop telling me about this trade until it ends", which it then does
         id: `watch-${w.id}-open`,
         title: `${who} is up ${rOf(w, p).toFixed(2)}R`,
+        // only a position has money on it — a watched plan reads in R and says nothing about euros
         detail: money === null
           ? `${price(p)} — from the ${side.toLowerCase()} entry at ${price(w.entry)}`
-          // "had you taken it" is the wrong sentence for money that is actually on the table
-          : `${price(p)} — ${signedEuro(money)}${isPosition(w) ? ' on your position' : ' had you taken it'}`,
+          : `${price(p)} — ${signedEuro(money)} on your position`,
         tone: 'info' as const,
         target: MARKET,
         asset: w.asset,
@@ -205,22 +205,21 @@ export const rLabel = (r: number) => `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`
 export const cashAt = (dir: 'long' | 'short', entry: number, level: number, qty: number) =>
   (level - entry) * qty * (dir === 'long' ? 1 : -1)
 
-/** What that R would have paid at the stake you set, or null when you have not set one. */
-export const moneyOf = (r: number, stake: number) => (stake > 0 ? r * stake : null)
+/** What that R paid on money that was really at risk, or null when there was none. */
+export const moneyOf = (r: number, risk: number) => (risk > 0 ? r * risk : null)
 
 /**
  * What one R is worth in euros on this row. A setup you actually took prices itself: `size × lev`
  * is the notional you're holding, and the distance from the entry to the stop is the share of it
- * that is at risk — so a €100 long at 10× with its stop 5% away has €50 on the line, whatever the
- * hypothetical stake in Settings says. Everything else falls back to that stake, which is what
- * every row here was before positions existed.
+ * that is at risk — so a €100 long at 10× with its stop 5% away has €50 on the line. A plan nobody
+ * took has no size, so it has no euros either, and reads in R.
  *
  * ponytail: no fees and no funding. On a perp held for days the funding is real money and this will
  * read a little rich; the moment that matters, it takes a rate per asset and a clock, not a
  * constant. What it does get right is the leverage, which is the part that was off by 10×.
  */
-export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake = 0) =>
-  (w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : stake)
+export const stakeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>) =>
+  (w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : 0)
 
 
 /** One open position, reduced to what a risk sum needs: where it got in, where it gets out, and
@@ -319,16 +318,11 @@ export const fundingOf = (w: Pick<Watch, 'size' | 'lev' | 'entryAt'>, rate: numb
 
 /**
  * What the trade is holding, in the currency it is priced in — the number a fee is a percentage of.
- * A position says so itself: size × leverage. A plan nobody took has no size, so the hypothetical
- * stake implies one — the notional at which the entry-to-stop distance is worth exactly that stake,
- * which is `stakeOf` read backwards and agrees with it on a real position.
+ * A position says so itself: size × leverage. A plan nobody took holds nothing, so there is no
+ * notional to charge a fee on and no figure to invent one from.
  */
-export const notionalOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake = 0) => {
-  if (isPosition(w)) return w.size! * w.lev!
-  const dist = Math.abs(w.entry - w.stop)
-  // a stop on the entry implies an infinite position for any stake at all — no distance, no figure
-  return dist > 0 && w.entry > 0 && stake > 0 ? (stake * w.entry) / dist : 0
-}
+export const notionalOf = (w: Pick<Watch, 'size' | 'lev'>) =>
+  (isPosition(w) ? w.size! * w.lev! : 0)
 
 /**
  * The round trip: in and out, one taker fee on the notional each side. Twice the dial, which is the
@@ -339,8 +333,8 @@ export const notionalOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, st
  * percent of a fraction of a percent. A maker fill pays less than this and sometimes is paid; the
  * dial is one number because a fill type is not something a saved setup remembers.
  */
-export const feeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake: number, fee: number) =>
-  (fee > 0 ? notionalOf(w, stake) * (fee / 100) * 2 : 0)
+export const feeOf = (w: Pick<Watch, 'size' | 'lev'>, fee: number) =>
+  (fee > 0 ? notionalOf(w) * (fee / 100) * 2 : 0)
 
 /**
  * The row's cash at `r`, net of what the trade costs to hold and to make: funding to `at`, and the
@@ -353,9 +347,9 @@ export const feeOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev'>, stake: 
  * plan beside these figures has been graded net of the fee since `tradePlan` learned to — reading
  * "1.8R after fees" above "+€480" that was gross of them was one number contradicting the other.
  */
-export const netOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev' | 'entryAt'>, r: number, stake: number, d: Dials, at: number) => {
-  const gross = moneyOf(r, stakeOf(w, stake))
-  return gross === null ? null : gross - fundingOf(w, d.funding, at) - feeOf(w, stake, d.fee)
+export const netOf = (w: Pick<Watch, 'entry' | 'stop' | 'size' | 'lev' | 'entryAt'>, r: number, d: Dials, at: number) => {
+  const gross = moneyOf(r, stakeOf(w))
+  return gross === null ? null : gross - fundingOf(w, d.funding, at) - feeOf(w, d.fee)
 }
 
 /**
@@ -422,20 +416,20 @@ export function watchProgress(watches: Watch[], prices: Record<string, number>, 
 /**
  * The finished ones, while they are still news. The only alert here about something that has
  * already happened — which is the point of it: the window opened, it ran, and this is what it
- * paid. On a plan that was only ever watched, what it would have paid, and the wording says so.
+ * paid. A plan that was only ever watched has no money on it and reads in R alone.
  */
-export function resultAlerts(results: Result[], stake: number, at = Date.now(), d: Dials = DIALS): Alert[] {
+export function resultAlerts(results: Result[], at = Date.now(), d: Dials = DIALS): Alert[] {
   return results.filter((r) => at - r.closedAt < RESULT_FRESH).map((r) => {
     const won = r.level === 'target'
     // what it paid, net of the funding the holding quietly cost — accrued to the close, not to now
-    const money = netOf(r, r.r, stake, d, r.closedAt)
+    const money = netOf(r, r.r, d, r.closedAt)
     const who = r.horizon ? `${r.label} · ${r.horizon}` : r.label
     return {
       id: `result-${r.id}`,
       title: `${who} ${won ? 'hit target' : 'stopped out'}`,
       detail: money === null
         ? `${rLabel(r.r)} — from the entry at ${price(r.entry)}`
-        : `${rLabel(r.r)} — ${signedEuro(money)}${isPosition(r) ? '' : ' had you taken it'}`,
+        : `${rLabel(r.r)} — ${signedEuro(money)}`,
       tone: won ? 'info' as const : 'warn' as const,
       target: MARKET,
       asset: r.asset,

@@ -95,18 +95,13 @@ export function levFor(entry: number, stop: number | null): number {
 }
 
 /**
- * What the dialog opens with: the stake from Settings turned into a size at this stop, and the
- * margin that size needs at a multiplier the stop can afford. A stake of nothing — the app's
- * default, meaning "say it in R" — falls back to a fifth of what is free, which is a starting
- * point to type over rather than a recommendation.
+ * What the dialog opens with: a fifth of what is free, at a multiplier the stop can afford. A
+ * starting point to type over rather than a recommendation — how much of the account one trade is
+ * worth is the one number this app has never claimed to know.
  */
-export function suggest(stake: number, entry: number, stop: number | null, available: number | null): { margin: number, leverage: number } {
-  const leverage = levFor(entry, stop)
-  const per = stop != null ? Math.abs(entry - stop) : null
-  const size = stake > 0 && per != null && per > 0 ? stake / per : null
-  const margin = size != null ? (size * entry) / leverage : (available ?? 0) / 5
-  const capped = available != null ? Math.min(margin, available) : margin
-  return { margin: Math.max(0, Math.round(capped * 100) / 100), leverage }
+export function suggest(entry: number, stop: number | null, available: number | null): { margin: number, leverage: number } {
+  const margin = (available ?? 0) / 5
+  return { margin: Math.max(0, Math.round(margin * 100) / 100), leverage: levFor(entry, stop) }
 }
 
 /** The line for a key that may not trade: the same trade, said as instructions. */

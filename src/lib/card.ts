@@ -6,7 +6,7 @@
  * SVG rather than a screenshot of the row: the row is theme-coloured, sized to whatever window it
  * is in, and surrounded by the rest of the desk. This is a fixed 1200×630 — the size every chat
  * app previews unclipped — and it says only what a stranger can read without an account: the
- * asset, the side, the move, and whose it is. Never the balance, the stake or the other positions.
+ * asset, the side, the move, and whose it is. Never the balance, the size or the other positions.
  *
  * The name and picture ride along because a card with no author is a screenshot of a number, and
  * the picture has to travel *inside* the image: an <img> pointed at an SVG loads nothing external,
@@ -23,7 +23,7 @@ export type CardPosition = {
   symbol: string
   side: 'long' | 'short'
   /** How much of it, in whatever unit the source counts in. Absent where there is no honest one —
-   *  a finished setup's stake is money and a position's size is coins, and the card would print
+   *  the money on a row is euros and a position's size is coins, and the card would print
    *  them in the same place under the same silence. */
   size?: number
   entry: number
