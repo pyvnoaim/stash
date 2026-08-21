@@ -5,7 +5,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn, MONEY_IN } from '@/lib/utils'
 import { fetchHours } from '@/lib/market'
 import { addDays, dayLabel, today } from '@/lib/parse'
-import { MARKET, monthlyCost, setMarketAsset, SUBS, useStash, type Item } from '@/lib/store'
+import { candlePair, MARKET, monthlyCost, setMarketAsset, SUBS, useStash, type Item } from '@/lib/store'
 import { ASSETS, fmtPrice } from '@/lib/market'
 import { ExchangePositions } from '@/components/market-page'
 import { Graph } from '@/components/graph'
@@ -31,12 +31,15 @@ type Row = { id: string; label: string; closes: number[]; price: number; change:
 export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
   data: number[]; up: boolean; id: string; className?: string
 }) {
+  // the same pair the desk's candles wear — a tile that reads up or down is no use to a colourblind
+  // eye in one palette and the chart in another
+  const hue = candlePair(useStash())
   if (data.length < 2) return null
   const lo = Math.min(...data), hi = Math.max(...data), span = hi - lo || 1
   // inset 3 units top+bottom so peaks/troughs don't sit on the edge — the 1.5px non-scaling stroke's
   // outer half (~2.3 units at this 32px height) would otherwise clip
   const line = data.map((v, i) => `${i ? 'L' : 'M'}${((i / (data.length - 1)) * 100).toFixed(1)} ${(3 + (1 - (v - lo) / span) * 94).toFixed(1)}`).join(' ')
-  const color = up ? '#10b981' : '#ef4444'
+  const color = up ? hue.up : hue.down
   return (
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={className}>
       <defs>

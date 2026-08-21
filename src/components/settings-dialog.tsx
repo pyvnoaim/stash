@@ -28,8 +28,9 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  addItem, CALENDAR, clearDone, hotkey, MARKET, readOnly, resetDials, resetHotkeys, setChart,
-  setDesk, setDial, setHotkey, setTool, TOOLS, toolOn, useStash, type ChartStyle,
+  addItem, CALENDAR, CANDLE_PAIRS, candlePair, clearDone, hotkey, MARKET, readOnly, resetDials,
+  resetHotkeys, setCandles, setChart, setDesk, setDial, setHotkey, setTool, TOOLS, toolOn, useStash,
+  type ChartStyle,
 } from '@/lib/store'
 import { type Dials as DialSet } from '@/lib/market'
 import {
@@ -388,6 +389,30 @@ function MarketsPanel() {
               {label}
             </Button>
           ))}
+        </div>
+
+        {/* The swatch is the setting: two dots say what the chart will look like better than the
+            name beside them does. Emerald against red is the pair the commonest colourblindness
+            cannot separate, which is the whole reason this row exists — and it paints the volume
+            bars and the open gaps too, not only the candles. */}
+        <div className="grid gap-1.5">
+          <p className="text-muted-foreground text-xs">Up and down</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {CANDLE_PAIRS.map((p) => (
+              <Button
+                key={p.id}
+                size="sm"
+                variant={candlePair(s).id === p.id ? 'default' : 'outline'}
+                onClick={() => setCandles(p.id)}
+              >
+                <span className="flex gap-0.5">
+                  <span className="size-2.5 rounded-full" style={{ background: p.up }} />
+                  <span className="size-2.5 rounded-full" style={{ background: p.down }} />
+                </span>
+                {p.label}
+              </Button>
+            ))}
+          </div>
         </div>
       </Section>
 

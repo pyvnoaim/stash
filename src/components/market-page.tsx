@@ -20,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash, type Result } from '@/lib/store'
+import { candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -175,9 +175,12 @@ function CopyNum({ v, className, children }: { v: string; className?: string; ch
 }
 
 export default function MarketPage() {
+  const s = useStash()
   const {
     chart, watches, marketAsset: asset, marketInterval: chosenInterval,
-  } = useStash()
+  } = s
+  // the one pair everything that means up or down on this chart is painted in
+  const hue = candlePair(s)
   const interval = chosenInterval
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
   // desk already showing the right thing — and it survives a reload. So does the bar size.
@@ -987,8 +990,8 @@ export default function MarketPage() {
                   <defs>
                     {/* fade the area under the price into nothing, tinted by the way it moved */}
                     <linearGradient id="mkt-fill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={up ? '#10b981' : '#ef4444'} stopOpacity={0.22} />
-                      <stop offset="100%" stopColor={up ? '#10b981' : '#ef4444'} stopOpacity={0} />
+                      <stop offset="0%" stopColor={up ? hue.up : hue.down} stopOpacity={0.22} />
+                      <stop offset="100%" stopColor={up ? hue.up : hue.down} stopOpacity={0} />
                     </linearGradient>
                     {/* an MA too far from price to be worth framing runs out of the box, not off the card */}
                     <clipPath id="mkt-clip"><rect x="0" y="0" width="100" height="100" /></clipPath>
@@ -1049,7 +1052,7 @@ export default function MarketPage() {
                   {visGaps.map((g) => (
                     <rect key={`g-${g.i}`} x={g.x} y={g.y0} width={Math.max(100 - g.x, 0)}
                       height={Math.max(g.y1 - g.y0, 0.3)} stroke="none"
-                      className={g.dir === 'up' ? 'fill-emerald-500/12' : 'fill-rose-500/12'} />
+                      fill={g.dir === 'up' ? hue.up : hue.down} fillOpacity={0.12} />
                   ))}
                   {/* The swing levels nobody has closed through yet — the ones a break would be news
                       about, and the exact levels the structure reading under the chart is talking
@@ -1088,7 +1091,7 @@ export default function MarketPage() {
                     // the wick keeps its 1px via non-scaling-stroke. Doji get a floor height to stay visible.
                     ? vis.map((c, i) => {
                         const x = xAt(i), w = n > 1 ? barW : 60
-                        const top = y(Math.max(c.o, c.c)), col = c.c >= c.o ? '#10b981' : '#ef4444'
+                        const top = y(Math.max(c.o, c.c)), col = c.c >= c.o ? hue.up : hue.down
                         return (
                           <g key={i} fill={col}>
                             <line x1={x} x2={x} y1={y(c.h)} y2={y(c.l)} stroke={col} strokeWidth={1} vectorEffect="non-scaling-stroke" />
@@ -1118,7 +1121,7 @@ export default function MarketPage() {
                   )}
                   {/* where the last drawn bar closed, so the tag on the axis has something to sit on */}
                   {price != null && (
-                    <line x1="0" x2="100" y1={y(price)} y2={y(price)} stroke={up ? '#10b981' : '#ef4444'}
+                    <line x1="0" x2="100" y1={y(price)} y2={y(price)} stroke={up ? hue.up : hue.down}
                       strokeWidth={1} strokeOpacity={0.45} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
                   )}
                 </svg>
@@ -1206,7 +1209,7 @@ export default function MarketPage() {
                   {panel === 'volume' && vis.map((c, i) => (
                     <rect key={i} x={xAt(i) - barW / 2} y={py(c.v ?? 0)} width={barW}
                       height={Math.max(100 - py(c.v ?? 0), 0)} stroke="none"
-                      className={c.c >= c.o ? 'fill-emerald-500/55' : 'fill-red-500/55'} />
+                      fill={c.c >= c.o ? hue.up : hue.down} fillOpacity={0.55} />
                   ))}
                   {panel === 'rsi' && (
                     <path d={pathOf(rsiV, pLo, pHi, xSpan)} className="stroke-violet-500 fill-none"

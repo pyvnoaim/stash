@@ -330,6 +330,27 @@ export type ProjectSort = (typeof PROJECT_SORTS)[number]
 /** How the Markets chart draws price: a single line, or OHLC candlesticks. */
 export type ChartStyle = 'line' | 'candles'
 
+/**
+ * The two colours everything that reads up or down on the chart is painted in — candle bodies and
+ * wicks, the volume bars under them, the open gaps behind them, the last-price line.
+ *
+ * Four pairs rather than a picker: this is the one choice a desk actually makes, and it is made
+ * once. Colourblind is the reason the setting exists at all — emerald against red is the pair the
+ * most common deficiency cannot separate. Reversed is East Asian convention, where red is the side
+ * that went up.
+ */
+export const CANDLE_PAIRS = [
+  { id: 'classic', label: 'Classic', up: '#10b981', down: '#ef4444' },
+  { id: 'neon', label: 'Neon', up: '#0ecb81', down: '#f6465d' },
+  { id: 'colorblind', label: 'Colourblind', up: '#2962ff', down: '#f59e0b' },
+  { id: 'reversed', label: 'Reversed', up: '#ef4444', down: '#10b981' },
+] as const
+export type CandlePair = (typeof CANDLE_PAIRS)[number]['id']
+
+/** The chosen pair, or the one it shipped with — so a document carrying a retired id still draws. */
+export const candlePair = (s: State) =>
+  CANDLE_PAIRS.find((p) => p.id === s.candles) ?? CANDLE_PAIRS[0]
+
 /** Subscriptions view state, kept so it survives leaving the tab. */
 export const SUB_SORTS = ['recent', 'name', 'cost', 'due'] as const
 export type SubSort = (typeof SUB_SORTS)[number]
@@ -351,6 +372,8 @@ export interface State {
    *  written into every existing document for the four of them to keep showing. */
   hidden: string[]
   chart: ChartStyle
+  /** Which colour pair up and down wear — see `CANDLE_PAIRS`, read through `candlePair`. */
+  candles: CandlePair
   /** Only the bindings that were changed; anything missing is the default in `HOTKEYS`. Local,
    *  like the theme — a keyboard is a property of the machine, not of the stash. */
   hotkeys: Record<string, string>
@@ -509,7 +532,7 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
   v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', hotkeys: {},
+  projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', candles: 'classic', hotkeys: {},
   subSort: 'recent', subView: 'expense', calView: 'month',
   watches: [], results: [], desk: false,
   // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
@@ -1307,6 +1330,7 @@ export const select = (sel: string) => set((s) => ({ ...s, sel }))
 export const focus = (focus: string | null) => set((s) => ({ ...s, focus }))
 export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
 export const setChart = (chart: ChartStyle) => set((s) => ({ ...s, chart }))
+export const setCandles = (candles: CandlePair) => set((s) => ({ ...s, candles }))
 export const setSubSort = (subSort: SubSort) => set((s) => ({ ...s, subSort }))
 
 /** The binding in force for one action: yours if you set one, otherwise the one it shipped with. */
