@@ -277,7 +277,9 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             >
               <span
                 style={p.color ? { backgroundColor: p.color } : undefined}
-                className="bg-muted-foreground h-3.5 w-0.5 rounded-full transition-opacity group-hover/menu-item:opacity-0"
+                // 3px, the same weight as the mark beside STASH in the header — at 2px a project's
+                // colour was a hairline that had to be looked for rather than seen
+                className="bg-muted-foreground h-3.5 w-[3px] rounded-full transition-opacity group-hover/menu-item:opacity-0"
               />
               {holds
                 ? <ChevronRight className={cn('absolute size-3.5 opacity-0 transition-[opacity,transform] group-hover/menu-item:opacity-100', !shut && 'rotate-90')} />
