@@ -752,9 +752,15 @@ export function load(data: unknown): State {
   st.subView = st.subView === 'income' ? 'income' : 'expense'
   st.calView = st.calView === 'week' ? 'week' : 'month'
   st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? assetId(st.marketAsset) : 'BTCUSDT'
-  st.marketHorizon = st.marketHorizon === 'long' ? 'long' : 'short'
+  /* Both retired here rather than coerced, the way apiKey above is. Markets draws one chart now —
+     the Investing horizon and the opening-range preset went with the mode switch — but the fields
+     stay in the document because `server/push.ts` still reads them to decide what to scan. Left
+     alone they would be write-only history: a document last saved on Investing would go on sending
+     alerts off a rule nothing draws, and pinning them from the page would only ever reach people
+     who open the tab. This reaches every document on its first load, once. */
+  st.marketHorizon = 'short'
+  st.marketPreset = 'standard'
   st.marketInterval = (INTERVALS as readonly string[]).includes(st.marketInterval) ? st.marketInterval : '1d'
-  st.marketPreset = st.marketPreset === 'orb' ? 'orb' : 'standard'
   // dialsOf owns the ranges: a hand-edited backup cannot set a threshold the bell has no wording for
   st.dials = dialsOf(st)
   /* Expiry runs here as well as on write: this is what every device does with a document it takes
@@ -1345,9 +1351,9 @@ const field = <K extends keyof State>(k: K) => (v: State[K]) =>
 
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = field('marketAsset')
-export const setMarketHorizon = field('marketHorizon')
 export const setMarketInterval = field('marketInterval')
-export const setMarketPreset = field('marketPreset')
+/* No setters for marketHorizon or marketPreset: `load` pins both, because the page they were the
+   controls for draws one chart now. The fields are still in the document for push.ts to read. */
 /** One dial, clamped to what it may be — the same guard a loaded document goes through. */
 export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))

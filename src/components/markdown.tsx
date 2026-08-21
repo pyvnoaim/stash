@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { cells, isDivider, safeHref, safeSrc, spanOpen, type WikiTarget } from '@/lib/markdown'
+import { cells, headingClass, isDivider, safeHref, safeSrc, spanOpen, type WikiTarget } from '@/lib/markdown'
 import { cn } from '@/lib/utils'
 
 /**
@@ -249,8 +249,7 @@ export function Markdown({ text, onToggle, links }: {
     const q = line.match(/^>\s?(.*)$/)
     if (h) {
       flush()
-      const cls = h[1].length === 1 ? 'text-xl' : h[1].length === 2 ? 'text-lg' : 'text-base'
-      blocks.push(<p key={blocks.length} className={cn('mt-2 font-semibold', cls)}>{inline(h[2], links)}</p>)
+      blocks.push(<p key={blocks.length} className={headingClass(h[1].length)}>{inline(h[2], links)}</p>)
     } else if (ul || ol) {
       flushPara(); flushQuote()
       const ordered = !!ol

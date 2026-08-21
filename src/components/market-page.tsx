@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ChevronDown, CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints, Zap } from 'lucide-react'
+import { CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,48 +13,39 @@ import {
 import { TradeDialog } from '@/components/trade-dialog'
 import { cancel as cancelOrder } from '@/lib/trade'
 import { Avatar } from '@/components/settings-dialog'
-import { useVenue, type VenueFeed } from '@/lib/venue'
+import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
-import { Sparkline } from '@/components/overview'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { copyCard, downloadCard } from '@/lib/card'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketHorizon, setMarketInterval, setMarketPreset, useStash, type Result } from '@/lib/store'
+import { clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ANCHOR, ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, fvg, localClock, openDesks, openPlay, orb, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, strategyPlan, tally, trendFilter,
-  venueName, offMexc, priceDigits, readInterval, toll,
-  scanBars, scanRead,
-  type Asset, type Candle, type Horizon, type Interval, type ScanRow, type Signal, type Swing,
+  ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, tally, trendFilter,
+  venueName, offMexc, priceDigits,
+  type Asset, type Candle, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
 
 // asset ids grouped for the picker dropdown, in the order ASSETS lists them
 const GROUPS = ASSETS.reduce<Record<string, Asset[]>>((m, a) => ((m[a.group] ??= []).push(a), m), {})
 
 /**
- * How the desk is reading, as one switch.
+ * One chart, one rule.
  *
- * It was two — a horizon (Trading / Investing) and a preset (Standard / Opening range) — which is a
- * 2×2 whose fourth square, a daily opening range, has never meant anything. Two trays in the toolbar
- * and two words to learn for one question: which rule is talking.
+ * There were three modes here — Trading, Investing, Opening range — each with its own MA pair, its
+ * own entry rule and its own way of phrasing an answer, and every reading on the page changed
+ * meaning depending on which was selected. The page draws one chart now: the intraday read, on
+ * whichever bar size you point it at.
  *
- * The store still keeps both fields separately, because the push server and the paper desk read them
- * as they are (see push.ts, paper.ts) and the stored document's shape is an API. This is the UI
- * flattening them, not a migration.
+ * `marketHorizon` and `marketPreset` are still in the stored document — the push server reads them
+ * as they are (see push.ts) and the document's shape is an API — but nothing writes them any more:
+ * `load` in store.ts pins both, so every document is retired on its first read rather than only the
+ * ones belonging to someone who opens this tab.
  */
-const modeHint = (h: Horizon) =>
-  `${HORIZONS[h].strategy} — ${HORIZONS[h].rule} Read off ${HORIZONS[h].fast}/${HORIZONS[h].slow}-MAs on ${HORIZONS[h].interval} bars; every verdict, level and alert below follows this rule. ${HORIZONS[h].measured}`
-
-const MODES = [
-  { id: 'short', label: 'Trading', hint: modeHint('short') },
-  { id: 'long', label: 'Investing', hint: modeHint('long') },
-  { id: 'orb', label: 'Opening range',
-    hint: "The first 15 minutes of the US session as the day's range — breaks of it are the trade, and the bars are pinned to 15m" },
-] as const
-type Mode = (typeof MODES)[number]['id']
+const READ: Horizon = 'short'
 
 /** One session open on the chart: where it sits, whose it is, and when — in the reader's own clock. */
 type SessionMark = { x: number; color: string; label: string; t: number; future: boolean }
@@ -67,26 +58,22 @@ const LIVE = 5000 // how often the forming candle is repriced
 // how long to wait between full-window refetches when a bar looks closed — see the tick below
 const ROLL_RETRY = 60_000
 /**
- * The page's three sittings, and there used to be five.
+ * Two sittings, and there used to be five.
  *
- * The three that went are all one question — how did trades go — asked of three different books:
- * your own, the rule's, and everyone else's. Three tabs for that put the comparison a click apart in
- * each direction, and left the toolbar carrying five pills before it got to the asset. They are one
- * tab with a switch on it now (see RECORDS), which is where a comparison belongs.
- *
- * `chart` is where you land — it is the asset you asked for.
+ * The Scan went with the setups: a sweep of every listed asset, ranking them by a rule this page no
+ * longer runs. `chart` is where you land — it is the asset you asked for, and everything you would
+ * read before taking a trade on it.
  */
 const TABS = [
   { id: 'chart', label: 'Chart' },
-  { id: 'scan', label: 'Scan' },
   { id: 'record', label: 'Record' },
 ] as const
 
-/** Whose finished trades. One question, three books — see the note on TABS. */
+/** Whose finished trades. One question, two books. The forward test that stood beside them is gone
+ *  with the rule it was testing — see the note on READ. */
 const RECORDS = [
   { id: 'mine', label: 'Your trades', hint: 'Every finished trade of yours: what it paid, and a card of it to share. Hit rate and expectancy by rule.' },
   { id: 'people', label: 'Friends trades', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
-  { id: 'paper', label: 'Backtesting', hint: 'The rule tested forward: every setup the desk endorsed, filed by the server and followed to its stop or target. Nothing traded.' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -119,7 +106,7 @@ const assetFor = (name: string) => ASSETS.find((a) => a.id === assetOf(name) || 
 
 /**
  * A trade's name, with its mark, as the way through to the chart of it. Every list here — your book,
- * the log, the paper desk, somebody else's tiles — names an asset and none of them used to be a way
+ * the log, somebody else's tiles — names an asset and none of them used to be a way
  * to look at one: the picker was the only door, and it is on the other tab.
  *
  * A name the desk has no chart for stays plain text rather than becoming a button that goes nowhere.
@@ -189,26 +176,13 @@ function CopyNum({ v, className, children }: { v: string; className?: string; ch
 
 export default function MarketPage() {
   const {
-    chart, watches, dials, stake, marketAsset: asset, marketHorizon: horizon,
-    marketInterval: chosenInterval, marketPreset: preset,
+    chart, watches, marketAsset: asset, marketInterval: chosenInterval,
   } = useStash()
-  /* The regime rule is read on days whatever the selector was left on — its timeframe is part of
-     the rule, and the server derives the desk's from the same function, so the chart, the card and
-     the row the phone gets cannot drift apart. See readInterval. */
-  const interval = readInterval(horizon, chosenInterval)
+  const interval = chosenInterval
   // the selected asset lives in the store, so an Overview mover tile or a bell alert can open the
-  // desk already showing the right thing — and it survives a reload. So do the picker and the
-  // preset, for the extra reason that the push server scans on whatever they say (see push.ts).
+  // desk already showing the right thing — and it survives a reload. So does the bar size.
   const setAsset = setMarketAsset
   const setInterval = setMarketInterval
-  /* The two store fields as the one switch the toolbar shows — see MODES. Leaving the opening range
-     always releases the 15m pin, which is why the interval is set unconditionally here where the
-     old two-tray version only did it while the preset happened to be Standard. */
-  const mode: Mode = preset === 'orb' ? 'orb' : horizon
-  const setMode = (m: Mode) => {
-    if (m === 'orb') { setMarketPreset('orb'); setMarketHorizon('short'); return }
-    setMarketPreset('standard'); setMarketHorizon(m); setMarketInterval(HORIZONS[m].interval)
-  }
   const [candles, setCandles] = useState<Candle[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -218,22 +192,22 @@ export default function MarketPage() {
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
-  /* The order dialog, holding the plan as it stood when the button was pressed. Not a boolean:
-     `plan` is recomputed off every tick, and passing its levels straight in re-ran the dialog's
-     own set-up on each one — the margin you had typed thrown away twice a second, and a confirm
-     button that meant a different price than the one under it. What is placed is what was shown. */
+  /* The order dialog, holding the price and the levels as they stood when the button was pressed.
+     Not a boolean: everything here is recomputed off every tick, and passing live numbers straight
+     in re-ran the dialog's own set-up on each one — the margin you had typed thrown away twice a
+     second, and a confirm button that meant a different price than the one under it. What is
+     placed is what was shown. */
   const [trading, setTrading] = useState<
-    { side: 'long' | 'short', entry: number, stop: number, target: number | null } | null
+    { side: 'long' | 'short', entry: number, stop: number | null, target: number | null } | null
   >(null)
-  const [showWhy, setShowWhy] = useState(false) // the readings behind the verdict, folded by default
   /* The unbroken swings, the range they span, and the gaps price has not come back for. On by
-     default — they are the levels every other reading on this page is quietly measured against, and
-     the chart used to draw the verdict's conclusions without ever showing the structure they came
-     from. A toggle rather than always-on because this chart already carries MAs, sessions, a plan
-     and a live position, and there are days you want the candles back. */
+     default — they are the levels every other reading on this page is measured against, and they
+     are most of what the readings below are actually about. A toggle rather than always-on because
+     this chart already carries MAs, sessions and a live position, and there are days you want the
+     candles back. */
   const [structure, setStructure] = useState(true)
-  /* The second panel under the price. Every one of these was already computed and voting on the
-     verdict while being impossible to see — the chart handed you "RSI 47" as text and nothing else.
+  /* The second panel under the price. Every one of these was already computed and read out as text
+     while being impossible to see — the chart handed you "RSI 47" and nothing else.
      Off by default — the price chart is the subject, and a panel steals a third of its height. */
   const [panel, setPanel] = useState<'none' | 'volume' | 'rsi' | 'macd'>('none')
   const online = useOnline()
@@ -243,8 +217,8 @@ export default function MarketPage() {
      honest signal that the feed is not answering. Either way the page stops claiming to be live. */
   const [notLive, setNotLive] = useState(false)
   const stale = !online || notLive
-  const cfg = HORIZONS[horizon]
-  // the exchange's word on what's held, for drawing the real position over whatever the plan says
+  const cfg = HORIZONS[READ]
+  // the exchange's word on what's held, so the chart draws the trade that is actually on
   const exch = useExchangePositions()
   /* Whose book to read. `undefined` means the answer is still coming, and every feed below waits
      for it rather than loading Binance's bars and replacing them a beat later. */
@@ -254,11 +228,6 @@ export default function MarketPage() {
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
   // Bitcoin, 4 for a coin at 0.17 — where two printed entry, stop and target as the same number
   const fmt = (v: number) => fmtPrice(v, candles.at(-1)?.c ?? 1)
-  // the same number without the grouping, for the clipboard — see CopyNum
-  const plain = (v: number) => v.toFixed(priceDigits(candles.at(-1)?.c ?? 1))
-
-  // the opening-range play only makes sense on 15m bars, so selecting it pins the interval
-  useEffect(() => { if (preset === 'orb') setInterval('15m') }, [preset])
 
   const seq = useRef(0)
   useEffect(() => {
@@ -279,27 +248,22 @@ export default function MarketPage() {
       })
   }, [asset, interval, nonce, feed]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The bigger picture, twice over. `higher` is the timeframe one step up and votes in the tally —
-  // the "don't fight the bigger picture" card. `anchor` is the daily (the weekly, once you're on the
-  // daily) and never votes: it exists so a 15m read, whose step up is only the 4h, can still tell you
-  // it is pointing the opposite way to the chart you were looking at a minute ago.
-  // Their own small fetches rather than grouping the bars we have: the slow MA wants 200 higher-
-  // timeframe bars of history, which this window doesn't hold. Fail quietly — filters, not the feed.
+  /* The bigger picture: the timeframe one step up, which leads the readings — the "don't fight the
+     bigger picture" card. A daily anchor used to be fetched beside it, to reconcile a 15m read with
+     whichever of the three modes you had the page on; there is one chart now and it says nothing
+     the step up doesn't.
+     Its own small fetch rather than grouping the bars we have: the slow MA wants 200 higher-
+     timeframe bars of history, which this window doesn't hold. Fails quietly — a filter, not the feed. */
   const [higher, setHigher] = useState<Signal | null>(null)
-  const [anchor, setAnchor] = useState<Signal | null>(null)
   useEffect(() => {
-    setHigher(null); setAnchor(null)
+    setHigher(null)
     if (feed === undefined) return
     let on = true
-    const lean = (iv?: Interval) => (iv
-      ? fetchCandles(current, iv, feed).then((c) => trendFilter(c, cfg.slow, iv)).catch(() => null)
-      : Promise.resolve(null))
-    const up = HIGHER[interval], anc = ANCHOR[interval]
-    const upLean = lean(up)
-    // on 1h the step up already *is* the daily — one request, read twice, not two identical calls.
-    const ancLean = anc === up ? upLean : lean(anc)
-    upLean.then((s) => { if (on) setHigher(s) })
-    ancLean.then((s) => { if (on) setAnchor(s) })
+    const up = HIGHER[interval]
+    if (!up) return
+    fetchCandles(current, up, feed)
+      .then((c) => { if (on) setHigher(trendFilter(c, cfg.slow, up)) })
+      .catch(() => {})
     return () => { on = false }
   }, [asset, interval, nonce, cfg.slow, feed]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -471,15 +435,9 @@ export default function MarketPage() {
     else if (mk.future && atEdge && !last.future) labelled[labelled.length - 1] = mk
   }
 
-  // opening-range levels + breakout signal, computed off the full window so the 00:00 bar is found.
-  // memoised so it doesn't re-scan (and re-spread) the whole candle array on every hover re-render
-  const range = useMemo(() => (preset === 'orb' && candles.length ? orb(candles) : null), [preset, candles])
-  // where the range hour sits in the drawn window — both -1 once it's scrolled out of view
-  const orbBar = range ? vis.findIndex((c) => c.t === range.t) : -1
-  const orbEnd = range ? vis.findIndex((c) => c.t === range.until) : -1
-  /* Where price sits against the average paid since the session opened. Not tied to the opening-range
-     preset — it is the intraday reference whatever you are looking at — and it returns null on its
-     own for a daily bar or a feed with no volume, which is every case it would be a lie in. */
+  /* Where price sits against the average paid since the session opened — the intraday reference
+     whatever you are looking at. It returns null on its own for a daily bar or a feed with no
+     volume, which is every case it would be a lie in. */
   const vwap = useMemo(() => (candles.length ? sessionVwap(candles) : null), [candles])
 
   /* Closed bars only, which is the same cut signals() makes before its own structure read (see the
@@ -508,55 +466,22 @@ export default function MarketPage() {
     [structure, closed],
   )
   // the higher-timeframe lean leads: it's the filter the others get read through
-  const shownSignals = deskSignals(higher, range, vwap, view?.signals ?? [])
+  const shownSignals = deskSignals(higher, null, vwap, view?.signals ?? [])
 
-  // one clean call: tally the bull vs bear cards into a Long / Short / Flat verdict for the horizon
+  /* How the readings lean, counted. A lean is not an instruction — this page used to turn the same
+     count into "Buy now", "Wait", "The fee eats it", and a plan with an entry, a stop and a target
+     nobody asked it for. The count is the honest part: it says what the chart is doing and leaves
+     the trade to you. */
   const { bulls, bears, dir } = tally(shownSignals)
   // tinted rather than solid: a filled red pill reads as an emergency, and a 1/5 tally is a lean
   const bias = dir === 'long'
-    ? { label: 'Long', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400', Icon: TrendingUp }
+    ? { label: 'Leaning long', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400', Icon: TrendingUp }
     : dir === 'short'
-      ? { label: 'Short', cls: 'bg-destructive/10 text-destructive', Icon: TrendingDown }
-      : { label: 'Flat', cls: 'bg-muted text-muted-foreground', Icon: Minus }
+      ? { label: 'Leaning short', cls: 'bg-destructive/10 text-destructive', Icon: TrendingDown }
+      : { label: 'No lean', cls: 'bg-muted text-muted-foreground', Icon: Minus }
 
-  /* The setup, from whichever strategy the horizon is on — Trading takes the VWAP pull-back at a
-     fixed 2R, Investing owns the trend while it is over the 200-MA. Both hand back a Plan, so
-     everything below this line (the levels card, the alert, the chart lines, the position) does not
-     care which rule made it; only the verdict language does. */
-  const entryMA = view?.smaFast.at(-1) ?? null
-  const slowMA = view?.smaSlow.at(-1) ?? null
   const last = candles.at(-1)?.c
-  // memoised for the reason vwap and the swings above are: the crosshair sets state, so everything
-  // in this body runs again on every mouse move, and this one sorts two hundred bars to find a median
-  const tollR = useMemo(() => toll(candles, dials.fee), [candles, dials.fee])
-  const { plan, block } = view && last != null
-    ? strategyPlan(horizon, {
-        dir, price: last, fast: entryMA, slow: slowMA,
-        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
-        toll: tollR, fee: dials.fee,
-      })
-    : { plan: null, block: null }
-  const holding = horizon === 'long' // the regime rule, which answers in positions not trades
-  /* The side the plan is actually on. The regime rule is long by construction whatever the cards
-     lean — see holdPlan — and this is the side the alert and the record get saved under, so a
-     bearish tally on the daily can no longer file a long-only position as a short. */
-  const side = holding ? ('long' as const) : dir
-  // taking a long while the timeframe above leans down is the trade guides tell you to skip
-  const fights = (s: Signal | null) => !!s && ((dir === 'long' && s.tone === 'bear') || (dir === 'short' && s.tone === 'bull'))
-  // neither applies to accumulation: the 200-MA regime filter is already the trend gate, and a
-  // weekly that disagrees with a multi-month holding is the ordinary weather, not a warning
-  const against = !holding && !!plan && fights(higher)
-  // the tide disagrees but the step up doesn't — not a reason to skip the trade, just the thing you
-  // want said out loud before you take a scalp against the chart the rest of the app defaults to
-  const counter = !holding && !!plan && !against && fights(anchor)
-
-  /* The whole card in one line, because "when do I buy" shouldn't need three cards cross-referenced.
-     Within a quarter-ATR of the entry counts as "here" — asking for the exact number is asking for a
-     fill you won't get. A setup that doesn't pay, or that fights the timeframe above, says so first:
-     the most useful thing this tool can tell you is usually that there is nothing to do. */
-  // in money, not in R: "the reward is under 1R" is only clear if you already know what R is
-  const risk = plan ? Math.abs(plan.entry - plan.stop) : 0
-  const reward = plan ? Math.abs(plan.target - plan.entry) : 0
+  const coin = current.id.replace(/USDT$/, '')
   // the exchange position on this very chart, if there is one — the strip above already knew about
   // it, and from here down so does the card
   const held = exch.rows.find((p) => assetOf(p.symbol) === current.id)
@@ -564,136 +489,35 @@ export default function MarketPage() {
      price nobody has traded yet — the one thing the desk knew about and never drew, so an entry
      placed on the exchange looked, on this page, exactly like an entry nobody had placed. */
   const resting = exch.orders.filter((o) => assetOf(o.symbol) === current.id)
-  /* The one of them that is this card's trade already placed: an opening order facing the way the
-     plan does. Everything below reads it — the verdict stops asking you to enter a trade you have
-     entered, and the footer stops saying there is nothing to press at someone who has pressed it.
-     Deliberately not matched on price: an order two ATR off the entry is still your order on this
-     side, and the line says how far off it sits rather than pretending it isn't there. */
-  const waiting = resting.find((o) => o.opens && (o.side === 'buy') === (side === 'long'))
-  const coin = current.id.replace(/USDT$/, '')
   /* How the position is doing on its own entry, the venue's sign convention: up is up whichever
      way it is facing. */
   const heldMove = held && last != null && held.entry > 0
     ? (last / held.entry - 1) * (held.side === 'long' ? 100 : -100) : null
-  /* Two ladders, because the two strategies answer different questions. Trading asks "is there a
-     trade", and no is a normal answer to that. Investing asks "should I own this", and no is still
-     an answer — Out is a position — so this side never renders the "nothing found" shape. */
-  const verdict = !view || last == null ? null
-    : holding
-    /* INVESTING — own it, or don't. Two rungs, because the regime is on or it is off and there is
-       no waiting rung once the entry is the price: the dip to the 50-MA that used to be one cost 48
-       of the 67 points the additions to this rule were worth (see HORIZONS). No thin check either —
-       a holding with no deadline is not judged on R:R — and no higher-timeframe gate, since the
-       200-MA already is the trend filter. */
-    ? block === 'below'
-      ? {
-          text: 'Out', tone: 'wait' as const,
-          why: `price is under the ${cfg.slow}-MA${slowMA != null ? ` at ${fmt(slowMA)}` : ''} — below that line the dips keep getting cheaper, and there is nothing here to hold`,
-        }
-    : !plan
-      ? {
-          text: 'Not enough history', tone: 'wait' as const,
-          why: `the ${cfg.slow}-MA needs ${cfg.slow} bars before it means anything — this feed has not given that many yet`,
-        }
-      : {
-          text: 'Own it', tone: 'go' as const,
-          why: `price is over the ${cfg.slow}-MA, so the position is on — buy it here, not on a dip that may not come, and out on a daily close under ${fmt(plan.stop)} (${Math.abs(((plan.stop - last) / last) * 100).toFixed(1)}% below)${plan.target > last ? ` · trim into ${fmt(plan.target)} if you want one` : ''}`,
-        }
-    /* TRADING — but first: the trade may already be on. Every rung below this one answers "should I
-       enter", and that is not the question once the entry is behind you — the card was reading
-       "Buy now · price is at the entry" at someone holding the very trade it was describing, off
-       the same feed it draws the position's levels with. Only when the readings still lean the way
-       you are facing: a tally that has flipped is not your trade any more, and that read (and the
-       "other side of this card" line below) is the one you want then. */
-    : held && held.side === side
-      ? {
-          text: 'In it', tone: 'hold' as const,
-          why: `the entry is behind you at ${fmt(held.entry)}${heldMove != null ? ` (${heldMove >= 0 ? '+' : ''}${heldMove.toFixed(2)}%)` : ''} — this is that trade, not a new one${
-            (held.stop ?? plan?.stop) != null ? ` · out at ${fmt((held.stop ?? plan!.stop))} if wrong` : ' · nothing is stopping this one'}${
-            (held.target ?? plan?.target) != null ? ` · take ${fmt((held.target ?? plan!.target))}` : ''}`,
-        }
-    // a split tally has no side to trade, and a bias on the wrong side of the session average has
-    // no trade either. Both used to render as an empty space where the answer goes, which reads as
-    // the tool being broken rather than as it having looked and found nothing.
-    : block === 'flat'
-      ? {
-          text: 'No side to take', tone: 'wait' as const,
-          why: `the readings are split ${bulls} to ${bears} — when they disagree this evenly, the honest answer is that there is no trade here`,
-        }
-    : block === 'vwap'
-      ? {
-          text: 'Wrong side of the VWAP', tone: 'wait' as const,
-          why: `the tally leans ${dir}, but price is ${dir === 'long' ? 'below' : 'above'} the average paid since the open${vwap ? ` (${fmt(vwap.vwap)})` : ''} — this rule only takes ${dir}s from ${dir === 'long' ? 'above' : 'below'} that line, and it is the one filter it will not let a card outvote`,
-        }
-    : block === 'quiet'
-      ? {
-          text: 'No stop to size', tone: 'wait' as const,
-          why: 'there is no ATR off these bars yet — without a normal bar\'s travel to measure, the stop would be a guess',
-        }
-    : block === 'toll'
-      ? {
-          text: 'The fee eats it', tone: 'wait' as const,
-          why: `a normal ${interval} bar is small enough that crossing the book twice at ${dials.fee}% a side costs more than a quarter of the risk — this rule stops one ATR away, so on bars this size the fee is most of the trade. Walked over 1807 of these, it lost 0.29R a trade with every asset losing. Take it on a bigger bar, or somewhere that charges you less.`,
-        }
-    : block === 'warmup'
-      ? {
-          text: 'Not enough bars', tone: 'wait' as const,
-          why: `the feed returned too few ${interval} candles to warm the ${cfg.slow}-MA this read is measured against — the cards that do have their bars would decide it on their own, which is a different rule wearing this one's name`,
-        }
-    : !plan
-      ? {
-          text: 'No clean setup', tone: 'wait' as const,
-          why: `the tally leans ${dir}, but price is already past the ${cfg.fast}-MA — entering here would be chasing; wait for the pull-back`,
-        }
-    : plan.thin || against
-      ? {
-          text: 'Nothing to do here', tone: 'wait' as const,
-          why: plan.thin
-            // the two figures it used to restate are the Risk to reward cell, an inch below it
-            ? `the fee comes off both ends — more than half of these have to win just to break even`
-            : `the ${HIGHER[interval]} chart is going the other way, and that is the bigger tide`,
-        }
-    /* The trade is placed. Below every filter above deliberately: a tally that has flipped or a fee
-       that eats it is news you want *because* an order is resting — that is the read that gets it
-       cancelled. Above the two entry rungs, because "buy at 75.93" at someone whose buy is already
-       on the book is the card asking twice for one trade. */
-    : waiting
-      ? {
-          text: 'Order in', tone: 'hold' as const,
-          why: `your ${waiting.side} for ${waiting.size} ${coin} rests at ${fmt(waiting.price)}${
-            Math.abs(waiting.price - plan.entry) > (view?.atr ?? 0) * 0.1
-              ? ` — ${away(waiting.price, plan.entry)} off the ${fmt(plan.entry)} entry` : ''
-          } · nothing to do until price comes to it`,
-        }
-    : Math.abs(plan.entry - last) <= (view?.atr ?? 0) * 0.25
-      ? {
-          text: dir === 'long' ? 'Buy now' : 'Sell now', tone: 'go' as const,
-          why: `price is at the entry — get out at ${fmt(plan.stop)} if wrong (${fmt(risk)}), take ${fmt(reward)} at ${fmt(plan.target)} · needs ${(plan.breakEven * 100).toFixed(0)}% winners`,
-        }
-      : {
-          text: `Wait — ${dir === 'long' ? 'buy' : 'sell'} at ${fmt(plan.entry)}`, tone: 'hold' as const,
-          why: `${Math.abs(((plan.entry - last) / last) * 100).toFixed(2)}% ${plan.entry > last ? 'above' : 'below'} the price now · risk ${fmt(risk)} to make ${fmt(reward)} · needs ${(plan.breakEven * 100).toFixed(0)}% winners`,
-        }
-  const VERDICT = {
-    go: 'text-emerald-600 dark:text-emerald-400',
-    hold: 'text-foreground',
-    wait: 'text-amber-600 dark:text-amber-500',
-  } as const
-  // `held`'s levels get drawn with the plan's. The whole position wears fuchsia — the one hue
-  // nothing else on the chart uses (candles are emerald/red, plan entry sky, MAs sky/amber, range
-  // violet, sessions rose/indigo/teal), and the one that stays apart from sky for colorblind eyes
-  // where fuchsia-500 didn't. Role is carried by weight and dash, and the legend below shows
-  // exactly those dashes.
+
+  /* What rides the order when you press Long or Short. One ATR out and two ATR up: a normal bar's
+     travel, so ordinary noise doesn't clip it, and the same distance the position strip suggests
+     for a stopless position (see useSuggested). Not a recommendation and not a setup — it is the
+     stop the exchange needs to have one, and the dialog prints what it costs before anything is
+     placed. No ATR yet means no stop: a guessed one is worse than none. */
+  const bracket = (s: 'long' | 'short') => {
+    const a = view?.atr ?? null
+    if (last == null) return null
+    const k = s === 'long' ? 1 : -1
+    return {
+      side: s, entry: last,
+      stop: a ? last - k * a : null,
+      target: a ? last + k * a * 2 : null,
+    }
+  }
+  // The whole position wears fuchsia — the one hue nothing else on the chart uses (candles are
+  // emerald/red, MAs sky/amber, VWAP cyan, sessions rose/indigo/teal), and the one that stays apart
+  // from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by weight and dash, and
+  // the legend below shows exactly those dashes.
   /* The hand-entered position on this asset is the one that knows its leverage, so it is the one
      with a liquidation price — the exchange feed's rows deliberately carry no lev (see bitget.ts).
      With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
      the feed's entry/stop/target are the trade's real ones. */
   const mine = watches.find((w) => w.asset === current.id && isPosition(w))
-  /* Money already on this asset, from either side of the house: the exchange's own row counts, not
-     only a hand-entered one. It used to be the hand-entered ones alone, which left the card telling
-     someone whose position it was drawing on the chart that nothing here is ever traded — the tool
-     not knowing what the strip above it knew. */
-  const inIt = !!held || !!mine
   // the exchange's own liquidation price where the feed carries one — that is the number that
   // actually fires — and the entry ± entry/lev estimate off the hand-entered position otherwise
   const liq = held?.liq ?? (mine ? liqOf(mine) : null)
@@ -718,9 +542,8 @@ export default function MarketPage() {
   ]
 
   /* The range price is working inside: the near swing band — what "support / resistance" has always
-     meant here, and where the stop goes.
-     The wider band three windows back used to be drawn with it, at a 40%-opacity 1-4 dash. It is
-     what the holding rule's target aims at, and the target already has a line of its own; two more
+     meant here, and where a stop belongs.
+     The wider band three windows back used to be drawn with it, at a 40%-opacity 1-4 dash. Two more
      hairlines nobody could name were two more of the dozen this chart draws. */
   const rangeLines = view && structure
     ? [{ label: 'range high', lvl: view.resistance }, { label: 'range low', lvl: view.support }]
@@ -797,17 +620,15 @@ export default function MarketPage() {
 
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
-      {/* The three questions this row is allowed to ask, in the order they get read: which page,
-          which asset, which rule. It used to carry six trays and sixteen controls — the pages, the
-          asset, the horizon, the bar size, the preset, three indicator panels, a structure toggle,
-          a live switch and a refresh — wrapping onto two and three lines on an ordinary window.
+      {/* Two questions now, in the order they get read: which page, which asset — and on the chart,
+          how big a bar. It used to carry six trays and sixteen controls, and after that three: the
+          third was the rule, and there is only one rule left because there is only one chart.
 
-          Everything that only decides what is *drawn* now lives on the chart card itself, where the
-          thing it changes is. And a control is only here on a tab that reads it: the Record has no
-          asset and no rule, so its toolbar is three pills and nothing else. */}
+          Everything that only decides what is *drawn* lives on the chart card itself, where the
+          thing it changes is. */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
-          {/* No tooltip: these are the three pages, and a page you can see the name of does not need
+          {/* No tooltip: these are the pages, and a page you can see the name of does not need
               a paragraph explaining it — it needs clicking. */}
           {TABS.map(({ id, label }) => (
             <Button
@@ -849,62 +670,43 @@ export default function MarketPage() {
             </SelectContent>
           </Select>
         )}
-        {/* Which rule is talking. One tray where there were two — see MODES. The Scan reads it too:
-            its whole table is every asset through this rule, so hiding the switch there would leave
-            a ranking with no way to say what it was ranked by. */}
-        {tab !== 'record' && (
-          <>
-            <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
-              {MODES.map((m) => (
-                <Hint key={m.id} label={m.hint}>
-                  <Button size="sm" variant={mode === m.id ? 'secondary' : 'ghost'}
-                    className={cn('h-7', mode !== m.id && 'text-muted-foreground')}
-                    onClick={() => setMode(m.id)}>
-                    {m.label}
-                  </Button>
-                </Hint>
+        {/* How big a bar. A dropdown, like the asset: six pills is the widest thing in this bar and
+            five of them are always the wrong answer. The trigger wears the tray's own fill so the
+            row still reads as one set of controls rather than a switch and a form field. */}
+        {tab === 'chart' && (
+          <Select value={interval} onValueChange={(v) => setInterval(v as Interval)}>
+            <Hint label="Bar size — how much time one candle covers. Every reading below is measured on these bars.">
+              <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
+                {/* the value written out, the way the asset trigger does it — this file never
+                    imported SelectValue and does not need it for a string */}
+                <span>{interval}</span>
+              </SelectTrigger>
+            </Hint>
+            <SelectContent position="popper">
+              {INTERVALS.map((iv) => (
+                <SelectItem key={iv} value={iv} className="tabular-nums">{iv}</SelectItem>
               ))}
-            </div>
-            {/* the opening range pins 15m and Investing pins the daily, so the bar size is only a
-                question on the one mode that has one */}
-            {mode === 'short' && (
-              /* A dropdown, like the asset: six pills is the widest thing in this bar and five of
-                 them are always the wrong answer. The trigger wears the tray's own fill so the row
-                 still reads as one set of controls rather than a switch and a form field. */
-              <Select value={interval} onValueChange={(v) => setInterval(v as Interval)}>
-                <Hint label="Bar size — how much time one candle covers. Every reading below is measured on these bars.">
-                  <SelectTrigger aria-label="Bar size" className="bg-muted/50 hover:bg-muted dark:bg-muted/50 dark:hover:bg-muted w-auto gap-1.5 rounded-lg border-0 px-2.5 py-0 text-sm font-medium tabular-nums shadow-none data-[size=default]:h-8 focus-visible:ring-0 [&_svg]:size-3.5">
-                    {/* the value written out, the way the asset trigger does it — this file never
-                        imported SelectValue and does not need it for a string */}
-                    <span>{interval}</span>
-                  </SelectTrigger>
-                </Hint>
-                <SelectContent position="popper">
-                  {INTERVALS.map((iv) => (
-                    <SelectItem key={iv} value={iv} className="tabular-nums">{iv}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </>
+            </SelectContent>
+          </Select>
         )}
       </div>
 
-      {/* what the exchange says you hold, account-wide — above the per-asset verdicts because it
-          is the one row here that is fact rather than reading. Absent unless the server has a key
-          and a venue reports something open. */}
+      {/* what the exchange says you hold, account-wide — first because it is the one row here that
+          is fact rather than reading. Absent unless the server has a key and a venue reports
+          something open. */}
       <div className={cn('flex flex-col gap-4', tab !== 'chart' && 'hidden')}>
-      {/* The setups strip used to stand here, above the chart you asked for: a sweep of every other
-          asset, on the one page that is about one asset. It is the Scan's own glance and it lives
-          there now — which also means the landing page no longer fires eleven assets × five
-          intervals of klines at a feed before drawing the chart anybody actually opened. */}
+      {/* A setups strip stood here, above the chart you asked for: a sweep of every other asset, on
+          the one page that is about one asset. It went with the Scan — which also means the landing
+          page no longer fires eleven assets × five intervals of klines at a feed before drawing the
+          chart anybody actually opened. */}
       <ExchangePositions onOpen={setAsset} />
 
       <>
-      {/* The answer first, as one block: the price, the tally's side, the verdict, the levels, and
-          what you're actually in. "What do I do" is the question the page exists for, and it used
-          to arrive as three separate pieces the eye had to gather before the chart. */}
-      <Card className={cn('py-3', against ? 'border-amber-600/40' : 'border-foreground/30')}>
+      {/* The chart's own read-out: the price, how the readings lean, what they are, and what you
+          are actually in. It used to be a verdict — "Buy now", "Nothing to do here", "The fee eats
+          it" — with a plan under it. That was the tool answering a question nobody asked it, off a
+          rule it could not see your account through. What is left is the reading and the button. */}
+      <Card className="py-3 border-foreground/30">
         <CardContent className="px-3">
           <div className="flex flex-wrap items-center gap-3">
             <AssetLogo src={current.logo} className="size-7" />
@@ -925,16 +727,16 @@ export default function MarketPage() {
               </span>
             )}
             {/* the one read that crosses books, said out loud. A daily chart on a Bitget desk is
-                MEXC's bars, because Bitget keeps ninety of them and the 200-MA wants two hundred —
+                MEXC's bars, because Bitget keeps ninety of them and this chart asks for a thousand —
                 and a chart quietly drawn off a different book from the prices beside it is exactly
                 the kind of thing this desk says rather than hides. */}
             {feed !== 'mexc' && offMexc(interval) && candles.length > 0 && (
-              <Hint label="Bitget serves 90 daily bars and the regime rule reads a 200-day average, so the daily chart is MEXC's — the same USDT perpetual on the other book. Every other bar size, and every price a level fires on, stays on your own venue.">
+              <Hint label="Bitget serves 90 daily bars and this chart asks for a thousand, so the daily chart is MEXC's — the same USDT perpetual on the other book. Every other bar size, and every price you trade off, stays on your own venue.">
                 <span className="text-muted-foreground text-xs">daily bars from MEXC</span>
               </Hint>
             )}
             {view && (
-              <Hint label={`How the readings voted on this chart: ${bulls} lean up, ${bears} lean down. The verdict below is what that adds up to, not a reading of its own.`}>
+              <Hint label={`How the readings below lean on this chart: ${bulls} up, ${bears} down. A count, not a call — the flat ones describe conditions and deliberately don't vote.`}>
                 <span className={cn('ml-auto inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
                   <bias.Icon className="size-3.5" />
                   {bias.label}
@@ -943,240 +745,110 @@ export default function MarketPage() {
               </Hint>
             )}
           </div>
-          {verdict && (
-            <>
-              <p className="mt-3 flex items-center gap-2">
-                <span className={cn('text-lg font-medium', VERDICT[verdict.tone])}>{verdict.text}</span>
-                {/* which chart this verdict is off — the two horizons disagree often, and a hint with
-                    no timeframe on it is the kind you act on for the wrong reason */}
-                <Hint label={`Read off ${interval} bars with the ${cfg.fast}/${cfg.slow}-MA pair. The other horizon often says something else — this names which one is talking.`}>
-                  <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
-                    {cfg.label} · {interval}
-                  </span>
-                </Hint>
-              </p>
-              <p className="text-muted-foreground text-xs">{verdict.why}</p>
-              {/* The one case the verdict can't carry itself: it is saying no while your money is
-                  already committed at a price. Up here rather than with the levels below, because
-                  the levels card only renders when there is a plan and this is exactly the state
-                  where there often isn't one. */}
-              {waiting && verdict.tone === 'wait' && (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-                  Your {waiting.side} for {waiting.size} {coin} is still resting at {fmt(waiting.price)} — this card
-                  no longer endorses it. Cancel it, or leave it knowing that.
-                </p>
-              )}
-            </>
-          )}
         </CardContent>
-        {/* faded when the verdict above already said not to take it — the levels are still there to
-            read, they just stop competing with the answer for attention */}
-        {plan && (
-        <CardContent className={cn('border-t px-3 pt-3 text-sm', verdict?.tone === 'wait' && 'opacity-60')}>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">
-              {holding ? 'Position' : side === 'long' ? 'Long setup' : 'Short setup'}
-              <span className="text-muted-foreground font-normal">
-                {' · '}{holding
-                  ? `own it while price holds the ${cfg.slow}-MA, out on a daily close under it`
-                  : `${side === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, ${side === 'long' ? 'above' : 'below'} the session VWAP`}
-              </span>
-            </span>
-          </div>
-          {/* the levels as an instrument row, label over number — the same read-out pattern as the
-              Overview tiles. The last one spells the money out as well as ratio'ing it: "0.70×"
-              means nothing until you see it's 1.310 for 900. */}
-          {/* max-content tracks, not four equal fractions: on a wide window the fractions pulled
-              the four read-outs to the far corners of the card with a hand's width of nothing
-              between each, and a row of numbers you have to sweep your eyes across is not a row.
-              They pack left and stay a group; the cells are w-fit already. */}
-          <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-[repeat(4,max-content)] sm:gap-x-10">
-            {/* the small grey number is the distance nobody was doing in their head: the entry's is
-                from where price stands now (how far until this is even live), the stop's and the
-                target's are from the entry, which is what they are risk and reward against. Two
-                reference points, so each tooltip names its own. */}
-            {([
-              // no distance-from-here on the holding side: the entry *is* here, and "+0.0%" under
-              // every reading is a number that never says anything
-              [holding ? 'Buy at' : 'Entry', fmt(plan.entry), 'text-sky-600 dark:text-sky-400',
-                holding || price == null ? null : away(plan.entry, price),
-                holding
-                  ? `The price. The regime being on is the whole signal, so there is nothing to wait for — and waiting for the ${cfg.fast}-MA instead is the single most expensive thing this rule ever did, worth 48 points of a 67-point hole over five years of daily bars.`
-                  : `The ${cfg.fast}-MA: wait for price to come back ${side === 'long' ? 'down to it and buy' : 'up into it and sell'} — ${price != null ? `${away(plan.entry, price)} from here` : 'no price to measure from'}. Taking it before then is chasing, which is why the plan disappears once price has passed it.`,
-                plain(plan.entry)],
-              [holding ? 'Out under' : 'Stop', fmt(plan.stop), 'text-destructive', away(plan.stop, plan.entry),
-                holding
-                  ? `The ${cfg.slow}-MA — the line the whole thesis rests on, and the line as it stands rather than as it stood when you bought: it climbs under a position that is working. A daily *close* back under it ends the holding; a wick through and back is weather, and being taken out by one costs 12 points of the same hole. Deliberately far, ${away(plan.stop, plan.entry)} from here.`
-                  : `One ATR past the entry — a normal bar's travel, so ordinary noise doesn't clip it — ${away(plan.stop, plan.entry)} away. Broken, the idea was wrong.`,
-                plain(plan.stop)],
-              [holding ? 'Trim into' : 'Target', plan.target > plan.entry || !holding ? fmt(plan.target) : '—',
-                'text-emerald-600 dark:text-emerald-400', plan.target > plan.entry || !holding ? away(plan.target, plan.entry) : null,
-                holding
-                  ? plan.target > plan.entry
-                    ? `The wide high, ${away(plan.target, plan.entry)} from here. A trim if you want one, never an exit — the position ends on the regime and nowhere else, and aiming at this level instead cost 22 points of the 67 the old rule gave away.`
-                    : `Price is above every high of the last ${cfg.srWindow * 3} bars, so there is no level above to trim into. That is the regime working, not a reason to be flat — this rule has no target to miss.`
-                  : `Two ATR — a fixed 2R off the stop, so the payoff is the same shape every time instead of wherever the last swing happened to land. ${away(plan.target, plan.entry)} from the entry.`,
-                // nothing to copy where there is no level: an em dash is not a price
-                plan.target > plan.entry || !holding ? plain(plan.target) : null],
-              /* Net first, gross in brackets behind it. The gross ratio is the one every guide and
-                 every other chart tool quotes, so dropping it would look like a different number
-                 for the same trade — but it is not the one that decides anything, and shown alone
-                 it flatters: the fee comes off the winner and is added to the loser, so a 1.15×
-                 that reads as "win 47% and you're ahead" really needs 50%. */
-              ['Risk to reward', `${fmt(risk)} → ${!holding || plan.target > plan.entry ? fmt(reward) : '—'}`,
-                plan.thin && !holding ? 'text-amber-600 dark:text-amber-500' : '',
-                holding && plan.target <= plan.entry ? 'no level above'
-                  : `${plan.net.toFixed(2)}× net${dials.fee > 0 ? ` (${plan.rr.toFixed(2)}× gross)` : ''}`,
-                holding
-                  // shown, not enforced: see holdPlan. A ratio measured to a trim level is not what
-                  // decides whether to own something, and dressing it up as a pass/fail would be
-                  // the trading rule's question asked about a position that has no deadline.
-                  ? `From here down to the ${cfg.slow}-MA against here up to the wide high. Context only — this side does not decline a position on its ratio, because the trim is not where the holding ends and the regime line is not a stop you get taken out at on a bad Tuesday.`
-                  : plan.thin
-                  ? `More than half of these have to win just to break even — ${(plan.breakEven * 100).toFixed(0)}%, with the ${dials.fee}%-a-side fee on the way in and the way out. Right idea, maths that does not pay. Guides pass on these.`
-                  : `Entry-to-stop against entry-to-target, per unit, after the ${dials.fee}%-a-side fee at both ends — a stop really costs ${plan.loss.toFixed(2)}R, not 1R, because you pay to get out of a loser too. ${(plan.breakEven * 100).toFixed(0)}% of these have to reach the target to break even. Leverage does not appear: size multiplies the fee and the payout alike, so R is the one unit that does not care how big you went.`,
-                null],
-            ] as const).map(([k, v, cls, sub, hint, raw]) => (
-              <Hint key={k} label={hint}>
-                {/* w-fit: the cell stretches the whole grid track, and a tooltip centres on its
-                    trigger — so the arrow was landing in the empty space to the right of the number
-                    rather than on it. The text is left-aligned either way, so nothing moves. */}
-                <div className="w-fit">
-                  <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{k}</p>
-                  <p className={cn('font-medium tabular-nums', cls)}>
-                    {raw ? <CopyNum v={raw}>{v}</CopyNum> : v}
-                    {sub && <span className="text-muted-foreground ml-1.5 text-xs font-normal">{sub}</span>}
-                  </p>
-                </div>
-              </Hint>
-            ))}
-          </div>
-          {/* The one number the card knew and never said: how many units the stake in Settings buys
-              at this stop. Every other line here is per unit, which is why a correct call kept
-              paying a euro — the size was being guessed at the exchange. ponytail: the stake is
-              euros and the quote is USDT, taken as the same money; a €/$ rate for a number you
-              typed yourself is precision the rest of this card doesn't have either. */}
-          {!holding && stake > 0 && (
-            <Hint label={`${fmt(Math.abs(plan.entry - plan.stop))} of stop is what decides the size: that many units loses the stake and nothing more if it is hit. Leverage only decides the margin that size needs, never what it risks.`}>
-              <p className="text-muted-foreground mt-2 w-fit text-xs">
-                {euro(stake)} at risk is{' '}
-                <span className="text-foreground font-medium tabular-nums">
-                  {(stake / Math.abs(plan.entry - plan.stop)).toFixed(2)} {coin}
-                </span>{' '}
-                here · {euro(stake * plan.net)} net at the target
-              </p>
-            </Hint>
-          )}
-          {/* the button explained where it sits — it was the one thing on this card you had to
-              already know. One line, gone once it is on. */}
-          {waiting && !held ? (
-            /* What the order actually risks, against what this card sized. Both in the same unit as
-               the stop, so the two are comparable at a glance — the card's own line above says
-               "€20 at risk is 49.65 SOL" and an order for 3.1 of them is a different trade wearing
-               the same plan's levels. Nothing is filed either way: an order is not a fill. */
-            <Hint label={`Sized off this card, ${euro(stake)} of risk is ${risk > 0 ? (stake / risk).toFixed(2) : '—'} ${coin}. Nothing files off an order — the desk records the trade when it fills, not when it is placed.`}>
-              <p className="text-muted-foreground mt-2 w-fit text-xs">
-                Your {waiting.side} for{' '}
-                <span className="text-foreground font-medium tabular-nums">{waiting.size} {coin}</span>{' '}
-                rests at {fmt(waiting.price)}
-                {risk > 0 && <> · {euro(waiting.size * risk)} at risk to the {fmt(plan.stop)} stop</>}
-              </p>
-            </Hint>
-          ) : !inIt ? (
-            <p className="text-muted-foreground mt-2 text-xs">
-              The desk files what it endorses on the Paper tab, even with every device here shut —
-              nothing there is ever traded. {feed === 'bitget'
-                ? 'Take this trade is the one thing in this app that places a real order, and it asks twice.'
-                : 'Nothing here places an order.'}
-            </p>
-          ) : held && (
-            /* The card knew the position was there — it draws its levels — and still read the paper
-               line at someone already in it. Nothing is inferred: same symbol off the same feed the
-               strip above uses, and the side is stated rather than assumed to be this one's. */
-            <Hint label="It files itself to the record with the R it really did when it closes, wherever you close it.">
-              <p className="text-muted-foreground mt-2 w-fit text-xs">
-                You are {held.side} {held.size} from {fmt(held.entry)}
-                {/* the matching side is the verdict's own first word now, so this line stops
-                    saying it twice and keeps the half the verdict can't know: the size */}
-                {held.side === side ? '' : ' — the other side of this card'}
-              </p>
-            </Hint>
-          )}
-          {/* The only order button in the app. Bitget only — MEXC's futures place-order endpoint
-              has been shut since 2022 — and never over a position that is already on: this card
-              plans an entry, and pressing it while holding one would be adding to a trade the plan
-              knows nothing about. The dialog does the arithmetic and asks twice. */}
-          {/* `side` is 'flat' where the chart has no lean — there is no order to place on that,
-              and the plan card above is already showing nothing to act on */}
-          {feed === 'bitget' && !holding && !held && side !== 'flat' && (
-            <Button
-              size="sm" className="mt-3"
-              onClick={() => setTrading({
-                side, entry: plan.entry, stop: plan.stop,
-                target: plan.target > plan.entry || side === 'short' ? plan.target : null,
-              })}
-            >
-              <Zap /> Take this trade
-            </Button>
-          )}
-          {trading && (
-            <TradeDialog
-              open onOpenChange={(v) => { if (!v) setTrading(null) }}
-              symbol={current.id} coin={coin} {...trading}
-            />
-          )}
-          {against && (
-            <p className="text-amber-600 dark:text-amber-500 mt-2 text-xs">
-              Against the {HIGHER[interval]} trend — every guide says take these smaller, or not at all.
-            </p>
-          )}
-          {/* Not amber: this one isn't a warning off, it's the sentence that stops the {interval}
-              card and the {ANCHOR[interval]} card reading as the tool contradicting itself. */}
-          {counter && (
-            <p className="text-muted-foreground mt-2 text-xs">
-              Counter-trend — the {ANCHOR[interval]} chart leans {dir === 'long' ? 'down' : 'up'}, so this is a{' '}
-              {interval} {dir} against it. That is a real trade, not the same one the {ANCHOR[interval]} chart is
-              offering; it wants a tighter stop and no waiting around for the target.
-            </p>
-          )}
-        </CardContent>
-        )}
-        {/* what you are actually in on this asset, if anything — the plan is what the tool thinks
-            and this is what you did, and they are not always the same */}
-        <Position asset={current.id} price={last ?? null} />
-        {/* The open, when there is something to act on — in the opening-range mode, always: there
-            the open is the whole subject. A card of its own for one sentence was a card too many;
-            it is the same verdict said about a different clock, so it belongs on the same card. */}
-        <OpenPlay candles={candles} full={mode === 'orb'} />
-        {/* The readings behind the call. They had a whole card to themselves under the chart, which
-            put the working two screens below the answer it is the working for — and made the page
-            four cards where it is really two. Folded, on the answer's own card. */}
+
+        {/* Every reading the chart makes, laid out — the sweeps, the gaps and the gaps price has
+            since closed back through, the structure break, the higher timeframe, the VWAP, the
+            averages. They were folded behind a "Why this call" disclosure, under a call. There is
+            no call now, so they are the card. */}
         {view && (
           <CardContent className="border-t px-3 pt-3">
-            <button type="button" onClick={() => setShowWhy((v) => !v)}
-              className="flex w-full items-baseline gap-2 text-left">
-              <span className="font-heading text-xs tracking-wide uppercase">Why this call</span>
-              <span className="text-muted-foreground text-xs">
-                {bulls} bull · {bears} bear
-              </span>
-              <ChevronDown className={cn('text-muted-foreground ml-auto size-4 self-center transition-transform', showWhy && 'rotate-180')} />
-            </button>
-            {showWhy && (
-              <div className="mt-3 grid gap-x-8 gap-y-2 sm:grid-cols-2">
-                {/* the detail is truncated to keep the grid on one line a row, and the dialog that
-                    used to hold the whole sentence is gone — so the sentence is the row's title */}
-                {shownSignals.map((sig, i) => (
-                  <div key={i} title={sig.detail} className="flex min-w-0 items-baseline gap-2 text-sm">
-                    <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
-                    <span className="shrink-0">{sig.label}</span>
-                    <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{sig.detail}</span>
-                  </div>
-                ))}
-                {!shownSignals.length && <p className="text-muted-foreground text-sm">No clear signals right now.</p>}
-              </div>
-            )}
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className="font-heading text-xs tracking-wide uppercase">What the chart says</span>
+              <Hint label={`Read off ${interval} bars with the ${cfg.fast}/${cfg.slow}-MA pair. Change the bar size in the toolbar and every one of these is measured again on the new bars.`}>
+                <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
+                  {interval}
+                </span>
+              </Hint>
+            </div>
+            <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
+              {shownSignals.map((sig, i) => (
+                <div key={i} className="flex min-w-0 items-baseline gap-2 text-sm">
+                  <span className={cn('mt-1.5 size-1.5 shrink-0 self-start rounded-full', DOT[sig.tone])} />
+                  <span className="shrink-0">{sig.label}</span>
+                  <span className="text-muted-foreground min-w-0 flex-1 text-xs">{sig.detail}</span>
+                </div>
+              ))}
+              {!shownSignals.length && <p className="text-muted-foreground text-sm">Nothing standing out on these bars.</p>}
+            </div>
           </CardContent>
         )}
+
+        {/* The two buttons this page exists for. Bitget only — MEXC's futures place-order endpoint
+            has been shut since 2022 — and the dialog does the arithmetic and asks twice before
+            anything reaches a book. Neither is a recommendation: the page has said what it sees and
+            the side is yours.
+
+            No ATR, no buttons. Not for tidiness: with no stop to size against, the dialog's own
+            suggestion falls back to a fifth of the whole free balance at 1× (see suggest in
+            trade.ts) — so a chart whose feed has not returned enough bars would offer a stopless
+            position sized off the account instead of off the stake. The reading is still worth
+            drawing; the order is not worth offering. */}
+        {feed === 'bitget' && last != null && (
+          <CardContent className="border-t px-3 pt-3">
+            {view?.atr ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {([['long', 'Long', TrendingUp], ['short', 'Short', TrendingDown]] as const).map(([s, label, Icon]) => (
+                  <Button
+                    key={s} size="sm"
+                    variant={s === 'long' ? 'default' : 'destructive'}
+                    onClick={() => setTrading(bracket(s))}
+                  >
+                    <Icon /> {label} {coin}
+                  </Button>
+                ))}
+                <Hint label="One ATR out and two ATR up from the price, so the order goes on the book with a stop and a take-profit riding it. The dialog sizes that against the stake in Settings and prints what it costs in money, and nothing is placed until a second press.">
+                  <span className="text-muted-foreground text-xs">
+                    stop {fmt(view.atr)} away · target {fmt(view.atr * 2)}
+                  </span>
+                </Hint>
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                No ATR off these bars yet, so there is no stop to size a trade against — and without
+                one this would be guessing at both the level and the size. Try a bigger bar size, or
+                an asset with more history on this feed.
+              </p>
+            )}
+            {/* What is already committed on this symbol, so neither button is pressed twice for one
+                trade. Both states, because an order resting is not a position on. Which side it is
+                matters: the other button is not a second helping of the same trade, and what it
+                does instead is the venue's margin mode to decide, not this card's. */}
+            {held && (
+              <p className="text-muted-foreground mt-2 text-xs">
+                You are already {held.side} {held.size} {coin} from {fmt(held.entry)}
+                {heldMove != null && <> ({heldMove >= 0 ? '+' : ''}{heldMove.toFixed(2)}%)</>}
+                {' '}— {held.side === 'long' ? 'Long' : 'Short'} adds to that, and{' '}
+                {held.side === 'long' ? 'Short' : 'Long'} is the other way.
+              </p>
+            )}
+            {resting.filter((o) => o.opens).map((o) => (
+              <p key={o.id} className="text-muted-foreground mt-2 text-xs">
+                Your {o.side} for {o.size} {coin} is resting at {fmt(o.price)}, not filled.
+              </p>
+            ))}
+          </CardContent>
+        )}
+        {/* Why there are no buttons, rather than a card that quietly ends. Bitget is the only venue
+            this app can place on, so a MEXC desk — or no key at all — gets the reading and takes
+            the trade wherever it keeps its money. `undefined` is the venue still being asked, and
+            says nothing rather than flashing "add a key" at someone who has one. */}
+        {feed !== undefined && feed !== 'bitget' && (
+          <CardContent className="text-muted-foreground border-t px-3 pt-3 text-xs">
+            Nothing here places an order. {feed === 'mexc'
+              ? "MEXC's futures place-order endpoint has been shut since 2022 — the readings are the same, the button is only on a Bitget desk."
+              : 'Add a Bitget key in Settings and the Long and Short buttons appear here.'}
+          </CardContent>
+        )}
+        {trading && (
+          <TradeDialog
+            open onOpenChange={(v) => { if (!v) setTrading(null) }}
+            symbol={current.id} coin={coin} {...trading}
+          />
+        )}
+        {/* what you are actually in on this asset, if anything — hand-entered, beside whatever the
+            exchange itself reports */}
+        <Position asset={current.id} price={last ?? null} />
       </Card>
 
       {/* the chart: price line, the two MAs whose cross the guides watch, and the S/R band */}
@@ -1360,25 +1032,14 @@ export default function MarketPage() {
                           strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                       ))}
                     </>
-                  ) : !plan && (
-                    // same frame check the plan and position lines have always had: without it a
-                    // level from off-screen draws its line outside the box, over the card
+                  ) : (
+                    // same frame check the position lines have always had: without it a level from
+                    // off-screen draws its line outside the box, over the card
                     [view.support, view.resistance].filter((lvl) => lvl >= lo && lvl <= hi).map((lvl, i) => (
                       <line key={i} x1="0" x2="100" y1={y(lvl)} y2={y(lvl)}
                         className="stroke-muted-foreground/50" strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                     ))
                   )}
-                  {/* The setup's levels. Only the entry keeps a colour — it's the line you're waiting
-                      on. Stop and target are grey: three coloured dashed lines plus the band was more
-                      decoration than information. */}
-                  {plan && [
-                    { lvl: plan.entry, cls: 'stroke-sky-500', dash: '5 3', w: 1.25 },
-                    { lvl: plan.stop, cls: 'stroke-muted-foreground/60', dash: '2 4', w: 1 },
-                    { lvl: plan.target, cls: 'stroke-muted-foreground/60', dash: '2 4', w: 1 },
-                  ].filter((l) => l.lvl >= lo && l.lvl <= hi).map((l, i) => (
-                    <line key={i} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
-                      className={l.cls} strokeWidth={l.w} strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
-                  ))}
                   {/* Fair value gaps still open: the stretches price jumped over without trading.
                       Drawn from the bar that made the gap to the right edge, because that is how
                       long the business stays unfinished — a box that stopped at its own three bars
@@ -1399,36 +1060,14 @@ export default function MarketPage() {
                       y1={y(s.price)} y2={y(s.price)}
                       className="stroke-foreground/55" strokeWidth={1} strokeDasharray="3 2" vectorEffect="non-scaling-stroke" />
                   ))}
-                  {/* Money actually on this chart: the exchange position's own levels, over whatever
-                      the plan says — the plan's lines are hypothesis, these are the trade. All
-                      three in the position's own fuchsia; the legend names each dash. Off-frame
-                      ones stay in the card, same rule as the plan's. */}
+                  {/* Money actually on this chart: the exchange position's own levels — these are
+                      the trade, not a reading about it. All three in the position's own fuchsia;
+                      the legend names each dash, and off-frame ones say so in the card. */}
                   {posLines.filter((l) => l.lvl >= lo && l.lvl <= hi).map((l) => (
                     <line key={`k-${l.label}`} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
                       className="stroke-fuchsia-600" strokeWidth={l.w} strokeOpacity={l.op}
                       strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
                   ))}
-                  {/* opening-range band: the session-open 15m high/low the breakout play watches */}
-                  {range && (
-                    <>
-                      <rect x="0" y={y(range.high)} width="100" height={Math.max(y(range.low) - y(range.high), 0)}
-                        className="fill-violet-500/10" stroke="none" />
-                      {[range.high, range.low].map((lvl, i) => (
-                        <line key={i} x1="0" x2="100" y1={y(lvl)} y2={y(lvl)}
-                          className="stroke-violet-500" strokeWidth={1} strokeOpacity={0.7} vectorEffect="non-scaling-stroke" />
-                      ))}
-                      {/* the hour that set the range, when it's in view — otherwise the band looks
-                          like it came from nowhere, which is exactly how a range set hours ago reads */}
-                      {orbBar >= 0 && (
-                        <>
-                          <rect x={xAt(orbBar)} y={y(range.high)} width={Math.max(xAt(orbEnd) - xAt(orbBar), 0.5)}
-                            height={Math.max(y(range.low) - y(range.high), 0)} className="fill-violet-500/25" stroke="none" />
-                          <line x1={xAt(orbBar)} x2={xAt(orbBar)} y1="0" y2="100"
-                            className="stroke-violet-500" strokeWidth={1} strokeOpacity={0.55} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
-                        </>
-                      )}
-                    </>
-                  )}
                   {/* highlight the hovered candle's column, behind the candles so it sits lit on top */}
                   {hc && n > 1 && (
                     <rect x={xAt(hover!) - 50 / (n - 1)} y="0" width={100 / (n - 1)} height="100"
@@ -1616,28 +1255,8 @@ export default function MarketPage() {
                   </span>
                 )
               })}
-              {range && <span><span className="bg-violet-500 inline-block h-0.5 w-3 -translate-y-0.75 align-middle" /> opening range</span>}
-              {/* The setup's own lines, as one chip rather than three. They were named one at a time
-                  — entry, stop, target — which was right when the only thing saying what they were
-                  was this row; the levels card directly above prints all three with their numbers,
-                  and the stop and the target are drawn in the same grey dash as each other, so two
-                  chips were describing one line twice. The entry keeps its own: it is the only
-                  coloured one, and it is the level the whole card is waiting on. */}
-              {plan && plan.entry >= lo && plan.entry <= hi && (
-                <span className="opacity-80">
-                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-sky-500" strokeWidth={1.25} strokeDasharray="5 3" />
-                  </svg> {holding ? 'buy at' : 'setup entry'}
-                </span>
-              )}
-              {plan && [plan.stop, plan.target].some((l) => l >= lo && l <= hi) && (
-                <span className="opacity-80">
-                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-muted-foreground/60" strokeWidth={1.25} strokeDasharray="2 4" />
-                  </svg> {holding ? 'regime line · trim' : 'stop · target'}
-                </span>
-              )}
-              {/* the line that had been voting invisibly since the day it was added */}
+              {/* the session average, drawn since the day the readings stopped being the only place
+                  it appeared */}
               {vwap && (
                 <span className={cn(!(vwap.vwap >= lo && vwap.vwap <= hi) && 'opacity-60')}>
                   <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
@@ -1691,22 +1310,9 @@ export default function MarketPage() {
       </>
       </div>
 
-      {/* outside the chart tab, so they are there while the desk loads or errors — neither of them
-          needs any of that.
-          Hidden rather than unmounted: a tab switch that threw away the Scan's rows would send
-          sixty-odd chart calls back out to look for the answer it already had. Not rendered until
-          the tab is first opened, though — the sweep should cost nothing to someone who only ever
-          reads the chart. */}
-      {seen.scan && (
-        <div className={cn('flex flex-col gap-4', tab !== 'scan' && 'hidden')}>
-          {/* orb pins the desk to 15m via an effect a render later — hand Scan the pinned value now,
-              or the switch-over runs the whole multi-asset sweep once on stale bars and again on 15m */}
-          <Scan orbMode={mode === 'orb'} interval={readInterval(horizon, mode === 'orb' ? '15m' : interval)}
-            current={current.id} onPick={goChart} />
-        </div>
-      )}
-
-      {/* One tab, three books, one question — see the note on TABS. The switch sits on the panel
+      {/* Outside the chart tab, so it is there while the desk loads or errors — it needs none of
+          that. Not rendered until the tab is first opened.
+          One tab, two books, one question — see the note on TABS. The switch sits on the panel
           rather than in the page toolbar, because it is a question about what is on this page and
           not about which page you are on. */}
       {seen.record && (
@@ -1723,11 +1329,10 @@ export default function MarketPage() {
               </Hint>
             ))}
           </div>
-          {/* Unmounted rather than hidden, unlike the tabs above. The two that cost anything both
-              poll on a minute, and a book nobody is reading has no business asking an exchange
-              about anybody — a switch back is one request, which is what the poll was for. */}
+          {/* Unmounted rather than hidden. The one that costs anything polls on a minute, and a
+              book nobody is reading has no business asking an exchange about anybody — a switch
+              back is one request, which is what the poll was for. */}
           {book === 'mine' && <Record onPick={goChart} />}
-          {book === 'paper' && <PaperDesk onPick={goChart} />}
           {book === 'people' && <Desk live={tab === 'record'} onPick={goChart} />}
         </div>
       )}
@@ -1760,39 +1365,6 @@ function OpenNow({ at }: { at?: number }) {
       {both && <span className="text-amber-600 dark:text-amber-500">the overlap — where most of the day's range gets made</span>}
       {!desks.length && <span>No exchange open — thin hours, and a break made in them is the kind that gets given back</span>}
     </div>
-  )
-}
-
-/**
- * The open, as an instruction. Four moments — one coming up, the hour that sets the range, the range
- * waiting, the break — and nothing here that the chart below doesn't already contain; the point is
- * that it is one sentence with a clock on it instead of three things to assemble.
- *
- * Off the drawn candles, so it reprices on the same live tick they do.
- */
-function OpenPlay({ candles, full }: { candles: Candle[]; full?: boolean }) {
-  const play = useMemo(() => (candles.length ? openPlay(candles) : null), [candles])
-  if (!play) return null
-  /* Waiting is the page's default state and the verdict above already owns it — the open earns a
-     line of its own only once there is something to act on. The opening-range mode is the
-     exception: there the open is the whole subject, so every state shows. */
-  if (play.tone === 'wait' && !full) return null
-  const TONE = {
-    wait: 'text-amber-600 dark:text-amber-500',
-    ready: 'text-foreground',
-    go: 'text-emerald-600 dark:text-emerald-400',
-  } as const
-  /* A section of the verdict card, not a card of its own: one sentence about the same asset the
-     card above it is about does not earn its own rectangle, and it read as a second, competing
-     answer sitting between the verdict and the chart. */
-  return (
-    <CardContent className="border-t px-3 pt-3">
-      <p className={cn('text-sm', TONE[play.tone])}>{play.say}</p>
-      <p className="text-muted-foreground mt-1 text-xs">
-        At the open · the opening-range play was break-even over 219 days once filtered — these are
-        levels worth knowing, not a system worth trusting.
-      </p>
-    </CardContent>
   )
 }
 
@@ -2593,15 +2165,11 @@ function Position({ asset, price }: { asset: string, price: number | null }) {
 
 /** One grid for the row and its header, so the columns line up by construction rather than by two
  *  sets of hand-matched widths. The last track is the two icons, which are outside the row button. */
-/* Two tables share this: the record, whose last column is what a trade paid, and the paper log,
-   whose last column is which rule it came from. On a wide window the track is 8rem, because 5rem
-   cut every rule off mid-word — "VWAP pull-b…" and "Trend accum…" name nothing, on the one column
-   whose whole job is naming.
-
-   On a phone it stays narrow, and the paper log drops the column instead (see the rule under the
-   trade's name there). The fixed tracks plus the gaps already came to more than a phone is wide,
-   so the flexible one — the side — was being squeezed to nothing: a Side heading with no side
-   under it, and the money sliding out under the share button. */
+/* The record's grid. On a wide window the last track is 8rem, because 5rem cut every rule off
+   mid-word — "VWAP pull-b…" and "Trend accum…" name nothing, on the one column whose whole job is
+   naming. On a phone it stays narrow: the fixed tracks plus the gaps already came to more than a
+   phone is wide, so the flexible one — the side — was being squeezed to nothing, a Side heading
+   with no side under it and the money sliding out under the share button. */
 /* The slack is shared rather than pooled. Only the dates were flexible, so every pixel a wide
    window offered went into that one track and the row grew a hole in the middle of it — the dates
    left-aligned against a stretch of nothing, and the numbers a hand's width away at the right edge.
@@ -2639,219 +2207,6 @@ const LOG_SORTS = [
   { id: 'won', label: 'Most made', hint: 'Biggest winners first, by what the trade paid' },
   { id: 'lost', label: 'Most lost', hint: 'Worst first, by what the trade cost' },
 ] as const
-
-/** One paper trade as the server keeps it. Mirrors server/paper.ts — the route sends these rows
- *  through unchanged, so the two shapes are the same shape or the tab draws nonsense. */
-type PaperRow = {
-  id: string; asset: string; label: string; dir: 'long' | 'short'
-  rule: string; interval: string
-  entry: number; stop: number; target: number; net: number | null
-  ts: number; entryAt: number | null; closedAt: number | null
-  level: 'target' | 'stop' | 'gone' | null; exit: number | null; r: number | null
-}
-
-/**
- * The rule tested forward.
- *
- * The Log is what you did; this is what the desk would have done, on every setup it endorsed,
- * whether or not anyone was at a screen for it. That difference is the whole point of it: a record
- * of the setups somebody happened to notice measures the noticing, not the rule.
- *
- * Read-only, and filed by the server (see server/paper.ts) — the app cannot add a row here, which
- * is what keeps the sample honest. Nothing here was ever traded and nothing here is money: it is
- * in R, because R is the only unit two setups on two different assets can be added up in.
- */
-function PaperDesk({ onPick }: { onPick: (asset: string) => void }) {
-  const [rows, setRows] = useState<PaperRow[] | null>(null)
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    let on = true
-    const tick = () => fetch('/api/paper')
-      .then(async (r) => {
-        if (!r.ok) { if (on) { setFailed(true); setRows([]) } ; return }
-        const j = await r.json()
-        if (on) { setFailed(false); setRows(j.rows ?? []) }
-      })
-      .catch(() => { if (on) setFailed(true) })
-    tick()
-    // the desk files on its own quarter-hour clock; a minute is plenty to see it land
-    const h = setInterval(tick, 60_000)
-    return () => { on = false; clearInterval(h) }
-  }, [])
-
-  if (rows === null) return <Card className="py-3"><CardContent className="text-muted-foreground px-3 text-sm">Reading the desk…</CardContent></Card>
-  if (failed) {
-    return (
-      <Card className="py-3">
-        <CardContent className="text-muted-foreground px-3 text-sm">
-          Sign in to see this. The paper desk runs on the server — that is what lets it file the
-          setups that appear while every device here is shut.
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const live = rows.filter((r) => r.closedAt == null)
-  const done = rows.filter((r) => r.closedAt != null && r.level !== 'gone' && r.r != null)
-  const gone = rows.filter((r) => r.level === 'gone').length
-  /* Expectancy over the ones that ran. The unfilled are counted beside it and never in it: a plan
-     whose entry never came round is not a trade that lost, which is the rule the whole app keeps. */
-  const exp = done.length ? done.reduce((n, r) => n + (r.r ?? 0), 0) / done.length : null
-  /* Did it pay, not did it reach a target. The regime rule has no target and comes off on a close —
-     counting hits by `level === 'target'` would report it at 0% forever however well it did, which
-     is the shape of wrong number that gets a working rule switched off. For every other rule the
-     two tests are the same one: a stop is booked at its own level and is always negative, a target
-     at its own level and always positive. */
-  const paid = (r: PaperRow) => (r.r ?? 0) > 0
-  const won = done.filter(paid).length
-  const lanes = [...done.reduce((m, r) => m.set(r.rule, [...(m.get(r.rule) ?? []), r]), new Map<string, PaperRow[]>())]
-    .map(([name, rs]) => ({ name, n: rs.length, hit: rs.filter(paid).length,
-      avg: rs.reduce((s, r) => s + (r.r ?? 0), 0) / rs.length }))
-    .sort((a, b) => b.n - a.n)
-
-  return (
-    <>
-      <Card className="py-3">
-        <CardContent className="px-3">
-          <div className="mb-2 flex flex-wrap items-baseline gap-2">
-            <span className="font-heading text-sm tracking-wide uppercase">Forward test</span>
-            <span className="text-muted-foreground text-xs">
-              {done.length} finished · {live.length} running{gone ? ` · ${gone} never filled` : ''}
-            </span>
-            {exp !== null && (
-              <span className={cn('ml-auto font-mono text-sm tabular-nums',
-                exp >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {rLabel(exp)}/trade
-              </span>
-            )}
-            {!!done.length && (
-              <span className="text-muted-foreground font-mono text-xs tabular-nums">
-                {Math.round((won / done.length) * 100)}% hit
-              </span>
-            )}
-          </div>
-          {!rows.length ? (
-            <p className="text-muted-foreground py-4 text-sm">
-              Nothing filed yet. The desk reads every chart a few times an hour and files the
-              setups it grades top — the ones the Scan card prints in green. Quiet days file nothing,
-              which is itself the answer to how often this rule actually speaks.
-            </p>
-          ) : (
-            <div className="text-muted-foreground flex flex-wrap gap-1.5 text-xs">
-              {lanes.map((l) => (
-                <span key={l.name} className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
-                  <span className="text-foreground font-medium">{l.name}</span>
-                  <span>{l.n}×</span>
-                  <span>{Math.round((l.hit / l.n) * 100)}% hit</span>
-                  <span className={l.avg >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>
-                    {l.avg >= 0 ? '+' : ''}{l.avg.toFixed(2)}R
-                  </span>
-                </span>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {!!live.length && (
-        <Card className="py-3">
-          <CardContent className="px-3">
-            <div className="mb-2 flex items-baseline gap-2">
-              <span className="font-heading text-sm tracking-wide uppercase">Running</span>
-              <span className="text-muted-foreground text-xs">
-                {live.filter((r) => r.entryAt != null).length} in, {live.filter((r) => r.entryAt == null).length} waiting for the entry
-              </span>
-            </div>
-            <div className={LOG_SCROLL}>
-            {live.map((r) => (
-              <div key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-dashed py-1.5 text-sm last:border-0">
-                <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] tracking-wide uppercase',
-                  r.dir === 'long' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive')}>
-                  {r.dir}
-                </span>
-                <TradeName name={r.label} asset={r.asset} className="font-medium" onPick={onPick} />
-                <span className="text-muted-foreground text-xs">{r.rule} · {r.interval}</span>
-                <span className="text-muted-foreground font-mono text-xs tabular-nums">
-                  {fmtPrice(r.entry)} → {fmtPrice(r.target)}, stop {fmtPrice(r.stop)}
-                </span>
-                <span className={cn('ml-auto text-xs', r.entryAt != null ? 'text-foreground' : 'text-muted-foreground')}>
-                  {r.entryAt != null ? `in since ${when(r.entryAt)}` : 'waiting for the entry'}
-                </span>
-              </div>
-            ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {!!done.length && (
-        <Card className="py-3">
-          <CardContent className="px-3">
-            <div className="mb-2 flex items-baseline gap-2">
-              <span className="font-heading text-sm tracking-wide uppercase">How they went</span>
-            </div>
-            <div className={LOG_SCROLL}>
-            <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading border-b px-1.5 pb-1 text-[10px] tracking-wider uppercase')}>
-              <span>Trade</span>
-              <span>Side</span>
-              <span className="hidden sm:block">Ran</span>
-              <span className="text-right">Ended</span>
-              <span className="text-right">R</span>
-              <span className="hidden text-right sm:block">Rule</span>
-            </div>
-            {done.map((r) => {
-              const hit = paid(r)
-              // what actually ended it, which on the regime rule is neither of the other two words:
-              // it left on a close through its line, and that close can be well above the entry
-              const ended = r.level === 'target' ? 'target'
-                : r.rule === HORIZONS.long.strategy ? 'regime' : 'stopped'
-              return (
-                <div key={r.id} className={cn(LOG_GRID, 'hover:bg-muted/40 border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
-                  {/* the rule rides under the name on a phone, where its own column does not fit
-                      and a truncated one names nothing */}
-                  <span className="min-w-0">
-                    <TradeName name={r.label} asset={r.asset} className="font-medium" onPick={onPick} />
-                    <span className="text-muted-foreground block truncate text-[10px] sm:hidden">{r.rule}</span>
-                  </span>
-                  <span className="text-muted-foreground truncate text-xs">
-                    {r.dir === 'long' ? 'Long' : 'Short'} · {r.interval}
-                  </span>
-                  <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
-                    {ran(r.entryAt ?? r.ts, r.closedAt!)}
-                  </span>
-                  <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {ended}
-                  </span>
-                  <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r ?? 0)}</span>
-                  <span className="text-muted-foreground hidden truncate text-right text-xs sm:block">{r.rule}</span>
-                  {/* The plan it was filed on, and where it actually came out — a row that says
-                      "+5.59R, target" names neither the trade nor the price it would have been
-                      taken at. Its own line across the grid: four prices do not fit in a column
-                      on a phone, and truncating them is the same as not printing them. */}
-                  <span className="text-muted-foreground col-span-full flex flex-wrap gap-x-2 font-mono text-[10px] tabular-nums">
-                    <span>entry <span className="text-sky-600 dark:text-sky-400">{fmtPrice(r.entry)}</span></span>
-                    <span>stop <span className="text-destructive">{fmtPrice(r.stop)}</span></span>
-                    <span>target <span className="text-emerald-600 dark:text-emerald-400">{fmtPrice(r.target)}</span></span>
-                    {r.exit != null && <span>out at <span className="text-foreground">{fmtPrice(r.exit)}</span></span>}
-                  </span>
-                </div>
-              )
-            })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <p className="text-muted-foreground px-1 text-xs">
-        Filed by the server off the same read the Scan card shows, a few times an hour, whether or
-        not this app is open. Nothing is ordered and nothing is money — the entry is the plan's
-        entry, the exit is the price that was actually polled when a level was reached, and a setup
-        whose entry never came round is counted separately rather than as a loss.
-      </p>
-    </>
-  )
-}
 
 /** One finished row as the share card wants it — the same payload whichever verb is chosen. */
 const cardOf = (r: Result) => ({
@@ -3406,360 +2761,10 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
   )
 }
 
-/** One asset through the desk's read, bars and all. The two halves live in market.ts, because the
- *  push server runs the same scan to decide whether a setup is worth waking someone for.
- *
- *  The closes ride back out with the row for the row's own line. Kept here rather than on ScanRow:
- *  the bars are already in hand and cost nothing, but the server builds these rows too and has no
- *  line to draw — a hundred numbers a row is a payload it would carry for nobody. */
-type ScanCard = ScanRow & { closes: number[] }
-
-/** One asset's bars, and what the desk reads off them. Split for the same reason `market.ts`
- *  splits `scanBars` from `scanRead`: only the venue decides what is fetched. The horizon, the
- *  interval, the preset and the fee are all read-side — poking the interval pills used to run the
- *  whole eleven-asset sweep again for numbers already in hand. */
-type ScanFeed = { a: Asset; bars: Record<Interval, Candle[]> }
-
-const scanCard = (
-  { a, bars }: ScanFeed, horizon: Horizon, interval: Interval, orbMode: boolean, fee: number,
-): ScanCard | null => {
-  /* The reads used to sit behind a per-asset catch because each was its own promise. They are a
-     render now, and one asset's bad bars must not take the page down with them. */
-  let row: ScanRow | null = null
-  try { row = scanRead(a, bars, horizon, interval, orbMode, fee) } catch { return null }
-  // the last of them, not all: a weekly chart hands over a year and the line is 4rem wide
-  return row && { ...row, closes: (bars[interval] ?? []).slice(-60).map((c) => c.c) }
-}
-
-/**
- * One sweep of klines for every asset, shared by the strip above the chart and the Scan
- * tab below it — the only part of a scan that touches a network.
- *
- * ponytail: one sweep per mount and per `nonce`, not a cache with a clock. Two mounts still fetch
- * twice; a per-(asset, venue) memo is the lever if that ever shows up in the network tab.
- */
-function useScanBars(feed: VenueFeed, nonce = 0) {
-  const [feeds, setFeeds] = useState<ScanFeed[] | null>(null)
-  useEffect(() => {
-    if (feed === undefined) return
-    let on = true
-    setFeeds(null)
-    void Promise.all(ASSETS
-      .map(async (a) => ({ a, bars: await scanBars(a, feed).catch(() => null) })))
-      .then((r) => { if (on) setFeeds(r.filter((x): x is ScanFeed => !!x.bars)) })
-    return () => { on = false }
-  }, [feed, nonce])
-  return feeds
-}
-
-/**
- * The answer to "is anything worth pressing", as one line of chips: only the rows the desk stands
- * behind, best-paying first, click to open it.
- *
- * It reads off rows the Scan has already computed rather than sweeping for itself. It used to run
- * its own `useScanBars` above the chart, which meant every load of the page anybody opened fired
- * eleven assets × five intervals of klines for a strip about ten other assets — and the moment the
- * Scan tab was opened, the identical sweep went out a second time. One sweep, two readers of it.
- *
- * The whole list, including the chart already open. It used to drop that one on the grounds that
- * the chart says all of it in full — but the strip is also the count, and hiding a row from it
- * turned "one setup, and it is the one you are on" into a strip that read like nothing was there.
- * The open one keeps a ring instead.
- */
-function SetupsNow({ rows, orbMode, interval, horizon, current, onPick }: {
-  /** Every scanned row, or null while the sweep is still out. */
-  rows: ScanCard[] | null
-  orbMode: boolean
-  interval: Interval
-  horizon: Horizon
-  current: string
-  onPick: (asset: string) => void
-}) {
-  /* A plan and a tier the desk stands behind. Tier 0 and 1 are "there is a shape here but do not
-     press it" — the table below says so in full, and it is noise in a list this size. Ranked on the
-     net R:R, the fee already taken off, because that is the order to look in. */
-  const best = useMemo(() => rows?.filter((x) => !!x.plan && x.tier >= 2)
-    .sort((x, y) => (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null, [rows])
-
-  // the table directly below already says the sweep is out — twice is once too many
-  if (best === null) return null
-  if (!best.length) {
-    return (
-      <p className="text-muted-foreground mb-3 border-b pb-3 text-xs">
-        Nothing to press on any chart. Waiting is the position.
-      </p>
-    )
-  }
-
-  return (
-    <div className="mb-3 flex flex-wrap items-center gap-1.5 border-b pb-3">
-      <Hint label={`Every chart's setup on the ${orbMode ? 'opening-range' : `${interval} ${HORIZONS[horizon].label.toLowerCase()}`} read — the entry, and what it pays net of the fee. Click one to open it.`}>
-        <span className="text-muted-foreground text-xs">Setups now</span>
-      </Hint>
-      {best.map((r) => (
-        <button key={r.a.id} type="button" onClick={() => onPick(r.a.id)}
-          className={cn(
-            'bg-muted/50 hover:bg-accent flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1.5 text-xs',
-            // the one you are already on, kept in the row rather than dropped from it: a list that
-            // hides a setup because you happen to be looking at it reads as "there is nothing here"
-            r.a.id === current && 'ring-border ring-1',
-          )}>
-          <AssetLogo src={r.a.logo} />
-          <span className="font-medium">{r.a.label}</span>
-          <span className={cn('font-medium', r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-            {r.dir === 'long' ? 'Long' : 'Short'}
-          </span>
-          {/* the entry keeps the colour it has on the chart — the line you are waiting on */}
-          <span className="font-mono tabular-nums text-sky-600 dark:text-sky-400">{fmtPrice(r.plan!.entry)}</span>
-          <span className={cn('text-muted-foreground font-mono tabular-nums', r.plan!.thin && 'text-amber-600 dark:text-amber-500')}>
-            {r.plan!.net.toFixed(1)}×
-          </span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-/** One grid for the header, the row and the row's second line, so all three line up by
- *  construction. They were three sets of hand-matched widths, and the cascade line was indented by
- *  a number that had to be re-guessed every time a column moved. */
-const SCAN_GRID = 'grid grid-cols-[1.5rem_minmax(4rem,7rem)_3.25rem_auto_4rem_minmax(0,1fr)_2.75rem] items-baseline gap-x-2'
-
-// how actionable the row's phrase is, by tier — the same palette the verdict card speaks in
-const TIER_CLS = [
-  'text-muted-foreground',
-  'text-amber-600 dark:text-amber-500',
-  'text-foreground',
-  'text-emerald-600 dark:text-emerald-400',
-] as const
-
-/**
- * The sweep, while it is out. One line per asset in the table's own grid, pulsing — a sentence
- * saying "Reading every chart…" was a line of text where a table was about to be, and the card
- * jumped its own height the moment the rows landed.
- *
- * The shape is knowable before the answer is: it is one row per asset on the list, every time. So
- * the room is held, the columns are already where they will be, and the rows arrive in the space
- * that was theirs. Only the shape, never a number — a stale reading pulsing as if it were loading
- * would be the one thing this card must not do.
- */
-function ScanPlaceholder() {
-  return (
-    <div role="status" aria-label="Reading every chart">
-      {/* the heading strip's own row, so the interval labels do not appear from nowhere */}
-      <div className={cn(SCAN_GRID, 'mb-1 px-1.5')}>
-        <span /><span /><span />
-        <span className="flex gap-1">
-          {INTERVALS.map((iv) => <Skeleton key={iv} className="h-2.5 w-8" />)}
-        </span>
-        <span /><span /><span />
-      </div>
-      {ASSETS.map((a, i) => (
-        <div key={a.id} className={cn(SCAN_GRID, 'border-border/40 border-b px-1.5 py-1.5 last:border-0')}
-          /* a shade quieter as the eye goes down, so the block reads as a list settling rather
-             than as twelve identical bars flashing in unison */
-          style={{ opacity: 1 - i * 0.05 }}>
-          <Skeleton className="size-4 rounded-full" />
-          <Skeleton className="h-3.5 w-16" />
-          <Skeleton className="h-3 w-8" />
-          <span className="flex gap-1">
-            {INTERVALS.map((iv) => <Skeleton key={iv} className="mx-auto h-3 w-3" />)}
-          </span>
-          <Skeleton className="h-4 w-full self-center" />
-          <Skeleton className="h-3 w-40" />
-          <Skeleton className="ml-auto h-3 w-7" />
-        </div>
-      ))}
-    </div>
-  )
-}
-
-/**
- * Which asset is worth opening, without opening them: every asset through the desk's own
- * read, best first. The picker can say what one asset thinks once you're on it; at the open the
- * question is which of eleven to even look at, and this is that pass in one card. Clicking a row
- * puts the desk on it.
- * ponytail: fetched once per visit and on the refresh button, no live poll — these reads move by
- * the bar (an hour, a day), not by the tick. Five intervals an asset rather than one is five times
- * the calls on that one pass; Binance weights a klines call at 2 against 1200 a minute, so eleven
- * assets is a tenth of the budget. A shared per-(asset, interval) cache is the lever if the desk
- * ever polls this live.
- */
-function Scan({ orbMode, interval, current, onPick }: {
-  orbMode: boolean
-  interval: Interval
-  /** The asset the chart is on, so the strip above the table can ring it. */
-  current: string
-  /** Picking a row is asking to look at that asset — the caller owns which tab that means. */
-  onPick: (asset: string) => void
-}) {
-  const { marketHorizon: horizon, dials } = useStash()
-  const fee = dials.fee
-  const feed = useVenue()
-  const cfg = HORIZONS[horizon]
-  const [nonce, setNonce] = useState(0)
-  // the worker answers these routes from cache offline — rows drawn from old bars must say so
-  const online = useOnline()
-  const feeds = useScanBars(feed, nonce)
-
-  // ranked on the net R:R, not the gross one — the whole point of the column is which of these
-  // to look at first, and the fee is exactly what reorders the close ones
-  const rows = useMemo(() => feeds?.map((f) => scanCard(f, horizon, interval, orbMode, fee))
-    .filter((x): x is ScanCard => !!x)
-    /* the completed cascade first — three timeframes in sequence is a better answer than any
-       single chart's grade, which is the whole reason it is computed. Then the desk's own
-       tier, then how many timeframes agree: between two setups of the same grade, the one the
-       slower charts are also behind is the one to look at first. */
-    .sort((x, y) => (y.cascade.stage === 3 ? 1 : 0) - (x.cascade.stage === 3 ? 1 : 0)
-      || y.tier - x.tier || y.agree - x.agree || (y.plan?.net ?? 0) - (x.plan?.net ?? 0)) ?? null,
-  [feeds, horizon, interval, orbMode, fee])
-
-  return (
-    <Card className="py-3">
-      <CardContent className="px-3">
-        <div className="mb-2 flex items-baseline gap-2">
-          <span className="font-heading text-sm tracking-wide uppercase">Scan</span>
-          <span className="text-muted-foreground text-xs">
-            every chart on every timeframe, ranked by the {orbMode ? 'opening-range' : `${interval} ${cfg.label.toLowerCase()}`} read
-          </span>
-          <Hint label="Refresh">
-            <Button size="icon" variant="ghost" aria-label="Refresh" className="ml-auto size-6"
-              onClick={() => setNonce((n) => n + 1)}>
-              <RefreshCw className={cn('size-3.5', rows === null && 'animate-spin')} />
-            </Button>
-          </Hint>
-        </div>
-        {/* The shortlist first, the whole table under it. They are the same sweep read at two
-            depths — which is worth press for press, and what every chart is doing — and the
-            shortlist used to sit on the chart tab, a page away from the table it summarises. */}
-        <SetupsNow rows={rows} orbMode={orbMode} interval={interval} horizon={horizon}
-          current={current} onPick={onPick} />
-        {rows?.length === 0 && <p className="text-muted-foreground py-4 text-sm">The feed is not answering.</p>}
-        {!online && !!rows?.length && (
-          <p className="text-amber-600 dark:text-amber-500 mb-1 flex items-center gap-1.5 text-xs">
-            <CloudOff className="size-3.5" /> Offline — these reads are as old as the bars the cache had.
-          </p>
-        )}
-        {/* Seven columns of it, six of them fixed: on a phone the last two ran off the right edge
-            with nothing to drag. The heading and the rows scroll together inside one box, so a
-            column and its label can never come apart, and the padding is pulled out and put back
-            so the scrolled edge is the card's edge rather than a stripe inside it. */}
-        <div className="-mx-1.5 overflow-x-auto px-1.5">
-        <div className="min-w-136">
-        {/* inside the scroller with the rows it stands in for: the grid's seven tracks are wider
-            than a phone, and a placeholder outside this box would be the one thing on the card
-            with no way to drag it into view */}
-        {rows === null && <ScanPlaceholder />}
-        {/* the strip's heading, once — five arrows a row with no scale on them is a puzzle. The
-            desk's own timeframe is marked, since that is the one the phrase and the plan belong to */}
-        {!!rows?.length && (
-          <div className={cn(SCAN_GRID, 'text-muted-foreground mb-1 px-1.5 text-[10px]')}>
-            <span /><span /><span />
-            <span className="flex gap-1">
-              {INTERVALS.map((iv) => (
-                <span key={iv} className={cn('w-8 text-center tabular-nums', iv === interval && 'text-foreground')}>
-                  {iv}
-                </span>
-              ))}
-            </span>
-            <span className="text-center">{interval}</span>
-            <span />
-            <span className="text-right">net</span>
-          </div>
-        )}
-        {rows?.map((r) => (
-          <button key={r.a.id} type="button"
-            onClick={(e) => {
-              /* Setting the asset used to be the whole click, which was right when the sweep and
-                 the chart were one page. Behind a tab it changed a chart nobody could see: the row
-                 lit, the page scrolled, and the answer was one tab away with nothing saying so. */
-              onPick(r.a.id)
-              // the answer is at the top of a page you are at the bottom of — go to it
-              e.currentTarget.closest('.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' })
-            }}
-            className={cn(SCAN_GRID,
-              'hover:bg-accent border-border/40 -mx-1.5 w-[calc(100%+0.75rem)] rounded-md border-b px-1.5 py-1.5 text-left text-sm last:border-0')}>
-            <AssetLogo src={r.a.logo} />
-            <span className="truncate font-medium">{r.a.label}</span>
-            <span className={cn('text-xs font-medium',
-              r.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400'
-              : r.dir === 'short' ? 'text-destructive' : 'text-muted-foreground')}>
-              {r.dir === 'long' ? 'Long' : r.dir === 'short' ? 'Short' : 'Flat'}
-            </span>
-            {/* every timeframe at once. A dash is a feed that gave that interval nothing, which is
-                not the same as no side and must not read like one */}
-            <span className="flex gap-1">
-              {INTERVALS.map((iv) => {
-                const l = r.by[iv]
-                return (
-                  <span
-                    key={iv}
-                    title={l ? `${iv}: ${l.dir === 'flat' ? 'no side' : l.dir} ${l.bulls}/${l.bears}` : `${iv}: no bars`}
-                    className={cn('w-8 text-center font-mono text-xs',
-                      iv === interval && 'bg-muted rounded',
-                      !l ? 'text-muted-foreground/50'
-                      : l.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400'
-                      : l.dir === 'short' ? 'text-destructive' : 'text-muted-foreground')}
-                  >
-                    {!l ? '–' : l.dir === 'long' ? '▲' : l.dir === 'short' ? '▼' : '·'}
-                  </span>
-                )
-              })}
-            </span>
-            {/* What the arrows beside it are a reading of. Coloured by its own two ends rather than
-                by the desk's side: the line is where price has been, and a short setup drawn in red
-                on a chart that rose says the wrong thing about both. Self-aligned because the row
-                is baseline-aligned and an svg has no baseline to sit on. */}
-            <span className="self-center">
-              <Sparkline data={r.closes} up={r.closes.at(-1)! >= r.closes[0]} id={`scan-${r.a.id}`} className="h-4 w-full" />
-            </span>
-            <span className={cn('truncate text-xs', TIER_CLS[r.tier])}>{r.say}</span>
-            <span className={cn('text-right font-mono text-xs tabular-nums',
-              !r.plan ? 'text-muted-foreground/40'
-              : r.plan.thin ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground')}>
-              {r.plan ? `${r.plan.net.toFixed(1)}×` : '—'}
-            </span>
-            {/* the cascade, but only once it has something to say: a stage 0 or 1 is "the case
-                never got started", which the strip above already shows in five arrows.
-                Under the phrase, in the phrase's own column — it is the same question asked of
-                three charts instead of one, and the ↳ is what says so without a second heading. */}
-            {r.cascade.stage >= 2 && (
-              <span className={cn('col-start-6 col-end-8 truncate text-xs',
-                r.cascade.stage === 3 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
-                <span className="opacity-50">↳ </span>{r.cascade.say}
-              </span>
-            )}
-          </button>
-        ))}
-        </div>
-        </div>
-        {/* Three different things used to be one paragraph in a narrow column under a very wide
-            table: what the glyphs mean and how to read a row. Capping
-            it kept the line length honest and made the shape wrong instead — six short lines of
-            prose hanging off the left edge of something 2000px wide.
-            Split by what each part is for. The glyphs are a legend, so they read as chips on one
-            line, the way the chart's own legend does. The sentence under them is the only trading
-            advice in here and stays a sentence. */}
-        <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 border-t pt-2 text-xs">
-          <span>
-            <span className="text-emerald-600 dark:text-emerald-400">▲</span>
-            <span className="text-destructive">▼</span>
-            {' '}each timeframe&rsquo;s lean<span className="opacity-70"> · boxed is the desk&rsquo;s</span>
-          </span>
-          <span>
-            <span className="opacity-50">↳</span> 4h → 15m → 5m<span className="opacity-70"> · green when all three land</span>
-          </span>
-          <span className="opacity-70">A side every chart agrees on beats one only the fastest sees.</span>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 /* A "Trending on Solana" panel stood here: the twelve hottest pools on the chain and the ones that
    had just opened, with a sparkline and a link out to GeckoTerminal.
-   It went because of what it could not do. Nothing on it is in ASSETS, so no row had a chart, a
-   verdict, a plan or a level — the panel's only verb was "open this somewhere else", under a
+   It went because of what it could not do. Nothing on it is in ASSETS, so no row had a chart or a
+   level — the panel's only verb was "open this somewhere else", under a
    heading on a page whose whole subject is what to do about an asset. It polled two keyless feeds
    a minute per open tab and one more per row for the picture, to render a list this app had no
    opinion about. The bell that pointed at it went with it (see notify.ts), and so did its

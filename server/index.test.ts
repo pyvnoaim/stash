@@ -340,15 +340,6 @@ const woke = (await (await get('/api/alerts?tz=0', leon)).json()).alerts
 assert.ok(woke.some((a: any) => a.target === 'today' && /overdue/.test(a.title)), 'the overdue line')
 assert.ok(woke.every((a: any) => a.key && a.title && a.target), 'an alert with nothing to show')
 
-/* The paper desk. Read-only and signed-in only — the rows are the server's own record of what the
-   desk did, so there is nothing for a client to write and nobody else's desk to read. Empty here
-   because this process has filed nothing: the scan behind it needs a network. */
-assert.equal((await get('/api/paper')).status, 401)
-assert.deepEqual((await (await get('/api/paper', leon)).json()).rows, [])
-assert.equal((await post('/api/paper', {}, leon)).status, 405)   // read-only, and it says so
-// and it is one desk per person: mia's is her own, and empty
-assert.deepEqual((await (await get('/api/paper', mia)).json()).rows, [])
-
 // an endpoint is a string anyone could send: only the account holding it may drop it
 const unsub = (cookie: string) => fetch(`${url}/api/push`, {
   method: 'DELETE', headers: { cookie }, body: JSON.stringify({ endpoint: 'https://push.example/abc' }),

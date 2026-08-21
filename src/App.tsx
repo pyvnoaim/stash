@@ -339,16 +339,24 @@ export default function App() {
         else drop(chosen, e.shiftKey)
         return
       }
-      /* ⌘A with nothing focused is the document's, and the document is the sidebar and the header
-         too — so a note in preview selected the whole app. Scope it to the content pane. Sits below
-         the `typingIn` return above on purpose: in the markdown editor, the search field or the
-         title, the browser's own select-all is already the one you meant, which is why this only
-         ever looked wrong in preview. */
+      /* ⌘A over a list marks every row in it — the trash included, which is where a select-all is
+         wanted most: fourteen days of deletions and one ⌘⌫ to be done with them. It used to select
+         the *text* of the rows, which is the browser's answer to a question nobody asks of a list.
+
+         Where there is no list — Overview, Markets, the PDF tab, a note open full-page — the text
+         selection is still the right answer, scoped to the content pane: the document is the sidebar
+         and the header too, so a note in preview used to select the whole app.
+
+         Sits below the `typingIn` return above on purpose: in the markdown editor, the search field
+         or the title, the browser's own select-all is already the one you meant. */
       if (cmd && key === 'a') {
-        const main = document.querySelector('main')
-        if (!main) return
         e.preventDefault()
-        window.getSelection()?.selectAllChildren(main)
+        if (!pageItem && (query || !isPage(s.sel)) && items.length) {
+          setMarked(items.map((i) => i.id))
+          return
+        }
+        const main = document.querySelector('main')
+        if (main) window.getSelection()?.selectAllChildren(main)
         return
       }
       // no other list shortcut wants a modifier, and ⌘S belongs to the browser

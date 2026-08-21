@@ -44,7 +44,6 @@ const MEXC_INTERVALS = new Set(Object.values(MX_INTERVAL))
 const MEXC_STEP: Record<string, number> = {
   Min5: 300, Min15: 900, Min60: 3_600, Hour4: 14_400, Day1: 86_400, Week1: 604_800,
 }
-import { createPaper } from './paper.ts'
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -664,10 +663,6 @@ export function start({
     for (const l of live) if (l.user === user && l.device !== from) wire(l.res, 'state', { v })
   }
 
-  /* The rule tested forward against itself: every setup the desk endorses, filed the moment it
-     appears and followed to its stop or its target in R, whether or not anyone was at a screen.
-     It touches no exchange and holds no key — public prices and bars only. See server/paper.ts. */
-  const paper = createPaper(db)
   /* The notifications that reach a closed app: its own module, its own table, and the minute
      timer that decides when anything is worth a knock. See server/push.ts. */
   const push = createPush(db)
@@ -1196,15 +1191,6 @@ export function start({
         return send(res, 200, {})
       }
       return send(res, 405, { error: 'method not allowed' })
-    }
-
-    /* The paper desk's own rows — read-only, because nothing in the app writes them: the server
-       files them off the same scan the notifications come from, and this is the app being shown
-       what its desk did while nobody was watching. */
-    if (path === '/api/paper' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      return send(res, 200, { rows: paper.rows(user.id) })
     }
 
     /* What the service worker asks the moment a knock arrives. The notification is written from
@@ -2177,8 +2163,8 @@ export function start({
   })
 
   server.listen(port)
-  server.on('close', () => { push.stop(); paper.stop() })
-  return Object.assign(server, { invite, push, paper })
+  server.on('close', () => { push.stop() })
+  return Object.assign(server, { invite, push })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -549,7 +549,8 @@ export function createPush(db: DatabaseSync) {
        the document now, so the chart the notification is about is the chart you were last reading.
        The same two lines the Scan card is given on the page. */
     const orbMode = doc?.marketPreset === 'orb'
-    // through readInterval for the reason paper.ts gives: orb is a 15m play, the horizon is not
+    // through readInterval because orb is a 15m play and the horizon is not — a doc left on the
+    // opening range before the page dropped it still scans as one, on its own bars.
     const interval = readInterval(horizon, orbMode ? '15m' as const : intervalOf(doc, horizon))
     const memo = `${horizon}-${interval}-${orbMode}-${d.fee}`
     const had = scanned.get(memo)

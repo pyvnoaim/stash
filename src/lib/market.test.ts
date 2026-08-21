@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, fetchTrending, priceDigits, fmtPrice, DEMOS, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
-  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, openPlay, backtest, amdBacktest, hold, fill, deskSignals, fvg, liquiditySweep, structureBreak, swings, standingSwings, topDown,
+  ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, backtest, amdBacktest, hold, fill, deskSignals, fvg, liquiditySweep, structureBreak, swings, standingSwings, topDown,
   heikin, heikinRun, toll } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
@@ -139,25 +139,6 @@ assert.deepEqual(desks(21), [])
 assert.deepEqual(desks(1), ['Asia']) // 10:00 in Tokyo, and only there
 // Saturday is nobody, however wide awake the crypto feed is
 assert.deepEqual(openDesks(Date.UTC(2024, 6, 6, 14)), [])
-
-/* The open as an instruction, in the four moments it has. The fixture opens at 09:30 in NY and
-   its fifth bar closes above the opening candle's high, so: 20 minutes before, nothing to do; ten
-   minutes in, the candle is still building; and after it, the break with a side on it. */
-const playAt = (mins: number, bars = orbBars) => openPlay(bars, open + mins * 60_000)
-assert.match(playAt(-20)!.say, /NY opens in 20 minutes/)
-assert.equal(playAt(-20)!.tone, 'wait')
-assert.match(playAt(10, orbBars.slice(0, 2))!.say, /still forming/)
-const broke = playAt(75)!
-assert.match(broke.say, /NY's high/)
-/* …and 'wait', not 'go': five bars are too few for an ATR, so the range cannot pass the width test,
-   and a play that can't check its own filter stands you down rather than pretending it passed. */
-assert.equal(broke.tone, 'wait')
-// inside the range there is a trigger but no trade, and past the session there is nothing to say
-assert.match(openPlay(orbBars.slice(0, 4), open + 75 * 60_000)!.say, /range is set|worth less/)
-// 23:00 UTC: the NY range is eight and a half hours behind, and Asia is still an hour off —
-// which is the one moment of the day this has nothing to say. Half an hour later it announces Asia.
-assert.equal(openPlay(orbBars, open + 8.5 * 3600_000), null)
-assert.match(openPlay(orbBars, open + 9 * 3600_000)!.say, /Asia opens in 30 minutes/)
 
 /* Session VWAP: the average price paid since that open, weighted by what traded at each. Most of
    the size went through at 100 and price has walked to 108, so the average sits well below it. */

@@ -106,8 +106,9 @@ export function TradeDialog({ open, onOpenChange, symbol, coin, side, entry, sto
             {side === 'long' ? 'Long' : 'Short'} {symbol}
           </DialogTitle>
           <DialogDescription>
-            On Bitget, with the stop and the target riding the order — the position is never on the
-            book without them.
+            {stop != null
+              ? 'On Bitget, with the stop and the target riding the order — the position goes on the book with both.'
+              : 'On Bitget. There is no ATR off these bars to place a stop from, so this one goes on naked — the exchange will not close it for you.'}
           </DialogDescription>
         </DialogHeader>
 

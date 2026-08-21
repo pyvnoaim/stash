@@ -541,7 +541,7 @@ export const NEW_POOL_LIQ = 15_000
 
 /**
  * How many of the six timeframes have to lean a scanned setup's way before it is worth a knock —
- * and before the paper desk files it.
+ * and before anything is filed off it.
  *
  * Half the charts, near enough. A "Buy now" only the timeframe you happen to be on can see is the
  * setup most likely to be noise, and an unasked-for notification is the thing that can least afford
@@ -2629,78 +2629,6 @@ export function orb(c: Candle[]): Range | null {
     : price < low ? { label: 'Opening-range breakdown', tone: weak ? 'flat' : 'bear', kind: 'orb' as const, detail: `price broke the ${whose} low ${fmtPrice(low)}, ${age}${caveat}` }
     : { label: 'Inside opening range', tone: 'flat', kind: 'orb' as const, detail: `holding between ${fmtPrice(low)} and ${fmtPrice(high)}, the ${whose} hour (${age}) — guides wait for a break` }
   return { t: open.t, until, high, low, where, quality: { wide, volume }, signal }
-}
-
-/** How near an open has to be before it is the thing worth saying, rather than the range that is
- *  already running. Half an hour is enough time to get to a screen and not enough to forget. */
-const OPEN_SOON = 30
-
-export type Play = {
-  where: string
-  /** 'wait' — there is nothing to do yet; 'ready' — the trigger is set and price hasn't hit it;
-   *  'go' — it has, and the setup card below carries the entry, stop and target. */
-  tone: 'wait' | 'ready' | 'go'
-  /** The sentence, which is the whole point of this. */
-  say: string
-  /** Minutes to the open, or left of the hour that sets the range — whichever the phase is about. */
-  mins?: number
-}
-
-/**
- * What to do about the open, right now, in one sentence — the thing the tool was silently leaving
- * you to assemble out of a dotted line, a violet band and a tally.
- *
- * Four moments, in the order they happen: an open coming up, the hour that sets the range, the
- * range standing and waiting to be broken, and the break. Nothing is invented for it — the range,
- * its quality tests and the break all come off `orb`, which is the tested version of this play, and
- * the entry/stop/target stay where they were, on the setup card. Read it as information: filtered,
- * that play was break-even over 219 days, not a living.
- */
-export function openPlay(c: Candle[], at = Date.now()): Play | null {
-  // an open you can still get in front of outranks a range already running: it is the one thing
-  // here that expires
-  const soon = SESSIONS
-    .map((s) => ({ s, mins: opensIn(s, at) }))
-    .filter((x): x is { s: typeof SESSIONS[number], mins: number } => x.mins !== null && x.mins > 0 && x.mins <= OPEN_SOON)
-    .sort((a, b) => a.mins - b.mins)[0]
-  if (soon) return {
-    where: soon.s.where, tone: 'wait', mins: soon.mins,
-    say: `${soon.s.where} opens in ${soon.mins} minute${soon.mins === 1 ? '' : 's'}. Nothing to do yet — the opening candle after it sets the range, and the play is the break of that.`,
-  }
-
-  const r = orb(c)
-  if (!r) return null
-  // off the clock, not off the last bar: the window that sets the range is a time of day, and a
-  // feed running a bar behind would otherwise hold the range open past the point it closed
-  const age = (at - r.t) / 60_000
-  if (age >= 8 * 60) return null // the session is over; the levels are yesterday's and say so elsewhere
-
-  const band = `${fmtPrice(r.low)} to ${fmtPrice(r.high)}`
-  if (age < RANGE_MIN) {
-    const left = Math.max(1, Math.round(RANGE_MIN - age))
-    return {
-      where: r.where, tone: 'wait', mins: left,
-      say: `${r.where}'s range is still forming — ${left} minute${left === 1 ? '' : 's'} of the opening candle left, ${band} so far. A break before it closes is a break of half a range.`,
-    }
-  }
-
-  // the same tests the play was filtered by, said as the reason to stand down rather than as a note
-  const thin = [!r.quality.wide && 'the range is tighter than a normal bar',
-    !r.quality.volume && 'it is trading on thin volume'].filter(Boolean).join(', and ')
-  const broke = r.signal.label !== 'Inside opening range'
-  if (!broke) return {
-    where: r.where, tone: thin ? 'wait' : 'ready',
-    say: thin
-      ? `${r.where}'s range is set at ${band}, but ${thin} — a break of it is worth less than the chart makes it look.`
-      : `${r.where}'s range is set: ${band}. A close beyond either side is the trigger — above it the long, below it the short.`,
-  }
-  const up = r.signal.label === 'Opening-range breakout'
-  return {
-    where: r.where, tone: thin ? 'wait' : 'go',
-    say: thin
-      ? `Price is through ${r.where}'s ${up ? 'high' : 'low'} at ${fmtPrice(up ? r.high : r.low)}, but ${thin} — this is the break that usually gets given back.`
-      : `Price has cleared ${r.where}'s ${up ? 'high' : 'low'} at ${fmtPrice(up ? r.high : r.low)} — the ${up ? 'long' : 'short'} is the side this play takes. The setup card has the entry, the stop and the target.`,
-  }
 }
 
 /**

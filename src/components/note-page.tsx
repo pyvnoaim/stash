@@ -8,7 +8,7 @@ import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { blocksOf, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
+import { blocksOf, headingClass, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
 import { patch, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 
@@ -240,7 +240,14 @@ export function NotePage({ it, onBack, onOpen }: {
   ]
 
   /* The open block, as a plain textarea holding only its own lines. Keyed on where it starts, so
-     moving to another block mounts a fresh one — which is what puts the cursor in it. */
+     moving to another block mounts a fresh one — which is what puts the cursor in it.
+
+     It wears the shape of what it renders into, so clicking a line moves nothing under it. A
+     heading was the loud half: 20px semibold became 14px regular and the rest of the note jumped up
+     half a line. The quiet half was on every block, heading or not — a textarea is inline-block, so
+     the wrapper's own line box was adding the font's descender under it, and every click cost seven
+     pixels of downward shift. Hence `block` below, which is the whole of that fix. */
+  const level = edit?.text.match(/^(#{1,3})\s/)?.[1].length ?? 0
   const editor = edit && (
     <div key={`edit-${edit.from}`} className="relative">
       <textarea
@@ -295,9 +302,15 @@ export function NotePage({ it, onBack, onOpen }: {
            [[ strip both hold focus with `preventDefault` on mousedown, so neither trips it. */
         onBlur={() => { setBar(null); setWikiQ(null); setEdit(null) }}
         aria-label="Note"
-        // text-base until md, like every other field: under 16px iOS zooms the page in on focus
-        // and never zooms back out, which leaves the header off the left edge
-        className="w-full resize-none overflow-hidden bg-transparent font-mono text-base leading-relaxed outline-none md:text-sm"
+        /* A heading takes its whole shape from the rendered one, line-height included, and needs no
+           iOS guard: every heading size here is already at or above 16px. Body text keeps the guard
+           — text-base until md, like every other field, because under 16px iOS zooms the page in on
+           focus and never zooms back out, which leaves the header off the left edge. That is the one
+           step left when a block opens, on phones only, and a page stuck zoomed is worse. */
+        className={cn(
+          'block w-full resize-none overflow-hidden bg-transparent font-mono outline-none',
+          level ? headingClass(level) : 'text-base leading-relaxed md:text-sm',
+        )}
       />
       {bar && (
         <div
