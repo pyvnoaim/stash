@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils'
 import { candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash, type Result } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ASSETS, assetOf, atr, fetchCandles, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ASSETS, assetOf, atr, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, tally, trendFilter,
   venueName, offMexc, priceDigits,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Swing,
@@ -66,6 +66,7 @@ const ROLL_RETRY = 60_000
  */
 const TABS = [
   { id: 'chart', label: 'Chart' },
+  { id: 'prices', label: 'Prices' },
   { id: 'record', label: 'Record' },
 ] as const
 
@@ -186,6 +187,10 @@ export default function MarketPage() {
   // desk already showing the right thing — and it survives a reload. So does the bar size.
   const setAsset = setMarketAsset
   const setInterval = setMarketInterval
+  /* Which page. Up here with the feed state rather than beside the tabs it draws, because the live
+     poll below reads it: a chart nobody is looking at has no business repricing its forming candle
+     every five seconds. */
+  const [tab, setTab] = useState<(typeof TABS)[number]['id']>('chart')
   const [candles, setCandles] = useState<Candle[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -283,7 +288,8 @@ export default function MarketPage() {
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
   useEffect(() => {
     setNotLive(false) // a new view has not probed yet, so it makes no claim either way
-    if (!live || !online || feed === undefined) return // nothing to poll for with no feed to poll
+    // nothing to poll for with no feed to poll, and nothing to reprice on a page nobody is reading
+    if (!live || !online || feed === undefined || tab !== 'chart') return
     let on = true
     const tick = () => {
       const t = lastAt.current
@@ -316,7 +322,12 @@ export default function MarketPage() {
     }
     const h = window.setInterval(tick, LIVE)
     return () => { on = false; window.clearInterval(h) }
-  }, [asset, interval, live, online]) // eslint-disable-line react-hooks/exhaustive-deps
+    /* `feed` belongs in here as much as the rest of them: it is `undefined` on every first render
+       (useVenue answers in an effect), so the run that happens on mount always returns early — and
+       without it in the deps nothing ever ran again. The chart showed a green Live dot over a
+       forming candle that was never repriced until you touched the asset, the bar size or the
+       toggle. */
+  }, [asset, interval, live, online, feed, tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const view = useMemo(() => (candles.length ? signals(candles, cfg) : null), [candles, cfg])
 
@@ -608,7 +619,6 @@ export default function MarketPage() {
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
   const up = change >= 0
-  const [tab, setTab] = useState<(typeof TABS)[number]['id']>('chart')
   // which book the Record tab is showing — see RECORDS
   const [book, setBook] = useState<(typeof RECORDS)[number]['id']>('mine')
   // which tabs have ever been opened — see the note by the Scan below
@@ -645,7 +655,7 @@ export default function MarketPage() {
             </Button>
           ))}
         </div>
-        {tab !== 'record' && <span className="bg-border mx-1 hidden h-5 w-px sm:block" />}
+        {tab === 'chart' && <span className="bg-border mx-1 hidden h-5 w-px sm:block" />}
         {/* the asset is the chart's subject and nothing else on this page has one */}
         {tab === 'chart' && (
           <Select value={asset} onValueChange={setAsset}>
@@ -1315,6 +1325,10 @@ export default function MarketPage() {
       </>
       </div>
 
+      {/* Every listed asset at once. Unmounted rather than hidden: it polls, and a list nobody is
+          reading has no business asking two venues about eleven contracts a minute. */}
+      {tab === 'prices' && <Prices current={asset} onPick={goChart} />}
+
       {/* Outside the chart tab, so it is there while the desk loads or errors — it needs none of
           that. Not rendered until the tab is first opened.
           One tab, two books, one question — see the note on TABS. The switch sits on the panel
@@ -1342,6 +1356,90 @@ export default function MarketPage() {
         </div>
       )}
     </div>
+  )
+}
+
+/** How often the price list re-reads — the same minute the Overview tiles use. */
+const PRICES_LIVE = 60_000
+
+/**
+ * Every listed asset, with its price, on one screen.
+ *
+ * The picker names eleven contracts and quotes none of them, so "what is everything doing" meant
+ * opening eleven charts. Built off the same twenty-five hourly bars the Overview tiles use — the
+ * last close is the price, the first bar's open is where the day started — so it is one fetch for
+ * both columns and nothing here is a second opinion about a number the desk already has.
+ */
+function Prices({ current, onPick }: { current: string; onPick: (id: string) => void }) {
+  const feed = useVenue()
+  const [rows, setRows] = useState<{ a: Asset; price: number; change: number }[]>([])
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [nonce, setNonce] = useState(0)
+  useEffect(() => {
+    if (feed === undefined) return // which venue is still being asked — see useVenue
+    let on = true
+    fetchHours(ASSETS, feed)
+      .then((bars) => {
+        if (!on) return
+        const next = bars
+          .map(({ a, c }) => ({ a, price: c.at(-1)!.c, change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100 }))
+          .filter((r) => isFinite(r.price) && isFinite(r.change))
+        setRows(next)
+        setState(next.length ? 'ready' : 'error')
+      })
+      // a refresh that fails leaves the prices already up rather than replacing a live market with
+      // an error panel — it is the first read that has nothing to fall back on
+      .catch(() => { if (on) setState((s) => (s === 'ready' ? s : 'error')) })
+    return () => { on = false }
+  }, [feed, nonce])
+  // …and again on a timer, only while the tab is being looked at
+  useEffect(() => {
+    const h = setInterval(
+      () => { if (document.visibilityState === 'visible') setNonce((n) => n + 1) }, PRICES_LIVE,
+    )
+    return () => clearInterval(h)
+  }, [])
+
+  return (
+    <Card className="py-3">
+      <CardContent className="px-3">
+        {state === 'error' && !rows.length ? (
+          <div className="text-muted-foreground flex flex-col items-center gap-2 py-6 text-sm">
+            <p>Prices are not loading — the exchange feed didn't answer.</p>
+            <Button size="sm" variant="outline" onClick={() => setNonce((n) => n + 1)}>Try again</Button>
+          </div>
+        ) : (
+          <div className="grid gap-0.5 sm:grid-cols-2">
+            {state === 'loading'
+              ? ASSETS.map((a) => <Skeleton key={a.id} className="h-8" />)
+              : rows.map(({ a, price, change }) => (
+                <button
+                  key={a.id} type="button" onClick={() => onPick(a.id)}
+                  aria-label={`Open ${a.label} chart`}
+                  className={cn('hover:bg-accent flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
+                    a.id === current && 'bg-muted')}
+                >
+                  <AssetLogo src={a.logo} />
+                  <span className="truncate">{a.label}</span>
+                  {/* fixed and right-aligned, so eleven prices of different magnitudes read as a
+                      column rather than as a ragged edge chasing each label's length */}
+                  <span className="ml-auto w-24 shrink-0 text-right tabular-nums">{fmtPrice(price)}</span>
+                  <span className={cn('w-16 shrink-0 text-right text-xs tabular-nums',
+                    change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {change >= 0 ? '+' : ''}{change.toFixed(2)}%
+                  </span>
+                </button>
+              ))}
+          </div>
+        )}
+        {/* the venue only once it is known — naming Bitget while the answer is still coming is a
+            MEXC reader being told, briefly, that these are somebody else's prices */}
+        <p className="text-muted-foreground mt-2 px-2 text-xs">
+          Last price and the move over the last 24 hours
+          {feed !== undefined && <>, on {venueName(feed ?? 'bitget')}</>} · tap one to chart it
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 
