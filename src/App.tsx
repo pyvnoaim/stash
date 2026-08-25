@@ -327,7 +327,11 @@ export default function App() {
         else if (s.focus) focus(null)
         return
       }
-      if (typingIn(e.target)) return
+      /* One field is exempt from that: the inspector's Title takes the caret on every click that
+         opens a row, so ⌘⌫ straight after clicking one used to mean delete-to-line-start in a
+         field you never asked for — when the row you just clicked is plainly what you meant. */
+      const inTitle = e.target instanceof HTMLElement && e.target.id === 'i-title'
+      if (typingIn(e.target) && !(inTitle && k('remove'))) return
       /* ⌘⌫, not a bare ⌫: reaching for the search field past a focused row should not wipe it.
          ⇧⌘⌫ skips the trash — `comboOf` ignores shift, so the binding is the same one and the
          modifier is read here. In the trash there is nowhere further to file a row, so both
