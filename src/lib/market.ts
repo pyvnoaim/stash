@@ -208,6 +208,28 @@ export type Hours = { a: Asset; c: Candle[] }
 export type Move = { id: string; label: string; hours: number; open: number; last: number; high: number; low: number }
 
 /**
+ * The path a sparkline draws, in a stretched 0..100 box — null when there is nothing to draw.
+ *
+ * A candle's numbers are `+k[4]` off a venue's JSON and nothing upstream checks them, so a series
+ * can arrive with a null close in the middle of it. One of those takes the min and max to NaN and
+ * every coordinate after them with it, and an unparseable `d` renders as nothing at all — a row
+ * with a price, a percentage and a blank space where its line should be. They are dropped instead:
+ * a bent line is a worse reading than a true one and a better one than no line.
+ *
+ * Inset 3 units top and bottom so peaks and troughs don't sit on the edge — the 1.5px non-scaling
+ * stroke's outer half (~2.3 units at a 32px height) would otherwise clip.
+ */
+export function sparkPath(data: number[]): string | null {
+  const pts = data.filter(Number.isFinite)
+  if (pts.length < 2) return null
+  const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo
+  // a series that never moved has no range to scale into, and 0/0 is NaN. It draws down the middle:
+  // pinned to the floor it would read as an asset sitting at the bottom of a range it never had.
+  const y = (v: number) => (3 + (span ? 1 - (v - lo) / span : 0.5) * 94).toFixed(1)
+  return pts.map((v, i) => `${i ? 'L' : 'M'}${((i / (pts.length - 1)) * 100).toFixed(1)} ${y(v)}`).join(' ')
+}
+
+/**
  * The day in hourly bars, per asset. Binance quoted 1h, 4h and 24h windows for a dozen symbols in
  * three batch calls and neither book here has an equivalent, so the windows are measured off bars
  * instead — one call per asset rather than three for the lot, and the same bars draw the sparkline

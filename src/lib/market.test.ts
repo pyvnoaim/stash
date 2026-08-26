@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, fetchTrending, priceDigits, fmtPrice, DEMOS, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
   ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, backtest, amdBacktest, hold, fill, deskSignals, fvg, liquiditySweep, structureBreak, swings, standingSwings, topDown,
-  heikin, heikinRun, toll } = await import('./market.ts')
+  heikin, heikinRun, toll, sparkPath } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -1001,3 +1001,19 @@ assert.match(two.say, /no 5m bars/)
 const down4h = ramp(40, 1).map((v, i) => tdBar(i, v))
 assert.equal(topDown({ '4h': down4h, '15m': shift15 }, tdCfg).stage, 1)
 assert.equal(topDown({ '4h': down4h, '15m': shift15 }, tdCfg).dir, 'short')
+
+// sparkPath: the shape the price rows and the Overview tiles draw
+// nothing to draw — one point is a dot, not a line
+assert.equal(sparkPath([]), null)
+assert.equal(sparkPath([7]), null)
+// a rising series spans the box: first point at x0 and the floor, last at x100 and the ceiling,
+// both held off the edge by the 3-unit inset
+assert.equal(sparkPath([1, 2, 3]), 'M0.0 97.0 L50.0 50.0 L100.0 3.0')
+// a flat series is one line through the middle, not a divide by zero and not pinned to the floor
+assert.equal(sparkPath([5, 5, 5]), 'M0.0 50.0 L50.0 50.0 L100.0 50.0')
+// the one this guards: a venue's null close in the middle used to take every coordinate to NaN,
+// and an unparseable `d` draws nothing at all. The bad point goes, the line stays.
+assert.equal(sparkPath([1, NaN, 3]), sparkPath([1, 3]))
+assert.ok(!sparkPath([1, 2, NaN, 3])!.includes('NaN'))
+// …and a series that is all rubbish still draws nothing rather than a straight lie
+assert.equal(sparkPath([NaN, NaN]), null)

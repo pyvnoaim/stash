@@ -24,7 +24,7 @@ import { candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, 
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ASSETS, assetOf, atr, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, standingSwings, structureBreak, tally, trendFilter,
+  deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
   venueName, offMexc, priceDigits,
   type Asset, type Candle, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
@@ -1359,6 +1359,33 @@ export default function MarketPage() {
   )
 }
 
+/** Price line with a gradient area fading beneath it, drawn in a stretched 0..100 box; the 1.5px
+ *  stroke is held via vector-effect. `id` keeps each card's gradient def unique. The price list
+ *  draws the same line at row height, which is what `className` is for. The shape itself is
+ *  `sparkPath`, which is where the feed's numbers are checked and where the test for it lives. */
+export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
+  data: number[]; up: boolean; id: string; className?: string
+}) {
+  // the same pair the desk's candles wear — a tile that reads up or down is no use to a colourblind
+  // eye in one palette and the chart in another
+  const hue = candlePair(useStash())
+  const line = sparkPath(data)
+  if (!line) return null
+  const color = up ? hue.up : hue.down
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={className}>
+      <defs>
+        <linearGradient id={`spark-${id}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+          <stop offset="100%" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <path d={`${line} L100 100 L0 100 Z`} fill={`url(#spark-${id})`} stroke="none" />
+      <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}
+
 /** How often the price list re-reads — the same minute the Overview tiles use. */
 const PRICES_LIVE = 60_000
 
@@ -1372,7 +1399,7 @@ const PRICES_LIVE = 60_000
  */
 function Prices({ current, onPick }: { current: string; onPick: (id: string) => void }) {
   const feed = useVenue()
-  const [rows, setRows] = useState<{ a: Asset; price: number; change: number }[]>([])
+  const [rows, setRows] = useState<{ a: Asset; price: number; change: number; closes: number[] }[]>([])
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [nonce, setNonce] = useState(0)
   useEffect(() => {
@@ -1382,7 +1409,10 @@ function Prices({ current, onPick }: { current: string; onPick: (id: string) => 
       .then((bars) => {
         if (!on) return
         const next = bars
-          .map(({ a, c }) => ({ a, price: c.at(-1)!.c, change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100 }))
+          .map(({ a, c }) => ({
+            a, price: c.at(-1)!.c, change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100,
+            closes: c.map((k) => k.c),
+          }))
           .filter((r) => isFinite(r.price) && isFinite(r.change))
         setRows(next)
         setState(next.length ? 'ready' : 'error')
@@ -1412,7 +1442,7 @@ function Prices({ current, onPick }: { current: string; onPick: (id: string) => 
           <div className="grid gap-0.5 sm:grid-cols-2">
             {state === 'loading'
               ? ASSETS.map((a) => <Skeleton key={a.id} className="h-8" />)
-              : rows.map(({ a, price, change }) => (
+              : rows.map(({ a, price, change, closes }) => (
                 <button
                   key={a.id} type="button" onClick={() => onPick(a.id)}
                   aria-label={`Open ${a.label} chart`}
@@ -1420,10 +1450,15 @@ function Prices({ current, onPick }: { current: string; onPick: (id: string) => 
                     a.id === current && 'bg-muted')}
                 >
                   <AssetLogo src={a.logo} />
-                  <span className="truncate">{a.label}</span>
+                  {/* the gap rides on the label, not on the line — a row whose feed came back with
+                      one bar draws no line, and the numbers still have to hold their column */}
+                  <span className="mr-auto truncate">{a.label}</span>
+                  {/* the shape behind the percentage — the same twenty-five bars both numbers on this
+                      row are read off, so it is the day, not a second opinion about it */}
+                  <Sparkline data={closes} up={change >= 0} id={`row-${a.id}`} className="h-5 w-16 shrink-0" />
                   {/* fixed and right-aligned, so eleven prices of different magnitudes read as a
                       column rather than as a ragged edge chasing each label's length */}
-                  <span className="ml-auto w-24 shrink-0 text-right tabular-nums">{fmtPrice(price)}</span>
+                  <span className="w-24 shrink-0 text-right tabular-nums">{fmtPrice(price)}</span>
                   <span className={cn('w-16 shrink-0 text-right text-xs tabular-nums',
                     change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                     {change >= 0 ? '+' : ''}{change.toFixed(2)}%
