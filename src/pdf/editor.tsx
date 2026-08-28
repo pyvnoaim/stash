@@ -21,6 +21,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import {
+  InputGroup, InputGroupAddon, InputGroupInput, InputGroupText,
+} from '@/components/ui/input-group'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toggle } from '@/components/ui/toggle'
@@ -294,7 +297,10 @@ export default function Editor({ visible }: { visible: boolean }) {
     } catch { toast.error('That page could not be removed.') }
   }
 
-  const suggested = () => name.replace(/(\.pdf)?$/i, '') + '-edited.pdf'
+  /* The stem only: the box types a name, not an extension. `.pdf` is what the tab writes and the
+     only thing it can write, so it sits beside the field rather than in it — where it was one more
+     thing to type around, and deleting it changed nothing about the file that came out. */
+  const suggested = () => name.replace(/(\.pdf)?$/i, '') + '-edited'
 
   const write = async () => {
     if (!bytes || saveAs === null) return
@@ -716,6 +722,10 @@ export default function Editor({ visible }: { visible: boolean }) {
                   }))}
                   className={cn(
                     'h-full w-full resize-none overflow-hidden text-black outline-none',
+                    /* Fixed, like the ring: the sheet under a stamp is white in either theme, and
+                       the app's foreground-tinted ::selection is near-white in dark — so selecting
+                       the text highlighted it white on white and ⌘A looked like it did nothing. */
+                    'selection:bg-blue-500/30',
                     'font-[Helvetica,Arial,sans-serif]',
                     // matches what bake draws, so the page shows what the file will hold
                     note.fill ? 'bg-[#fce633]' : 'bg-transparent',
@@ -766,16 +776,21 @@ export default function Editor({ visible }: { visible: boolean }) {
               The text you added is drawn into the file as it is written.
             </DialogDescription>
           </DialogHeader>
-          <Input
-            autoFocus
-            aria-label="File name"
-            value={saveAs ?? ''}
-            // the whole name selected, the way the browser's own box opened — retyping it is the
-            // common case, and the stem is what you were going to replace
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => setSaveAs(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void write() } }}
-          />
+          <InputGroup>
+            <InputGroupInput
+              autoFocus
+              aria-label="File name"
+              value={saveAs ?? ''}
+              // the whole name selected, the way the browser's own box opened — retyping it is the
+              // common case, and the stem is what you were going to replace
+              onFocus={(e) => e.currentTarget.select()}
+              onChange={(e) => setSaveAs(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void write() } }}
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupText>.pdf</InputGroupText>
+            </InputGroupAddon>
+          </InputGroup>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSaveAs(null)}>Cancel</Button>
             <Button onClick={write}>Download</Button>
