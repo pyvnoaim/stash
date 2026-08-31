@@ -74,13 +74,20 @@ assert.deepEqual(fire(104), []) // still above the entry — nothing to say
 assert.equal(fire(100)[0].title, 'Bitcoin · Trading at entry') // touched, exactly
 assert.equal(fire(97)[0].title, 'Bitcoin · Trading at entry') // below the entry, above the stop
 assert.equal(fire(95)[0].title, 'Bitcoin · Trading setup broken') // the stop is past the entry, and outranks it
-assert.equal(fire(111)[0].title, 'Bitcoin · Trading hit target')
+/* No target alert at all. On a setup that never opened it was a knock nothing could clear — nobody
+   was in it, so watchProgress will not close it (a gold long targeting 4,361 while price sat at
+   4,462, having skipped its entry entirely) — and on one that did open, the close writes a result
+   and resultAlerts says what it paid. */
+assert.deepEqual(fire(111), [])
 // a short mirrors: entry above, stop above that, target below
 const short: Watch = { ...long, dir: 'short', entry: 100, stop: 105, target: 90 }
 assert.deepEqual(fire(96, short), []) // already run away from the entry, downward
 assert.equal(fire(101, short)[0].title, 'Bitcoin · Trading at entry')
 assert.equal(fire(106, short)[0].title, 'Bitcoin · Trading setup broken')
-assert.equal(fire(89, short)[0].title, 'Bitcoin · Trading hit target')
+assert.deepEqual(fire(89, short), []) // …and the same, the other way up
+// the stop and the liquidation are on the near side, so they still speak without an entryAt: for
+// a long, price through the stop was through the entry on the way down
+assert.equal(fire(95)[0].title, 'Bitcoin · Trading setup broken')
 // no price (feed down, or a stock with no key) says nothing rather than guessing
 assert.deepEqual(watchAlerts([long], {}), [])
 assert.deepEqual(watchAlerts([long], { BTCUSDT: NaN }), [])
@@ -105,8 +112,10 @@ assert.equal(runShort(102)[0].title, 'Bitcoin · Trading at entry')
 // the three levels still own their own ticks — openWatch fires on the same price test as the entry
 // alert, so a runner that spoke here would silence buy-now after one render
 assert.equal(run(97)[0].title, 'Bitcoin · Trading at entry')  // back in the zone, and says so
-assert.equal(run(111)[0].title, 'Bitcoin · Trading hit target')
 assert.equal(run(95)[0].title, 'Bitcoin · Trading setup broken')
+// past its target it is the running read-out for the one tick before watchProgress closes it —
+// what the target paid is the record's sentence to say, not a live level's
+assert.equal(run(111)[0].title, 'Bitcoin · Trading is up 2.20R')
 // never opened, and away from every level — still nothing to say, as before
 assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }), [])
 

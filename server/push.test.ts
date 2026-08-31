@@ -26,7 +26,13 @@ assert.deepEqual(at(long, { ETHUSDT: 100 }), [])
 // price still above the entry: nothing has happened yet
 assert.deepEqual(at(long, { BTCUSDT: 105 }), [])
 assert.equal(at(long, { BTCUSDT: 100 })[0].key, 'watch-w1-entry')
-assert.equal(at(long, { BTCUSDT: 120 })[0].key, 'watch-w1-target')
+/* No target knock, opened or not. Price at the target of a long says nothing about whether the
+   entry ever came round, and nothing closes a setup nobody was in — so a plan price ran away from
+   knocked about its target on every single pass, forever. A target reached from inside the trade
+   is the app's record to write, not a phone's to repeat. */
+const openLong = { watches: [{ ...long.watches[0], entryAt: NOON - 3600_000 }] }
+assert.deepEqual(at(long, { BTCUSDT: 120 }), [])
+assert.deepEqual(at(openLong, { BTCUSDT: 120 }), [])
 // through the stop is also past the entry, and the worst news is the one that gets said
 assert.equal(at(long, { BTCUSDT: 89 })[0].key, 'watch-w1-stop')
 assert.equal(at(long, { BTCUSDT: 100 })[0].title, 'Bitcoin · Trading at entry')
@@ -34,7 +40,8 @@ assert.equal(at(long, { BTCUSDT: 100 })[0].title, 'Bitcoin · Trading at entry')
 // a short reads every level the other way round, including which side "reached" is
 assert.deepEqual(at(short, { BTCUSDT: 95 }), [])
 assert.equal(at(short, { BTCUSDT: 100 })[0].key, 'watch-w2-entry')
-assert.equal(at(short, { BTCUSDT: 80 })[0].key, 'watch-w2-target')
+assert.deepEqual(at(short, { BTCUSDT: 80 }), [])   // …the same silence, the other way up
+assert.deepEqual(at({ watches: [{ ...short.watches[0], entryAt: NOON - 3600_000 }] }, { BTCUSDT: 80 }), [])
 assert.equal(at(short, { BTCUSDT: 111 })[0].key, 'watch-w2-stop')
 // no horizon, no separator hanging off the label
 assert.equal(at(short, { BTCUSDT: 100 })[0].title, 'Bitcoin at entry')
@@ -54,13 +61,14 @@ assert.equal(at({ watches: [{ ...short.watches[0], stop: 125, size: 50, lev: 5 }
    here noticed. The whole point of the copy is that both sides say the same thing. */
 assert.ok(at(taken, { BTCUSDT: 79 })[0].body.includes('80.5'))
 
-/* What an outcome paid, net of the round trip — the same subtraction netOf makes in the app.
-   A position states its own notional: €50 at 5× is €250 on the market, 0.05% a side twice is 25
-   cents, and the 2R target on €25-per-R pays €50 gross. */
-const held = { watches: [{ ...long.watches[0], size: 50, lev: 5 }] }
-assert.ok(at(held, { BTCUSDT: 120 })[0].body.includes('+€49.75'))
+/* What an outcome cost, net of the round trip — the same subtraction netOf makes in the app. A
+   position states its own notional: €50 at 5× is €250 on the market, the 10 between the entry and
+   the stop is €25 of it at risk, and 0.05% a side twice is 25 cents on top of the 1R it lost.
+   entryAt on the tick itself, so nothing has been held for any time and no funding muddies it. */
+const held = { watches: [{ ...long.watches[0], size: 50, lev: 5, entryAt: NOON }] }
+assert.ok(at(held, { BTCUSDT: 90 })[0].body.includes('−€25.25'))
 // a plan has no size, so there is no money on it — it says its level and nothing in euros
-assert.ok(!at(long, { BTCUSDT: 120 })[0].body.includes('€'))
+assert.ok(!at(long, { BTCUSDT: 90 })[0].body.includes('€'))
 
 /* ---------- the morning digest ---------- */
 

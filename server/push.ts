@@ -160,10 +160,13 @@ export function alertsOf(
     const liq = isFinite(bare) && bare > 0
       ? w.entry * (1 + away * (1 / lev - Math.min(MAINT, 1 / lev / 2)))
       : null
+    /* No target knock, the same as watchAlerts: the stop and the liquidation sit on the far side of
+       the entry, so a price through them was through the entry too, but the target is not — a setup
+       price ran away from was knocking about a target it had never been in a position to reach, and
+       nothing closes an unopened setup, so it knocked every pass. The app records what a target
+       really paid when the trade was in it; a phone does not need to be told twice. */
     const hit = liq !== null && reached(liq) ? 'liq'
-      : reached(w.stop) ? 'stop'
-        : (long ? p >= w.target : p <= w.target) ? 'target'
-          : reached(w.entry) ? 'entry' : null
+      : reached(w.stop) ? 'stop' : reached(w.entry) ? 'entry' : null
     if (!hit) continue
     const who = w.horizon ? `${w.label} · ${w.horizon}` : w.label
     const side = long ? 'long' : 'short'
@@ -202,10 +205,9 @@ export function alertsOf(
       : ''
     out.push({
       key: `watch-${w.id}-${hit}`,
-      title: hit === 'entry' ? `${who} at entry` : hit === 'target' ? `${who} hit target` : `${who} setup broken`,
+      title: hit === 'entry' ? `${who} at entry` : `${who} setup broken`,
       body: (hit === 'entry' ? `${fmtPrice(p)} — the ${side} entry ${fmtPrice(w.entry)} is here`
-        : hit === 'target' ? `${fmtPrice(p)} — the ${side} target ${fmtPrice(w.target)} is reached`
-          : `${fmtPrice(p)} — through the ${side} stop ${fmtPrice(w.stop)}`) + paid,
+        : `${fmtPrice(p)} — through the ${side} stop ${fmtPrice(w.stop)}`) + paid,
       target: 'market',
     })
   }

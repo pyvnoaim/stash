@@ -32,7 +32,7 @@ const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits
 export function watchAlerts(
   watches: Watch[], prices: Record<string, number>, d: Dials = DIALS, at = Date.now(),
 ): Alert[] {
-  return watches.flatMap((w) => {
+  return watches.flatMap((w): Alert[] => {
     const p = prices[w.asset]
     if (typeof p !== 'number' || !isFinite(p)) return []
     const below = w.dir === 'long' // which way price has to travel for a level to be "reached"
@@ -40,8 +40,15 @@ export function watchAlerts(
     /* Liquidation outranks even the stop: it only wins when the stop was set beyond it, and then
        the exchange ends the trade before the stop ever could — the worst news, and the true one. */
     const liq = liqOf(w)
+    /* No target here. It is the only level on the far side of the entry: for a long the stop and
+       the liquidation sit below it, so a price through them was through the entry on the way, while
+       a price at the target says nothing about whether the fill ever came. A gold long targeting
+       4,361 that ran away upward without touching its entry said "hit target" at 4,462 on every
+       poll, forever — watchProgress rightly will not close a trade nobody was in, so nothing took
+       it off the list. And a target that *was* reached from inside the trade is already spoken for:
+       watchProgress closes it that tick and resultAlerts says what it paid, in R and in money. */
     const hit = liq !== null && reached(liq) ? 'liq'
-      : reached(w.stop) ? 'stop' : (below ? p >= w.target : p <= w.target) ? 'target' : reached(w.entry) ? 'entry' : null
+      : reached(w.stop) ? 'stop' : reached(w.entry) ? 'entry' : null
     const side = w.dir === 'long' ? 'Long' : 'Short'
     // the horizon is in the title: two setups on one asset can fire at once, and "which chart is
     // this?" is the first thing you'd ask of an alert that just said the coin's name
@@ -50,11 +57,12 @@ export function watchAlerts(
        to say nothing at all, and it is the only one it may speak for: openWatch fires on the same
        price test as the entry alert, on the same tick, so a runner that also outranked 'entry'
        would replace the most actionable alert here after a single render — buy-now silenced by an
-       ambient read-out. A stop or a target still ends it, because a setup that is over is not
-       running. Price back in the entry zone is still the entry zone, and reads as it always did.
-       Which leaves only the gap between the entry and the target — so this alert is always in
-       profit, and there is no losing case to write. A trade going the other way is either back at
-       its entry or through its stop, and both of those already have the word for it. */
+       ambient read-out. A stop still ends it, because a setup that is over is not running. Price
+       back in the entry zone is still the entry zone, and reads as it always did. Which leaves
+       everything past the entry on the winning side — so this alert is always in profit, and there
+       is no losing case to write. A trade going the other way is either back at its entry or
+       through its stop, and both of those already have the word for it. Past the target it is
+       the read-out for one tick, until watchProgress closes it into the record. */
     if (w.entryAt && !hit) {
       // funding comes off the running read-out — the number on a held perp is net of what holding costs
       const money = netOf(w, rOf(w, p), d, at)
@@ -86,7 +94,6 @@ export function watchAlerts(
     }
     const a = {
       entry: { title: `${who} at entry`, detail: `${price(p)} — the ${side.toLowerCase()} entry ${price(w.entry)} is here`, tone: 'due' as const },
-      target: { title: `${who} hit target`, detail: `${price(p)} — ${side} target ${price(w.target)} reached`, tone: 'info' as const },
       stop: { title: `${who} setup broken`, detail: `${price(p)} — through the ${side.toLowerCase()} stop ${price(w.stop)}`, tone: 'warn' as const },
     }[hit]
     // the level is in the id, so dismissing "at entry" doesn't also silence the stop that follows
