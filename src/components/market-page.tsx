@@ -676,7 +676,9 @@ export default function MarketPage() {
   const hc = hover != null ? vis[hover] : null
 
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col overflow-y-auto lg:overflow-hidden">
+    {/* The desk owns its scrolling on a wide window — each pane scrolls inside the grid — so the
+        page must not. The record is a page of cards and scrolls like one, whatever the width. */}
+    <div className={cn('flex min-h-0 w-full flex-1 flex-col overflow-y-auto', screen === 'desk' && 'lg:overflow-hidden')}>
       {screen === 'desk' ? (
         /* Three panes where there is width: the watchlist, the chart, and what you would do about
            it. One column where there is not, in the same order, with the page doing the scrolling
