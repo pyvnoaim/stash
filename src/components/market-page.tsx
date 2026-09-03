@@ -1202,14 +1202,17 @@ export default function MarketPage() {
                   {/* A pair, tinted the way up and down are everywhere else on this page: a solid
                       white Long beside a dark red Short read as one button and one warning. */}
                   <div className="grid grid-cols-2 gap-2">
-                    {/* every state spelled out, because the outline variant brings its own dark fill and
-                        its own hover ink, and either one wins over a tint that only says half */}
-                    {([['long', 'Long', TrendingUp,
-                      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 hover:text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20 dark:hover:text-emerald-400'],
-                      ['short', 'Short', TrendingDown,
-                      'border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive dark:bg-destructive/10 dark:hover:bg-destructive/20 dark:hover:text-destructive']] as const)
-                      .map(([sd, label, Icon, cls]) => (
-                        <Button key={sd} size="sm" variant="outline" className={cn('h-9', cls)}
+                    {/* In the candle pair's own colours, not a fixed green and red: whoever picked Ice
+                        or Mono did so because green and red are two colours their eyes do not tell
+                        apart, and a Long button they cannot tell from Short is the worst place to
+                        forget that. The tone rides in a variable so the hover can deepen it in CSS.
+                        Every state spelled out, because the outline variant brings its own dark fill
+                        and its own hover ink, and either one wins over a tint that only says half. */}
+                    {([['long', 'Long', TrendingUp, hue.up], ['short', 'Short', TrendingDown, hue.down]] as const)
+                      .map(([sd, label, Icon, tone]) => (
+                        <Button key={sd} size="sm" variant="outline"
+                          style={{ '--tone': tone } as React.CSSProperties}
+                          className="h-9 border-[color-mix(in_oklab,var(--tone)_35%,transparent)] bg-[color-mix(in_oklab,var(--tone)_12%,transparent)] text-(--tone) hover:bg-[color-mix(in_oklab,var(--tone)_22%,transparent)] hover:text-(--tone) dark:bg-[color-mix(in_oklab,var(--tone)_12%,transparent)] dark:hover:bg-[color-mix(in_oklab,var(--tone)_22%,transparent)] dark:hover:text-(--tone)"
                           onClick={() => setTrading(bracket(sd))}>
                           <Icon /> {label} {coin}
                         </Button>
