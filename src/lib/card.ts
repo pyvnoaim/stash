@@ -61,8 +61,16 @@ const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] 
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
 const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-/** The card, as SVG. Pure string in, pure string out — which is what makes it testable. */
-export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null): string {
+/**
+ * The card, as SVG. Pure string in, pure string out — which is what makes it testable.
+ *
+ * `bg` is the media behind it: the data URI of a picture to bake in, `''` for one drawn under this
+ * SVG at export time — a video frame, which cannot be a string — and null for no media at all,
+ * which is when the card falls back to its own gradient. Empty and null are deliberately not the
+ * same: both draw no picture here, but only one of them expects something underneath and so keeps
+ * the scrim that makes white text readable over it.
+ */
+export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null): string {
   const name = p.symbol
   /* The money is the headline and the price move is the note under it, which is the way round a
      leveraged trade is actually read. A percent here has always been the move in the price, not
@@ -80,43 +88,70 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
   const ink = p.pnl == null && p.pct == null ? '#a1a1aa' : up ? '#34d399' : '#f87171'
   // its own sign, not the headline's, for exactly that disagreement
   const pct = p.pct == null ? '—' : `${p.pct >= 0 ? '+' : ''}${p.pct.toFixed(2)}%`
+  const head = headline ?? pct
   /* Money is longer than a percent — "−$123,456.78" is twelve characters where "+12.33%" was
-     seven — and at 156px the twelfth one walks off a 1200-wide card. Digits in this stack run
-     about 0.6em, so shrink until the line fits the 1040 between the margin and the right edge,
-     and never past the size the card was drawn at. */
-  const size = (s: string) => Math.min(156, Math.floor(1040 / (s.length * 0.6)))
-  // the line under the headline: everything a reader needs to place the trade, in one sentence
-  const facts = [
-    `Entry ${num(p.entry)}`,
-    p.mark != null && `${p.closedAt ? 'Exit' : 'Now'} ${num(p.mark)}`,
-    r != null && `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`,
-    p.openedAt && `Opened ${new Date(p.openedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
-    p.closedAt && `Closed ${new Date(p.closedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
-  ].filter(Boolean).join('   ·   ')
+     seven — so the headline shrinks until its block fits the left column rather than running out
+     over the picture. Digits in this stack run about 0.6em; 520 leaves the chip's own padding
+     inside the column, and 76 is the size the card was drawn at. */
+  const fs = Math.min(76, Math.floor(520 / (head.length * 0.6)))
+  // the block behind it, sized to the line it holds. The one loud thing on the card.
+  const chip = Math.round(head.length * fs * 0.6) + 56
+  /* The trade in a column of label-and-figure, which is how the reading eye actually takes numbers
+     — not as a sentence with middots in it. The move is a row rather than the note under the
+     headline because the headline is money: a percent said twice is a card arguing with itself,
+     so it only appears here when the money took the top line. */
+  /* When it ran, as one of these rows rather than as a line of its own along the bottom. It was
+     along the bottom, right-anchored, sharing a baseline with the byline — and a name may be
+     thirty-two characters, so any name past about nine ran straight through the dates. Nothing
+     down there now but the signature, which is all a signature ever wanted.
+     A trade that opened and closed inside one day prints that day once: "3 Sep → 3 Sep" is the
+     same date twice and says nothing the single one does not. Same rule the record's own column
+     follows. */
+  const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  const ran = !p.openedAt || !p.closedAt || day(p.openedAt) === day(p.closedAt)
+    ? [p.closedAt ? 'Closed' : 'Opened', day((p.closedAt ?? p.openedAt)!)]
+    : ['Ran', `${day(p.openedAt)} → ${day(p.closedAt)}`]
+  const rows = [
+    p.pnl != null && p.pct != null && ['Move', pct, ink],
+    r != null && ['Risk', `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`, '#fafafa'],
+    ['Entry', num(p.entry), '#fafafa'],
+    p.mark != null && [p.closedAt ? 'Exit' : 'Now', num(p.mark), '#fafafa'],
+    (p.openedAt || p.closedAt) && [ran[0], ran[1], '#a1a1aa'],
+  ].filter(Boolean) as [string, string, string][]
   const t = (x: number, y: number, size: number, fill: string, weight: number, text: string, extra = '') =>
     `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-weight="${weight}"${extra}>${esc(text)}</text>`
-  /* Whose trade it is, top right — across from the asset, above the wordmark, so the two things a
-     stranger reads first (what it is, who did it) sit on the same line and the brand stays out of
-     the way at the bottom. Signed out, the row simply isn't there; the card has always worked
-     without an account and still does.
+  /* Whose trade it is, bottom left under the numbers: a byline signs the thing it is under. It was
+     across from the asset at the top, which put the two loudest lines on one baseline and left the
+     bottom of the card empty — and with a picture behind the card that empty bottom is where the
+     picture is least covered, so the text belongs there. Signed out, the row simply isn't there;
+     the card has always worked without an account and still does.
      The picture is optional and the name is not: a name is the part that makes it yours, and an
      account with no picture chosen should not get a placeholder letter next to a word that is
      already spelled out. Rounded square rather than a circle, the same shape the Avatar in the app
      wears, scaled up. */
   const pic = who?.avatar && AVATAR.test(who.avatar) ? who.avatar : null
+  /* A name is allowed thirty-two characters and this one is set in 30px, which is wider than the
+     column it signs. Cut to what fits rather than let it run out over the picture — the same
+     rule the headline follows, and the only place on the card where text is somebody else's
+     length to choose. */
+  const signed = who && (who.name.length > 25 ? who.name.slice(0, 24) + '…' : who.name)
   const byline = !who ? '' : `${pic ? `
-<clipPath id="pfp"><rect x="1048" y="84" width="72" height="72" rx="14"/></clipPath>
-<image href="${pic}" x="1048" y="84" width="72" height="72" preserveAspectRatio="xMidYMid slice" clip-path="url(#pfp)"/>
-<rect x="1048" y="84" width="72" height="72" rx="14" fill="none" stroke="#27272a" stroke-width="2"/>` : ''}
-${t(pic ? 1028 : 1120, 132, 30, '#a1a1aa', 500, who.name, ' text-anchor="end"')}`
-  /* The ground the numbers stand on. It was one flat rectangle, which read as a screenshot of a
-     terminal rather than as a card anybody would post: three cheap SVG primitives fix that and cost
-     nothing to draw. A vertical wash so the top is not the same black as the bottom; the trade's own
-     colour bloomed behind the headline, which is what makes a green card feel green before a word
-     of it is read; and a hairline grid at 4% white, because this is a chart's result and a chart is
-     what it should look like. Every one of them takes its colour from `ink`, so a losing card
-     carries no trace of the winning one. */
-  const dressing = `<defs>
+<clipPath id="pfp"><rect x="80" y="556" width="56" height="56" rx="12"/></clipPath>
+<image href="${pic}" x="80" y="556" width="56" height="56" preserveAspectRatio="xMidYMid slice" clip-path="url(#pfp)"/>
+<rect x="80" y="556" width="56" height="56" rx="12" fill="none" stroke="#ffffff" stroke-opacity="0.2" stroke-width="2"/>` : ''}
+${t(pic ? 152 : 80, 598, 30, '#fafafa', 600, signed!)}`
+  /* The ground the numbers stand on, when nothing was chosen to stand them on. It was one flat
+     rectangle, which read as a screenshot of a terminal rather than as a card anybody would post:
+     three cheap SVG primitives fix that and cost nothing to draw. A vertical wash so the top is not
+     the same black as the bottom; the trade's own colour bloomed behind the headline; and a
+     hairline grid at 4% white, because this is a chart's result and a chart is what it should look
+     like. Every one of them takes its colour from `ink`, so a losing card carries no trace of the
+     winning one.
+
+     With a picture behind it, all of that comes off and a scrim goes on instead: a wash dark at the
+     left where every word is and clear at the right where the picture is worth seeing. White text
+     straight onto somebody's photograph is text you cannot read on half the photographs. */
+  const dressing = bg === null ? `<defs>
 <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
 <stop offset="0" stop-color="#101014"/><stop offset="1" stop-color="#08080a"/>
 </linearGradient>
@@ -134,16 +169,67 @@ ${t(pic ? 1028 : 1120, 132, 30, '#a1a1aa', 500, who.name, ' text-anchor="end"')}
 <rect width="1200" height="630" fill="url(#bg)"/>
 <rect width="1200" height="630" fill="url(#grid)"/>
 <rect width="1200" height="630" fill="url(#bloom)"/>
-<rect x="0" y="0" width="1200" height="6" fill="url(#edge)"/>`
+<rect x="0" y="0" width="1200" height="6" fill="url(#edge)"/>` : `<defs>
+<linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0" stop-color="#000000" stop-opacity="0.86"/>
+<stop offset="0.5" stop-color="#000000" stop-opacity="0.5"/>
+<stop offset="1" stop-color="#000000" stop-opacity="0.12"/>
+</linearGradient>
+</defs>${bg && AVATAR.test(bg) ? `
+<image href="${bg}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice"/>` : ''}
+<rect width="1200" height="630" fill="url(#scrim)"/>
+<rect x="0" y="0" width="1200" height="6" fill="${ink}"/>`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
 ${dressing}
-${t(80, 140, 68, '#fafafa', 600, name)}${byline}
-${t(80, 190, 28, '#a1a1aa', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null].filter(Boolean).join('   ·   '))}
-${t(80, 400, size(headline ?? pct), ink, 700, headline ?? pct)}
-${t(80, 462, 34, '#fafafa', 500, `${headline == null ? '' : pct + ' in the price · '}${p.closedAt ? 'realised' : 'unrealised'}`)}
-${t(80, 560, 26, '#71717a', 400, facts)}
-${t(1120, 560, 28, '#52525b', 600, 'stash', ' text-anchor="end"')}
+${t(1120, 118, 30, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
+${t(80, 176, 60, '#fafafa', 700, name)}
+${t(80, 220, 26, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
+<rect x="76" y="244" width="${chip}" height="96" rx="14" fill="${ink}"/>
+${t(104, 312, fs, '#0a0a0a', 800, head)}
+${rows.map(([label, value, fill], i) => `${t(80, 384 + i * 40, 27, '#d4d4d8', 400, label)}
+${t(580, 384 + i * 40, 27, fill, 600, value, ' text-anchor="end"')}`).join('\n')}
+${byline}
 </svg>`
+}
+
+/** Cover-crop whatever was handed over onto the card's own 1200×630, the way every background on
+ *  one of these is fitted — a picture, a video frame, and each recorded frame of a video. */
+const cover = (c: CanvasRenderingContext2D, src: CanvasImageSource, w: number, h: number) => {
+  const s = Math.max(1200 / w, 630 / h)
+  c.drawImage(src, (1200 - w * s) / 2, (630 - h * s) / 2, w * s, h * s)
+}
+
+/**
+ * A picture chosen for the back of a card, as a data URI the SVG can carry.
+ *
+ * Re-encoded rather than passed through: a phone photograph is several megabytes of pixels nobody
+ * will ever see at this size, and it has to travel *inside* the SVG — an <img> pointed at one loads
+ * nothing external, so a linked picture would render as a hole. Cropped here as well, so what the
+ * preview shows and what the PNG holds are cropped by the same arithmetic.
+ *
+ * Decoded from the file itself rather than through an <img>: that wants a blob: URL, and the page
+ * is served under `img-src 'self' data:`. Orientation from the file, or every phone photo lies down.
+ */
+export async function cardImage(file: File): Promise<string> {
+  const img = await createImageBitmap(file, { imageOrientation: 'from-image' })
+  const c = document.createElement('canvas')
+  c.width = 1200
+  c.height = 630
+  cover(c.getContext('2d')!, img, img.width, img.height)
+  img.close()
+  return c.toDataURL('image/jpeg', 0.82)
+}
+
+/** The frame a video is showing right now, as that same data URI — which is what makes the still
+ *  card work for a video background too, rather than the two verbs going dark the moment one is
+ *  chosen. Null before there are dimensions to crop against. */
+export function cardFrame(v: HTMLVideoElement): string | null {
+  if (!v.videoWidth || !v.videoHeight) return null
+  const c = document.createElement('canvas')
+  c.width = 1200
+  c.height = 630
+  cover(c.getContext('2d')!, v, v.videoWidth, v.videoHeight)
+  return c.toDataURL('image/jpeg', 0.82)
 }
 
 /**
@@ -160,33 +246,155 @@ ${t(1120, 560, 28, '#52525b', 600, 'stash', ' text-anchor="end"')}
 /** The card as PNG bytes, and the filename it should carry. Split out of shareCard so the row can
  *  offer the two things a person actually wants — save it, or put it on the clipboard — rather than
  *  one button that guesses which. */
-export async function cardBlob(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<{ blob: Blob; name: string }> {
-  const svg = cardSvg(p, r, who)
-  const img = new Image()
-  // data:, not a blob: URL — the page is served under `img-src 'self' data:`
-  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
-  await img.decode()
+export async function cardBlob(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null): Promise<{ blob: Blob; name: string }> {
+  const img = await svgImage(cardSvg(p, r, who, bg))
   const c = document.createElement('canvas')
   c.width = 1200
   c.height = 630
   c.getContext('2d')!.drawImage(img, 0, 0)
   const blob = await new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('no card'))), 'image/png'))
-  // the symbol is the exchange's word, not ours: anything that is not a filename comes out
-  const name = (p.symbol.replace(/[^\w.-]/g, '') || 'position') + '.png'
-  return { blob, name }
+  return { blob, name: fileName(p) + '.png' }
 }
 
+/** The card as something a canvas will draw. Its own function because the video path needs the very
+ *  same picture, decoded once and then stamped over every frame. */
+async function svgImage(svg: string): Promise<HTMLImageElement> {
+  const img = new Image()
+  // data:, not a blob: URL — the page is served under `img-src 'self' data:`
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+  await img.decode()
+  return img
+}
+
+// the symbol is the exchange's word, not ours: anything that is not a filename comes out
+const fileName = (p: CardPosition) => p.symbol.replace(/[^\w.-]/g, '') || 'position'
+
 /** Straight to the download folder, no share sheet asked. */
-export async function downloadCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<void> {
-  const { blob, name } = await cardBlob(p, r, who)
+export async function downloadCard(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null): Promise<void> {
+  const { blob, name } = await cardBlob(p, r, who, bg)
   save(blob, name)
 }
 
 /** Onto the clipboard as an image, for pasting into whatever is open. Throws where the browser has
  *  no clipboard for pictures, which the caller turns into a sentence rather than a silent nothing. */
-export async function copyCard(p: CardPosition, r: number | null = null, who: CardWho | null = null): Promise<void> {
-  const { blob } = await cardBlob(p, r, who)
+export async function copyCard(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null): Promise<void> {
+  const { blob } = await cardBlob(p, r, who, bg)
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+}
+
+/** The longest clip one of these will carry. A card is a glance, and the recorder runs in real
+ *  time — a two-minute upload is two minutes of a progress bar for something nobody watches to the
+ *  end. Past this the clip is simply cut short, which is the honest thing to do to a video that
+ *  was only ever going to be a backdrop. */
+export const CARD_SECONDS = 20
+
+/* mp4 first: it is the one container every phone, every chat app and X itself will play, and Safari
+   records nothing else. WebM is the fallback for the browsers that record nothing but. An empty
+   list means this browser has no recorder at all, which the caller says out loud rather than
+   failing silently on a press. */
+const FORMATS = [
+  'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4',
+  'video/webm;codecs=vp9,opus',
+  'video/webm',
+]
+export const canRecord = () => typeof MediaRecorder !== 'undefined'
+  && FORMATS.some((f) => MediaRecorder.isTypeSupported(f))
+
+/**
+ * The card over a moving background, with the clip's own sound, as a file.
+ *
+ * Real time and no way around it: MediaRecorder records a canvas as fast as the wall clock, so a
+ * ten-second clip takes ten seconds. `onTick` is how the caller says so rather than freezing under
+ * a spinner.
+ *
+ * The sound goes through WebAudio rather than the speakers. A media element that is muted captures
+ * a silent track, so the obvious way to keep quiet — mute it — is the one way to lose the audio
+ * the person picked the clip for; routing it into a stream destination and nowhere else records it
+ * without playing it at whoever pressed the button.
+ *
+ * The overlay is decoded once and stamped over every frame, so what the video says is the same
+ * picture the still card says, down to the pixel.
+ */
+export async function recordCard(
+  p: CardPosition, r: number | null, who: CardWho | null, src: string,
+  onTick?: (done: number, total: number) => void,
+): Promise<{ blob: Blob; name: string }> {
+  const type = FORMATS.find((f) => MediaRecorder.isTypeSupported(f))
+  if (!type) throw new Error('no recorder')
+  const v = document.createElement('video')
+  v.src = src
+  v.playsInline = true
+  v.preload = 'auto'
+  await new Promise<void>((res, rej) => {
+    v.onloadedmetadata = () => res()
+    v.onerror = () => rej(new Error('no video'))
+  })
+  const overlay = await svgImage(cardSvg(p, r, who, ''))
+  const c = document.createElement('canvas')
+  c.width = 1200
+  c.height = 630
+  const ctx = c.getContext('2d')!
+  const stream = c.captureStream(30)
+  /* A clip with no audio, or a browser that will not wire one up, still records its picture — the
+     card is the point and the sound is what the clip brought with it. */
+  let audio: AudioContext | null = null
+  try {
+    audio = new AudioContext()
+    await audio.resume()
+    const out = audio.createMediaStreamDestination()
+    audio.createMediaElementSource(v).connect(out)
+    for (const track of out.stream.getAudioTracks()) stream.addTrack(track)
+  } catch { audio = null }
+
+  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6_000_000 })
+  const parts: Blob[] = []
+  rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data) }
+  const stopped = new Promise<void>((res) => { rec.onstop = () => res() })
+
+  const total = Math.min(v.duration || CARD_SECONDS, CARD_SECONDS)
+  let frame = 0
+  /* Whole seconds only. The caller puts this on a button, and a button is React state — told sixty
+     times a second it re-renders sixty times a second, for a figure that changes once. */
+  let said = -1
+  const draw = () => {
+    cover(ctx, v, v.videoWidth, v.videoHeight)
+    ctx.drawImage(overlay, 0, 0)
+    const at = Math.floor(Math.min(v.currentTime, total))
+    if (at !== said) onTick?.((said = at), total)
+    frame = requestAnimationFrame(draw)
+  }
+  const stop = () => { if (rec.state !== 'inactive') rec.stop() }
+  v.onended = stop
+  let cap: ReturnType<typeof setTimeout> | undefined
+  try {
+    await v.play()
+    rec.start()
+    // the cut-off, and the reason a clip that stalls mid-play still ends up as a file. Started
+    // here rather than above it, or however long the first frame took comes off the recording.
+    cap = setTimeout(stop, total * 1000 + 500)
+    frame = requestAnimationFrame(draw)
+    await stopped
+  } finally {
+    clearTimeout(cap)
+    cancelAnimationFrame(frame)
+    v.pause()
+    void audio?.close()
+  }
+  /* A recorder that produced nothing produces a file that plays nothing, and a zero-byte download
+     is worse than a sentence saying it did not work. A clip with no duration is how you get here. */
+  const blob = new Blob(parts, { type })
+  if (!blob.size) throw new Error('nothing recorded')
+  return { blob, name: `${fileName(p)}.${type.includes('mp4') ? 'mp4' : 'webm'}` }
+}
+
+/** The clip to the download folder, the same way the picture goes. */
+export async function downloadClip(
+  p: CardPosition, r: number | null, who: CardWho | null, src: string,
+  onTick?: (done: number, total: number) => void,
+): Promise<void> {
+  const { blob, name } = await recordCard(p, r, who, src, onTick)
+  save(blob, name)
 }
 
 function save(blob: Blob, name: string) {

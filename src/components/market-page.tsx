@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { CloudOff, Copy, Download, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
+import { CloudOff, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -16,8 +16,7 @@ import { Avatar } from '@/components/settings-dialog'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { copyCard, downloadCard } from '@/lib/card'
+import { CardDialog } from '@/components/card-dialog'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import { candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash, type Result } from '@/lib/store'
@@ -2542,7 +2541,10 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             The tooltip says "lane", never "rule": the lanes keyed on a horizon, or on nothing at
             all, are the rows saved before the rules had names of their own, and calling those a
             rule is the exact claim the grouping above refuses to make. */}
-        <div className="mb-2 flex flex-wrap gap-1.5 text-xs">
+        {/* Only where there is something to compare. One lane is the whole record under a second
+            name — "32 trades 44% hit" is the two figures already read directly above it, printed
+            again as a chip that looks like a breakdown and breaks nothing down. */}
+        {lanes.length > 1 && <div className="mb-2 flex flex-wrap gap-1.5 text-xs">
           {lanes.map((l) => (
             <Hint key={l.name} label={`${l.n} finished trade${l.n === 1 ? '' : 's'} in this lane${
               l.name === '—' ? ', which are the ones saved before the rules had names of their own' : ''
@@ -2557,7 +2559,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
               </span>
             </Hint>
           ))}
-        </div>
+        </div>}
         {/* what each column is, once, instead of the eye working it out from the first row */}
         <div className={LOG_SCROLL}>
         <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
@@ -2594,36 +2596,25 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
                   {hit ? 'target' : 'stopped'}
                 </span>
                 <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+                {/* coloured by the figure printed beside it, not by the R behind it: a row this app
+                    prices itself prints cash net of the fee at both ends and the funding to the
+                    close, and a thin winner eaten by those settles negative on a positive R. Green
+                    over a minus sign is the cell disagreeing with itself. */}
                 <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
-                  (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  (r.cash ?? cashOf(r) ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                   {paid(r)}
                 </span>
               </div>
               {/* The one thing on this desk anyone shows anyone else, and only ever from here: a
-                  finished trade is the only one with a result to show. Two verbs rather than one
-                  button that guesses: the share sheet only exists on a phone, and on a desktop the
-                  same press quietly became a download, which is not what it said it would do. */}
-                <DropdownMenu>
-                  <Hint label="Share">
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
-                        className="text-muted-foreground hover:text-foreground shrink-0">
-                        <Share2 className="size-3.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                  </Hint>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => void downloadCard(cardOf(r), r.r, user)
-                      .catch(() => toast('No card', { description: 'The picture could not be drawn on this browser.' }))}>
-                      <Download className="size-3.5" /> Download
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => void copyCard(cardOf(r), r.r, user)
-                      .then(() => toast('Card copied', { description: 'On the clipboard as a picture.' }))
-                      .catch(() => toast('Not copied', { description: 'This browser will not put a picture on the clipboard — download it instead.' }))}>
-                      <Copy className="size-3.5" /> Copy
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                  finished trade is the only one with a result to show. A window rather than a menu
+                  of two verbs, because a card now has a background someone chose and a background
+                  is a thing you have to see before you agree to it. */}
+                <CardDialog p={cardOf(r)} r={r.r} who={user}>
+                  <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
+                    className="text-muted-foreground hover:text-foreground shrink-0">
+                    <Share2 className="size-3.5" />
+                  </Button>
+                </CardDialog>
               </div>
             </div>
           )

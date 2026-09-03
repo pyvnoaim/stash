@@ -2133,6 +2133,10 @@ export function start({
         ...(ext === 'html' && {
           'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
             + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            // blob: is the clip somebody puts behind a share card — a file they picked off their
+            // own device, played back to them and recorded. Nothing here fetches media over the
+            // network, so no host is named.
+            + "media-src 'self' blob:; "
             // MEXC is absent on purpose: its contract API sends no allow-origin header, so those
             // bars come through this server's own relay and ride 'self'.
             // GeckoTerminal came off with the Trending panel: no browser code reaches it any more
