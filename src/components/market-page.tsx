@@ -1217,7 +1217,7 @@ export default function MarketPage() {
                   </div>
                   {/* the four numbers the order rides on, each with its name over it — a sentence
                       of them wrapped mid-figure and read as one long grey line */}
-                  <Hint label="One ATR out and two ATR up from the price, so the order goes on the book with a stop and a take-profit riding it. The size is what the dialog will open with — a fifth of what is free, at a multiplier the stop can afford — and nothing is placed until a second press there.">
+                  <Hint label="Stop one ATR out, target two ATR up. Nothing is placed until the dialog's second press.">
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs tabular-nums sm:grid-cols-4 lg:grid-cols-2">
                       <div><dt className="text-muted-foreground">Stop</dt><dd>{fmt(view.atr)} away</dd></div>
                       <div><dt className="text-muted-foreground">Target</dt><dd>{fmt(view.atr * 2)} away</dd></div>
