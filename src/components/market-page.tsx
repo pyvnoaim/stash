@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { CloudOff, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
+import { ChevronRight, CloudOff, Loader2, Minus, RefreshCw, Share2, TrendingDown, TrendingUp, Waypoints } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -2689,10 +2689,15 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
+      {/* Outlined, with the arrow that says a window is behind it. As a ghost button it was grey
+          text on a line of grey text — the same size, the same colour, no edge — and the one thing
+          on this pane that opens somebody's trades read as a caption nobody would think to press.
+          The border is the whole affordance: it costs a hairline and says "control". */}
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm"
-          className="text-muted-foreground hover:text-foreground -my-1 h-6 px-1.5 text-xs tabular-nums">
+        <Button variant="outline" size="sm" aria-label={`Open ${p.name}'s log`}
+          className="text-muted-foreground hover:text-foreground -my-1 h-6 gap-1 px-2 text-xs tabular-nums">
           {rows.length} finished · {Math.round((won / rows.length) * 100)}% hit
+          <ChevronRight className="size-3" />
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
