@@ -840,5 +840,26 @@ export function startSync() {
     // and the same beat puts the stream back if it was refused rather than merely dropped
     join()
   }, 5 * 60_000))
+  /* Offline has to be able to end on its own.
+     `retry` reschedules for a signed-in user and nobody else, and the backstop above sits `off`
+     out entirely, so the only ways back were a focus, an `online` event or a tab switch. None of
+     those is the event that actually happened: the network never went anywhere, the *server* did
+     — a deploy restarting it, a proxy blinking — and a window that already has focus fires none
+     of the three. The app sat on "No connection — working locally" against a server that had been
+     answering for an hour, and every version check said it could not reach it.
+     Its own beat rather than the one above, because that one is for a tab that is up to date and
+     this is for a tab that cannot ask anything at all. Backed off to the same five-minute ceiling
+     so a machine with no server behind the origin — a plain static host, someone's local copy —
+     settles into one request every five minutes rather than one every thirty seconds forever. */
+  let asking = RETRY_MIN
+  const askAgain = () => loose(setTimeout(async () => {
+    if (snap.status === 'off' && !document.hidden) {
+      await me()
+      // answered: the next outage starts its own count from the bottom again
+      asking = snap.status === 'off' ? Math.min(asking * 2, RETRY_MAX) : RETRY_MIN
+    }
+    askAgain()
+  }, asking))
+  askAgain()
   void me()
 }
