@@ -4,6 +4,10 @@ import {
   TrendingDown, TrendingUp, Waypoints,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -2696,17 +2700,39 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
           {/* cards or rows: the same trades, drawn or listed */}
           <ModeTray mode={mode} onChange={setMode} />
           <RecapButton all={all} who={user} />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground h-7"
-            onClick={() => {
-              const gone = clearResults()
-              if (gone) toast(`Cleared ${gone.n}`, { action: { label: 'Undo', onClick: gone.undo } })
-            }}
-          >
-            Clear
-          </Button>
+          {/* Asked first, not offered back afterwards. It emptied the whole record on one press and
+              put an Undo in a toast — which is a few seconds of grace over a year of settled trades,
+              on an edit that has already synced to your other devices by the time the toast fades.
+              The undo stays, because a confirmed thing can still be a misread one. */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="ghost" size="sm" className="text-muted-foreground h-7">Clear</Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Clear {all.length === 1 ? 'the one finished trade' : `all ${all.length} finished trades`}?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  The whole record goes, on every device you are signed in on — what each trade paid,
+                  its R, and the hit rate built out of them. Nothing here is read back from an
+                  exchange, so a trade a venue has already settled does not come back on its own.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Keep them</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-white hover:bg-destructive/90"
+                  onClick={() => {
+                    const gone = clearResults()
+                    if (gone) toast(`Cleared ${gone.n}`, { action: { label: 'Undo', onClick: gone.undo } })
+                  }}
+                >
+                  Clear the record
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         {/* Two of these are money in two currencies that are deliberately never added together,
