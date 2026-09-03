@@ -520,21 +520,19 @@ export default function Overview({ onNavigate, onOpen }: {
         {s.subs.length > 0 && (
           <Panel title="Money" className="lg:col-start-2 lg:row-start-1 lg:row-span-2"
             action={{ label: 'Subscriptions', onClick: () => onNavigate(SUBS) }}>
-            {/* the net is the headline and the two it is made of are the note under it: three equal
-                tiles made a reader do the subtraction the page had already done */}
-            <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
-              <div>
-                <p className={cn('text-2xl tabular-nums', money.net >= 0 ? MONEY_IN : 'text-destructive')}>{euro(money.net)}</p>
-                <p className="text-muted-foreground text-xs">net a month</p>
-              </div>
-              <div>
-                <p className={cn('tabular-nums', MONEY_IN)}>{euro(money.income)}</p>
-                <p className="text-muted-foreground text-xs">in</p>
-              </div>
-              <div>
-                <p className="tabular-nums">{euro(money.expense)}</p>
-                <p className="text-muted-foreground text-xs">out</p>
-              </div>
+            {/* three figures at one size, each with its name under it: the net led at twice the
+                size of the two it is made of, and the three no longer read as one row */}
+            <div className="flex flex-wrap gap-x-6 gap-y-1">
+              {([
+                [euro(money.net), 'net a month', money.net >= 0 ? MONEY_IN : 'text-destructive'],
+                [euro(money.income), 'in', MONEY_IN],
+                [euro(money.expense), 'out', ''],
+              ] as const).map(([v, l, c]) => (
+                <div key={l}>
+                  <p className={cn('text-xl tabular-nums', c)}>{v}</p>
+                  <p className="text-muted-foreground text-xs">{l}</p>
+                </div>
+              ))}
             </div>
             {money.bills.length > 0 && (
               <div className="flex flex-col">
