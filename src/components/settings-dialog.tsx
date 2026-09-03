@@ -350,8 +350,20 @@ function AboutPanel() {
             setChecking(true)
             const found = await checkUpdate()
             setChecking(false)
-            // the prompt raises itself when there is one; silence here means there is not
-            if (!found) toast('This is the newest build')
+            /* The prompt raises itself when a worker is waiting, so that case says nothing here.
+               The rest are said apart: a server on another build is a deploy this tab has not
+               picked up, and no answer at all is not the same as nothing to find. */
+            if (found.state === 'behind') {
+              toast(`The server is on ${found.served}`, {
+                description: 'This tab is still on ' + __BUILD__ + '.',
+                action: { label: 'Reload', onClick: () => location.reload() },
+              })
+            } else if (found.state === 'current') {
+              toast('This is the newest build')
+            } else if (found.state === 'unknown') {
+              // offline, or a server old enough not to say which build it is serving
+              toast('Could not check', { description: 'The server did not say which build it is serving.' })
+            }
           }}
         >
           <RefreshCw /> {checking ? 'Looking…' : 'Check now'}

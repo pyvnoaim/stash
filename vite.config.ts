@@ -18,6 +18,18 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    /* The version the server is serving, as a file rather than only as a constant baked into the
+       bundle. `__BUILD__` says which build is *running*; nothing on the page could say which one
+       is being served, so "Check now" could only ask the service worker whether it had found a new
+       worker — and answered "this is the newest build" to that, to being offline, and to a deploy
+       that never rebuilt, all alike. Not precached: the worker's globPatterns list no json, so this
+       is always a real request or a failed one, which are the two honest answers. */
+    {
+      name: 'stash-version',
+      generateBundle() {
+        this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: pkg.version }) })
+      },
+    },
     // the offline half: precache the whole bundle so the app opens with no network at all
     VitePWA({
       /* Not autoUpdate: it forces skipWaiting, so a new build replaces the running one under an
