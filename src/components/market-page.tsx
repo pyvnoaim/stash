@@ -2489,8 +2489,10 @@ function TradeCard({ r, who, paid, good, onPick }: {
           <img src={src} alt="" className="block aspect-[1200/630] w-full" />
         </button>
       </CardDialog>
-      <div className="text-muted-foreground flex items-baseline gap-2 px-0.5 text-xs">
-        <TradeName name={r.label} asset={r.asset} onPick={onPick} className="text-foreground" />
+      {/* centred, not baselined: the name is a flex row with a logo in it and sits on no baseline,
+          so sharing one with the date is exactly what pushed the two apart */}
+      <div className="text-muted-foreground flex items-center gap-2 px-0.5 text-xs">
+        <TradeName name={r.label} asset={r.asset} onPick={onPick} className="text-foreground text-xs" />
         <span className="truncate font-mono tabular-nums">{ran(r.entryAt, r.closedAt)}</span>
         <span className={cn('ml-auto shrink-0 font-mono font-medium tabular-nums', good ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
           {paid || rLabel(r.r)}
