@@ -696,6 +696,14 @@ assert.equal(pos({}).size, undefined)                     // a plain watched pla
   // …as does one that has its own, however it differs — that is the same trade told twice, not news
   closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9, cash: -99 }, 5000)
   assert.equal(getState().results[0].cash, -17.2)
+  /* The return on the margin arrives the same way and just as late — the money settles a poll
+     before the margin behind it is known — so a row that has the one and not the other is still
+     news, and the card gets its return instead of only the price move. */
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -0.83, cash: -17.2, roi: -0.62 }, 5000)
+  assert.equal(getState().results[0].roi, -0.62)
+  // and once it is on file, a telling with the same figures is the trade told twice again
+  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9, cash: -99, roi: -9 }, 5000)
+  assert.equal(getState().results[0].roi, -0.62)
   /* Across the two ids as well, which is the arrangement it actually shows up in: the diff and the
      history stamp a trade differently, so `twice` is what recognises the row to settle. */
   clearResults()

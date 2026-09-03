@@ -1431,7 +1431,13 @@ export const closeWatch = (r: Result, at = Date.now()) => set((s) => {
    * on either side, and what you type is a bare `uid()`.
    */
   if (filed >= 0) {
-    if (r.cash == null || s.results[filed].cash != null) return s
+    /* …and the same exception for the return on the margin, which arrives the same way and just as
+       late: a row filed with the venue's money but no margin behind it yet is a card that can only
+       say what the price did. Either figure turning up where the row on file has none is the
+       history catching up, and the history row is better sourced on every field. */
+    const better = (r.cash != null && s.results[filed].cash == null)
+      || (r.roi != null && s.results[filed].roi == null)
+    if (!better) return s
     const results = s.results.slice()
     results[filed] = r
     return { ...s, results }

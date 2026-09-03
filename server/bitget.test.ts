@@ -1,7 +1,7 @@
 // npm test — the Bitget shaping: their row, our shape, and junk numbers turn null not NaN
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { accountLev, equityOf, levOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
+import { accountLev, closed, equityOf, levOf, shape, shapeClosed, shapeOrders, sign } from './bitget.ts'
 
 const rows = shape([
   {
@@ -132,3 +132,19 @@ assert.deepEqual(orders[0], {
 assert.equal(orders[1].live, false)    // partially filled is not untouched
 assert.equal(orders[1].opens, false)   // and it would close, not open
 assert.equal(orders[2].opens, true)
+
+/* closed(): a page where the venue already stamped every row with its leverage asks for nothing
+   more — and still owes the margin, which is what the record divides the money by to get the ROI
+   the share card prints. It used to hand those rows back untouched, margin null, and the card lost
+   its return row on exactly the trades that needed no lookup. */
+globalThis.fetch = (async () => ({
+  json: async () => ({ code: '00000', data: { list: [{
+    symbol: 'SOLUSDT', holdSide: 'long', openAvgPrice: '99.281', closeAvgPrice: '100.533',
+    ctime: '1756800000000', utime: '1756860000000', netProfit: '2.6',
+    openLeverage: '45', openTotalPos: '2',
+  }] } }),
+})) as unknown as typeof fetch
+const back = await closed('k', 's', 'p', 0)
+assert.equal(back.length, 1)
+assert.equal(back[0].margin, 4.412489)          // size × entry ÷ lev, the money really put up
+assert.equal(Math.round(2.6 / back[0].margin! * 100), 59)   // …which is the ROI on the card

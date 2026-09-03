@@ -246,7 +246,12 @@ export async function closed(key: string, secret: string, pass: string, since: n
   // the list is under `list` on this endpoint and is the data itself on others — take either
   let rows = shapeClosed(Array.isArray(r.data) ? r.data : r.data?.list ?? [])
   const need = [...new Set(rows.filter((x) => x.lev == null).map((x) => x.symbol))].slice(0, 8)
-  if (!need.length) return rows
+  /* …through marginOf, always. This used to hand the rows straight back, and a row the venue
+     already stamped with its own leverage is exactly the row that never needed a lookup — so the
+     whole-page early exit was returning every one of them with a null margin, which is the one
+     field the ROI on the card is divided by. The lookups below fill in a leverage; this fills in
+     the margin that leverage implies, and both paths owe the caller the same shape. */
+  if (!need.length) return rows.map(marginOf)
   /* The orders that opened them, which is where the leverage lives. One call for the week, matched
      back to each position — the account's own setting below is only the fallback now, for a trade
      whose opening fill is older than this window or on a page past the first hundred. */
