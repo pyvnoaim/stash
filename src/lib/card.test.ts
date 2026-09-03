@@ -11,9 +11,9 @@ test('the card names the asset, the side and the profit', () => {
   const svg = cardSvg(P, 1.84)
   assert.match(svg, /BTCUSDT/)
   assert.match(svg, /Long {3}· {3}0\.5 {3}· {3}Bitget {3}· {3}unrealised</)
-  // the money is the headline, in a block of the trade's colour with the ink knocked out of it
-  assert.match(svg, /<rect x="76" y="194" width="\d+" height="104" rx="14" fill="#34d399"\/>/)
-  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+\$3,700\.00</)
+  // the money is the headline, on a pane of glass tinted the trade's colour, in white
+  assert.match(svg, /<rect x="76" y="194" width="\d+" height="104" rx="14" fill="#34d399" fill-opacity="0.3"\/>/)
+  assert.match(svg, /font-size="76" fill="#ffffff" font-weight="800" text-anchor="middle" filter="url\(#shade\)">\+\$3,700\.00</)
   // and the rest of it reads as label-and-figure, not as a sentence with middots in it
   assert.match(svg, />MOVE</)
   assert.match(svg, />\+12\.33%</)
@@ -63,7 +63,7 @@ test('the headline shrinks rather than running the width of the card', () => {
 test('a plan nobody took keeps the percent as its headline', () => {
   // watched rather than taken: no size, so no money — and a card with nothing big on it is no card
   const svg = cardSvg({ ...P, pnl: null })
-  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+12\.33%</)
+  assert.match(svg, /font-size="76" fill="#ffffff" font-weight="800" text-anchor="middle" filter="url\(#shade\)">\+12\.33%</)
   // and the percent is not then said a second time as a row of its own
   assert.doesNotMatch(svg, />MOVE</)
 })

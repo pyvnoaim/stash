@@ -255,18 +255,38 @@ ${t(at, 572, vfs, fill, 600, value, end)}`
   }).join('\n')
 }
 
-/* the block behind the headline, sized to the line it holds. The one loud thing on the card. 28px
-   of padding each side, and the line centred in it rather than set from its left edge, so whatever
-   the measurement is out by is split between the two sides instead of piling up on the right.
-   Money is longer than a percent — "−$123,456.78" is twelve characters where "+12.33%" was
-   seven — so the headline shrinks rather than let its block run the width of the card. 620 is
-   the widest the block may be before its padding, which leaves it stopping short of the middle
-   column of the band below it, and 76 is the size the card was drawn at. */
-function chip(head: string, ink: string): string {
+/* The block behind the headline, sized to the line it holds. The one loud thing on the card.
+   28px of padding each side, and the line centred in it rather than set from its left edge, so
+   whatever the measurement is out by is split between the two sides instead of piling up on the
+   right. Money is longer than a percent — "−$123,456.78" is twelve characters where "+12.33%" was
+   seven — so the headline shrinks rather than let its block run the width of the card. 620 is the
+   widest the block may be before its padding, which leaves it stopping short of the middle column
+   of the band below it, and 76 is the size the card was drawn at.
+
+   Glass, not paint. A solid block of the trade's colour sat on a photograph like a sticker; this
+   one lets the picture through. Over a picture that is inside the SVG it is the real thing — a
+   blurred copy of the picture, clipped to the block, with the tint over it. Over a clip the frame
+   is drawn underneath at export time and is not here to blur, and over the card's own ground there
+   is nothing worth blurring, so those get the tint, the gloss and the edge alone, which is most of
+   what the eye reads as glass anyway. White figures with a soft shadow, because black on a
+   translucent tint is black on whatever is behind it. */
+function chip(head: string, ink: string, bg: string | null = null): string {
   const fs = Math.min(76, Math.floor(620 / ems(head)))
   const w = Math.round(ems(head) * fs) + 56
-  return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
-${t(76 + w / 2, Math.round(194 + (104 + fs * 0.72) / 2), fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}`
+  const photo = bg && AVATAR.test(bg) ? bg : null
+  return `<defs>${photo ? `
+<clipPath id="chipc"><rect x="76" y="194" width="${w}" height="104" rx="14"/></clipPath>
+<filter id="frost" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="16"/></filter>` : ''}
+<filter id="shade"><feDropShadow dx="0" dy="1.5" stdDeviation="1.5" flood-color="#000000" flood-opacity="0.35"/></filter>
+<linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
+</linearGradient>
+</defs>${photo ? `
+<image href="${photo}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice" filter="url(#frost)" clip-path="url(#chipc)"/>` : ''}
+<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}" fill-opacity="${photo ? 0.42 : 0.3}"/>
+<rect x="76" y="194" width="${w}" height="104" rx="14" fill="url(#gloss)"/>
+<rect x="76.75" y="194.75" width="${w - 1.5}" height="102.5" rx="13.5" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1.5"/>
+${t(76 + w / 2, Math.round(194 + (104 + fs * 0.72) / 2), fs, '#ffffff', 800, head, ' text-anchor="middle" filter="url(#shade)"')}`
 }
 
 const FONT_STACK = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif'
@@ -323,7 +343,7 @@ ${dressing(bg, ink)}
 ${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
 ${t(80, 118, 62, '#fafafa', 700, p.symbol)}
 ${t(80, 162, 25, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
-${chip(headline ?? pct, ink)}
+${chip(headline ?? pct, ink, bg)}
 ${byline(who)}
 ${band(rows)}
 </svg>`
@@ -475,7 +495,7 @@ ${dressing(bg, ink)}
 ${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
 ${t(80, 118, 62, '#fafafa', 700, rec.title)}
 ${t(80, 162, 25, '#d4d4d8', 400, [rec.sub, who ? `by ${signedOf(who)}` : null].filter(Boolean).join('   ·   '))}
-${chip(head, ink)}
+${chip(head, ink, bg)}
 ${strip}
 ${t(80, 384, 19, '#a1a1aa', 500, `each block one trade, oldest first${dropped ? ` · ${dropped} earlier not shown` : ''}`)}
 ${band(rows)}

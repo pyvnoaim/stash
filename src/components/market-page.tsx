@@ -1185,7 +1185,11 @@ export default function MarketPage() {
           {/* What you would do about it, beside the chart: the order, the money already on this
               asset and everywhere else, and the readings. Every one of these was a card stacked
               above the chart, pushing it down the page. */}
-          <aside className="flex flex-col gap-3 border-t p-3 text-sm lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+          <aside className="flex flex-col gap-3 border-t p-3 text-sm lg:min-h-0 lg:overflow-hidden lg:border-t-0 lg:border-l">
+            {/* Two scrolls, not one. The order and the money on the table stay put at the top, and
+                the readings scroll under them: a dozen readings used to carry the Long and Short
+                buttons off the top of the column, on the one page whose point is those buttons. */}
+            <div className="flex flex-col gap-3 lg:max-h-[55%] lg:shrink-0 lg:overflow-y-auto">
             <section className="grid gap-2">
               <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Trade</p>
               {/* The two buttons this page exists for. Bitget only — MEXC's futures place-order
@@ -1262,12 +1266,13 @@ export default function MarketPage() {
             {/* what the exchange says you hold, account-wide — the one block here that is fact
                 rather than reading. Absent unless a venue reports something open. */}
             <ExchangePositions onOpen={setAsset} />
+            </div>
             {/* Every reading the chart makes, as a list beside it — the sweeps, the gaps, the
                 structure break, the higher timeframe, the VWAP, the averages. They were a grid of
                 prose in a card above the chart; here each is a line the eye can run down while the
                 chart is in view. */}
             {view && (
-              <section className="grid gap-2 border-t pt-3">
+              <section className="flex flex-col gap-2 border-t pt-3 lg:min-h-0 lg:flex-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">What the chart says</span>
                   <Hint label={`Read off ${interval} bars with the ${cfg.fast}/${cfg.slow}-MA pair. Change the bar size and every one of these is measured again on the new bars.`}>
@@ -1276,7 +1281,7 @@ export default function MarketPage() {
                     </span>
                   </Hint>
                 </div>
-                <div className="grid gap-1.5">
+                <div className="grid gap-1.5 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
                   {shownSignals.map((sig, i) => (
                     <div key={i} className="flex min-w-0 items-start gap-2 text-sm">
                       <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[sig.tone])} />
