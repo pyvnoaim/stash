@@ -1202,8 +1202,12 @@ export default function MarketPage() {
                   {/* A pair, tinted the way up and down are everywhere else on this page: a solid
                       white Long beside a dark red Short read as one button and one warning. */}
                   <div className="grid grid-cols-2 gap-2">
-                    {([['long', 'Long', TrendingUp, 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400'],
-                      ['short', 'Short', TrendingDown, 'border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/20']] as const)
+                    {/* every state spelled out, because the outline variant brings its own dark fill and
+                        its own hover ink, and either one wins over a tint that only says half */}
+                    {([['long', 'Long', TrendingUp,
+                      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 hover:text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/20 dark:hover:text-emerald-400'],
+                      ['short', 'Short', TrendingDown,
+                      'border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive dark:bg-destructive/10 dark:hover:bg-destructive/20 dark:hover:text-destructive']] as const)
                       .map(([sd, label, Icon, cls]) => (
                         <Button key={sd} size="sm" variant="outline" className={cn('h-9', cls)}
                           onClick={() => setTrading(bracket(sd))}>
