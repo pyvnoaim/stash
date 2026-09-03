@@ -7,7 +7,6 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
@@ -1403,24 +1402,20 @@ function Watchlist({ current, onPick, inputRef }: {
   return (
     <div className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
       {/* the search only where there is a column to search down; a strip of eleven is scanned */}
-      {/* the icon and the key badge are centred on the box directly around the field, not on the
-          padded wrapper: that one has more room above than below, and centring on it put both a
-          couple of pixels high of the text they sit beside */}
+      {/* the icon is centred on the box directly around the field, not on the padded wrapper: that
+          one has more room above than below, and centring on it put it a couple of pixels high of
+          the text it sits beside. The / key focuses this; it does not say so — a badge in the field
+          never sat right in it. */}
       <div className="hidden p-2 pb-1 lg:block">
         <div className="relative">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
           <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an asset"
-            aria-label="Find an asset" className="h-8 pr-8 pl-7 text-xs"
+            aria-label="Find an asset" className="h-8 pl-7 text-xs"
             onKeyDown={(e) => {
               // Enter takes the first match, Escape gives the keys back to the chart
               if (e.key === 'Enter') { const f = ASSETS.find(hit); if (f) { onPick(f.id); setQ('') } }
               if (e.key === 'Escape' || e.key === 'Enter') e.currentTarget.blur()
             }} />
-          {/* sized to the field it sits in, not to the header's ⌘K — and gone once there is text, so
-              it never sits under what is being typed */}
-          {!q && (
-            <Kbd className="text-muted-foreground pointer-events-none absolute top-1/2 right-1.5 h-5 min-w-5 -translate-y-1/2 justify-center rounded-sm px-1 py-0 text-[11px] leading-none">/</Kbd>
-          )}
         </div>
       </div>
       <div className="flex min-h-0 gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto">
