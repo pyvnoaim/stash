@@ -8,9 +8,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger,
-} from '@/components/ui/dialog'
 import { TradeDialog } from '@/components/trade-dialog'
 import { cancel as cancelOrder, desk as deskOf, suggest } from '@/lib/trade'
 import { Avatar } from '@/components/settings-dialog'
@@ -1198,22 +1195,31 @@ export default function MarketPage() {
                   falls back to a fifth of the whole free balance at 1× (see suggest in trade.ts). */}
               {feed === 'bitget' && last != null ? (view?.atr ? (
                 <>
+                  {/* A pair, tinted the way up and down are everywhere else on this page: a solid
+                      white Long beside a dark red Short read as one button and one warning. */}
                   <div className="grid grid-cols-2 gap-2">
-                    {([['long', 'Long', TrendingUp], ['short', 'Short', TrendingDown]] as const).map(([sd, label, Icon]) => (
-                      <Button key={sd} size="sm" variant={sd === 'long' ? 'default' : 'destructive'}
-                        onClick={() => setTrading(bracket(sd))}>
-                        <Icon /> {label} {coin}
-                      </Button>
-                    ))}
+                    {([['long', 'Long', TrendingUp, 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400'],
+                      ['short', 'Short', TrendingDown, 'border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/20']] as const)
+                      .map(([sd, label, Icon, cls]) => (
+                        <Button key={sd} size="sm" variant="outline" className={cn('h-9', cls)}
+                          onClick={() => setTrading(bracket(sd))}>
+                          <Icon /> {label} {coin}
+                        </Button>
+                      ))}
                   </div>
+                  {/* the four numbers the order rides on, each with its name over it — a sentence
+                      of them wrapped mid-figure and read as one long grey line */}
                   <Hint label="One ATR out and two ATR up from the price, so the order goes on the book with a stop and a take-profit riding it. The size is what the dialog will open with — a fifth of what is free, at a multiplier the stop can afford — and nothing is placed until a second press there.">
-                    <p className="text-muted-foreground text-xs">
-                      stop {fmt(view.atr)} away · target {fmt(view.atr * 2)}
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs tabular-nums sm:grid-cols-4 lg:grid-cols-2">
+                      <div><dt className="text-muted-foreground">Stop</dt><dd>{fmt(view.atr)} away</dd></div>
+                      <div><dt className="text-muted-foreground">Target</dt><dd>{fmt(view.atr * 2)} away</dd></div>
                       {sized && sized.margin > 0 && risking != null && (
-                        <> · opens at ≈ <span className="text-foreground tabular-nums">${sized.margin.toFixed(2)} at {sized.leverage}×</span>,
-                          risking <span className="text-foreground tabular-nums">${risking.toFixed(2)}</span></>
+                        <>
+                          <div><dt className="text-muted-foreground">Opens at</dt><dd>${sized.margin.toFixed(2)} · {sized.leverage}×</dd></div>
+                          <div><dt className="text-muted-foreground">Risking</dt><dd>${risking.toFixed(2)}</dd></div>
+                        </>
                       )}
-                    </p>
+                    </dl>
                   </Hint>
                 </>
               ) : (
@@ -2154,8 +2160,8 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
        the weight of the toolbar above it. The box comes back with the rows. */
     if (equity == null) return null
     return (
-      <p className="flex items-baseline gap-2 px-3 text-sm">
-        <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Flat</span>
+      <p className="text-muted-foreground flex items-baseline gap-2 text-xs">
+        <span className="font-heading text-[11px] tracking-wider uppercase">Flat</span>
         {equityTag()}
       </p>
     )
@@ -2466,7 +2472,7 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
         <span className="text-muted-foreground">Nothing finished yet — a trade lands here once it is over</span>
       )}
       <Button size="sm" variant="secondary" className="ml-auto h-6 gap-1 px-2 text-xs" onClick={onOpen}>
-        Open record <ChevronRight className="size-3" />
+        All trades <ChevronRight className="size-3" />
       </Button>
     </div>
   )
@@ -2477,18 +2483,22 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
  * same SVG the dialog previews and the PNG is made from — drawn once per row and kept, because a
  * record of fifty is fifty cards and the store re-renders on every price tick.
  */
-function TradeCard({ r, who, paid, good, onPick }: {
-  r: Result; who: CardWho | null; paid: string; good: boolean; onPick: (asset: string) => void
+/** A finished row as the card grid wants it: the card's own fields, plus the name and the R. Your
+ *  own `Result` is one; a friend's row off `/api/desk` is another, once it has both prices. */
+type CardableRow = CardRow & { id: string; label: string; r: number }
+
+function TradeCard({ row, who, paid, good, onPick }: {
+  row: CardableRow; who: CardWho | null; paid: string; good: boolean; onPick: (asset: string) => void
 }) {
-  const p = cardOf(r)
+  const p = cardOf(row)
   const src = useMemo(
-    () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(cardSvg(p, r.r, who)),
-    [r, who], // eslint-disable-line react-hooks/exhaustive-deps
+    () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(cardSvg(p, row.r, who)),
+    [row, who], // eslint-disable-line react-hooks/exhaustive-deps
   )
   return (
     <div className="grid gap-1">
-      <CardDialog {...tradeCard(p, r.r, who)}>
-        <button type="button" aria-label={`Share ${r.label} card`}
+      <CardDialog {...tradeCard(p, row.r, who)}>
+        <button type="button" aria-label={`Share ${row.label} card`}
           className="hover:border-foreground/40 focus-visible:ring-ring/50 overflow-hidden rounded-lg border transition-colors focus-visible:ring-[3px] focus-visible:outline-none">
           <img src={src} alt="" className="block aspect-[1200/630] w-full" />
         </button>
@@ -2496,12 +2506,54 @@ function TradeCard({ r, who, paid, good, onPick }: {
       {/* centred, not baselined: the name is a flex row with a logo in it and sits on no baseline,
           so sharing one with the date is exactly what pushed the two apart */}
       <div className="text-muted-foreground flex items-center gap-2 px-0.5 text-xs">
-        <TradeName name={r.label} asset={r.asset} onPick={onPick} className="text-foreground text-xs" />
-        <span className="truncate font-mono tabular-nums">{ran(r.entryAt, r.closedAt)}</span>
+        <TradeName name={row.label} asset={row.asset} onPick={onPick} className="text-foreground text-xs" />
+        <span className="truncate font-mono tabular-nums">{ran(row.entryAt, row.closedAt)}</span>
         <span className={cn('ml-auto shrink-0 font-mono font-medium tabular-nums', good ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-          {paid || rLabel(r.r)}
+          {paid || rLabel(row.r)}
         </span>
       </div>
+    </div>
+  )
+}
+
+/** Every number with its name over it. Packed left and wrapping, not equal fractions: on a wide
+ *  window fractions pull five read-outs into five far corners with a hand's width between them.
+ *  `up` colours the figure — null leaves it plain, for a count that is neither good nor bad. */
+type Stat = [label: string, value: string, sub: string, up: boolean | null, hint: string]
+function StatRow({ stats }: { stats: Stat[] }) {
+  return (
+    <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 sm:gap-x-10">
+      {stats.map(([label, value, sub, up, hint]) => (
+        <Hint key={label} label={hint}>
+          {/* w-fit: the cell stretches its whole grid track and a tooltip centres on its
+              trigger, so the arrow landed in the empty space beside the number */}
+          <div className="w-fit">
+            <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
+            <p className={cn('font-medium tabular-nums',
+              up === null ? '' : up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {value}
+              {sub && <span className="text-muted-foreground ml-1.5 text-xs font-normal">{sub}</span>}
+            </p>
+          </div>
+        </Hint>
+      ))}
+    </div>
+  )
+}
+
+/** The switch between the two ways a record is read. */
+function ModeTray({ mode, onChange }: { mode: 'cards' | 'table'; onChange: (m: 'cards' | 'table') => void }) {
+  return (
+    <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
+      {([['cards', 'Cards', LayoutGrid], ['table', 'Table', Rows3]] as const).map(([id, label, Icon]) => (
+        <Hint key={id} label={id === 'cards' ? 'Every finished trade as the card you would share' : 'The same trades as rows'}>
+          <Button size="sm" variant={mode === id ? 'secondary' : 'ghost'} aria-pressed={mode === id}
+            className={cn('h-6 gap-1 px-2 text-xs', mode !== id && 'text-muted-foreground')}
+            onClick={() => onChange(id)}>
+            <Icon className="size-3" /> {label}
+          </Button>
+        </Hint>
+      ))}
     </div>
   )
 }
@@ -2629,17 +2681,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             ))}
           </div>
           {/* cards or rows: the same trades, drawn or listed */}
-          <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
-            {([['cards', 'Cards', LayoutGrid], ['table', 'Table', Rows3]] as const).map(([id, label, Icon]) => (
-              <Hint key={id} label={id === 'cards' ? 'Every finished trade as the card you would share' : 'The same trades as rows'}>
-                <Button size="sm" variant={mode === id ? 'secondary' : 'ghost'} aria-pressed={mode === id}
-                  className={cn('h-6 gap-1 px-2 text-xs', mode !== id && 'text-muted-foreground')}
-                  onClick={() => setMode(id)}>
-                  <Icon className="size-3" /> {label}
-                </Button>
-              </Hint>
-            ))}
-          </div>
+          <ModeTray mode={mode} onChange={setMode} />
           <RecapButton all={all} who={user} />
           <Button
             variant="ghost"
@@ -2654,44 +2696,20 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
           </Button>
         </div>
 
-        {/* Every number with its name over it, which is the one thing the old strip could not do:
-            two of these are money in two currencies that are deliberately never added together, and
-            one is not money at all. Read as a run-on line the words trailed the wrong figures.
-
-            Packed left and wrapping, not equal fractions: on a wide window fractions pull five
-            read-outs into five far corners with a hand's width between them, and a row of numbers
-            you sweep your eyes across is not a row. Wrapping rather than five fixed max-content
-            tracks, which is what this was — five tracks that will not shrink and cannot wrap ran
-            past the card's edge somewhere around 660px and clipped "units of risk" to "units of",
-            and since the desk column scrolls vertically it took a horizontal scrollbar with it. */}
-        <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2 sm:gap-x-10">
-          {([
-            ['Finished', String(results.length), '', null,
-              'Every trade of yours that has closed. A setup you only watched is not a trade and never reaches this list.'],
-            ['Hit target', String(won), `${results.length ? Math.round((won / results.length) * 100) : 0}%`, null,
-              'How many came off at the target rather than at the stop or by hand. The percentage is that share of the finished trades.'],
-            money === null ? null : ['Priced here', signedEuro(money), 'euros', money >= 0,
-              `This app's own arithmetic over the size you typed, net of the ${dials.fee}%-a-side fee at both ends and the funding to the close. Only the trades no venue settled for you — counting one in both currencies would be the same trade twice.`],
-            usd === null ? null : ['Settled', `${usd >= 0 ? '+' : '−'}$${Math.abs(usd).toFixed(2)}`, 'dollars', usd >= 0,
-              'What a venue actually paid out, its own fees and funding already inside the figure. Never added to the euros beside it — the sum of the two is a number no exchange rate ever produced.'],
-            ['Total in R', rLabel(total), 'units of risk', total >= 0,
-              'R is one trade\'s risk — what it would have cost if the stop had hit. It is the only unit two trades on two different assets add up in, which is why the record is kept in it. A week can settle up in money and down in R, so this is coloured by itself and not by the money.'],
-          ].filter(Boolean) as [string, string, string, boolean | null, string][])
-            .map(([label, value, sub, up, hint]) => (
-              <Hint key={label} label={hint}>
-                {/* w-fit: the cell stretches its whole grid track and a tooltip centres on its
-                    trigger, so the arrow landed in the empty space beside the number */}
-                <div className="w-fit">
-                  <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
-                  <p className={cn('font-medium tabular-nums',
-                    up === null ? '' : up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {value}
-                    {sub && <span className="text-muted-foreground ml-1.5 text-xs font-normal">{sub}</span>}
-                  </p>
-                </div>
-              </Hint>
-            ))}
-        </div>
+        {/* Two of these are money in two currencies that are deliberately never added together,
+            and one is not money at all. Read as a run-on line the words trailed the wrong figures. */}
+        <StatRow stats={[
+          ['Finished', String(results.length), '', null,
+            'Every trade of yours that has closed. A setup you only watched is not a trade and never reaches this list.'],
+          ['Hit target', String(won), `${results.length ? Math.round((won / results.length) * 100) : 0}%`, null,
+            'How many came off at the target rather than at the stop or by hand. The percentage is that share of the finished trades.'],
+          ...(money === null ? [] : [['Priced here', signedEuro(money), 'euros', money >= 0,
+            `This app's own arithmetic over the size you typed, net of the ${dials.fee}%-a-side fee at both ends and the funding to the close. Only the trades no venue settled for you — counting one in both currencies would be the same trade twice.`] as Stat]),
+          ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0,
+            'What a venue actually paid out, its own fees and funding already inside the figure. Never added to the euros beside it — the sum of the two is a number no exchange rate ever produced.'] as Stat]),
+          ['Total in R', rLabel(total), 'units of risk', total >= 0,
+            'R is one trade\'s risk — what it would have cost if the stop had hit. It is the only unit two trades on two different assets add up in, which is why the record is kept in it. A week can settle up in money and down in R, so this is coloured by itself and not by the money.'],
+        ]} />
 
         {/* The same trades cut by lane — expectancy per rule is what the record is kept to say. As
             chips rather than as a run-on sentence: three lanes in a row of prose separated by
@@ -2727,7 +2745,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
               under it, the three things a row said that the card does not print at this size. */
           <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]">
             {results.map((r) => (
-              <TradeCard key={r.id} r={r} who={user} paid={paid(r)}
+              <TradeCard key={r.id} row={r} who={user} paid={paid(r)}
                 good={(r.cash ?? cashOf(r) ?? r.r) >= 0} onPick={onPick} />
             ))}
           </div>
@@ -2834,162 +2852,190 @@ const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => !r.cash || !rs.s
   .some((x) => x.label === r.label && x.dir === r.dir && x.cash === r.cash && x.closedAt === r.closedAt))
 
 /**
- * One desk's finished trades, behind a press.
- *
- * The row above already says how many there were and what share of them hit; this is what those
- * came from. Behind a press rather than on the page because the pane is a glance at everyone —
- * ten desks with twenty trades each unrolled is a page nobody reaches the bottom of, and the
- * summary is what you read first anyway.
- *
- * The same table the Log tab draws for your own record — the same grid, the same headings, the same
- * asset faces down the left, and the same share beside every row. It was its own narrower table
- * with no icons and nothing to press, which read as a lesser copy of the thing it is a copy of; one
- * grid and one card function now, so the two cannot drift apart. `/api/desk` sends the asset, the
- * two prices and the open stamp for exactly that: the Ran column has both ends of its range, and a
- * card is drawn from prices.
+ * One friend's finished trades, as a page: the same stats row, the same cards and the same table
+ * as your own record, signed with their name and their face. It was a dialog behind a small
+ * outlined button on a line of text; a friend is a tile now, and pressing it opens this in place.
  *
  * The money is the venue's own settled dollars and only that. A trade someone sized by hand prices
- * itself off a size and a funding dial that never leave their device — those rows
- * print their R and an empty Paid, and the footer's total counts only the ones a venue settled, so
- * it is never half a sum passed off as a whole one.
+ * itself off a size and a funding dial that never leave their device — those rows print their R
+ * and an empty Paid, and the total counts only the ones a venue settled, so it is never half a
+ * sum passed off as a whole one. A row whose document lost one of its two prices has no card to
+ * draw; it is in the table and the count, and the cards say how many are only there.
  */
-function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void }) {
+function FriendRecord({ p, onPick, onBack }: { p: DeskRow; onPick: (asset: string) => void; onBack: () => void }) {
+  const [mode, setMode] = useState<'cards' | 'table'>('cards')
+  const who = useMemo(() => ({ name: p.name, avatar: p.avatar }), [p.name, p.avatar])
   const rows = useMemo(() => [...p.results].sort((a, b) => b.closedAt - a.closedAt), [p.results])
+  /* Built once per answer from the server, not per render: TradeCard keeps its picture by the row
+     object, and a spread inside the render would be a new object — and a new card — every poll. */
+  const drawable = useMemo(() => rows.flatMap((r): CardableRow[] => (r.entry && r.exit
+    ? [{ ...r, asset: r.asset || r.label, entry: r.entry, exit: r.exit, entryAt: r.entryAt ?? r.closedAt }] : [])), [rows])
   const { total, won, usd } = deskTally(rows)
-  // held open rather than uncontrolled, so a row that sends you to the chart takes its dialog with it
-  const [open, setOpen] = useState(false)
-
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      {/* Outlined, with the arrow that says a window is behind it. As a ghost button it was grey
-          text on a line of grey text — the same size, the same colour, no edge — and the one thing
-          on this pane that opens somebody's trades read as a caption nobody would think to press.
-          The border is the whole affordance: it costs a hairline and says "control". */}
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" aria-label={`Open ${p.name}'s log`}
-          className="text-muted-foreground hover:text-foreground -my-1 h-6 gap-1 px-2 text-xs tabular-nums">
-          {rows.length} finished · {Math.round((won / rows.length) * 100)}% hit
-          <ChevronRight className="size-3" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          {/* the same face the row outside carries, so the window says whose book it is the way
-              the tile you pressed did */}
-          <DialogTitle className="flex items-center gap-2">
-            <Avatar name={p.name} avatar={p.avatar} className="size-6 text-[11px]" />
-            {p.name}&rsquo;s log
-          </DialogTitle>
-          <DialogDescription>
-            Every trade they were really in, newest first. Paid is what the exchange settled it for;
-            a trade they sized by hand prices itself off numbers that never leave their device, so
-            those rows say it in R alone.
-          </DialogDescription>
-        </DialogHeader>
-        <div className={LOG_SCROLL}>
-          {/* bg-background, not the Log's bg-card: this table is inside a dialog, and a heading
-              that keeps the card colour is a stripe of the wrong grey over the rows sliding under
-              it. Last class wins through `cn`, which is what makes one shared string safe here. */}
-          <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading bg-background border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
-            <span>Trade</span>
-            <span>Side</span>
-            <span className="hidden sm:block">Ran</span>
-            <span className="text-right">Ended</span>
-            <span className="text-right">R</span>
-            <span className="text-right">Paid</span>
+    <Card className="py-3">
+      <CardContent className="px-3">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="ghost" className="text-muted-foreground h-7" onClick={onBack}>
+            <ArrowLeft /> Friends
+          </Button>
+          <Avatar name={p.name} avatar={p.avatar} className="size-6 text-[11px]" />
+          <span className="font-heading text-sm tracking-wide uppercase">{p.name}</span>
+          <div className="ml-auto"><ModeTray mode={mode} onChange={setMode} /></div>
+        </div>
+        <StatRow stats={[
+          ['Finished', String(rows.length), '', null, 'Every trade they were really in. The server drops watched plans before sending, so this is a claim about how they trade, not about ideas they never took.'],
+          ['Hit target', String(won), `${rows.length ? Math.round((won / rows.length) * 100) : 0}%`, null, 'How many came off at the target rather than at the stop or by hand.'],
+          ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0, 'What their exchange paid out, over the rows a venue settled. A trade they sized by hand prices itself off numbers that never leave their device, so those rows count here in R alone.'] as Stat]),
+          ['Total in R', rLabel(total), 'units of risk', total >= 0, 'Over every finished trade, because every row has an R.'],
+        ]} />
+        {/* what they are in right now — the same tile as your own book, off the same numbers */}
+        {p.open.length > 0 && (
+          <div className="mb-3">
+            <p className="text-muted-foreground font-heading mb-1.5 text-[11px] tracking-wider uppercase">Open now</p>
+            <div className={TILE_GRID}>
+              {p.open.slice(0, 6).map((w) => (
+                <PositionTile key={w.id} side={w.dir} symbol={w.label} onPick={onPick}
+                  venue={w.horizon || null} lev={w.lev} pnl={w.pnl} value={w.value}
+                  from={w.entry} now={w.mark} stop={w.stop} target={w.target} liq={w.liq}
+                  openedAt={w.entryAt}
+                  // the one thing only this side can say: their row may be a plan, not a fill
+                  meta={[!w.entryAt && 'waiting for the entry']} />
+              ))}
+            </div>
+            {p.open.length > 6 && <p className="text-muted-foreground pt-1.5 text-xs">and {p.open.length - 6} more</p>}
           </div>
-          {rows.map((r, i) => {
-            const hit = r.level === 'target'
-            return (
-              /* the position, not the id: these rows are someone else's document, and two results
-                 carrying one id — or none at all, which is what `String(r?.id ?? '')` leaves — is
-                 a thing their file is allowed to contain and this list must not break on. Nothing
-                 in a row holds state, so the index is a key with nothing to get wrong. */
-              <div key={i} className="hover:bg-muted/40 border-b border-dashed last:border-0">
-                <div className="flex items-center">
-                <div className={cn(LOG_GRID, 'min-w-0 flex-1 px-1.5 py-1.5 text-sm')}>
-                  <TradeName name={r.label} asset={r.asset || r.label} className="font-medium"
-                    onPick={(id) => { setOpen(false); onPick(id) }} />
-                  <span className="text-muted-foreground truncate text-xs">
-                    {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
-                  </span>
-                  {/* both ends where their document had them, and the close alone where it did not —
-                      the same span the Log writes, off the same two stamps */}
-                  <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
-                    {ran(r.entryAt ?? r.closedAt, r.closedAt)}
-                  </span>
-                  <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {hit ? 'target' : 'stopped'}
-                  </span>
-                  <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
-                  <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
-                    (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {deskPaid(r.cash)}
-                  </span>
-                </div>
-                {/* Their trade, on their card, signed with their name and their face — the same
-                    window your own rows open. A row whose document lost one of its two prices has
-                    no card to draw and keeps the space instead, so the column stays a column. */}
-                {r.entry && r.exit ? (
-                  <CardDialog {...tradeCard(
-                    cardOf({ ...r, asset: r.asset || r.label, entry: r.entry, exit: r.exit, entryAt: r.entryAt ?? r.closedAt }),
-                    r.r, { name: p.name, avatar: p.avatar })}>
-                    <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
-                      className="text-muted-foreground hover:text-foreground shrink-0">
-                      <Share2 className="size-3.5" />
-                    </Button>
-                  </CardDialog>
-                ) : <span className="size-6 shrink-0" />}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        <div className="flex items-baseline gap-2 border-t pt-3 text-sm">
-          <span className="text-muted-foreground text-xs">
-            {rows.length} finished · {won} hit target
-          </span>
-          {/* Both, side by side, never summed into one: the R is over every finished trade and the
-              dollars only over the ones a venue settled. A desk can be down in R and up in money on
-              the same list, so each is coloured by itself rather than by the other — and the money
-              leads, with the R as the note under it, the same way a position tile reads. */}
-          <span className="ml-auto flex items-baseline gap-2 font-mono tabular-nums">
-            {usd !== null && (
-              <span className={cn('font-medium',
-                usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                {deskPaid(usd)}
-              </span>
+        )}
+        {mode === 'cards' ? (
+          <>
+            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]">
+              {drawable.map((r, i) => (
+                <TradeCard key={`${r.id}-${i}`} row={r} who={who} paid={deskPaid(r.cash ?? null)}
+                  good={(r.cash ?? r.r) >= 0} onPick={onPick} />
+              ))}
+            </div>
+            {drawable.length < rows.length && (
+              <p className="text-muted-foreground mt-2 text-xs">
+                {rows.length - drawable.length} more in the table — their document kept no prices for those, so there is no card to draw.
+              </p>
             )}
-            <span className={cn('text-xs',
-              total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-              {rLabel(total)}
-            </span>
-          </span>
-        </div>
-      </DialogContent>
-    </Dialog>
+          </>
+        ) : (
+          <div className={LOG_SCROLL}>
+            <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
+              <span>Trade</span>
+              <span>Side</span>
+              <span className="hidden sm:block">Ran</span>
+              <span className="text-right">Ended</span>
+              <span className="text-right">R</span>
+              <span className="text-right">Paid</span>
+            </div>
+            {rows.map((r, i) => {
+              const hit = r.level === 'target'
+              return (
+                /* the position, not the id: these rows are someone else's document, and two results
+                   carrying one id — or none at all — is a thing their file is allowed to contain and
+                   this list must not break on. Nothing in a row holds state. */
+                <div key={i} className="hover:bg-muted/40 border-b border-dashed last:border-0">
+                  <div className="flex items-center">
+                  <div className={cn(LOG_GRID, 'min-w-0 flex-1 px-1.5 py-1.5 text-sm')}>
+                    <TradeName name={r.label} asset={r.asset || r.label} className="font-medium" onPick={onPick} />
+                    <span className="text-muted-foreground truncate text-xs">
+                      {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
+                    </span>
+                    <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
+                      {ran(r.entryAt ?? r.closedAt, r.closedAt)}
+                    </span>
+                    <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                      {hit ? 'target' : 'stopped'}
+                    </span>
+                    <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+                    <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
+                      (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                      {deskPaid(r.cash)}
+                    </span>
+                  </div>
+                  {r.entry && r.exit ? (
+                    <CardDialog {...tradeCard(
+                      cardOf({ ...r, asset: r.asset || r.label, entry: r.entry, exit: r.exit, entryAt: r.entryAt ?? r.closedAt }),
+                      r.r, who)}>
+                      <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
+                        className="text-muted-foreground hover:text-foreground shrink-0">
+                        <Share2 className="size-3.5" />
+                      </Button>
+                    </CardDialog>
+                  ) : <span className="size-6 shrink-0" />}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
 /**
- * Everyone else on this server who has switched their desk on: how their trades went, and what they
- * are in right now. Money only where an exchange settled or is marking it — a position's running
- * dollars, a finished trade's settled ones. What somebody typed a size for stays in R: that figure
- * is worked out from a size and a funding rate this server never receives.
+ * One friend as a tile: their face, how their trades went, what they are in — and the way through
+ * to all of it. The same weight your own cards have, so the two books read as the same thing.
+ */
+function FriendTile({ p, onOpen }: { p: DeskRow; onOpen: () => void }) {
+  const { total, won, usd } = deskTally(p.results)
+  return (
+    <button type="button" onClick={onOpen} aria-label={`Open ${p.name}'s trades`}
+      className="hover:border-foreground/40 focus-visible:ring-ring/50 grid gap-2 rounded-lg border p-3 text-left transition-colors focus-visible:ring-[3px] focus-visible:outline-none">
+      <div className="flex items-center gap-2.5">
+        <Avatar name={p.name} avatar={p.avatar} className="size-9 text-sm" />
+        <div className="min-w-0">
+          <p className="truncate font-medium">{p.name}</p>
+          <p className="text-muted-foreground truncate text-xs">
+            {p.results.length
+              ? `${p.results.length} finished · ${Math.round((won / p.results.length) * 100)}% hit`
+              : 'nothing finished yet'}
+          </p>
+        </div>
+        <ChevronRight className="text-muted-foreground ml-auto size-4 shrink-0" />
+      </div>
+      <div className="flex items-baseline gap-3 text-xs">
+        <span className="text-muted-foreground">
+          {p.open.length ? `${p.open.length} open right now` : 'nothing open right now'}
+        </span>
+        {/* Both, side by side, never summed into one: the R is over every finished trade and the
+            dollars only over the ones a venue settled. A desk can be down in R and up in money on
+            the same list, so each is coloured by itself rather than by the other. */}
+        {!!p.results.length && (
+          <span className="ml-auto flex items-baseline gap-2 font-mono tabular-nums">
+            {usd !== null && (
+              <span className={cn('text-sm font-medium', usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                {deskPaid(usd)}
+              </span>
+            )}
+            <span className={total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{rLabel(total)}</span>
+          </span>
+        )}
+      </div>
+    </button>
+  )
+}
+
+/**
+ * Everyone else on this server who has switched their desk on: a tile each, and their record
+ * behind it. Money only where an exchange settled or is marking it — a position's running dollars,
+ * a finished trade's settled ones. What somebody typed a size for stays in R: that figure is
+ * worked out from a size and a funding rate this server never receives.
  *
  * Trades they were really in, and only those: the server drops watched plans before sending, so a
  * hit rate here is a claim about how someone trades rather than about how their untaken ideas would
  * have gone. That filter is deliberately not repeated on this side — arriving and then being hidden
  * is not the same as never being sent, and only one of the two is a promise.
  *
- * What each is in right now is their exchange's own book where their account has a key on it — the
- * fills, not what anyone remembered to type. Which is why this re-asks on a minute: an empty desk
- * here is a flat book, and it should not stay on screen once it stops being true. The server's own
- * per-key cache is what keeps that from being a minute's worth of exchange calls per reader.
+ * It re-asks on a minute while it is the screen on show: an empty desk here is a flat book, and it
+ * should not stay on screen once it stops being true. The server's own per-key cache is what keeps
+ * that from being a minute's worth of exchange calls per reader.
  *
- * It says so rather than disappearing when there is nobody: this is a tab now, and a tab that
- * renders nothing is one you press twice and stop trusting. Offline, signed out, and on a server
- * where nobody has switched it on all read the same, because from here they are the same.
+ * It says so rather than disappearing when there is nobody: a screen that renders nothing is one
+ * you press twice and stop trusting. Offline, signed out, and on a server where nobody has switched
+ * it on all read the same, because from here they are the same.
  */
 function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void }) {
   const [rows, setRows] = useState<DeskRow[]>([])
@@ -2997,12 +3043,10 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
      as long as the request takes — "nobody else has switched their desk on" is a claim, and making
      it before asking is the same pop-in as an empty book that fills a second later. */
   const [asked, setAsked] = useState(false)
+  // whose record is open, by name — the row itself is looked up fresh, so a poll updates the page
+  const [who, setWho] = useState<string | null>(null)
   const { user } = useSyncExternalStore(subscribeSync, getSync)
 
-  /* Only while the tab is the one on screen. A hidden tab stays mounted here — throwing its rows
-     away would cost a round trip on every switch back — and a minute-long poll behind it would be
-     every reader asking every exchange about everybody, forever, to redraw nothing. Coming back to
-     the tab asks again on the spot, which is the same thing the poll was for. */
   useEffect(() => {
     if (!live) return
     const load = () => {
@@ -3016,6 +3060,8 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
   }, [user?.name, live])
 
   const people = rows.filter((p) => p.results.length || p.open.length)
+  const open = who ? people.find((p) => p.name === who) : null
+  if (open) return <FriendRecord p={open} onPick={onPick} onBack={() => setWho(null)} />
   if (!people.length && live && !asked) {
     return (
       <Card className="py-3" role="status" aria-label="Loading the other desks">
@@ -3038,80 +3084,12 @@ function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void
       </Card>
     )
   }
-
   return (
     <Card className="py-3">
       <CardContent className="px-3">
-        {/* no count beside the heading: the desks are right underneath and countable on sight */}
-        <div className="mb-2 font-heading text-sm tracking-wide uppercase">The others</div>
-        {/* A ruled list, not a stack of boxes. Each desk used to be a bordered card holding bordered
-            tiles inside a bordered card — three nested rectangles for what is really a name and the
-            positions under it, and at two desks the page read as packaging. The rule between people
-            does the same separating with none of the weight. */}
-        <div className="grid gap-3">
-          {people.map((p) => {
-            const { total, usd } = deskTally(p.results)
-            return (
-              <div key={p.name} className="border-t pt-3 first:border-t-0 first:pt-0">
-                <div className="flex items-center gap-2">
-                  <Avatar name={p.name} avatar={p.avatar} className="size-6 text-[11px]" />
-                  <span className="truncate text-sm font-medium">{p.name}</span>
-                  {/* a desk with nothing finished says so: the empty stat slot read as a row that
-                      had failed to load its numbers rather than one with none to load — and with
-                      nothing behind it there is nothing to press, so it stays a word rather than
-                      becoming a button that opens an empty table */}
-                  {p.results.length
-                    ? <DeskLog p={p} onPick={onPick} />
-                    : <span className="text-muted-foreground text-xs">nothing finished yet</span>}
-                  {/* A flat desk says so, for the reason the empty stat slot does: a name with
-                      nothing under it reads as tiles that failed to arrive rather than as a book
-                      with none in it, and those are the two things this pane exists to tell apart.
-                      On the name's own line rather than under it — as a second line it was one word
-                      of grey alone across the whole card, and the desk it belongs to is a one-line
-                      desk. */}
-                  {!p.open.length && (
-                    <span className="text-muted-foreground shrink-0 text-xs">nothing open right now</span>
-                  )}
-                  {!!p.results.length && (
-                    /* The same two figures the log's own footer prints, and in the same order, so
-                       opening the table never changes the answer the row already gave. */
-                    <span className="ml-auto flex items-baseline gap-2 font-mono text-sm tabular-nums">
-                      {usd !== null && (
-                        <span className={cn('font-medium',
-                          usd >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                          {deskPaid(usd)}
-                        </span>
-                      )}
-                      <span className={cn('text-xs',
-                        total >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                        {rLabel(total)}
-                      </span>
-                    </span>
-                  )}
-                </div>
-                {/* someone watching thirty setups is a list nobody reads, and it would push every
-                    other desk off the page — the count below says what was left out */}
-                <div className={cn('mt-1.5 empty:hidden', TILE_GRID)}>
-                  {/* the same tile as your own book, off the same numbers: the money, the percent
-                      and the R where a stop defines one, all read by the tile itself. A row from
-                      someone's document knows none of them, and says so by leaving them out. */}
-                  {p.open.slice(0, 6).map((w) => (
-                    <PositionTile key={w.id} side={w.dir} symbol={w.label} onPick={onPick}
-                      venue={w.horizon || null} lev={w.lev} pnl={w.pnl} value={w.value}
-                      from={w.entry} now={w.mark} stop={w.stop} target={w.target} liq={w.liq}
-                      openedAt={w.entryAt}
-                      // the one thing only this side can say: their row may be a plan, not a fill
-                      meta={[!w.entryAt && 'waiting for the entry']} />
-                  ))}
-                </div>
-                {p.open.length > 6 && (
-                  <p className="text-muted-foreground pt-1.5 text-xs">
-                    and {p.open.length - 6} more
-                  </p>
-                )}
-              </div>
-            )
-          })}
+        <div className="mb-3 font-heading text-sm tracking-wide uppercase">The others</div>
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
+          {people.map((p) => <FriendTile key={p.name} p={p} onOpen={() => setWho(p.name)} />)}
         </div>
       </CardContent>
     </Card>
