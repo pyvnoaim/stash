@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Copy, Download, ImageIcon, Trash2, Video } from 'lucide-react'
+import { Copy, Download, ImageIcon, Trash2, Video, Volume2, VolumeX } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -39,11 +39,33 @@ export function CardDialog({ p, r, who, children }: {
   const [busy, setBusy] = useState<{ job: 'copy' | 'png' | 'video'; say: string } | null>(null)
   const file = useRef<HTMLInputElement>(null)
   const video = useRef<HTMLVideoElement>(null)
+  /** the preview's sound, on unless the browser refused it — see the effect below */
+  const [hush, setHush] = useState(false)
 
   /* The object URL behind a clip is a handle on a file this tab is holding open. Cleaning up on
      the way out of the effect hands back the one being replaced, so picking three clips in a row
      does not leak all three. */
   useEffect(() => () => { if (bg?.kind === 'video') URL.revokeObjectURL(bg.url) }, [bg])
+
+  /* Playing it out loud, and dropping to silent only where that is refused. A clip picked for its
+     sound is a clip you want to hear, and the press that opened this dialog is the interaction
+     Chrome wants before it will autoplay one — an installed app is allowed it outright. Safari
+     wants the gesture on the element itself and turns this down, so the rejection is the cue to
+     mute and play anyway rather than sit there on a frozen first frame. Driven from here rather
+     than the `muted` attribute, which React does not reliably set on the first render. */
+  useEffect(() => {
+    const v = video.current
+    if (!v || bg?.kind !== 'video') return
+    /* Out of the way while the recorder has the clip. It plays its own copy from the same file, so
+       leaving this one running is the same sound a second or two out of step with the one being
+       recorded — and a second decode competing with the encoder for the seconds it records in. */
+    if (busy?.job === 'video') return v.pause()
+    v.muted = hush
+    void v.play().catch(() => { if (!hush) setHush(true) })
+    // `open` is in here because closing unmounts the element: reopening hands back a fresh one that
+    // nothing has pressed play on, and without it the second look at a card is a frozen first frame.
+    // `busy.job` rather than `busy`: the label counts the seconds off, and the job is what changed.
+  }, [bg, hush, open, busy?.job])
 
   /* The overlay only — the media sits behind it as its own layer. '' rather than null is the card
      being told there is something under it: it drops its own gradient and keeps the scrim that
@@ -83,8 +105,10 @@ export function CardDialog({ p, r, who, children }: {
     }
   }
 
+  /* A mute is for the clip it was pressed on. Closing puts the sound back on, so the next open
+     asks the browser for it again rather than inheriting a decision about a different clip. */
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setHush(false) }}>
       <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
@@ -102,13 +126,22 @@ export function CardDialog({ p, r, who, children }: {
             <img src={bg.url} alt="" className="absolute inset-0 size-full object-cover" />
           )}
           {bg?.kind === 'video' && (
-            /* muted and looping: this is a preview running behind a dialog, and a preview that
-               starts talking is one nobody forgives. The sound is not lost — the recorder takes it
-               from the file rather than from this element. */
-            <video ref={video} src={bg.url} autoPlay loop muted playsInline
+            /* No autoPlay and no muted here: both are the effect above's to decide, and an
+               attribute fighting it is how the preview ends up silent on the render that mattered. */
+            <video ref={video} src={bg.url} loop playsInline
               className="absolute inset-0 size-full object-cover" />
           )}
-          <img src={overlay} alt={`${p.symbol} card`} className="absolute inset-0 size-full" />
+          <img src={overlay} alt={`${p.symbol} card`}
+            className="pointer-events-none absolute inset-0 size-full" />
+          {bg?.kind === 'video' && (
+            <Button variant="secondary" size="icon"
+              aria-label={hush ? 'Play the clip with sound' : 'Mute the clip'}
+              aria-pressed={!hush}
+              className="absolute right-2 bottom-2 size-8 rounded-full opacity-70 transition-opacity hover:opacity-100"
+              onClick={() => setHush((q) => !q)}>
+              {hush ? <VolumeX /> : <Volume2 />}
+            </Button>
+          )}
         </div>
 
         <input ref={file} type="file" accept="image/*,video/*" className="hidden"
