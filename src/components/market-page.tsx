@@ -1410,7 +1410,9 @@ function Watchlist({ current, onPick, inputRef }: {
             if (e.key === 'Enter') { const f = ASSETS.find(hit); if (f) { onPick(f.id); setQ('') } }
             if (e.key === 'Escape' || e.key === 'Enter') e.currentTarget.blur()
           }} />
-        <Kbd className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2">/</Kbd>
+        {/* sized to the field it sits in, not to the header's ⌘K — and gone once there is text, so
+            it never sits under what is being typed */}
+        {!q && <Kbd className="text-muted-foreground pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2 rounded-sm px-1 py-0 text-[10px]">/</Kbd>}
       </div>
       <div className="flex min-h-0 gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-x-hidden lg:overflow-y-auto">
         {state === 'error' && !rows.length ? (
