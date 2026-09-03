@@ -380,34 +380,47 @@ export async function recordCard(
   c.width = 1200
   c.height = 630
   const ctx = c.getContext('2d')!
-  const stream = c.captureStream(30)
   /* A clip with no audio, or a browser that will not wire one up, still records its picture — the
      card is the point and the sound is what the clip brought with it. */
   let audio: AudioContext | null = null
+  let tracks: MediaStreamTrack[] = []
   try {
     audio = new AudioContext()
     await audio.resume()
     const out = audio.createMediaStreamDestination()
     audio.createMediaElementSource(v).connect(out)
-    for (const track of out.stream.getAudioTracks()) stream.addTrack(track)
+    tracks = out.stream.getAudioTracks()
   } catch { audio = null }
+  /* Both tracks handed over at construction. Adding the sound to the canvas stream afterwards is
+     the obvious way to write it and the way Safari quietly drops it: the recorder takes the tracks
+     the stream had when it was made, and the file comes out silent. */
+  const stream = new MediaStream([...c.captureStream(30).getVideoTracks(), ...tracks])
 
   const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6_000_000 })
   const parts: Blob[] = []
   rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data) }
-  const stopped = new Promise<void>((res) => { rec.onstop = () => res() })
+  /* An error ends the wait the same way a stop does. A recorder that dies mid-clip fires no `onstop`
+     and `stop()` on a dead one is a no-op, so without this the await never returns and the button
+     spins for the rest of the tab's life — the empty-blob check below says what happened instead. */
+  const stopped = new Promise<void>((res) => { rec.onstop = rec.onerror = () => res() })
 
   const total = Math.min(v.duration || CARD_SECONDS, CARD_SECONDS)
   let frame = 0
   /* Whole seconds only. The caller puts this on a button, and a button is React state — told sixty
      times a second it re-renders sixty times a second, for a figure that changes once. */
   let said = -1
-  const draw = () => {
+  /* The canvas is captured at 30, and a Mac runs its display at 120: drawn every frame, three
+     quarters of the compositing is a full-size video blit and a full-size overlay stamp for a frame
+     no recorder ever reads — while the encoder is competing for the same seconds in real time. */
+  let last = 0
+  const draw = (now: number) => {
+    frame = requestAnimationFrame(draw)
+    if (now - last < 32) return
+    last = now
     cover(ctx, v, v.videoWidth, v.videoHeight)
     ctx.drawImage(overlay, 0, 0)
     const at = Math.floor(Math.min(v.currentTime, total))
     if (at !== said) onTick?.((said = at), total)
-    frame = requestAnimationFrame(draw)
   }
   const stop = () => { if (rec.state !== 'inactive') rec.stop() }
   v.onended = stop
