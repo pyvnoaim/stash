@@ -174,6 +174,17 @@ export interface Result extends Watch {
    * itself — those are `size × lev` against the stop, which is the euro arithmetic `netOf` does.
    */
   cash?: number
+  /**
+   * The money over the margin it was put up against — the number a venue prints as ROI, as a
+   * fraction: 2.17 is +217%. Not the price move, which on a leveraged trade is the whole leverage
+   * smaller, and not always the R beside it: an R measured off a resting stop is a share of what
+   * the trade was willing to lose, and this is a share of what it had on the table.
+   *
+   * Only where the venue said what the margin was. A row the app sized itself needs nothing here —
+   * its `size` and `lev` say it outright — and a row filed before this existed has no honest way
+   * back to it, so those simply don't carry one.
+   */
+  roi?: number
 }
 
 /** Whether this row is money you actually have on the table, which is a different sentence. */
@@ -727,6 +738,7 @@ export function load(data: unknown): State {
       r: Number(r.r),
       // the venue's own figure, and zero is a real answer: a scratch is not a missing number
       ...(typeof r.cash === 'number' && isFinite(r.cash) ? { cash: r.cash } : {}),
+      ...(typeof r.roi === 'number' && isFinite(r.roi) ? { roi: r.roi } : {}),
       ...positionOf(r),
     }))
     /* `> 0` rather than isFinite for the three that cannot be zero: Number(null) and Number('')

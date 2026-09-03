@@ -70,9 +70,13 @@ export function CardDialog({ p, r, who, children }: {
   /* The overlay only — the media sits behind it as its own layer. '' rather than null is the card
      being told there is something under it: it drops its own gradient and keeps the scrim that
      makes white text readable over a stranger's photograph. */
+  /* Only while it is open. `p` and `who` are built inline by every row that offers a card, so they
+     are new objects on each render and this memo never held: a log of fifty rows drew fifty cards
+     and percent-encoded fifty SVGs on every poll, for a dialog nobody had pressed. Closed, Radix
+     has unmounted everything that reads it. */
   const overlay = useMemo(
-    () => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(cardSvg(p, r, who, bg ? '' : null)),
-    [p, r, who, bg],
+    () => (open ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(cardSvg(p, r, who, bg ? '' : null)) : ''),
+    [open, p, r, who, bg],
   )
 
   /* What the still card bakes in: the picture itself, or the frame the clip is paused on. A video

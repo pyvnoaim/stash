@@ -19,7 +19,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { CardDialog } from '@/components/card-dialog'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
-import { candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash, type Result } from '@/lib/store'
+import { candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ASSETS, assetOf, atr, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
@@ -1658,7 +1658,8 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
     /* A resting stop is a real denominator and keeps its R: that is the money the trade was
        actually willing to lose. Without one the row was being scored against a liquidation price or
        a leverage, and there the venue's own money over the margin says it better — see rOfClose. */
-    const r = (stopRisk == null && hit ? rOfClose(hit) : null)
+    const roi = hit ? rOfClose(hit) : null
+    const r = (stopRisk == null ? roi : null)
       ?? (p.side === 'long' ? exit - p.entry : p.entry - exit) / risk
     const id = assetOf(p.symbol)
     closeWatch({
@@ -1697,6 +1698,10 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
          feed's size is coins and Watch.size is euros, so the app cannot price this row itself —
          which is exactly why the venue's own figure rides along instead of a guess. */
       ...(hit?.pnl != null ? { cash: hit.pnl } : {}),
+      /* and that money over the margin — the venue's ROI, which the card prints. Kept even where
+         the R above is a resting stop's: the two answer different questions and only this one is
+         what the position actually returned on what it put up. */
+      ...(roi != null ? { roi } : {}),
     })
   }
 
@@ -1716,7 +1721,8 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
     // drawn at: off the leverage where there is one, off the margin per coin where there is not
     const risk = c.lev ? c.entry / c.lev : (c.margin && c.size ? c.margin / c.size : null)
     if (risk == null || !(risk > 0)) continue
-    const r = rOfClose(c) ?? (c.side === 'long' ? c.exit - c.entry : c.entry - c.exit) / risk
+    const roi = rOfClose(c)
+    const r = roi ?? (c.side === 'long' ? c.exit - c.entry : c.entry - c.exit) / risk
     const id = assetOf(c.symbol)
     closeWatch({
       // the same id the diff builds, so a trade both paths reach is still one row in the record
@@ -1730,6 +1736,7 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
       ts: c.openedAt ?? c.closedAt, entryAt: c.openedAt ?? c.closedAt, closedAt: c.closedAt,
       level: r >= 0 ? 'target' : 'stop', exit: c.exit, r,
       ...(c.pnl != null ? { cash: c.pnl } : {}),
+      ...(roi != null ? { roi } : {}),
     })
   }
 }
@@ -2338,7 +2345,13 @@ const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,
 const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 const ran = (from: number, to: number) => (when(from) === when(to) ? when(to) : `${when(from)} → ${when(to)}`)
 
-const LOG_SCROLL = 'max-h-[60vh] overflow-y-auto'
+/* The right-hand padding is the scrollbar's lane. The share button sits hard against the right edge
+   of every row, and an overlay scrollbar — the kind macOS draws over the content rather than beside
+   it — comes down the list straight on top of the icons: a column of buttons with a grey bar
+   through them, and the one on the row you are pointing at is the one it covers. Eight pixels is
+   wider than the bar, so it passes the icons instead of over them, and the header inside is padded
+   by the same amount, so nothing moves out of line with anything else. */
+const LOG_SCROLL = 'max-h-[60vh] overflow-y-auto pr-2'
 /** …and the headings that stay put inside it. `bg-card` because this one sits inside a Card, where
  *  the page background would show as a stripe of the wrong colour under the scrolled rows. */
 const LOG_HEAD = 'bg-card sticky top-0 z-10'
@@ -2351,21 +2364,41 @@ const LOG_SORTS = [
   { id: 'lost', label: 'Most lost', hint: 'Worst first, by what the trade cost' },
 ] as const
 
-/** One finished row as the share card wants it — the same payload whichever verb is chosen. */
-const cardOf = (r: Result) => ({
-  symbol: r.asset, side: r.dir, entry: r.entry, mark: r.exit,
+/**
+ * One finished row as the share card wants it — the same payload whichever verb is chosen.
+ *
+ * Structural rather than `Result`, because the Desk draws this card too: a row off `/api/desk` is
+ * the same trade with fewer fields on it, and one card function means somebody else's card cannot
+ * quietly drift into saying something different from your own.
+ */
+type CardRow = {
+  asset: string, dir: 'long' | 'short', entry: number, exit: number,
+  entryAt: number, closedAt: number,
+  cash?: number | null, roi?: number | null, lev?: number | null,
+  rule?: string, horizon?: string,
+}
+const cardOf = (r: CardRow) => {
   // price move signed by the side, the same way a position's is
-  pct: r.entry > 0 ? (r.exit / r.entry - 1) * (r.dir === 'long' ? 100 : -100) : null,
-  /* only the venue's own dollars: the card draws a $ figure, and the euros this app works out for
-     its own rows are not dollars. A row without one prints the R and the prices, which is the
-     honest half of the same card. */
-  pnl: r.cash ?? null,
-  openedAt: new Date(r.entryAt).toISOString(),
-  closedAt: new Date(r.closedAt).toISOString(),
-  // no size: a position's size is coins where the money beside it is euros, and the card prints
-  // both in the same place with no unit. The rule that made it says more about the trade than either.
-  venue: r.rule || r.horizon || undefined,
-})
+  const pct = r.entry > 0 ? (r.exit / r.entry - 1) * (r.dir === 'long' ? 100 : -100) : null
+  return {
+    symbol: r.asset, side: r.dir, entry: r.entry, mark: r.exit,
+    pct,
+    /* What it returned on the margin behind it, which on a leveraged trade is the whole leverage
+       bigger than the move above and is the number anyone reading the card means by "how much".
+       The venue's own, where it said; off the leverage where this app sized the trade itself,
+       which is the same sum done forwards — margin × lev is the notional the move ran on. */
+    roi: r.roi ?? (r.lev && pct != null ? (pct * r.lev) / 100 : null),
+    /* only the venue's own dollars: the card draws a $ figure, and the euros this app works out for
+       its own rows are not dollars. A row without one prints the R and the prices, which is the
+       honest half of the same card. */
+    pnl: r.cash ?? null,
+    openedAt: new Date(r.entryAt).toISOString(),
+    closedAt: new Date(r.closedAt).toISOString(),
+    // no size: a position's size is coins where the money beside it is euros, and the card prints
+    // both in the same place with no unit. The rule that made it says more about the trade than either.
+    venue: r.rule || r.horizon || undefined,
+  }
+}
 
 function Record({ onPick }: { onPick: (asset: string) => void }) {
   const { results: every, dials } = useStash()
@@ -2625,8 +2658,6 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
   )
 }
 
-const DESK_LOG_GRID = 'grid items-baseline gap-x-3 grid-cols-[minmax(4rem,1fr)_minmax(4rem,8rem)_4.5rem_3.5rem_5rem]'
-
 /** A settled figure as the desk prints it: the venue's dollars, or nothing where there are none. */
 const deskPaid = (cash: number | null) =>
   cash === null ? '' : `${cash >= 0 ? '+' : '−'}$${Math.abs(cash).toFixed(2)}`
@@ -2670,11 +2701,12 @@ const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => !r.cash || !rs.s
  * ten desks with twenty trades each unrolled is a page nobody reaches the bottom of, and the
  * summary is what you read first anyway.
  *
- * The same table the Log tab draws for your own record, short one column: when the trade opened.
- * `/api/desk` sends `closedAt` and not `entryAt`, so the Ran column has one end of its range and is
- * left off rather than half-drawn. Putting `entryAt` on that allowlist is a one-line change to the
- * route and a decision about what the desk switch promises, so it is not one to make from the page
- * that happens to want it.
+ * The same table the Log tab draws for your own record — the same grid, the same headings, the same
+ * asset faces down the left, and the same share beside every row. It was its own narrower table
+ * with no icons and nothing to press, which read as a lesser copy of the thing it is a copy of; one
+ * grid and one card function now, so the two cannot drift apart. `/api/desk` sends the asset, the
+ * two prices and the open stamp for exactly that: the Ran column has both ends of its range, and a
+ * card is drawn from prices.
  *
  * The money is the venue's own settled dollars and only that. A trade someone sized by hand prices
  * itself off a size and a funding dial that never leave their device — those rows
@@ -2714,12 +2746,14 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
             those rows say it in R alone.
           </DialogDescription>
         </DialogHeader>
-        {/* no horizontal padding on the scroller: the header below is sticky, and a container
-            padded at the sides leaves it two gaps for the rows to scroll up through */}
-        <div className="max-h-[60vh] overflow-y-auto">
-          <div className={cn(DESK_LOG_GRID, 'text-muted-foreground font-heading bg-background sticky top-0 border-b px-1.5 pt-1 pb-1 text-[10px] tracking-wider uppercase')}>
+        <div className={LOG_SCROLL}>
+          {/* bg-background, not the Log's bg-card: this table is inside a dialog, and a heading
+              that keeps the card colour is a stripe of the wrong grey over the rows sliding under
+              it. Last class wins through `cn`, which is what makes one shared string safe here. */}
+          <div className={cn(LOG_GRID, LOG_HEAD, 'text-muted-foreground font-heading bg-background border-b px-1.5 pr-9 pb-1 text-[10px] tracking-wider uppercase')}>
             <span>Trade</span>
             <span>Side</span>
+            <span className="hidden sm:block">Ran</span>
             <span className="text-right">Ended</span>
             <span className="text-right">R</span>
             <span className="text-right">Paid</span>
@@ -2731,20 +2765,42 @@ function DeskLog({ p, onPick }: { p: DeskRow; onPick: (asset: string) => void })
                  carrying one id — or none at all, which is what `String(r?.id ?? '')` leaves — is
                  a thing their file is allowed to contain and this list must not break on. Nothing
                  in a row holds state, so the index is a key with nothing to get wrong. */
-              <div key={i} className={cn(DESK_LOG_GRID, 'border-b border-dashed px-1.5 py-1.5 text-sm last:border-0')}>
-                <TradeName name={r.label} className="font-medium"
-                  onPick={(id) => { setOpen(false); onPick(id) }} />
-                <span className="text-muted-foreground truncate text-xs">
-                  {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
-                </span>
-                <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                  {hit ? 'target' : 'stopped'}
-                </span>
-                <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
-                <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
-                  (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                  {deskPaid(r.cash)}
-                </span>
+              <div key={i} className="hover:bg-muted/40 border-b border-dashed last:border-0">
+                <div className="flex items-center">
+                <div className={cn(LOG_GRID, 'min-w-0 flex-1 px-1.5 py-1.5 text-sm')}>
+                  <TradeName name={r.label} asset={r.asset || r.label} className="font-medium"
+                    onPick={(id) => { setOpen(false); onPick(id) }} />
+                  <span className="text-muted-foreground truncate text-xs">
+                    {r.dir === 'long' ? 'Long' : 'Short'}{r.horizon ? ` · ${r.horizon}` : ''}
+                  </span>
+                  {/* both ends where their document had them, and the close alone where it did not —
+                      the same span the Log writes, off the same two stamps */}
+                  <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums sm:block">
+                    {ran(r.entryAt ?? r.closedAt, r.closedAt)}
+                  </span>
+                  <span className={cn('text-right text-xs', hit ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {hit ? 'target' : 'stopped'}
+                  </span>
+                  <span className="text-right font-mono text-xs tabular-nums">{rLabel(r.r)}</span>
+                  <span className={cn('text-right font-mono text-xs font-medium tabular-nums',
+                    (r.cash ?? r.r) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                    {deskPaid(r.cash)}
+                  </span>
+                </div>
+                {/* Their trade, on their card, signed with their name and their face — the same
+                    window your own rows open. A row whose document lost one of its two prices has
+                    no card to draw and keeps the space instead, so the column stays a column. */}
+                {r.entry && r.exit ? (
+                  <CardDialog
+                    p={cardOf({ ...r, asset: r.asset || r.label, entry: r.entry, exit: r.exit, entryAt: r.entryAt ?? r.closedAt })}
+                    r={r.r} who={{ name: p.name, avatar: p.avatar }}>
+                    <Button variant="ghost" size="icon-xs" aria-label={`Share ${r.label} card`}
+                      className="text-muted-foreground hover:text-foreground shrink-0">
+                      <Share2 className="size-3.5" />
+                    </Button>
+                  </CardDialog>
+                ) : <span className="size-6 shrink-0" />}
+                </div>
               </div>
             )
           })}

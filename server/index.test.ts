@@ -176,7 +176,8 @@ await put(mia, (await (await get('/state', mia)).json()).version, {
   results: [
     { id: 'r1', label: 'Bitcoin', horizon: 'Trading', dir: 'long', level: 'target', r: 2, closedAt: 5, size: 500, lev: 10 },
     { id: 'r2', label: 'Solana', horizon: 'Trading', dir: 'long', level: 'stop', r: -1, closedAt: 6 },
-    { id: 'mexc-BTCUSDT-7', label: 'Bitcoin', horizon: 'Trading', dir: 'short', level: 'target', r: 3, closedAt: 7, cash: 12.4 },
+    { id: 'mexc-BTCUSDT-7', label: 'Bitcoin', horizon: 'Trading', dir: 'short', level: 'target', r: 3, closedAt: 7, cash: 12.4,
+      asset: 'BTCUSDT', entry: 66420, exit: 64100, entryAt: 6, roi: 0.42 },
   ],
   watches: [
     { id: 'w1', label: 'Ether', horizon: 'Trading', dir: 'short', entry: 3, stop: 4, target: 1, size: 500, lev: 10 },
@@ -193,6 +194,16 @@ assert.equal(seen[0].results[0].r, 2)
 // the venue's settled dollars ride along; a row she sized herself has none to send
 assert.equal(seen[0].results[0].cash, null, 'no venue closed it, so there is no settled figure')
 assert.equal(seen[0].results[1].cash, 12.4, 'what her exchange settled it for')
+/* the trade behind the money: the asset, the two prices and the open stamp, which is what the
+   card the Desk now offers is drawn from. A price a venue printed for everyone is the least
+   private thing on the row, and without them somebody else's log is a column of letters. */
+assert.deepEqual(
+  (({ asset, entry, exit, entryAt, roi }) => ({ asset, entry, exit, entryAt, roi }))(seen[0].results[1]),
+  { asset: 'BTCUSDT', entry: 66420, exit: 64100, entryAt: 6, roi: 0.42 })
+// and a row whose document never held them says null rather than a number it made up
+assert.deepEqual(
+  (({ asset, entry, exit, roi }) => ({ asset, entry, exit, roi }))(seen[0].results[0]),
+  { asset: '', entry: null, exit: null, roi: null })
 assert.deepEqual(seen[0].open.map((w: any) => w.id), ['w1'], 'nor is a plan she is only watching')
 assert.equal(seen[0].open[0].mark, null, 'a document row carries no live price')
 // the filter reads size and leverage to decide, and neither one is what it sends

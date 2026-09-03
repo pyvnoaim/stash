@@ -1631,6 +1631,14 @@ export function start({
                carries none: that figure is this app's arithmetic over a size they typed, and it is
                not sent. */
             r: num(r?.r), cash: num(r?.cash), closedAt: num(r?.closedAt) ?? 0,
+            /* The trade itself: which asset, what it was got in and out at, when it opened, and
+               what it returned on the margin behind it. The list read as a column of Rs against a
+               column of labels and could not be shared, because a card is drawn from prices — and
+               a price a venue printed for everyone is the least private thing on this row. The
+               money above is the wider promise; this is the trade the money came from. */
+            asset: String(r?.asset ?? ''),
+            entry: num(r?.entry), exit: num(r?.exit), entryAt: num(r?.entryAt),
+            roi: num(r?.roi),
           })).filter((r: any) => r.r !== null),
           open: arr(s.watches).filter(taken).map((w: any) => ({
             id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),

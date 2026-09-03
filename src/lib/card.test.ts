@@ -23,6 +23,27 @@ test('the card names the asset, the side and the profit', () => {
   assert.match(svg, /width="1200" height="630"/)
 })
 
+test('the return on the margin stands beside the move in the price', () => {
+  // the whole point of the row: 3.74% of price is 217% of what a 58× position had on the table
+  const svg = cardSvg({ ...P, pct: 3.74, pnl: 10.35, roi: 2.17 }, 2.17)
+  assert.match(svg, />RETURN</)
+  assert.match(svg, />\+217%</)
+  assert.match(svg, />\+3\.74%</)   // and the price's own move is still there, unchanged
+  // a small return keeps its decimal, and a loss is signed like every other figure here
+  assert.match(cardSvg({ ...P, roi: 0.037 }), />\+3\.7%</)
+  assert.match(cardSvg({ ...P, pnl: -400, roi: -0.62 }), />−62%</)
+  // a row that never knew its margin says nothing rather than guessing at one
+  assert.doesNotMatch(cardSvg(P, 1.84), />RETURN</)
+  /* and the R is not the same number in another unit twice: a stopless position is scored on its
+     margin, so its R *is* its return — 2.17R and +217% are one figure, and the card prints it once */
+  assert.doesNotMatch(svg, />RISK</)
+  assert.doesNotMatch(svg, />\+2\.17R</)
+  // measured off a resting stop the two are different questions, and both are answered
+  const stopped = cardSvg({ ...P, pct: 3.74, pnl: 10.35, roi: 2.17 }, 0.8)
+  assert.match(stopped, />\+0\.80R</)
+  assert.match(stopped, />\+217%</)
+})
+
 test('a loss is red and signed, and green is kept for profit', () => {
   const red = cardSvg({ ...P, side: 'short', pct: -4.5, pnl: -1234.5 })
   assert.match(red, />−\$1,234\.50</)

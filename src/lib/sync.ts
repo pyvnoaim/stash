@@ -504,6 +504,13 @@ export interface DeskRow {
     level: 'target' | 'stop', r: number, closedAt: number,
     /** What the venue settled it for, in dollars. Null on a row nobody's exchange closed. */
     cash: number | null,
+    /** The asset id where their document named one, '' where it did not — the icon beside the row. */
+    asset: string,
+    /** The prices it ran between and when it started, so somebody else's trade draws the same card
+     *  yours does. Null on a row whose document is missing one of them. */
+    entry: number | null, exit: number | null, entryAt: number | null,
+    /** What it made on its margin, as a fraction. Null on every row filed before that was kept. */
+    roi: number | null,
   }[]
   open: {
     id: string, label: string, horizon: string, dir: 'long' | 'short',

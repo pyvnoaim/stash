@@ -31,6 +31,10 @@ export type CardPosition = {
   mark: number | null
   /** price move from entry, signed by the side */
   pct: number | null
+  /** What it made on the margin behind it, as a fraction — 2.17 is +217%. The move above is the
+   *  price's, and on anything leveraged the two are the whole leverage apart: the same trade that
+   *  moved 3.74% returned 217% of what it had on the table. Null where nothing knows the margin. */
+  roi?: number | null
   /** PnL in the quote currency: unrealised while it runs, realised once it is over */
   pnl: number | null
   openedAt: string | null
@@ -130,9 +134,21 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
   const ran = !p.openedAt || !p.closedAt || day(p.openedAt) === day(p.closedAt)
     ? [p.closedAt ? 'Closed' : 'Opened', day((p.closedAt ?? p.openedAt)!)]
     : ['Ran', `${day(p.openedAt)} → ${day(p.closedAt)}`]
+  /* The return on the margin, beside the move in the price — the two numbers a leveraged trade is
+     read by, and the reason the move alone was never the answer to "how much did you make". Whole
+     percent, and a decimal only under ten: "+217.0%" is a decimal nobody reads, while "+4%" on a
+     trade that returned 3.7% is a rounding error the card would be showing off with. */
+  const roi = p.roi == null ? null
+    : `${p.roi >= 0 ? '+' : '−'}${(Math.abs(p.roi) * 100).toFixed(Math.abs(p.roi) < 0.1 ? 1 : 0)}%`
+  /* …and the R, unless it is the same number in another unit. A stopless position is scored on its
+     margin — the money over what it put up, which is this very return — so those cards were saying
+     "+2.17R" and "+217%" side by side and calling it two figures. Where the R was measured off a
+     resting stop the two really do differ, and both stand. */
+  const twice = r != null && p.roi != null && Math.abs(r - p.roi) < 0.005
   const rows = [
     p.pnl != null && p.pct != null && ['Move', pct, ink],
-    r != null && ['Risk', `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`, '#fafafa'],
+    roi != null && ['Return', roi, ink],
+    r != null && !twice && ['Risk', `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`, '#fafafa'],
     ['Entry', num(p.entry), '#fafafa'],
     p.mark != null && [p.closedAt ? 'Exit' : 'Now', num(p.mark), '#fafafa'],
     (p.openedAt || p.closedAt) && [ran[0], ran[1], '#a1a1aa'],
