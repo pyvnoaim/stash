@@ -25,9 +25,11 @@ const TEMPLATES: { id: Template; label: string; hint: string }[] = [
  *  preset is one of the grounds the renderer draws itself. */
 type Bg = { kind: 'image'; url: string } | { kind: 'video'; url: string } | { kind: 'preset'; id: PresetId }
 
-/* The last ground and template chosen, per device. Only the built-in grounds are remembered — a
-   photograph is a choice about one card, and a clip is a file this tab was holding open. */
-const BG_KEY = 'stash-card-bg', TPL_KEY = 'stash-card-template'
+/* The template is remembered per device; the background deliberately is not. A ground is a choice
+   about the card in front of you, and inheriting the last one meant every card opened wearing a
+   colour picked for a different trade — the plain card, which is the one most of them want, took a
+   press to get back to. Every card starts on the card's own ground. */
+const TPL_KEY = 'stash-card-template'
 const remembered = <T extends string>(key: string, ok: readonly T[], fallback: T): T => {
   try { const v = localStorage.getItem(key) as T | null; return v && ok.includes(v) ? v : fallback } catch { return fallback }
 }
@@ -61,10 +63,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
     const t = remembered(TPL_KEY, TEMPLATES.map((x) => x.id), 'ledger')
     return templates.includes(t) ? t : templates[0]!
   })
-  const [bg, setBg] = useState<Bg | null>(() => {
-    const id = remembered(BG_KEY, ['none', ...PRESETS.map((x) => x.id)] as const, 'none')
-    return id === 'none' ? null : { kind: 'preset', id }
-  })
+  const [bg, setBg] = useState<Bg | null>(null)
   /** which press is running, and what it wants to say while it runs */
   const [busy, setBusy] = useState<{ job: 'copy' | 'png' | 'share' | 'video'; say: string } | null>(null)
   const file = useRef<HTMLInputElement>(null)
@@ -124,10 +123,6 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
       setBg(null)
       toast('Not a picture', { description: `${f.type || 'That file'} is not something this browser can open.` })
     }
-  }
-  const choose = (b: Bg | null) => {
-    setBg(b)
-    remember(BG_KEY, b?.kind === 'preset' ? b.id : b ? 'upload' : 'none')
   }
 
   // one wrapper for all of them, so a press can never leave the buttons stuck in their busy state
@@ -216,7 +211,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
               <button type="button" role="radio" aria-checked={!bg} aria-label="None"
                 className={cn('aspect-[1200/630] h-6 rounded-sm border bg-[#101014] transition-shadow',
                   !bg ? 'ring-foreground/70 ring-2 ring-offset-1 ring-offset-background' : 'hover:ring-foreground/30 hover:ring-2 hover:ring-offset-1 hover:ring-offset-background')}
-                onClick={() => choose(null)} />
+                onClick={() => setBg(null)} />
             </Hint>
             {PRESETS.map((x) => (
               <Hint key={x.id} label={x.label}>
@@ -227,7 +222,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
                       ? 'ring-foreground/70 ring-2 ring-offset-1 ring-offset-background'
                       : 'hover:ring-foreground/30 hover:ring-2 hover:ring-offset-1 hover:ring-offset-background')}
                   style={{ background: `linear-gradient(135deg, ${x.from}, ${x.to})` }}
-                  onClick={() => choose({ kind: 'preset', id: x.id })} />
+                  onClick={() => setBg({ kind: 'preset', id: x.id })} />
               </Hint>
             ))}
             <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => file.current?.click()}
@@ -238,7 +233,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
             {(bg?.kind === 'image' || bg?.kind === 'video') && (
               <Hint label="Take the picture off">
                 <Button variant="ghost" size="icon" className="text-muted-foreground size-7" aria-label="Remove background"
-                  onClick={() => choose(null)}>
+                  onClick={() => setBg(null)}>
                   <Trash2 />
                 </Button>
               </Hint>

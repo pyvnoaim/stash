@@ -263,43 +263,15 @@ ${t(at, 572, vfs, fill, 600, value, end)}`
    widest the block may be before its padding, which leaves it stopping short of the middle column
    of the band below it, and 76 is the size the card was drawn at.
 
-   Glass over a photograph, paint everywhere else. A solid block of the trade's colour sat on a
-   picture like a sticker, so there it is a pane: a blurred copy of the picture, clipped to the
-   block, with the tint over it and white figures on top. Over the card's own ground the same pane
-   was a murky tint on black — a translucent colour over nothing is just a duller colour — so the
-   block stays solid there, and over a clip too, since the frame is drawn underneath at export time
-   and is not here to blur. */
-function chip(head: string, ink: string, bg: string | null = null): string {
+   Solid, over anything. It was glass for a while — a blurred copy of the picture under a
+   part-opaque tint — and the picture underneath took the colour with it: milky over a bright clip,
+   muddy over the card's own dark ground, and the figures on top never as readable as black on the
+   flat block. The one number a stranger's eye lands on is worth more than the effect. */
+function chip(head: string, ink: string): string {
   const fs = Math.min(76, Math.floor(620 / ems(head)))
   const w = Math.round(ems(head) * fs) + 56
-  const photo = bg && AVATAR.test(bg) ? bg : null
-  /* Anything behind the card that is not the card's own ground: a picture baked in, or a clip,
-     which is drawn underneath at export time and so is `''` here. Both get the pane — a solid
-     block over somebody's video is the sticker this was meant to stop being — and only the picture
-     can be blurred, since the clip's frame is not inside this SVG to blur. The rest of what the
-     eye reads as glass is the tint, the gloss and the lit edge, and those work over either. */
-  const media = bg !== null && !presetOf(bg)
-  const y = Math.round(194 + (104 + fs * 0.72) / 2)
-  const dark = t(76 + w / 2, y, fs, '#0a0a0a', 800, head, ' text-anchor="middle"')
-  if (!media) return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
-${dark}`
-  /* Nearly the full tint, not half of it. At 42% the colour went milky over a bright clip and the
-     white figures on top had nothing to stand against — a pale green smear where the loudest thing
-     on the card should be. What makes it read as glass is the gloss down the face and the lit
-     edge, neither of which costs any contrast; the figures stay the same black they are on the
-     solid block, which is the one thing on this card that must be legible at a glance. */
-  return `<defs>${photo ? `
-<clipPath id="chipc"><rect x="76" y="194" width="${w}" height="104" rx="14"/></clipPath>
-<filter id="frost" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="16"/></filter>` : ''}
-<linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0" stop-color="#ffffff" stop-opacity="0.3"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.08"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-</linearGradient>
-</defs>${photo ? `
-<image href="${photo}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice" filter="url(#frost)" clip-path="url(#chipc)"/>` : ''}
-<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}" fill-opacity="0.88"/>
-<rect x="76" y="194" width="${w}" height="104" rx="14" fill="url(#gloss)"/>
-<rect x="76.75" y="194.75" width="${w - 1.5}" height="102.5" rx="13.5" fill="none" stroke="#ffffff" stroke-opacity="0.4" stroke-width="1.5"/>
-${dark}`
+  return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
+${t(76 + w / 2, Math.round(194 + (104 + fs * 0.72) / 2), fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}`
 }
 
 const FONT_STACK = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif'
@@ -356,7 +328,7 @@ ${dressing(bg, ink)}
 ${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
 ${t(80, 118, 62, '#fafafa', 700, p.symbol)}
 ${t(80, 162, 25, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
-${chip(headline ?? pct, ink, bg)}
+${chip(headline ?? pct, ink)}
 ${byline(who)}
 ${band(rows)}
 </svg>`
@@ -521,7 +493,7 @@ ${dressing(bg, ink)}
 ${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
 ${t(80, 118, 62, '#fafafa', 700, rec.title)}
 ${t(80, 162, 25, '#d4d4d8', 400, [rec.sub, who ? `by ${signedOf(who)}` : null].filter(Boolean).join('   ·   '))}
-${chip(head, ink, bg)}
+${chip(head, ink)}
 ${strip}
 ${t(80, 384, 19, '#a1a1aa', 500, `each block one trade, oldest first${dropped ? ` · ${dropped} earlier not shown` : ''}`)}
 ${band(rows)}

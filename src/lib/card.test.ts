@@ -145,9 +145,6 @@ test('an avatar that is not a small self-contained picture is dropped, not drawn
 
 test('a chosen background takes the place of the card\'s own dressing', () => {
   const over = cardSvg(P, 1.84, null, PIC)
-  // and the headline sits on glass there — a blurred copy of the picture under the tint — and only there
-  assert.match(over, /filter="url\(#frost\)" clip-path="url\(#chipc\)"/)
-  assert.doesNotMatch(cardSvg(P, 1.84), /frost/)
   assert.match(over, /<image href="data:image\/png;base64,iVBORw0KGgo=" x="0" y="0" width="1200" height="630"/)
   // the scrim is what keeps white text readable over somebody's photograph
   assert.match(over, /fill="url\(#scrim\)"/)
@@ -165,11 +162,8 @@ test('a video background keeps the scrim and draws no picture of its own', () =>
   assert.match(clip, /fill="url\(#scrim\)"/)
   assert.doesNotMatch(clip, /<image/)
   assert.doesNotMatch(clip, /url\(#grid\)/)
-  /* …and the headline is a pane over it rather than a solid block, because there is a clip behind
-     it to see. Nothing to blur, though: the frame is drawn under this SVG at export time. */
-  assert.match(clip, /fill="#34d399" fill-opacity="0.88"/)
-  assert.doesNotMatch(clip, /frost/)
-  // a ground the card drew itself is not something to see through, so that one stays solid
+  // the headline is the same solid block whatever is behind the card — see the note on chip()
+  assert.match(clip, /rx="14" fill="#34d399"\/>/)
   assert.match(cardSvg(P, 1.84, null, 'preset:tide'), /rx="14" fill="#34d399"\/>/)
 })
 
