@@ -12,13 +12,13 @@ test('the card names the asset, the side and the profit', () => {
   assert.match(svg, /BTCUSDT/)
   assert.match(svg, /Long {3}· {3}0\.5 {3}· {3}Bitget {3}· {3}unrealised</)
   // the money is the headline, in a block of the trade's colour with the ink knocked out of it
-  assert.match(svg, /<rect x="76" y="244" width="\d+" height="96" rx="14" fill="#34d399"\/>/)
-  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800">\+\$3,700\.00</)
+  assert.match(svg, /<rect x="76" y="194" width="\d+" height="104" rx="14" fill="#34d399"\/>/)
+  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+\$3,700\.00</)
   // and the rest of it reads as label-and-figure, not as a sentence with middots in it
-  assert.match(svg, />Move</)
+  assert.match(svg, />MOVE</)
   assert.match(svg, />\+12\.33%</)
   assert.match(svg, />\+1\.84R</)
-  assert.match(svg, />Entry</)
+  assert.match(svg, />ENTRY</)
   assert.match(svg, />60,000</)
   assert.match(svg, /width="1200" height="630"/)
 })
@@ -32,18 +32,19 @@ test('a loss is red and signed, and green is kept for profit', () => {
   assert.match(cardSvg(P), /#34d399/)
 })
 
-test('the headline shrinks rather than running out over the picture', () => {
-  // twelve characters at 76px would push the block past the column; seven at that size never do
-  assert.match(cardSvg({ ...P, pnl: -123456.78 }), /font-size="72"[^>]*>−\$123,456\.78</)
+test('the headline shrinks rather than running the width of the card', () => {
+  // a billion-dollar line at 76px would run past the middle of the card; ordinary money never does
+  assert.match(cardSvg({ ...P, pnl: -1234567890.12 }), /font-size="67"[^>]*>−\$1,234,567,890\.12</)
+  assert.match(cardSvg({ ...P, pnl: -123456.78 }), /font-size="76"[^>]*>−\$123,456\.78</)
   assert.match(cardSvg({ ...P, pnl: 3700 }), /font-size="76"[^>]*>\+\$3,700\.00</)
 })
 
 test('a plan nobody took keeps the percent as its headline', () => {
   // watched rather than taken: no size, so no money — and a card with nothing big on it is no card
   const svg = cardSvg({ ...P, pnl: null })
-  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800">\+12\.33%</)
+  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+12\.33%</)
   // and the percent is not then said a second time as a row of its own
-  assert.doesNotMatch(svg, />Move</)
+  assert.doesNotMatch(svg, />MOVE</)
 })
 
 test('a feed with no mark still makes a card, saying nothing it cannot', () => {
@@ -51,8 +52,8 @@ test('a feed with no mark still makes a card, saying nothing it cannot', () => {
   assert.match(svg, />—</)
   assert.match(svg, /#a1a1aa/)   // neither number: grey, not the winning colour
   assert.match(svg, /· {3}unrealised</)
-  assert.doesNotMatch(svg, />Now</)
-  assert.doesNotMatch(svg, /Opened/)
+  assert.doesNotMatch(svg, />NOW</)
+  assert.doesNotMatch(svg, /OPENED/)
 })
 
 test('a finished trade says realised, and prints an exit rather than a mark', () => {
@@ -63,11 +64,11 @@ test('a finished trade says realised, and prints an exit rather than a mark', ()
   assert.match(svg, />\+\$9\.20</)
   assert.match(svg, /· {3}realised</)
   assert.doesNotMatch(svg, /unrealised/)
-  assert.match(svg, />Exit</)
+  assert.match(svg, />EXIT</)
   assert.match(svg, />0\.1909</)
-  assert.doesNotMatch(svg, />Now</)
+  assert.doesNotMatch(svg, />NOW</)
   // opened one day and closed the next, so the row names the span rather than one end of it
-  assert.match(svg, />Ran</)
+  assert.match(svg, />RAN</)
   assert.match(svg, />9 Aug → 10 Aug</)
   // no size to print, and the rule that made it stands where a venue would
   assert.match(svg, /Short {3}· {3}VWAP pull-back {3}· {3}realised</)
@@ -79,7 +80,7 @@ test('a running position still talks about a trade that is running', () => {
     openedAt: null, venue: 'bitget',
   })
   assert.match(svg, /unrealised/)
-  assert.match(svg, />Now</)
+  assert.match(svg, />NOW</)
   assert.match(svg, />110</)
 })
 
@@ -89,15 +90,15 @@ test('a symbol carrying markup cannot break out of the svg', () => {
 
 const PIC = 'data:image/png;base64,iVBORw0KGgo='
 
-test('the card is signed under the numbers, with the picture where there is one', () => {
+test('the card is signed under the money, with the picture where there is one', () => {
   const withPic = cardSvg(P, 1.84, { name: 'sam', avatar: PIC })
   assert.match(withPic, />sam</)
-  assert.match(withPic, /<image href="data:image\/png;base64,iVBORw0KGgo=" x="80" y="556"/)
+  assert.match(withPic, /<image href="data:image\/png;base64,iVBORw0KGgo=" x="80" y="340"/)
   assert.match(withPic, /clip-path="url\(#pfp\)"/)
 
   // a name with no picture still signs it, and slides left into the space the picture had
   const bare = cardSvg(P, 1.84, { name: 'sam', avatar: null })
-  assert.match(bare, /x="80" y="598"[^>]*>sam</)
+  assert.match(bare, /x="80" y="377"[^>]*>sam</)
   assert.doesNotMatch(bare, /<image/)
 
   // signed out is the card as it always was — no byline, nothing where one would go

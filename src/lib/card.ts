@@ -58,6 +58,16 @@ const AVATAR = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/
    string in, pure string out is what makes it testable — and a two-entry lookup is a cheaper
    duplicate than a dependency on the whole feed module. */
 const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
+/* How wide a string is, in ems, without a canvas to ask.
+   ponytail: a table of the eight characters that are nowhere near the average, and three buckets
+   for everything else. Every position on this card is arithmetic — a chip sized to its line, a band
+   of cells with the leftover split between them — and a flat 0.6em a character got the chip's
+   padding visibly wrong on the side the "$" and the "." were on. Measuring properly needs a canvas
+   this file deliberately does not have; this is within a few pixels, which is what the layout
+   needs. Widen a bucket, never narrow it: too wide leaves a gap, too narrow overlaps. */
+const CHAR: Record<string, number> = { ' ': 0.28, '.': 0.28, ',': 0.28, '-': 0.36, '+': 0.58, '−': 0.58, '$': 0.56, '%': 0.95, '→': 1 }
+const ems = (text: string) => [...text].reduce((w, c) => w + (CHAR[c] ?? (c >= '0' && c <= '9' ? 0.58 : c === c.toUpperCase() ? 0.68 : 0.55)), 0)
+
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
 const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
@@ -90,16 +100,25 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
   const pct = p.pct == null ? '—' : `${p.pct >= 0 ? '+' : ''}${p.pct.toFixed(2)}%`
   const head = headline ?? pct
   /* Money is longer than a percent — "−$123,456.78" is twelve characters where "+12.33%" was
-     seven — so the headline shrinks until its block fits the left column rather than running out
-     over the picture. Digits in this stack run about 0.6em; 520 leaves the chip's own padding
-     inside the column, and 76 is the size the card was drawn at. */
-  const fs = Math.min(76, Math.floor(520 / (head.length * 0.6)))
-  // the block behind it, sized to the line it holds. The one loud thing on the card.
-  const chip = Math.round(head.length * fs * 0.6) + 56
+     seven — so the headline shrinks rather than let its block run the width of the card. 620 is
+     the widest the block may be before its padding, which leaves it stopping short of the middle
+     column of the band below it, and 76 is the size the card was drawn at. */
+  const fs = Math.min(76, Math.floor(620 / ems(head)))
+  /* the block behind it, sized to the line it holds. The one loud thing on the card. 28px of
+     padding each side, and the line centred in it rather than set from its left edge, so whatever
+     the measurement is out by is split between the two sides instead of piling up on the right. */
+  const chip = Math.round(ems(head) * fs) + 56
   /* The trade in a column of label-and-figure, which is how the reading eye actually takes numbers
      — not as a sentence with middots in it. The move is a row rather than the note under the
      headline because the headline is money: a percent said twice is a card arguing with itself,
-     so it only appears here when the money took the top line. */
+     so it only appears here when the money took the top line.
+     The figures were right-anchored at 580, half the card away from the labels: "Move" and its
+     percent sat at opposite ends of five hundred pixels of nothing, and the eye had to walk the
+     gap to pair them. 470 is roughly where the chip ends, so the whole left block — name, chip,
+     rows, signature — squares off against one edge instead of three.
+     The whole block sits 47px higher than it was drawn: the card had a hand's width of nothing
+     above the asset and a hairline under the signature, which reads as content that slid down the
+     picture. Even margins top and bottom, and it reads as a card. */
   /* When it ran, as one of these rows rather than as a line of its own along the bottom. It was
      along the bottom, right-anchored, sharing a baseline with the byline — and a name may be
      thirty-two characters, so any name past about nine ran straight through the dates. Nothing
@@ -120,26 +139,26 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
   ].filter(Boolean) as [string, string, string][]
   const t = (x: number, y: number, size: number, fill: string, weight: number, text: string, extra = '') =>
     `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-weight="${weight}"${extra}>${esc(text)}</text>`
-  /* Whose trade it is, bottom left under the numbers: a byline signs the thing it is under. It was
-     across from the asset at the top, which put the two loudest lines on one baseline and left the
-     bottom of the card empty — and with a picture behind the card that empty bottom is where the
-     picture is least covered, so the text belongs there. Signed out, the row simply isn't there;
-     the card has always worked without an account and still does.
+  /* Whose trade it is, under the money and above the numbers: a byline signs the thing it is under,
+     and that is where the eye already is once it has read the headline. It has been two other
+     places — across from the asset on one baseline with it, and alone on the bottom edge — and the
+     numbers now run along the bottom, so this is the space left, which is also the right one.
+     Signed out, the row simply isn't there; the card has always worked without an account.
      The picture is optional and the name is not: a name is the part that makes it yours, and an
      account with no picture chosen should not get a placeholder letter next to a word that is
      already spelled out. Rounded square rather than a circle, the same shape the Avatar in the app
      wears, scaled up. */
   const pic = who?.avatar && AVATAR.test(who.avatar) ? who.avatar : null
-  /* A name is allowed thirty-two characters and this one is set in 30px, which is wider than the
-     column it signs. Cut to what fits rather than let it run out over the picture — the same
+  /* A name is allowed thirty-two characters and this one is set in 28px, which is wider than the
+     space it signs. Cut to what fits rather than let it run out over the picture — the same
      rule the headline follows, and the only place on the card where text is somebody else's
      length to choose. */
   const signed = who && (who.name.length > 25 ? who.name.slice(0, 24) + '…' : who.name)
   const byline = !who ? '' : `${pic ? `
-<clipPath id="pfp"><rect x="80" y="556" width="56" height="56" rx="12"/></clipPath>
-<image href="${pic}" x="80" y="556" width="56" height="56" preserveAspectRatio="xMidYMid slice" clip-path="url(#pfp)"/>
-<rect x="80" y="556" width="56" height="56" rx="12" fill="none" stroke="#ffffff" stroke-opacity="0.2" stroke-width="2"/>` : ''}
-${t(pic ? 152 : 80, 598, 30, '#fafafa', 600, signed!)}`
+<clipPath id="pfp"><rect x="80" y="340" width="52" height="52" rx="12"/></clipPath>
+<image href="${pic}" x="80" y="340" width="52" height="52" preserveAspectRatio="xMidYMid slice" clip-path="url(#pfp)"/>
+<rect x="80" y="340" width="52" height="52" rx="12" fill="none" stroke="#ffffff" stroke-opacity="0.2" stroke-width="2"/>` : ''}
+${t(pic ? 148 : 80, 377, 28, '#fafafa', 600, signed!)}`
   /* The ground the numbers stand on, when nothing was chosen to stand them on. It was one flat
      rectangle, which read as a screenshot of a terminal rather than as a card anybody would post:
      three cheap SVG primitives fix that and cost nothing to draw. A vertical wash so the top is not
@@ -148,8 +167,9 @@ ${t(pic ? 152 : 80, 598, 30, '#fafafa', 600, signed!)}`
      like. Every one of them takes its colour from `ink`, so a losing card carries no trace of the
      winning one.
 
-     With a picture behind it, all of that comes off and a scrim goes on instead: a wash dark at the
-     left where every word is and clear at the right where the picture is worth seeing. White text
+     With a picture behind it, all of that comes off and a scrim goes on instead: dark at the top
+     where the asset and the money are and dark along the bottom where the figures run, thinnest
+     across the middle, which is the band of the picture nothing is written over. White text
      straight onto somebody's photograph is text you cannot read on half the photographs. */
   const dressing = bg === null ? `<defs>
 <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -158,37 +178,62 @@ ${t(pic ? 152 : 80, 598, 30, '#fafafa', 600, signed!)}`
 <radialGradient id="bloom" cx="0.28" cy="0.62" r="0.62">
 <stop offset="0" stop-color="${ink}" stop-opacity="0.16"/><stop offset="1" stop-color="${ink}" stop-opacity="0"/>
 </radialGradient>
-<linearGradient id="edge" x1="0" y1="0" x2="1" y2="0">
-<stop offset="0" stop-color="${ink}"/><stop offset="0.55" stop-color="${ink}" stop-opacity="0.35"/>
-<stop offset="1" stop-color="${ink}" stop-opacity="0"/>
-</linearGradient>
 <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
 <path d="M60 0H0V60" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1"/>
 </pattern>
 </defs>
 <rect width="1200" height="630" fill="url(#bg)"/>
 <rect width="1200" height="630" fill="url(#grid)"/>
-<rect width="1200" height="630" fill="url(#bloom)"/>
-<rect x="0" y="0" width="1200" height="6" fill="url(#edge)"/>` : `<defs>
-<linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0">
-<stop offset="0" stop-color="#000000" stop-opacity="0.86"/>
-<stop offset="0.5" stop-color="#000000" stop-opacity="0.5"/>
-<stop offset="1" stop-color="#000000" stop-opacity="0.12"/>
+<rect width="1200" height="630" fill="url(#bloom)"/>` : `<defs>
+<linearGradient id="scrim" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#000000" stop-opacity="0.82"/>
+<stop offset="0.45" stop-color="#000000" stop-opacity="0.42"/>
+<stop offset="1" stop-color="#000000" stop-opacity="0.86"/>
 </linearGradient>
 </defs>${bg && AVATAR.test(bg) ? `
 <image href="${bg}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice"/>` : ''}
-<rect width="1200" height="630" fill="url(#scrim)"/>
-<rect x="0" y="0" width="1200" height="6" fill="${ink}"/>`
+<rect width="1200" height="630" fill="url(#scrim)"/>`
+  /* The figures along the bottom rather than stacked down the left, so the card spends its whole
+     width instead of leaving half of it empty.
+     Set in cells of one fixed width, the gaps came out uneven: five equal columns put four of
+     them flush left and the fifth, anchored to the right edge, a hundred pixels further off than
+     any of its neighbours. So the cells are measured and the leftover is split evenly between
+     them — the same thing `justify-content: space-between` does, arithmetic an SVG has to do for
+     itself. Widths are the 0.6em estimate again, and again it is only ever a few pixels out; the
+     last cell is anchored to the right edge, which is where that error goes. */
+  // the tracking on a label is 2px a letter, which has to be counted along with the letters
+  const label = (text: string) => ems(text) * 19 + (text.length - 1) * 2
+  const gaps = rows.length - 1
+  /* A date span — "9 Aug → 10 Aug" — is three times the width of a price, and five of those do not
+     fit across 1040. The figures shrink together rather than one of them colliding with the next:
+     a band set in two sizes is a band that looks broken. 40px is the narrowest gap that still
+     reads as a gap. */
+  const room = 1040 - 40 * gaps
+  const wide = rows.reduce((n, [, value]) => n + ems(value), 0)
+  const vfs = Math.min(34, Math.floor(room / wide))
+  const cells = rows.map(([lbl, value]) => Math.max(label(lbl.toUpperCase()), ems(value) * vfs))
+  const gap = gaps ? (1040 - cells.reduce((a, b) => a + b, 0)) / gaps : 0
+  let x = 80
+  const band = rows.map(([lbl, value, fill], i) => {
+    const last = i === gaps && gaps > 0
+    const at = last ? 1120 : x
+    x += cells[i]! + gap
+    const end = last ? ' text-anchor="end"' : ''
+    /* The band sits centred in the space under the rule: 58px of air above the labels and the same
+       under the figures, which is what the eye checks first on a strip like this. */
+    return `${t(at, 512, 19, '#a1a1aa', 500, lbl.toUpperCase(), ` letter-spacing="2"${end}`)}
+${t(at, 572, vfs, fill, 600, value, end)}`
+  }).join('\n')
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
 ${dressing}
-${t(1120, 118, 30, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
-${t(80, 176, 60, '#fafafa', 700, name)}
-${t(80, 220, 26, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
-<rect x="76" y="244" width="${chip}" height="96" rx="14" fill="${ink}"/>
-${t(104, 312, fs, '#0a0a0a', 800, head)}
-${rows.map(([label, value, fill], i) => `${t(80, 384 + i * 40, 27, '#d4d4d8', 400, label)}
-${t(580, 384 + i * 40, 27, fill, 600, value, ' text-anchor="end"')}`).join('\n')}
+${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
+${t(80, 118, 62, '#fafafa', 700, name)}
+${t(80, 162, 25, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
+<rect x="76" y="194" width="${chip}" height="104" rx="14" fill="${ink}"/>
+${t(76 + chip / 2, Math.round(194 + (104 + fs * 0.72) / 2), fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}
 ${byline}
+<rect x="80" y="440" width="1040" height="1" fill="#ffffff" fill-opacity="0.1"/>
+${band}
 </svg>`
 }
 
