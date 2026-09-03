@@ -196,15 +196,16 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
         <div className="flex flex-wrap items-center gap-2">
           {templates.length > 1 && (
             <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5">
+              {/* No tooltip on these, nor on Upload below: the dialog puts the focus on its first
+                  control as it opens, and a tooltip that answers to focus meant every card opened
+                  with a speech bubble over its own preview. The two words are the whole label. */}
               {TEMPLATES.filter((x) => templates.includes(x.id)).map((x) => (
-                <Hint key={x.id} label={x.hint}>
-                  <Button size="sm" variant={template === x.id ? 'secondary' : 'ghost'}
-                    aria-pressed={template === x.id}
-                    className={cn('h-7', template !== x.id && 'text-muted-foreground')}
-                    onClick={() => { setTemplate(x.id); remember(TPL_KEY, x.id) }}>
-                    {x.label}
-                  </Button>
-                </Hint>
+                <Button key={x.id} size="sm" variant={template === x.id ? 'secondary' : 'ghost'}
+                  aria-pressed={template === x.id}
+                  className={cn('h-7', template !== x.id && 'text-muted-foreground')}
+                  onClick={() => { setTemplate(x.id); remember(TPL_KEY, x.id) }}>
+                  {x.label}
+                </Button>
               ))}
             </div>
           )}
@@ -229,13 +230,11 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
                   onClick={() => choose({ kind: 'preset', id: x.id })} />
               </Hint>
             ))}
-            <Hint label={bg?.kind === 'image' || bg?.kind === 'video' ? 'Change the picture or clip' : 'A picture or a clip of your own'}>
-              <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => file.current?.click()}
-                aria-pressed={bg?.kind === 'image' || bg?.kind === 'video'}>
-                {bg?.kind === 'video' ? <Video /> : <ImageIcon />}
-                {bg?.kind === 'image' || bg?.kind === 'video' ? 'Change' : 'Upload'}
-              </Button>
-            </Hint>
+            <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => file.current?.click()}
+              aria-pressed={bg?.kind === 'image' || bg?.kind === 'video'}>
+              {bg?.kind === 'video' ? <Video /> : <ImageIcon />}
+              {bg?.kind === 'image' || bg?.kind === 'video' ? 'Change' : 'Upload'}
+            </Button>
             {(bg?.kind === 'image' || bg?.kind === 'video') && (
               <Hint label="Take the picture off">
                 <Button variant="ghost" size="icon" className="text-muted-foreground size-7" aria-label="Remove background"
