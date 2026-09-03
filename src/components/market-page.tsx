@@ -2171,10 +2171,11 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
        as a container that lost its contents, which is the opposite of what being flat is. A line,
        the weight of the toolbar above it. The box comes back with the rows. */
     if (equity == null) return null
+    // said in words, not in the venue's: "flat" and "equity" are the exchange's vocabulary, and
+    // the desk's own is that nothing is open and this is what is in the account
     return (
-      <p className="text-muted-foreground flex items-baseline gap-2 text-xs">
-        <span className="font-heading text-[11px] tracking-wider uppercase">Flat</span>
-        {equityTag()}
+      <p className="text-muted-foreground text-xs">
+        Nothing open · <span className="text-foreground tabular-nums">{usd(equity)}</span> in the account
       </p>
     )
   }
