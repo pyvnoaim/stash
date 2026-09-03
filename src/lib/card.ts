@@ -273,18 +273,24 @@ function chip(head: string, ink: string, bg: string | null = null): string {
   const fs = Math.min(76, Math.floor(620 / ems(head)))
   const w = Math.round(ems(head) * fs) + 56
   const photo = bg && AVATAR.test(bg) ? bg : null
+  /* Anything behind the card that is not the card's own ground: a picture baked in, or a clip,
+     which is drawn underneath at export time and so is `''` here. Both get the pane — a solid
+     block over somebody's video is the sticker this was meant to stop being — and only the picture
+     can be blurred, since the clip's frame is not inside this SVG to blur. The rest of what the
+     eye reads as glass is the tint, the gloss and the lit edge, and those work over either. */
+  const media = bg !== null && !presetOf(bg)
   const y = Math.round(194 + (104 + fs * 0.72) / 2)
-  if (!photo) return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
+  if (!media) return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
 ${t(76 + w / 2, y, fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}`
-  return `<defs>
+  return `<defs>${photo ? `
 <clipPath id="chipc"><rect x="76" y="194" width="${w}" height="104" rx="14"/></clipPath>
-<filter id="frost" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="16"/></filter>
+<filter id="frost" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="16"/></filter>` : ''}
 <filter id="shade"><feDropShadow dx="0" dy="1.5" stdDeviation="1.5" flood-color="#000000" flood-opacity="0.35"/></filter>
 <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
 <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
 </linearGradient>
-</defs>
-<image href="${photo}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice" filter="url(#frost)" clip-path="url(#chipc)"/>
+</defs>${photo ? `
+<image href="${photo}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice" filter="url(#frost)" clip-path="url(#chipc)"/>` : ''}
 <rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}" fill-opacity="0.42"/>
 <rect x="76" y="194" width="${w}" height="104" rx="14" fill="url(#gloss)"/>
 <rect x="76.75" y="194.75" width="${w - 1.5}" height="102.5" rx="13.5" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1.5"/>

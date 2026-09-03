@@ -165,6 +165,12 @@ test('a video background keeps the scrim and draws no picture of its own', () =>
   assert.match(clip, /fill="url\(#scrim\)"/)
   assert.doesNotMatch(clip, /<image/)
   assert.doesNotMatch(clip, /url\(#grid\)/)
+  /* …and the headline is a pane over it rather than a solid block, because there is a clip behind
+     it to see. Nothing to blur, though: the frame is drawn under this SVG at export time. */
+  assert.match(clip, /fill="#34d399" fill-opacity="0.42"/)
+  assert.doesNotMatch(clip, /frost/)
+  // a ground the card drew itself is not something to see through, so that one stays solid
+  assert.match(cardSvg(P, 1.84, null, 'preset:tide'), /rx="14" fill="#34d399"\/>/)
 })
 
 test('a background that is not a small self-contained picture is dropped, not drawn', () => {
