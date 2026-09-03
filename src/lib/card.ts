@@ -263,30 +263,32 @@ ${t(at, 572, vfs, fill, 600, value, end)}`
    widest the block may be before its padding, which leaves it stopping short of the middle column
    of the band below it, and 76 is the size the card was drawn at.
 
-   Glass, not paint. A solid block of the trade's colour sat on a photograph like a sticker; this
-   one lets the picture through. Over a picture that is inside the SVG it is the real thing — a
-   blurred copy of the picture, clipped to the block, with the tint over it. Over a clip the frame
-   is drawn underneath at export time and is not here to blur, and over the card's own ground there
-   is nothing worth blurring, so those get the tint, the gloss and the edge alone, which is most of
-   what the eye reads as glass anyway. White figures with a soft shadow, because black on a
-   translucent tint is black on whatever is behind it. */
+   Glass over a photograph, paint everywhere else. A solid block of the trade's colour sat on a
+   picture like a sticker, so there it is a pane: a blurred copy of the picture, clipped to the
+   block, with the tint over it and white figures on top. Over the card's own ground the same pane
+   was a murky tint on black — a translucent colour over nothing is just a duller colour — so the
+   block stays solid there, and over a clip too, since the frame is drawn underneath at export time
+   and is not here to blur. */
 function chip(head: string, ink: string, bg: string | null = null): string {
   const fs = Math.min(76, Math.floor(620 / ems(head)))
   const w = Math.round(ems(head) * fs) + 56
   const photo = bg && AVATAR.test(bg) ? bg : null
-  return `<defs>${photo ? `
+  const y = Math.round(194 + (104 + fs * 0.72) / 2)
+  if (!photo) return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
+${t(76 + w / 2, y, fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}`
+  return `<defs>
 <clipPath id="chipc"><rect x="76" y="194" width="${w}" height="104" rx="14"/></clipPath>
-<filter id="frost" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="16"/></filter>` : ''}
+<filter id="frost" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="16"/></filter>
 <filter id="shade"><feDropShadow dx="0" dy="1.5" stdDeviation="1.5" flood-color="#000000" flood-opacity="0.35"/></filter>
 <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
 <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/><stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
 </linearGradient>
-</defs>${photo ? `
-<image href="${photo}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice" filter="url(#frost)" clip-path="url(#chipc)"/>` : ''}
-<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}" fill-opacity="${photo ? 0.42 : 0.3}"/>
+</defs>
+<image href="${photo}" x="0" y="0" width="1200" height="630" preserveAspectRatio="xMidYMid slice" filter="url(#frost)" clip-path="url(#chipc)"/>
+<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}" fill-opacity="0.42"/>
 <rect x="76" y="194" width="${w}" height="104" rx="14" fill="url(#gloss)"/>
 <rect x="76.75" y="194.75" width="${w - 1.5}" height="102.5" rx="13.5" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1.5"/>
-${t(76 + w / 2, Math.round(194 + (104 + fs * 0.72) / 2), fs, '#ffffff', 800, head, ' text-anchor="middle" filter="url(#shade)"')}`
+${t(76 + w / 2, y, fs, '#ffffff', 800, head, ' text-anchor="middle" filter="url(#shade)"')}`
 }
 
 const FONT_STACK = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif'
