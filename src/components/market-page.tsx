@@ -70,8 +70,8 @@ type Screen = 'desk' | 'record'
 /** Whose finished trades. One question, two books. The forward test that stood beside them is gone
  *  with the rule it was testing — see the note on READ. */
 const RECORDS = [
-  { id: 'mine', label: 'Your trades', hint: 'Every finished trade of yours: what it paid, and a card of it to share. Hit rate and expectancy by rule.' },
-  { id: 'people', label: 'Friends trades', hint: 'Everyone else on this server who switched their desk on: what they are in now, and how their trades went' },
+  { id: 'mine', label: 'Your trades', hint: 'Your finished trades, as cards' },
+  { id: 'people', label: 'Friends trades', hint: 'What your friends are in, and how it went' },
 ] as const
 
 const BAR_MS: Record<Interval, number> = { '5m': 3e5, '15m': 9e5, '1h': 36e5, '4h': 1.44e7, '1d': 8.64e7, '1w': 6.048e8 }
@@ -691,7 +691,7 @@ export default function MarketPage() {
               <AssetLogo src={current.logo} className="size-7" />
               <span className="text-2xl tabular-nums">{price != null ? fmt(price) : '—'}</span>
               {price != null && (
-                <Hint label={`The move across the ${n} bars on screen, ${interval} each — not the 24-hour change`}>
+                <Hint label={`Move over the ${n} bars on screen, not 24h`}>
                   <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                     {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
                   </span>
@@ -707,12 +707,12 @@ export default function MarketPage() {
               )}
               {/* the one read that crosses books, said out loud — see offMexc */}
               {feed !== 'mexc' && offMexc(interval) && candles.length > 0 && (
-                <Hint label="Bitget serves 90 daily bars and this chart asks for a thousand, so the daily chart is MEXC's — the same USDT perpetual on the other book. Every other bar size, and every price you trade off, stays on your own venue.">
+                <Hint label="Bitget keeps only 90 daily bars, so this chart uses MEXC's. Prices you trade off stay on your venue.">
                   <span className="text-muted-foreground text-xs">daily bars from MEXC</span>
                 </Hint>
               )}
               {view && (
-                <Hint label={`How the readings lean on this chart: ${bulls} up, ${bears} down. A count, not a call — the flat ones describe conditions and deliberately don't vote.`}>
+                <Hint label={`${bulls} readings lean up, ${bears} down. A count, not advice.`}>
                   <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
                     <bias.Icon className="size-3.5" />
                     {bias.label}
@@ -725,7 +725,7 @@ export default function MarketPage() {
                     thing you flick between, not a thing you pick from a list. */}
                 <div className="bg-muted/50 mr-1 flex gap-0.5 rounded-lg p-0.5">
                   {INTERVALS.map((iv, i) => (
-                    <Hint key={iv} label={`${iv} bars — every reading is measured on these. Key ${i + 1}.`}>
+                    <Hint key={iv} label={`${iv} bars · key ${i + 1}`}>
                       <Button size="sm" variant={interval === iv ? 'secondary' : 'ghost'} aria-pressed={interval === iv}
                         className={cn('h-6 px-2 text-xs tabular-nums', interval !== iv && 'text-muted-foreground')}
                         onClick={() => setInterval(iv)}>
@@ -737,11 +737,11 @@ export default function MarketPage() {
                 {/* the panel under the price — the readings that were voting while invisible. No
                     "None" button: the one that is on turns itself off. */}
                 {([
-                  ['volume', 'Vol', 'Volume per bar, under the price — how much agreed with the move'],
-                  ['rsi', 'RSI', 'RSI(14) with its 30 and 70 lines — one of the votes in the tally above'],
-                  ['macd', 'MACD', 'MACD 12/26 and its 9 signal — the cross the verdict reads, drawn'],
+                  ['volume', 'Vol', 'Volume per bar'],
+                  ['rsi', 'RSI', 'RSI 14, with the 30 and 70 lines'],
+                  ['macd', 'MACD', 'MACD 12/26/9'],
                 ] as const).map(([id, label, hint]) => (
-                  <Hint key={id} label={panel === id ? `${hint}. Click to close the panel.` : hint}>
+                  <Hint key={id} label={panel === id ? `${hint} · click to hide` : hint}>
                     <Button size="sm" variant={panel === id ? 'secondary' : 'ghost'}
                       className={cn('h-6 px-2 text-xs', panel !== id && 'text-muted-foreground')}
                       onClick={() => setPanel(panel === id ? 'none' : id)}>
@@ -749,7 +749,7 @@ export default function MarketPage() {
                     </Button>
                   </Hint>
                 ))}
-                <Hint label={`Structure — the unbroken swing highs and lows, the range they span, and the gaps price has not come back for. ${structure ? 'Click to hide.' : 'Off.'}`}>
+                <Hint label={`Swing levels, range and open gaps${structure ? ' · click to hide' : ''}`}>
                   <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
                     aria-pressed={structure} className={cn('size-6', !structure && 'text-muted-foreground')}
                     onClick={() => setStructure((v) => !v)}>
@@ -757,8 +757,8 @@ export default function MarketPage() {
                   </Button>
                 </Hint>
                 <span className="bg-border mx-1 h-4 w-px" />
-                <Hint label={!online ? 'Offline — nothing to poll' : notLive ? 'The feed is not answering'
-                  : live ? `Live — every ${LIVE / 1000}s` : 'Live updates off'}>
+                <Hint label={!online ? 'Offline' : notLive ? 'Feed not answering'
+                  : live ? `Live, every ${LIVE / 1000}s` : 'Live off'}>
                   <Button size="sm" variant="ghost" className={cn('h-6 gap-1.5 px-2 text-xs', (!live || stale) && 'text-muted-foreground')}
                     onClick={() => setLive((v) => !v)}>
                     <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
@@ -1279,7 +1279,7 @@ export default function MarketPage() {
               <section className="flex flex-col gap-2 border-t pt-3 lg:min-h-0 lg:flex-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">What the chart says</span>
-                  <Hint label={`Read off ${interval} bars with the ${cfg.fast}/${cfg.slow}-MA pair. Change the bar size and every one of these is measured again on the new bars.`}>
+                  <Hint label={`Measured on ${interval} bars with the ${cfg.fast}/${cfg.slow} MAs`}>
                     <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
                       {interval}
                     </span>
@@ -2147,8 +2147,8 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
      words pretending to be a table. There they simply stand together. */
   const equityTag = (right = false) => equity == null ? null : (
     <Hint label={rows.length
-      ? 'Account equity as the venue reports it — wallet balance plus what is open, before fees'
-      : 'What the venue says is in the account, with nothing open against it'}>
+      ? 'Balance plus open positions, before fees'
+      : 'Balance, nothing open'}>
       <span className={cn('text-muted-foreground font-mono text-xs tabular-nums', right && 'ml-auto')}>
         equity {usd(equity)}
       </span>
@@ -2195,8 +2195,8 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             {rows.length ? 'Open positions' : 'Resting orders'}
           </p>
           <Hint label={nearestLiq != null
-            ? 'The worst single row: how far price has to travel before an exchange closes it for you. Only where the venue vouches for the number.'
-            : 'What the exchanges say is open right now, keys held server-side'}>
+            ? 'How far price must move before the closest position is liquidated'
+            : 'Open on your exchanges right now'}>
             <span className="text-muted-foreground text-xs tabular-nums">
               {[rows.length && `${rows.length} open`, orders.length && `${orders.length} resting`]
                 .filter(Boolean).join(' · ')}
@@ -2381,9 +2381,9 @@ const LOG_HEAD = 'bg-card sticky top-0 z-10'
 /** How the record is stacked. Newest is the default because a log is read from the top down; the
  *  other two are the question "what actually paid, and what actually cost" asked directly. */
 const LOG_SORTS = [
-  { id: 'new', label: 'Newest', hint: 'Most recently closed first — the order the record is written in' },
-  { id: 'won', label: 'Most made', hint: 'Biggest winners first, by what the trade paid' },
-  { id: 'lost', label: 'Most lost', hint: 'Worst first, by what the trade cost' },
+  { id: 'new', label: 'Newest', hint: 'Latest first' },
+  { id: 'won', label: 'Most made', hint: 'Biggest winners first' },
+  { id: 'lost', label: 'Most lost', hint: 'Biggest losers first' },
 ] as const
 
 /**
@@ -2555,7 +2555,7 @@ function ModeTray({ mode, onChange }: { mode: 'cards' | 'table'; onChange: (m: '
   return (
     <div className="bg-muted/50 flex gap-1 rounded-lg p-1">
       {([['cards', 'Cards', LayoutGrid], ['table', 'Table', Rows3]] as const).map(([id, label, Icon]) => (
-        <Hint key={id} label={id === 'cards' ? 'Every finished trade as the card you would share' : 'The same trades as rows'}>
+        <Hint key={id} label={id === 'cards' ? 'As cards' : 'As a table'}>
           <Button size="sm" variant={mode === id ? 'secondary' : 'ghost'} aria-pressed={mode === id}
             className={cn('h-6 gap-1 px-2 text-xs', mode !== id && 'text-muted-foreground')}
             onClick={() => onChange(id)}>
@@ -2709,15 +2709,15 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             and one is not money at all. Read as a run-on line the words trailed the wrong figures. */}
         <StatRow stats={[
           ['Finished', String(results.length), '', null,
-            'Every trade of yours that has closed. A setup you only watched is not a trade and never reaches this list.'],
+            'Trades that have closed'],
           ['Hit target', String(won), `${results.length ? Math.round((won / results.length) * 100) : 0}%`, null,
-            'How many came off at the target rather than at the stop or by hand. The percentage is that share of the finished trades.'],
+            'How many reached the target'],
           ...(money === null ? [] : [['Priced here', signedEuro(money), 'euros', money >= 0,
-            `This app's own arithmetic over the size you typed, net of the ${dials.fee}%-a-side fee at both ends and the funding to the close. Only the trades no venue settled for you — counting one in both currencies would be the same trade twice.`] as Stat]),
+            `Trades you sized by hand, after the ${dials.fee}% fee and funding`] as Stat]),
           ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0,
-            'What a venue actually paid out, its own fees and funding already inside the figure. Never added to the euros beside it — the sum of the two is a number no exchange rate ever produced.'] as Stat]),
+            'What the exchange paid out, fees included'] as Stat]),
           ['Total in R', rLabel(total), 'units of risk', total >= 0,
-            'R is one trade\'s risk — what it would have cost if the stop had hit. It is the only unit two trades on two different assets add up in, which is why the record is kept in it. A week can settle up in money and down in R, so this is coloured by itself and not by the money.'],
+            'R is what one trade risked. +2R made twice what it could have lost.'],
         ]} />
 
         {/* The same trades cut by lane — expectancy per rule is what the record is kept to say. As
@@ -2735,9 +2735,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             again as a chip that looks like a breakdown and breaks nothing down. */}
         {lanes.length > 1 && <div className="mb-2 flex flex-wrap gap-1.5 text-xs">
           {lanes.map((l) => (
-            <Hint key={l.name} label={`${l.n} finished trade${l.n === 1 ? '' : 's'} in this lane${
-              l.name === '—' ? ', which are the ones saved before the rules had names of their own' : ''
-            }. ${l.hit} of them reached the target. The last figure is what one average trade here returned in units of risk — over enough trades that is the number that says whether the lane pays to keep driving.`}>
+            <Hint key={l.name} label={`${l.hit} of ${l.n} hit target · average trade in R`}>
               <span className="bg-muted/50 flex items-baseline gap-1.5 rounded-md px-2 py-0.5 tabular-nums">
                 <span className="font-medium">{l.name}</span>
                 <span className="text-muted-foreground">{l.n} trade{l.n === 1 ? '' : 's'}</span>
@@ -2892,10 +2890,10 @@ function FriendRecord({ p, onPick, onBack }: { p: DeskRow; onPick: (asset: strin
           <div className="ml-auto"><ModeTray mode={mode} onChange={setMode} /></div>
         </div>
         <StatRow stats={[
-          ['Finished', String(rows.length), '', null, 'Every trade they were really in. The server drops watched plans before sending, so this is a claim about how they trade, not about ideas they never took.'],
-          ['Hit target', String(won), `${rows.length ? Math.round((won / rows.length) * 100) : 0}%`, null, 'How many came off at the target rather than at the stop or by hand.'],
-          ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0, 'What their exchange paid out, over the rows a venue settled. A trade they sized by hand prices itself off numbers that never leave their device, so those rows count here in R alone.'] as Stat]),
-          ['Total in R', rLabel(total), 'units of risk', total >= 0, 'Over every finished trade, because every row has an R.'],
+          ['Finished', String(rows.length), '', null, 'Trades they were really in'],
+          ['Hit target', String(won), `${rows.length ? Math.round((won / rows.length) * 100) : 0}%`, null, 'How many reached the target'],
+          ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0, 'What their exchange paid out, fees included'] as Stat]),
+          ['Total in R', rLabel(total), 'units of risk', total >= 0, 'R is what one trade risked. +2R made twice what it could have lost.'],
         ]} />
         {/* what they are in right now — the same tile as your own book, off the same numbers */}
         {p.open.length > 0 && (
