@@ -387,21 +387,34 @@ export function ticketSvg(p: CardPosition, r: number | null = null, who: CardWho
   const side = [p.side, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join(' · ').toUpperCase()
   const face = font && FONT.test(font) ? `<style>@font-face{font-family:'Geist Pixel Square';src:url(${font}) format('woff2')}</style>` : ''
   const family = "'Geist Pixel Square', ui-monospace, SFMono-Regular, Menlo, monospace"
-  const rule = (y: number) => `<line x1="120" x2="1080" y1="${y}" y2="${y}" stroke="#b9b6ac" stroke-width="3" stroke-dasharray="8 8"/>`
+  /* The paper, and the margins around and inside it. Every number below comes off these four, so
+     the slip cannot end up with more air above it than below or more at one edge than the other:
+     it sat 84 from the sides and 54 from the top, and the total ran so close to the bottom edge
+     that the figure looked as if it had slipped off the paper. */
+  const M = 60                      // card to paper, the same on all four sides
+  const PAD = 44                    // paper to anything written on it, likewise
+  const [x0, x1] = [M + PAD, 1200 - M - PAD]
+  const [top, foot] = [M + PAD, 630 - M - PAD]   // first cap-height, and the last baseline
+  const rule = (y: number) => `<line x1="${x0}" x2="${x1}" y1="${y}" y2="${y}" stroke="#b9b6ac" stroke-width="3" stroke-dasharray="8 8"/>`
+  /* The rows, centred in the space the two rules leave them: a slip with two figures on it should
+     not carry the same hole above its total as one with six. */
+  const [from, to] = [top + 200, foot - 48]
+  const step = 30
+  const first = (from + to) / 2 - (step * (rows.length - 1)) / 2
   return `${open(family, face)}
 ${ground(bg)}
-<rect x="84" y="54" width="1032" height="522" rx="12" fill="#f4f1e6"/>
-${t(120, 112, 20, '#5b5b60', 400, 'STASH · TRADE', ' letter-spacing="3"')}
-${t(1080, 112, 20, '#5b5b60', 400, dated, ' letter-spacing="3" text-anchor="end"')}
-${t(120, 196, 72, '#141416', 400, p.symbol.toUpperCase())}
-${t(120, 240, 24, '#5b5b60', 400, side, ' letter-spacing="2"')}
-${rule(272)}
-${rows.map(([l, v], i) => `${t(120, 316 + i * 34, 24, '#5b5b60', 400, l.toUpperCase(), ' letter-spacing="2"')}
-${t(1080, 316 + i * 34, 24, '#141416', 400, v, ' text-anchor="end"')}`).join('\n')}
-${rule(506)}
-${byline(who, 120, 522, 36, '#5b5b60')}
-${t(1080, 530, 16, '#5b5b60', 400, headLabel.toUpperCase(), ' letter-spacing="3" text-anchor="end"')}
-${t(1080, 566, 44, ink, 400, head, ' text-anchor="end"')}
+<rect x="${M}" y="${M}" width="${1200 - M * 2}" height="${630 - M * 2}" rx="12" fill="#f4f1e6"/>
+${t(x0, top + 14, 20, '#5b5b60', 400, 'STASH · TRADE', ' letter-spacing="3"')}
+${t(x1, top + 14, 20, '#5b5b60', 400, dated, ' letter-spacing="3" text-anchor="end"')}
+${t(x0, top + 92, 60, '#141416', 400, p.symbol.toUpperCase())}
+${t(x0, top + 130, 20, '#5b5b60', 400, side, ' letter-spacing="2"')}
+${rule(top + 160)}
+${rows.map(([lbl, value], i) => `${t(x0, first + i * step, 22, '#5b5b60', 400, lbl.toUpperCase(), ' letter-spacing="2"')}
+${t(x1, first + i * step, 22, '#141416', 400, value, ' text-anchor="end"')}`).join('\n')}
+${rule(foot - 48)}
+${byline(who, x0, foot - 34, 34, '#5b5b60')}
+${t(x1 - ems(head) * 40 - 12, foot, 16, '#5b5b60', 400, headLabel.toUpperCase(), ' letter-spacing="3" text-anchor="end"')}
+${t(x1, foot, 40, ink, 400, head, ' text-anchor="end"')}
 </svg>`
 }
 
