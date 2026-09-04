@@ -197,7 +197,7 @@ export default function MarketPage() {
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
-  const phone = useIsMobile() // which verbs the chart's footer offers — pinch and tap, or wheel
+  const phone = useIsMobile() // which verbs the chart's footer offers, and how much room a label has
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
@@ -442,11 +442,14 @@ export default function MarketPage() {
      goes on one with room for it, and the legend below names every session that landed a line
      anyway. Where two are too close, an open still ahead takes the slot off one already passed:
      that one is the part you would act on, and it is also the one crowded hardest, since every
-     future mark lands inside the narrow strip of room left on the right. */
+     future mark lands inside the narrow strip of room left on the right.
+     A name is a fixed number of pixels wide and the gap here is a percentage of the box, so the
+     room one needs is width-dependent: on a phone the same 9% is thirty pixels and "London 09:00"
+     is seventy, which is the smear again on the narrowest screen there is. */
   const labelled: SessionMark[] = []
   for (const mk of marks) {
     const last = labelled.at(-1)
-    if (!last || mk.x - last.x > 9) labelled.push(mk)
+    if (!last || mk.x - last.x > (phone ? 24 : 9)) labelled.push(mk)
     else if (mk.future && atEdge && !last.future) labelled[labelled.length - 1] = mk
   }
 
@@ -674,6 +677,8 @@ export default function MarketPage() {
     month: 'short', day: 'numeric', ...(interval === '1d' || interval === '1w' ? {} : { hour: '2-digit', minute: '2-digit' }),
   })
   const hc = hover != null ? vis[hover] : null
+  // six stamps is six times "4 Sept, 13:00" — more than a phone has room for, so it gets three
+  const ticks = phone ? 3 : 6
 
   /* The desk owns its scrolling on a wide window — each pane scrolls inside the grid — so the page
      must not. The record is a page of cards and scrolls like one, whatever the width. */
@@ -682,8 +687,12 @@ export default function MarketPage() {
       {screen === 'desk' ? (
         /* Three panes where there is width: the watchlist, the chart, and what you would do about
            it. One column where there is not, in the same order, with the page doing the scrolling
-           instead of each pane. The record is a strip along the bottom either way. */
-        <div className="flex min-h-0 flex-col lg:grid lg:flex-1 lg:grid-cols-[232px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)_auto]">
+           instead of each pane. The record is a strip along the bottom either way.
+           shrink-0 on that one-column form: it is a flex item of a scrolling column, and the
+           watchlist inside it carries min-h-0 for its own desktop scroll — which let the strip be
+           squeezed to fit the viewport instead of the page scrolling, cutting the price line off
+           every tile. The column keeps its natural height and the page does the scrolling. */
+        <div className="flex min-h-0 shrink-0 flex-col lg:grid lg:flex-1 lg:grid-cols-[232px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)_auto]">
           <Watchlist current={asset} onPick={setAsset} inputRef={search} />
 
           <div className="flex min-h-0 flex-col gap-2 p-3 lg:min-w-0">
@@ -1114,7 +1123,7 @@ export default function MarketPage() {
               strip and read as dates still to come (projected off the last bar's spacing) */}
           {view && n > 1 && (
             <div className="text-muted-foreground mt-2 flex justify-between text-[10px] tabular-nums">
-              {Array.from({ length: 6 }, (_, k) => Math.round((k / 5) * xSpan)).map((i, k) => (
+              {Array.from({ length: ticks }, (_, k) => Math.round((k / (ticks - 1)) * xSpan)).map((i, k) => (
                 <span key={k} className={cn(i > n - 1 && 'opacity-50')}>
                   {stamp(i <= n - 1 ? vis[i].t : vis.at(-1)!.t + (i - (n - 1)) * (vis.at(-1)!.t - vis.at(-2)!.t))}
                 </span>
