@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import {
   ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Loader2, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
   TrendingDown, TrendingUp, Waypoints, X,
@@ -1200,12 +1200,10 @@ export default function MarketPage() {
                     so a mark sitting on a level does not eat the drag — the detail is read off the
                     crosshair below, which is the one reading a phone can do too. */}
                 {visFills.map((m, k) => (
-                  <span key={`f-${k}`}
-                    className={cn('pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 text-[9px] leading-none',
-                      m.buy ? 'text-emerald-500' : 'text-destructive', !m.open && 'opacity-70')}
-                    style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }}>
-                    {m.buy ? '▲' : '▼'}
-                  </span>
+                  <FillMark key={`f-${k}`} buy={m.buy}
+                    className={cn('pointer-events-none absolute z-10 -translate-x-1/2',
+                      m.buy ? '' : '-translate-y-full', !m.open && 'opacity-60')}
+                    style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }} />
                 ))}
 
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
@@ -1219,9 +1217,7 @@ export default function MarketPage() {
                         where the crosshair already is rather than on a hover a phone cannot do */}
                     {hoverFills.map((m, k) => (
                       <span key={`h-${k}`} className="mt-0.5 flex items-center gap-1.5 border-t pt-0.5">
-                        <span className={cn('text-[9px] leading-none', m.buy ? 'text-emerald-500' : 'text-destructive')}>
-                          {m.buy ? '▲' : '▼'}
-                        </span>
+                        <FillMark buy={m.buy} className="shrink-0" />
                         <span>{m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>
                         {m.row && !m.open && (
                           <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
@@ -1577,6 +1573,23 @@ export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
       <path d={`${line} L100 100 L0 100 Z`} fill={`url(#spark-${id})`} stroke="none" />
       <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
     </svg>
+  )
+}
+
+/** A fill mark. Clip-path rather than the ▲ glyph this used to be: a text arrow is whatever shape
+ *  the platform's font happens to draw, sat on a baseline that put it off the level it pointed at,
+ *  and went soft at 9px. The apex is the price — the triangle hangs off it, so a buy points up at
+ *  its own level from below. The halo is the card colour, so the mark still reads on a candle. */
+function FillMark({ buy, className, style }: {
+  buy: boolean; className?: string; style?: CSSProperties
+}) {
+  return (
+    <span className={cn('block h-[7px] w-[9px]', buy ? 'bg-emerald-500' : 'bg-destructive', className)}
+      style={{
+        clipPath: buy ? 'polygon(50% 0,100% 100%,0 100%)' : 'polygon(0 0,100% 0,50% 100%)',
+        filter: 'drop-shadow(0 0 1px var(--card))',
+        ...style,
+      }} />
   )
 }
 
