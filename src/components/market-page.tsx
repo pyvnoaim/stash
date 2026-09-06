@@ -1200,9 +1200,9 @@ export default function MarketPage() {
                     so a mark sitting on a level does not eat the drag — the detail is read off the
                     crosshair below, which is the one reading a phone can do too. */}
                 {visFills.map((m, k) => (
-                  <FillMark key={`f-${k}`} buy={m.buy}
+                  <FillMark key={`f-${k}`} buy={m.buy} open={m.open}
                     className={cn('pointer-events-none absolute z-10 -translate-x-1/2',
-                      m.buy ? '' : '-translate-y-full', !m.open && 'opacity-60')}
+                      !m.buy && '-translate-y-full')}
                     style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }} />
                 ))}
 
@@ -1217,7 +1217,7 @@ export default function MarketPage() {
                         where the crosshair already is rather than on a hover a phone cannot do */}
                     {hoverFills.map((m, k) => (
                       <span key={`h-${k}`} className="mt-0.5 flex items-center gap-1.5 border-t pt-0.5">
-                        <FillMark buy={m.buy} className="shrink-0" />
+                        <FillMark buy={m.buy} open={m.open} />
                         <span>{m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>
                         {m.row && !m.open && (
                           <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
@@ -1576,20 +1576,26 @@ export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
   )
 }
 
-/** A fill mark. Clip-path rather than the ▲ glyph this used to be: a text arrow is whatever shape
- *  the platform's font happens to draw, sat on a baseline that put it off the level it pointed at,
- *  and went soft at 9px. The apex is the price — the triangle hangs off it, so a buy points up at
- *  its own level from below. The halo is the card colour, so the mark still reads on a candle. */
-function FillMark({ buy, className, style }: {
-  buy: boolean; className?: string; style?: CSSProperties
+/** A fill mark. Its own little SVG at a fixed pixel size, not a shape in the plot's stretched
+ *  viewBox and not the ▲ glyph before that: a text arrow is whatever the platform's font draws,
+ *  and it went soft and dim at 9px against candles. The apex is the price — the triangle hangs
+ *  off it, so a buy points up at its own level from below.
+ *
+ *  Visibility is the keyline, not the size. The chart under it is white wicks, two moving averages
+ *  and a wash of dashed levels, all of which a flat triangle sinks into; a stroke in the pane's own
+ *  colour cuts the mark out of whatever it lands on, in either theme. Entries are that solid shape,
+ *  exits the same outline hollowed out — in and out at a glance, which one triangle at 60% opacity
+ *  never said. */
+function FillMark({ buy, open = true, className, style }: {
+  buy: boolean; open?: boolean; className?: string; style?: CSSProperties
 }) {
   return (
-    <span className={cn('block h-[7px] w-[9px]', buy ? 'bg-emerald-500' : 'bg-destructive', className)}
-      style={{
-        clipPath: buy ? 'polygon(50% 0,100% 100%,0 100%)' : 'polygon(0 0,100% 0,50% 100%)',
-        filter: 'drop-shadow(0 0 1px var(--card))',
-        ...style,
-      }} />
+    <svg viewBox="0 0 12 10" aria-hidden className={cn('h-2.5 w-3 shrink-0', className)} style={style}>
+      <path d={buy ? 'M6 1 11 9 1 9Z' : 'M6 9 1 1 11 1Z'} strokeWidth={1.5} strokeLinejoin="round"
+        className={cn(buy ? 'text-emerald-400' : 'text-rose-400',
+          open ? 'fill-current stroke-card' : 'fill-card stroke-current')}
+        style={{ paintOrder: 'stroke' }} />
+    </svg>
   )
 }
 
