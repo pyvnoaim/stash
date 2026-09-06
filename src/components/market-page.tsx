@@ -645,8 +645,13 @@ export default function MarketPage() {
      until the venue's own row agrees with it — near enough, since the exchange rounds to the
      contract's own step — and drops the moment it does. */
   useEffect(() => {
-    if (!drag?.sent) return
-    const now = held?.[drag.which]
+    if (!drag) return
+    /* The position went — stopped out, taken, closed on the phone. Whatever the chip was offering
+       to move no longer exists, and a "move" button over a book with nothing on it is a press that
+       can only fail. Sent or not, it goes with the trade. */
+    if (!held) { setDrag(null); return }
+    if (!drag.sent) return
+    const now = held[drag.which]
     if (now != null && Math.abs(now - drag.price) / drag.price < 0.001) setDrag(null)
   }, [held, drag])
   // a level belongs to the trade it was dragged on: another asset is another position, or none
@@ -923,6 +928,7 @@ export default function MarketPage() {
                        gesture, so the chart does not walk sideways while a stop is being placed.
                        One finger only: a second one is a pinch, and a zoom that also moved a stop
                        is not a thing anybody meant. */
+                    if (dragging.current) return
                     const level = pts.current.size ? null
                       : levelAt(e.clientY, e.currentTarget.getBoundingClientRect(), e.pointerType !== 'mouse')
                     if (level) {
@@ -1220,7 +1226,9 @@ export default function MarketPage() {
                         {m.row && !m.open && (
                           <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
                             {m.row.r >= 0 ? '+' : ''}{m.row.r.toFixed(2)}R
-                            {m.row.cash != null && ` · ${m.row.cash >= 0 ? '+' : ''}$${Math.abs(m.row.cash).toFixed(2)}`}
+                            {/* the sign goes in front of the currency, not nowhere: a loser read
+                                as "$12.44" is a winner */}
+                            {m.row.cash != null && ` · ${m.row.cash < 0 ? '−' : '+'}$${Math.abs(m.row.cash).toFixed(2)}`}
                           </span>
                         )}
                         {!m.row && <span className="text-muted-foreground">open</span>}
