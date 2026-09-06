@@ -9,7 +9,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import {
   CARD_SECONDS, canRecord, canShareFiles, cardFrame, cardImage, copyCard, downloadCard, downloadClip,
-  PRESETS, shareCard, type PresetId,
+  PRESETS, recordsMp4, shareCard, type PresetId,
 } from '@/lib/card'
 
 /** How the numbers are laid out. The ledger is the card as it has always been; the ticket is a
@@ -264,16 +264,29 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
         {bg?.kind === 'video' && (
           <div className="flex flex-wrap items-center gap-2 border-t pt-3">
             <p className="text-muted-foreground text-xs">
-              {canRecord()
-                ? `The clip with its own sound, up to ${CARD_SECONDS} seconds. It records as it plays, so this takes about as long as the clip does.`
-                : 'This browser cannot record video — the picture still saves.'}
+              {!canRecord()
+                ? 'This browser cannot record video — the picture still saves.'
+                : `The clip with its own sound, up to ${CARD_SECONDS} seconds. It records as it plays, so this takes about as long as the clip does.`
+                  // said here rather than discovered in the chat window it was shared into
+                  + (recordsMp4() ? '' : ' This browser only records WebM, which chat apps will not'
+                    + ' preview, so the clip goes to the server to come back as MP4 — that needs an account.')}
             </p>
             <Button size="sm" className="ml-auto tabular-nums" disabled={!!busy || !canRecord()}
               onClick={() => void run('video', 'Recording…',
                 // whole seconds, and the recorder only says so when one turns over
-                () => downloadClip(draw('', template), name, bg.url, (done, total) =>
-                  setBusy({ job: 'video', say: `${done}s of ${Math.round(total)}s` })),
-                'Video saved', 'No video')}>
+                () => downloadClip(draw('', template), name, bg.url,
+                  (done, total) => setBusy({ job: 'video', say: `${done}s of ${Math.round(total)}s` }),
+                  () => setBusy({ job: 'video', say: 'Converting…' }),
+                ).then((how) => {
+                  // the saved toast is spoken here rather than by run, because a WebM is a save
+                  // that worked and still has something to say about the file it left behind
+                  if (how === 'mp4') { toast('Video saved'); return }
+                  toast('Video saved as WebM', {
+                    description: 'This browser cannot record MP4 and the server did not convert it.'
+                      + ' Chat apps will show it as a file rather than play it.',
+                  })
+                }),
+                '', 'No video')}>
               <Video /> {busy?.job === 'video' ? busy.say : 'Export video'}
             </Button>
           </div>

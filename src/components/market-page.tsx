@@ -2379,10 +2379,25 @@ const LOG_GRID = 'grid items-baseline gap-x-2 sm:gap-x-3 grid-cols-[minmax(4rem,
  * stays visible enough to be known about. The same shape DeskLog's dialog has used all along.
  */
 /** A date the way both logs write one, and the span between two of them. A trade that opened and
- *  closed inside the same day printed that day twice with an arrow between — "13 Aug → 13 Aug" is
- *  the most repeated string in the record and it says nothing the single date does not. */
+ *  closed inside the same day printed that day twice with a dash between — "13 Aug–13 Aug" is
+ *  the most repeated string in the record and it says nothing the single date does not.
+ *
+ *  A span is set the way print sets one: an en dash, tight inside a month and spaced across one,
+ *  and the month said once where both ends share it. The card follows the same rule — see ranOf
+ *  in card.ts — and the two are read side by side often enough to be worth keeping in step. */
 const when = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
-const ran = (from: number, to: number) => (when(from) === when(to) ? when(to) : `${when(from)} → ${when(to)}`)
+const dayOnly = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric' })
+const sameMonth = (a: number, b: number) => {
+  const [x, y] = [new Date(a), new Date(b)]
+  return x.getMonth() === y.getMonth() && x.getFullYear() === y.getFullYear()
+}
+/* With the year in the question. Asking whether the two print the same "13 Aug" answers yes for a
+   position opened on one and closed on the next 13 August, and the row said it closed the day it
+   opened. Same fix, and the same reason, as ranOf in card.ts. */
+const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString()
+const ran = (from: number, to: number) => sameDay(from, to) ? when(to)
+  : sameMonth(from, to) ? `${dayOnly(from)}–${when(to)}`
+    : `${when(from)} – ${when(to)}`
 
 /* The right-hand padding is the scrollbar's lane. The share button sits hard against the right edge
    of every row, and an overlay scrollbar — the kind macOS draws over the content rather than beside

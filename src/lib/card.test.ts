@@ -12,7 +12,7 @@ test('the card names the asset, the side and the profit', () => {
   assert.match(svg, /BTCUSDT/)
   assert.match(svg, /Long {3}· {3}0\.5 {3}· {3}Bitget {3}· {3}unrealised</)
   // the money is the headline, in a block of the trade's colour with the ink knocked out of it
-  assert.match(svg, /<rect x="76" y="194" width="\d+" height="104" rx="14" fill="#34d399"\/>/)
+  assert.match(svg, /<rect x="76" y="214" width="\d+" height="104" rx="14" fill="#34d399"\/>/)
   assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+\$3,700\.00</)
   // and the rest of it reads as label-and-figure, not as a sentence with middots in it
   assert.match(svg, />MOVE</)
@@ -88,9 +88,17 @@ test('a finished trade says realised, and prints an exit rather than a mark', ()
   assert.match(svg, />EXIT</)
   assert.match(svg, />0\.1909</)
   assert.doesNotMatch(svg, />NOW</)
-  // opened one day and closed the next, so the row names the span rather than one end of it
+  // opened one day and closed the next, so the row names the span rather than one end of it —
+  // an en dash the way a range is set, and the month said once because both ends share it
   assert.match(svg, />RAN</)
-  assert.match(svg, />9 Aug → 10 Aug</)
+  assert.match(svg, />9–10 Aug</)
+  // across a month both ends are named in full, and the dash gets air: "28 Aug–6 Sept" runs the
+  // two months together into one word
+  // ICU says both "Sep" and "Sept" depending on its vintage; the dash and its air are what is asserted
+  assert.match(cardSvg({ ...P, openedAt: '2026-08-28T09:00:00.000Z', closedAt: '2026-09-06T09:00:00.000Z' }),
+    />28 Aug – 6 Sept?</)
+  // and one day is still one date, not the same date twice with punctuation between
+  assert.match(cardSvg({ ...P, openedAt: '2026-08-09T09:00:00.000Z', closedAt: '2026-08-09T15:00:00.000Z' }), />CLOSED</)
   // no size to print, and the rule that made it stands where a venue would
   assert.match(svg, /Short {3}· {3}VWAP pull-back {3}· {3}realised</)
 })
@@ -114,12 +122,12 @@ const PIC = 'data:image/png;base64,iVBORw0KGgo='
 test('the card is signed under the money, with the picture where there is one', () => {
   const withPic = cardSvg(P, 1.84, { name: 'sam', avatar: PIC })
   assert.match(withPic, />sam</)
-  assert.match(withPic, /<image href="data:image\/png;base64,iVBORw0KGgo=" x="80" y="340"/)
+  assert.match(withPic, /<image href="data:image\/png;base64,iVBORw0KGgo=" x="80" y="362"/)
   assert.match(withPic, /clip-path="url\(#pfp\)"/)
 
   // a name with no picture still signs it, and slides left into the space the picture had
   const bare = cardSvg(P, 1.84, { name: 'sam', avatar: null })
-  assert.match(bare, /x="80" y="377"[^>]*>sam</)
+  assert.match(bare, /x="80" y="399"[^>]*>sam</)
   assert.doesNotMatch(bare, /<image/)
 
   // signed out is the card as it always was — no byline, nothing where one would go

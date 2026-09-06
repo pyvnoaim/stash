@@ -87,7 +87,7 @@ const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] 
    padding visibly wrong on the side the "$" and the "." were on. Measuring properly needs a canvas
    this file deliberately does not have; this is within a few pixels, which is what the layout
    needs. Widen a bucket, never narrow it: too wide leaves a gap, too narrow overlaps. */
-const CHAR: Record<string, number> = { ' ': 0.28, '.': 0.28, ',': 0.28, '-': 0.36, '+': 0.58, '−': 0.58, '$': 0.56, '%': 0.95, '→': 1 }
+const CHAR: Record<string, number> = { ' ': 0.28, '.': 0.28, ',': 0.28, '-': 0.36, '–': 0.5, '+': 0.58, '−': 0.58, '$': 0.56, '%': 0.95 }
 const ems = (text: string) => [...text].reduce((w, c) => w + (CHAR[c] ?? (c >= '0' && c <= '9' ? 0.58 : c === c.toUpperCase() ? 0.68 : 0.55)), 0)
 
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
@@ -104,17 +104,63 @@ const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleStri
  */
 /** A date the way every card writes one. */
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-/* When it ran, as one label-and-figure. A trade that opened and closed inside one day prints that
-   day once: "3 Sep → 3 Sep" is the same date twice and says nothing the single one does not. Same
-   rule the record's own column follows. */
+/** The day on its own, for the near end of a span that shares its month with the far one. */
+const dayNum = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric' })
+/**
+ * When it ran, as one label-and-figure. A trade that opened and closed inside one day prints that
+ * day once: "3 Sept–3 Sept" is the same date twice and says nothing the single one does not. Same
+ * rule the record's own column follows.
+ *
+ * A span is set the way a span is set in print — an en dash, and the month said once when both
+ * ends share it. The arrow this used to carry pointed at nothing: an arrow means "becomes", and
+ * these are two ends of a range, not a transformation. It was also the widest glyph on the card,
+ * in the widest cell of a band that shrinks every figure in it to fit the one that does not, so
+ * "4–6 Sept" buys the numbers beside it a size they were losing to punctuation.
+ */
 const ranOf = (p: Pick<CardPosition, 'openedAt' | 'closedAt'>): [string, string] | null =>
   !p.openedAt && !p.closedAt ? null
-    : !p.openedAt || !p.closedAt || day(p.openedAt) === day(p.closedAt)
+    : !p.openedAt || !p.closedAt || sameDay(p.openedAt, p.closedAt)
       ? [p.closedAt ? 'Closed' : 'Opened', day((p.closedAt ?? p.openedAt)!)]
-      : ['Ran', `${day(p.openedAt)} → ${day(p.closedAt)}`]
+      : ['Ran', span(p.openedAt, p.closedAt)]
+/* One day, with the year in the question. This asked whether the two printed the same "6 Sept",
+   which a position opened on one and closed on the next 6 September answers yes to — and a trade
+   that ran a year said it closed the day it opened. `toDateString` carries the year and is the
+   same local day the printed date is taken from. */
+const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString()
+/* Tight around the dash inside a month — "4–6 Sept" is one date with two days — and spaced across
+   one, where "28 Aug–6 Sept" runs the two months together into a single word. */
+const span = (from: string, to: string) => monthOf(from) === monthOf(to)
+  ? `${dayNum(from)}–${day(to)}`
+  : `${day(from)} – ${day(to)}`
+const monthOf = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
 
 const t = (x: number, y: number, size: number, fill: string, weight: number, text: string, extra = '') =>
   `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-weight="${weight}"${extra}>${esc(text)}</text>`
+
+/**
+ * Where the ledger's four blocks sit down the card, named rather than typed into five places.
+ *
+ * The card is 630 tall with 80 of margin on the sides, and it used to spend that height unevenly:
+ * the asset, its line of detail and the money were packed into the top third with barely twenty
+ * pixels between them, while the byline had forty-odd on each side and the rule under it another
+ * fifty. Crowded where the eye lands first, airy where there is nothing to look at.
+ *
+ * So the gaps are set once, and they widen as they go down — the asset and its detail line are a
+ * pair and stay close, and everything after them is its own block with the same air around it.
+ * The band below the rule keeps its own balance: what it lost above the labels to make room here
+ * it had to spare, and it still stands off the bottom edge by about what it stands off the rule.
+ */
+const HEAD = 122   // the asset's baseline: 62px caps, which puts their tops on the 80 the sides use
+const SUB = 176    // the line of detail under it
+const CHIP = 214   // the money's block, 104 tall
+const SIGN = 362   // the byline, 52 tall — and the recap's strip of trades, which stands in for it
+const RULE = 458   // the hairline the figures hang under
+
+/* The wordmark, in the corner rather than on the asset's own baseline. It sat level with the
+   symbol at the same 80 of margin the text keeps, which made it read as a second heading arguing
+   with the first for the top line. A mark is not a heading: it belongs in the corner, smaller and
+   quieter, where the eye finds it after everything it came for rather than before. */
+const mark = () => t(1152, 66, 26, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.7"')
 
 /* The return on the margin, whole percent, and a decimal only under ten: "+217.0%" is a decimal
    nobody reads, while "+4%" on a trade that returned 3.7% is a rounding error the card would be
@@ -209,7 +255,7 @@ const picOf = (who: CardWho | null) => who?.avatar && AVATAR.test(who.avatar) ? 
    rule the headline follows, and the only place on the card where text is somebody else's
    length to choose. */
 const signedOf = (who: CardWho) => who.name.length > 25 ? who.name.slice(0, 24) + '…' : who.name
-function byline(who: CardWho | null, x = 80, y = 340, size = 52, fill = '#fafafa'): string {
+function byline(who: CardWho | null, x = 80, y = SIGN, size = 52, fill = '#fafafa'): string {
   if (!who) return ''
   const pic = picOf(who)
   const fs = Math.round(size * 0.54)
@@ -232,26 +278,28 @@ function band(rows: [string, string, string][]): string {
   // the tracking on a label is 2px a letter, which has to be counted along with the letters
   const label = (text: string) => ems(text) * 19 + (text.length - 1) * 2
   const gaps = rows.length - 1
-  /* A date span — "9 Aug → 10 Aug" — is three times the width of a price, and five of those do not
-     fit across 1040. The figures shrink together rather than one of them colliding with the next:
-     a band set in two sizes is a band that looks broken. 40px is the narrowest gap that still
-     reads as a gap. */
+  /* A date span — "9–10 Aug" — is twice the width of a price, and five of those do not fit across
+     1040. The figures shrink together rather than one of them colliding with the next: a band set
+     in two sizes is a band that looks broken. 40px is the narrowest gap that still reads as a
+     gap. */
   const room = 1040 - 40 * gaps
   const wide = rows.reduce((n, [, value]) => n + ems(value), 0)
   const vfs = Math.min(34, Math.floor(room / wide))
   const cells = rows.map(([lbl, value]) => Math.max(label(lbl.toUpperCase()), ems(value) * vfs))
   const gap = gaps ? (1040 - cells.reduce((a, b) => a + b, 0)) / gaps : 0
   let x = 80
-  return `<rect x="80" y="440" width="1040" height="1" fill="#ffffff" fill-opacity="0.1"/>
+  return `<rect x="80" y="${RULE}" width="1040" height="1" fill="#ffffff" fill-opacity="0.1"/>
 ` + rows.map(([lbl, value, fill], i) => {
     const last = i === gaps && gaps > 0
     const at = last ? 1120 : x
     x += cells[i]! + gap
     const end = last ? ' text-anchor="end"' : ''
-    /* The band sits centred in the space under the rule: 58px of air above the labels and the same
-       under the figures, which is what the eye checks first on a strip like this. */
-    return `${t(at, 512, 19, '#a1a1aa', 500, lbl.toUpperCase(), ` letter-spacing="2"${end}`)}
-${t(at, 572, vfs, fill, 600, value, end)}`
+    /* The band sits centred in the space under the rule: some forty pixels of air above the labels
+       and much the same under the figures, which is what the eye checks first on a strip like
+       this. It gave up sixteen of the air it had above to move the rule down — see RULE — and
+       stayed centred, because that was the half of it nobody was looking at. */
+    return `${t(at, RULE + 56, 19, '#a1a1aa', 500, lbl.toUpperCase(), ` letter-spacing="2"${end}`)}
+${t(at, RULE + 116, vfs, fill, 600, value, end)}`
   }).join('\n')
 }
 
@@ -270,8 +318,8 @@ ${t(at, 572, vfs, fill, 600, value, end)}`
 function chip(head: string, ink: string): string {
   const fs = Math.min(76, Math.floor(620 / ems(head)))
   const w = Math.round(ems(head) * fs) + 56
-  return `<rect x="76" y="194" width="${w}" height="104" rx="14" fill="${ink}"/>
-${t(76 + w / 2, Math.round(194 + (104 + fs * 0.72) / 2), fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}`
+  return `<rect x="76" y="${CHIP}" width="${w}" height="104" rx="14" fill="${ink}"/>
+${t(76 + w / 2, Math.round(CHIP + (104 + fs * 0.72) / 2), fs, '#0a0a0a', 800, head, ' text-anchor="middle"')}`
 }
 
 const FONT_STACK = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif'
@@ -325,9 +373,9 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
   ].filter(Boolean) as [string, string, string][]
   return `${open()}
 ${dressing(bg, ink)}
-${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
-${t(80, 118, 62, '#fafafa', 700, p.symbol)}
-${t(80, 162, 25, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
+${mark()}
+${t(80, HEAD, 62, '#fafafa', 700, p.symbol)}
+${t(80, SUB, 25, '#d4d4d8', 400, [p.side === 'long' ? 'Long' : 'Short', p.size != null ? num(p.size) : null, p.venue ? venueName(p.venue) : null, p.closedAt ? 'realised' : 'unrealised'].filter(Boolean).join('   ·   '))}
 ${chip(headline ?? pct, ink)}
 ${byline(who)}
 ${band(rows)}
@@ -448,10 +496,9 @@ export function recapOf(rows: RecapRow[], now = Date.now()): Recap | null {
     const end = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1).getTime()
     const rs = rows.filter((r) => r.closedAt >= from.getTime() && r.closedAt < end).sort((a, b) => a.closedAt - b.closedAt)
     if (!rs.length) continue
-    const fmt = (x: Date) => x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
     return {
       title,
-      sub: `${fmt(from)} → ${fmt(to)}   ·   ${rs.length} trade${rs.length === 1 ? '' : 's'}`,
+      sub: `${span(from.toISOString(), to.toISOString())}   ·   ${rs.length} trade${rs.length === 1 ? '' : 's'}`,
       n: rs.length,
       won: rs.filter((r) => r.level === 'target').length,
       total: rs.reduce((n, r) => n + r.r, 0),
@@ -479,7 +526,7 @@ export function recapSvg(rec: Recap, who: CardWho | null = null, bg: string | nu
   const seq = rec.seq.slice(-30)
   const bw = Math.min(44, (1040 - 8 * (seq.length - 1)) / Math.max(seq.length, 1))
   const strip = seq.map((w, i) =>
-    `<rect x="${(80 + i * (bw + 8)).toFixed(1)}" y="326" width="${bw.toFixed(1)}" height="26" rx="5" fill="${w ? '#34d399' : '#f87171'}"/>`).join('\n')
+    `<rect x="${(80 + i * (bw + 8)).toFixed(1)}" y="${SIGN}" width="${bw.toFixed(1)}" height="26" rx="5" fill="${w ? '#34d399' : '#f87171'}"/>`).join('\n')
   const dropped = rec.seq.length - seq.length
   const rows: [string, string, string][] = [
     ['Hit target', `${rec.won} of ${rec.n}`, ink],
@@ -490,12 +537,12 @@ export function recapSvg(rec: Recap, who: CardWho | null = null, bg: string | nu
   ]
   return `${open()}
 ${dressing(bg, ink)}
-${t(1120, 118, 28, '#fafafa', 700, 'stash', ' text-anchor="end" opacity="0.85"')}
-${t(80, 118, 62, '#fafafa', 700, rec.title)}
-${t(80, 162, 25, '#d4d4d8', 400, [rec.sub, who ? `by ${signedOf(who)}` : null].filter(Boolean).join('   ·   '))}
+${mark()}
+${t(80, HEAD, 62, '#fafafa', 700, rec.title)}
+${t(80, SUB, 25, '#d4d4d8', 400, [rec.sub, who ? `by ${signedOf(who)}` : null].filter(Boolean).join('   ·   '))}
 ${chip(head, ink)}
 ${strip}
-${t(80, 384, 19, '#a1a1aa', 500, `each block one trade, oldest first${dropped ? ` · ${dropped} earlier not shown` : ''}`)}
+${t(80, SIGN + 58, 19, '#a1a1aa', 500, `each block one trade, oldest first${dropped ? ` · ${dropped} earlier not shown` : ''}`)}
 ${band(rows)}
 </svg>`
 }
@@ -609,6 +656,12 @@ const FORMATS = [
 export const canRecord = () => typeof MediaRecorder !== 'undefined'
   && FORMATS.some((f) => MediaRecorder.isTypeSupported(f))
 
+/** Whether this browser's recorder writes the container a chat app will play. The Firefox family —
+ *  Zen and the rest of them included — does not and never has, which is the whole reason
+ *  /api/clip exists; said before a twenty-second press rather than found out after one. */
+export const recordsMp4 = () => typeof MediaRecorder !== 'undefined'
+  && FORMATS.some((f) => f.includes('mp4') && MediaRecorder.isTypeSupported(f))
+
 /**
  * The card over a moving background, with the clip's own sound, as a file.
  *
@@ -710,13 +763,66 @@ export async function recordCard(
   return { blob, name: `${fileName(stem)}.${type.includes('mp4') ? 'mp4' : 'webm'}` }
 }
 
-/** The clip to the download folder, the same way the picture goes. */
+/**
+ * A recorded WebM as MP4, or null where that could not happen.
+ *
+ * Which container the recorder wrote is not this app's choice — Chrome and Safari write MP4, the
+ * Firefox family writes WebM and never has written anything else — and it is invisible until the
+ * file is shared: WhatsApp and Telegram file a `.webm` as a document and show "No preview
+ * available" over a grey page. There is no browser-side fix (Firefox's WebCodecs H.264 encoder
+ * refuses to configure), so the server's ffmpeg does it — see server/clip.ts.
+ *
+ * Null for every way this can fail, because none of them is worth interrupting a save for: no
+ * account, no ffmpeg on that server, no server at all. The caller keeps the WebM and says which
+ * one it saved.
+ */
+async function asMp4(blob: Blob): Promise<Blob | null> {
+  try {
+    /* The server kills its own encoder at a minute, but nothing on this side was ever going to
+       give up: a proxy that holds the connection open, a machine that went away mid-upload, and
+       the button sits on "Converting…" for the rest of the tab's life with a finished recording it
+       could have saved. Two minutes is the server's ceiling plus the upload it sits behind. */
+    const r = await fetch('/api/clip', {
+      method: 'POST',
+      headers: { 'content-type': blob.type || 'video/webm' },
+      body: blob,
+      signal: AbortSignal.timeout(120_000),
+    })
+    /* Both halves matter. A build older than this route answers 405, but the app also runs with
+       no server at all behind whatever is serving `dist/` — and a static host with an SPA
+       fallback answers a POST it has never heard of with 200 and a page. Saved unread that is
+       index.html wearing an .mp4 on the end of its name. */
+    if (!r.ok || r.headers.get('content-type') !== 'video/mp4') return null
+    const out = await r.blob()
+    return out.size ? out : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The clip to the download folder, the same way the picture goes, and which format it went as —
+ * which the caller says out loud, because a WebM is a file the person is about to try to share
+ * and find out about at the far end.
+ *
+ * `onConvert` is the second wait. The recording is real time and counts itself off; the transcode
+ * that follows it on a WebM browser is a few more seconds with nothing to count, and a button
+ * still saying "20s of 20s" through it reads as a press that hung.
+ */
 export async function downloadClip(
   svg: string, stem: string, src: string,
   onTick?: (done: number, total: number) => void,
-): Promise<void> {
+  onConvert?: () => void,
+): Promise<'mp4' | 'webm'> {
   const { blob, name } = await recordCard(svg, stem, src, onTick)
-  save(blob, name)
+  if (name.endsWith('.mp4')) {
+    save(blob, name)
+    return 'mp4'
+  }
+  onConvert?.()
+  const mp4 = await asMp4(blob)
+  save(mp4 ?? blob, mp4 ? name.replace(/\.webm$/, '.mp4') : name)
+  return mp4 ? 'mp4' : 'webm'
 }
 
 function save(blob: Blob, name: string) {
