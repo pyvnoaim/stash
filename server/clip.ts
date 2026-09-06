@@ -1,16 +1,19 @@
 /**
- * WebM in, MP4 out — the one thing a browser cannot do for itself.
+ * A recording in, a file a chat app will play out — the one thing a browser cannot do for itself.
  *
- * A card's clip is recorded by MediaRecorder, and which container that writes is not the app's
- * choice: Chrome and Safari write MP4, Firefox and everything built on it (Zen among them) write
- * WebM and have never written anything else. That difference is invisible until the file is
- * shared — WhatsApp, Telegram and the rest treat a `.webm` as a document, so twenty seconds of
- * recording arrives in the chat as a grey page saying "No preview available".
+ * Nothing MediaRecorder writes is fit to send, and it is broken differently in each browser.
+ * Firefox and everything built on it (Zen among them) write WebM and never have written anything
+ * else, and WhatsApp, Telegram and the rest file a `.webm` as a document: twenty seconds of
+ * recording arrives in the chat as a grey page saying "No preview available". Chrome and Safari
+ * write MP4, but a fragmented one whose header carries no real length — a local player scans the
+ * file and shows the fourteen seconds, a chat app believes the header and sends on a hundredth of
+ * a second.
  *
- * There is no way around it in the browser. WebCodecs would be the escape hatch, but Firefox's
+ * There is no way around either in the browser. WebCodecs would be the escape hatch, but Firefox's
  * H.264 encoder fails at configure time even where `isConfigSupported()` says yes, and the only
  * other client-side answer is a 25 MB ffmpeg build downloaded to do a job the server already has
- * ffmpeg for. So the bytes come here and go back as H.264/AAC.
+ * ffmpeg for. So the bytes come here: a WebM is encoded to H.264/AAC, an MP4 keeps its streams and
+ * gets a container with the length written in it.
  *
  * This is the second thing that needs an account, for the same reason pictures do: with no server
  * there is nowhere for the work to happen. The app says so and keeps the WebM rather than
@@ -36,45 +39,58 @@ export const MAX_CLIP = 32 * 1024 * 1024
 export const CLIP_TIMEOUT = 60_000
 
 /**
- * That the bytes are a WebM, read off the front of them rather than believed from the header the
- * uploader typed. Same bargain as blob.ts's sniff: this hands a file to a subprocess, so the
- * question is what it actually is.
+ * Which of the two the bytes are, read off the front of them rather than believed from the header
+ * the uploader typed. Same bargain as blob.ts's sniff: this hands a file to a subprocess, so the
+ * question is what it actually is — and the answer names the demuxer below, so a wrong one is not
+ * a wrong guess, it is a parser the sniff never checked.
  *
  * EBML's magic is four bytes, which Matroska shares — the doctype a few bytes in is what separates
  * a `.webm` from a `.mkv`, and it is searched for rather than read at a fixed offset because the
- * header's element sizes are variable-length.
+ * header's element sizes are variable-length. An MP4 says `ftyp` in the second four bytes of its
+ * first box.
  */
-export function isWebm(b: Buffer): boolean {
-  if (b.length < 16) return false
-  if (!(b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3)) return false
-  return b.subarray(4, 64).toString('latin1').includes('webm')
+export function container(b: Buffer): 'webm' | 'mp4' | null {
+  if (b.length < 16) return null
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) {
+    return b.subarray(4, 64).toString('latin1').includes('webm') ? 'webm' : null
+  }
+  return b.subarray(4, 8).toString('latin1') === 'ftyp' ? 'mp4' : null
 }
 
 /**
  * What ffmpeg is asked to do, as a list — never a shell string, so a filename can never be
  * anything but a filename.
  *
- * `yuv420p` and `main` are the pair every phone decodes; a recorder that hands over 4:2:0 already
- * loses nothing by being told so, and one that does not is a file half the world could not play.
- * `faststart` moves the index to the front, which is what lets a chat app show a first frame
- * instead of downloading the whole thing to find out it has one. The scale filter is a guard, not
- * a resize: H.264 needs even dimensions, the card is 1200×630, and a background that somehow
- * arrives odd should come back playable rather than as an ffmpeg error.
+ * An MP4 in is already H.264 and AAC — the recorder wrote it that way — so the streams are copied
+ * and only the container is rebuilt. That is the whole job for those: what MediaRecorder writes is
+ * a fragmented MP4 whose header carries no real length, which local players survive by scanning
+ * the file and chat apps do not, and a clip arrives in the chat as a hundredth of a second.
+ *
+ * A WebM in has to be encoded. `yuv420p` and `main` are the pair every phone decodes; a recorder
+ * that hands over 4:2:0 already loses nothing by being told so, and one that does not is a file
+ * half the world could not play. The scale filter is a guard, not a resize: H.264 needs even
+ * dimensions, the card is 1200×630, and a background that somehow arrives odd should come back
+ * playable rather than as an ffmpeg error.
+ *
+ * `faststart` moves the index to the front for both, which is what lets a chat app show a first
+ * frame instead of downloading the whole thing to find out it has one.
  */
-export const ffmpegArgs = (from: string, to: string): string[] => [
+export const ffmpegArgs = (from: string, to: string, kind: 'webm' | 'mp4'): string[] => [
   '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-  /* The demuxer is named rather than probed. `isWebm` reads sixty-four bytes, and ffmpeg reads the
+  /* The demuxer is named rather than probed. `container` reads sixty-four bytes, and ffmpeg reads the
      whole file: without this, bytes that open like a WebM and continue as something else are
      handed to whatever demuxer probes highest — including the ones that treat their input as a
-     playlist and go and open what it names. Pinned to webm there is one parser, and it is the one
-     the sniff actually checked. */
-  '-f', 'webm',
+     playlist and go and open what it names. Pinned there is one parser, and it is the one the
+     sniff actually checked. */
+  '-f', kind,
   '-i', from,
-  '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-  '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-  '-pix_fmt', 'yuv420p', '-profile:v', 'main', '-level', '4.0',
-  // a clip with no sound simply has no stream for this to apply to, which ffmpeg passes over
-  '-c:a', 'aac', '-b:a', '128k',
+  ...kind === 'mp4' ? ['-c', 'copy'] : [
+    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+    '-pix_fmt', 'yuv420p', '-profile:v', 'main', '-level', '4.0',
+    // a clip with no sound simply has no stream for this to apply to, which ffmpeg passes over
+    '-c:a', 'aac', '-b:a', '128k',
+  ],
   '-movflags', '+faststart',
   '-f', 'mp4', to,
 ]
@@ -103,9 +119,10 @@ export function claim(): boolean {
 }
 export function release(): void { running = false }
 
-/** The bytes, transcoded. Throws with a sentence for the log. Nothing is written to the database
- *  and nothing outlives the call: the temp directory goes whether this worked or threw. */
-export async function toMp4(webm: Buffer): Promise<Buffer> {
+/** The bytes, rebuilt as an MP4 a chat app will play. Throws with a sentence for the log. Nothing
+ *  is written to the database and nothing outlives the call: the temp directory goes whether this
+ *  worked or threw. */
+export async function toMp4(bytes: Buffer, kind: 'webm' | 'mp4'): Promise<Buffer> {
   /* Its own directory rather than two names in the shared one: a single rm takes both files and
      there is no window where a half-written output is sitting under a guessable path. Inside the
      try, so a tmpdir that cannot be made is still a directory the finally knows not to remove —
@@ -114,10 +131,10 @@ export async function toMp4(webm: Buffer): Promise<Buffer> {
   let dir: string | null = null
   try {
     dir = await mkdtemp(join(tmpdir(), 'stash-clip-'))
-    const from = join(dir, 'in.webm')
+    const from = join(dir, `in.${kind}`)
     const to = join(dir, 'out.mp4')
-    await writeFile(from, webm)
-    await run('ffmpeg', ffmpegArgs(from, to))
+    await writeFile(from, bytes)
+    await run('ffmpeg', ffmpegArgs(from, to, kind))
     const out = await readFile(to)
     // ffmpeg can exit 0 having written a container with nothing in it; that is not a video
     if (!out.length) throw new Error('nothing came back')

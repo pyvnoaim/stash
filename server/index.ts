@@ -30,7 +30,7 @@ import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
-import { claim as clipClaim, hasFfmpeg, isWebm, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
+import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, pending as mexcPending, positions as mexcPositions } from './mexc.ts'
 import { cancel, desk, place, type Cred } from './trade.ts'
@@ -1341,13 +1341,13 @@ export function start({
       return res.end(Buffer.from(row.bytes))
     }
 
-    /* A card's clip, recorded as WebM because the browser could write nothing else, handed back as
-       MP4 so a chat app will play it rather than file it as a document. Nothing is stored: the
-       bytes go to a temp directory, ffmpeg reads them, and the answer is the reply body.
+    /* A card's clip as the browser recorded it, handed back as an MP4 a chat app will play rather
+       than file as a document or send on with no length. Nothing is stored: the bytes go to a temp
+       directory, ffmpeg reads them, and the answer is the reply body.
 
-       Every refusal here is one the app can live with — it keeps the WebM and says which it saved
-       — so none of them is an error worth a red toast. See server/clip.ts for why this is on the
-       server at all. */
+       Every refusal here is one the app can live with — it keeps the recording and says so — so
+       none of them is an error worth a red toast. See server/clip.ts for why this is on the server
+       at all. */
     if (path === '/api/clip' && req.method === 'POST') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
@@ -1364,13 +1364,14 @@ export function start({
         let bytes: Buffer
         try { bytes = await readBytes(req, MAX_CLIP) }
         catch { return send(res, 413, { error: tooBig }) }
-        if (!isWebm(bytes)) return send(res, 415, { error: 'webm' })
+        const kind = container(bytes)
+        if (!kind) return send(res, 415, { error: 'a clip has to be a webm or an mp4' })
         let mp4: Buffer
-        try { mp4 = await toMp4(bytes) }
+        try { mp4 = await toMp4(bytes, kind) }
         catch (e) {
           /* The reason goes to the log, not to the browser: ffmpeg names the temp file it was
              reading, and the app does nothing with the sentence anyway — any refusal here means
-             the same thing to it, which is keep the WebM and say so. */
+             the same thing to it, which is keep the recording and say so. */
           console.error(`${new Date().toISOString()} clip ${user.name}`, (e as Error).message)
           return send(res, 422, { error: 'that clip could not be converted' })
         }

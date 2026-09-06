@@ -9,7 +9,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import {
   CARD_SECONDS, canRecord, canShareFiles, canShareVideo, cardFrame, cardImage, type Clip, clipFile,
-  copyCard, downloadCard, downloadClip, PRESETS, recordsMp4, saveFile, shareCard, shareFile,
+  copyCard, downloadCard, downloadClip, PRESETS, saveFile, shareCard, shareFile,
   type PresetId,
 } from '@/lib/card'
 
@@ -149,13 +149,13 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
   }
 
   /* What a finished clip says, in one place, because there are three ways to finish one and the
-     WebM caveat has to come out of all of them. A file that went out through the sheet says
+     unconverted caveat has to come out of all of them. A file that went out through the sheet says
      nothing: the sheet was the answer. */
   const said = (how: Clip['how'], where: 'shared' | 'saved') => {
     if (how === 'mp4') { if (where === 'saved') toast('Video saved'); return }
-    toast(where === 'shared' ? 'Shared as WebM' : 'Video saved as WebM', {
-      description: 'This browser cannot record MP4 and the server did not convert it.'
-        + ' Chat apps will show it as a file rather than play it.',
+    toast(where === 'shared' ? 'Shared as recorded' : 'Video saved as recorded', {
+      description: 'The server did not convert it. It plays here, but a chat app will show it as a'
+        + ' file or send it on with no length.',
     })
   }
 
@@ -308,8 +308,8 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
                   ? 'Recorded. Press Send clip to open the share sheet — a video sent that way plays in the chat, where the same file attached as a document does not.'
                   : `The clip with its own sound, up to ${CARD_SECONDS} seconds. It records as it plays, so this takes about as long as the clip does.`
                     // said here rather than discovered in the chat window it was shared into
-                    + (recordsMp4() ? '' : ' This browser only records WebM, which chat apps will not'
-                      + ' preview, so the clip goes to the server to come back as MP4 — that needs an account.')}
+                    + ' No browser records a file a chat app will play, so the clip goes to the'
+                    + ' server to come back as one — that needs an account.'}
             </p>
             {/* The sheet, where there is one that takes a video — which is a different question
                 from whether it takes a picture, and asked separately. */}

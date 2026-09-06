@@ -1,6 +1,6 @@
 // npm test
 import assert from 'node:assert/strict'
-import { claim, CLIP_TIMEOUT, ffmpegArgs, isWebm, MAX_CLIP, release } from './clip.ts'
+import { claim, CLIP_TIMEOUT, container, ffmpegArgs, MAX_CLIP, release } from './clip.ts'
 
 /* The sniffer, which is what stands between a POST body and a subprocess. Same bargain blob.ts
    makes: what the bytes are, not what the uploader called them. */
@@ -13,21 +13,31 @@ const ebml = (doctype: string) => Buffer.concat([
   Buffer.alloc(16),
 ])
 
-assert.equal(isWebm(ebml('webm')), true)
+/** An MP4's first box: a length, then `ftyp`, then the brand. */
+const mp4 = (brand: string) => Buffer.concat([
+  Buffer.from([0, 0, 0, 0x18]),
+  Buffer.from(`ftyp${brand}`, 'latin1'),
+  Buffer.alloc(16),
+])
+
+assert.equal(container(ebml('webm')), 'webm')
 // Matroska shares the magic and is not what the recorder wrote, so the doctype is what decides
-assert.equal(isWebm(ebml('matroska')), false)
-// and an MP4 arriving here is a browser that did not need this route at all
-assert.equal(isWebm(Buffer.concat([Buffer.alloc(4), Buffer.from('ftypisom', 'latin1'), Buffer.alloc(16)])), false)
-assert.equal(isWebm(Buffer.from('<!doctype html><script>alert(1)</script>')), false)
-assert.equal(isWebm(Buffer.alloc(0)), false)
-assert.equal(isWebm(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])), false)   // too short to have said anything
+assert.equal(container(ebml('matroska')), null)
+// both recorders come here now: Chrome's and Safari's MP4 has no length in its header either
+assert.equal(container(mp4('isom')), 'mp4')
+assert.equal(container(mp4('mp42')), 'mp4')
+assert.equal(container(Buffer.from('<!doctype html><script>alert(1)</script>')), null)
+assert.equal(container(Buffer.alloc(0)), null)
+assert.equal(container(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])), null)   // too short to have said anything
 // the word alone is not the file: the magic has to be there too
-assert.equal(isWebm(Buffer.concat([Buffer.from('webm and nothing else', 'latin1'), Buffer.alloc(16)])), false)
+assert.equal(container(Buffer.concat([Buffer.from('webm and nothing else', 'latin1'), Buffer.alloc(16)])), null)
+// and `ftyp` has to be where a box header puts it, not anywhere in the first bytes
+assert.equal(container(Buffer.concat([Buffer.from('ftypisom', 'latin1'), Buffer.alloc(16)])), null)
 
 /* What ffmpeg is told. These are the flags a phone's decoder needs and the ones a chat app needs
    to show a first frame — the whole point of the route — so they are asserted rather than trusted
    to survive an edit. */
-const args = ffmpegArgs('/tmp/in.webm', '/tmp/out.mp4')
+const args = ffmpegArgs('/tmp/in.webm', '/tmp/out.mp4', 'webm')
 const after = (flag: string) => args[args.indexOf(flag) + 1]
 
 assert.equal(after('-i'), '/tmp/in.webm')
@@ -51,6 +61,18 @@ assert.equal(after('-vf'), 'scale=trunc(iw/2)*2:trunc(ih/2)*2')
 assert.ok(args.every((a) => typeof a === 'string'))
 // and nothing waits on a stdin that is never coming
 assert.ok(args.includes('-nostdin'))
+
+/* An MP4 in is already H.264 and AAC. Only its container is wrong — MediaRecorder writes a
+   fragmented one with no length in the header, which is how a fourteen-second clip arrives in a
+   chat as a hundredth of a second — so the streams are copied and nothing is re-encoded. */
+const copy = ffmpegArgs('/tmp/in.mp4', '/tmp/out.mp4', 'mp4')
+assert.equal(copy[copy.indexOf('-f') + 1], 'mp4')                     // the demuxer, still named
+assert.ok(copy.indexOf('-f') < copy.indexOf('-i'), 'the input format has to be set before the input')
+assert.equal(copy[copy.indexOf('-c') + 1], 'copy')
+assert.ok(!copy.includes('libx264'), 'an mp4 is not worth re-encoding')
+assert.equal(copy[copy.indexOf('-movflags') + 1], '+faststart')       // the point of the round trip
+assert.equal(copy.at(-1), '/tmp/out.mp4')
+assert.equal(copy[copy.lastIndexOf('-f') + 1], 'mp4')
 
 /* The caps. The recorder is twenty seconds at six megabits — fifteen megabytes — so the ceiling
    has to sit above that and the timeout well above what encoding it takes. */

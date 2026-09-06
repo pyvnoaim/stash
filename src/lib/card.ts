@@ -656,12 +656,6 @@ const FORMATS = [
 export const canRecord = () => typeof MediaRecorder !== 'undefined'
   && FORMATS.some((f) => MediaRecorder.isTypeSupported(f))
 
-/** Whether this browser's recorder writes the container a chat app will play. The Firefox family —
- *  Zen and the rest of them included — does not and never has, which is the whole reason
- *  /api/clip exists; said before a twenty-second press rather than found out after one. */
-export const recordsMp4 = () => typeof MediaRecorder !== 'undefined'
-  && FORMATS.some((f) => f.includes('mp4') && MediaRecorder.isTypeSupported(f))
-
 /**
  * The card over a moving background, with the clip's own sound, as a file.
  *
@@ -764,17 +758,18 @@ export async function recordCard(
 }
 
 /**
- * A recorded WebM as MP4, or null where that could not happen.
+ * A recording as an MP4 something else will play, or null where that could not happen.
  *
- * Which container the recorder wrote is not this app's choice — Chrome and Safari write MP4, the
- * Firefox family writes WebM and never has written anything else — and it is invisible until the
- * file is shared: WhatsApp and Telegram file a `.webm` as a document and show "No preview
- * available" over a grey page. There is no browser-side fix (Firefox's WebCodecs H.264 encoder
- * refuses to configure), so the server's ffmpeg does it — see server/clip.ts.
+ * Every recording goes through this, not only the WebM ones. Nothing MediaRecorder writes is fit
+ * to hand to a chat app: the Firefox family writes WebM, which WhatsApp and Telegram file as a
+ * document under "No preview available", and Chrome and Safari write a fragmented MP4 with no
+ * length in its header — which a local player survives by scanning the file, and everything that
+ * reads the header sends on as a hundredth of a second. There is no browser-side fix (Firefox's
+ * WebCodecs H.264 encoder refuses to configure), so the server's ffmpeg does it — see
+ * server/clip.ts, where an MP4 keeps its streams and only its container is rebuilt.
  *
  * Null for every way this can fail, because none of them is worth interrupting a save for: no
- * account, no ffmpeg on that server, no server at all. The caller keeps the WebM and says which
- * one it saved.
+ * account, no ffmpeg on that server, no server at all. The caller keeps the recording and says so.
  */
 async function asMp4(blob: Blob): Promise<Blob | null> {
   try {
@@ -800,19 +795,24 @@ async function asMp4(blob: Blob): Promise<Blob | null> {
   }
 }
 
-/** A finished clip: the file to hand over, and whether it ended up as the format a chat app will
- *  play. `how` is what the caller says out loud — a WebM is a file the person is about to try to
- *  send and find out about at the far end. */
-export type Clip = { file: File; how: 'mp4' | 'webm' }
+/** A finished clip: the file to hand over, and whether the server got to fix it. `how` is what the
+ *  caller says out loud — a `raw` file is the recording as the browser wrote it, which is a file
+ *  the person is about to try to send and find out about at the far end. */
+export type Clip = { file: File; how: 'mp4' | 'raw' }
 
 /**
  * Record the card over its clip and come back with a file worth handing to something.
  *
- * `onConvert` is the second wait. The recording is real time and counts itself off; the transcode
- * that follows it on a WebM browser is a few more seconds with nothing to count, and a button
- * still saying "20s of 20s" through it reads as a press that hung.
+ * The recording always goes to the server, whichever container it came out as: see asMp4 for the
+ * two different ways MediaRecorder's own output is unsendable. Where the server cannot take it the
+ * recording is handed over as it is, which is a file that saves and plays here and may not survive
+ * being sent — the caller says so.
  *
- * The type is set from the format rather than carried over from the recorder, whose own is
+ * `onConvert` is the second wait. The recording is real time and counts itself off; the upload and
+ * the fix that follow it are a few more seconds with nothing to count, and a button still saying
+ * "20s of 20s" through them reads as a press that hung.
+ *
+ * The type is set from the container rather than carried over from the recorder, whose own is
  * `video/webm;codecs=vp9,opus` — parameters and all. A share sheet matches what it is offered
  * against what the app it is offering to will take, and the plain type is the one every one of
  * them lists.
@@ -823,12 +823,11 @@ export async function clipFile(
   onConvert?: () => void,
 ): Promise<Clip> {
   const rec = await recordCard(svg, stem, src, onTick)
-  const as = (blob: Blob, name: string, how: 'mp4' | 'webm'): Clip =>
-    ({ file: new File([blob], name, { type: `video/${how}` }), how })
-  if (rec.name.endsWith('.mp4')) return as(rec.blob, rec.name, 'mp4')
+  const as = (blob: Blob, name: string, how: Clip['how']): Clip =>
+    ({ file: new File([blob], name, { type: name.endsWith('.mp4') ? 'video/mp4' : 'video/webm' }), how })
   onConvert?.()
   const mp4 = await asMp4(rec.blob)
-  return mp4 ? as(mp4, rec.name.replace(/\.webm$/, '.mp4'), 'mp4') : as(rec.blob, rec.name, 'webm')
+  return mp4 ? as(mp4, rec.name.replace(/\.webm$/, '.mp4'), 'mp4') : as(rec.blob, rec.name, 'raw')
 }
 
 /** The clip to the download folder, the same way the picture goes. */
@@ -836,7 +835,7 @@ export async function downloadClip(
   svg: string, stem: string, src: string,
   onTick?: (done: number, total: number) => void,
   onConvert?: () => void,
-): Promise<'mp4' | 'webm'> {
+): Promise<Clip['how']> {
   const { file, how } = await clipFile(svg, stem, src, onTick, onConvert)
   saveFile(file)
   return how
