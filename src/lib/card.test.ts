@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
-import { cardSvg, type CardPosition } from './card.ts'
+import { canShareFiles, canShareVideo, cardSvg, type CardPosition, shareFile } from './card.ts'
 
 const P: CardPosition = {
   symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 60_000, mark: 67_400,
@@ -189,4 +189,50 @@ test('a background that is not a small self-contained picture is dropped, not dr
     // still dressed for a background, because one was asked for and only the file was refused
     assert.match(svg, /fill="url\(#scrim\)"/)
   }
+})
+
+/* The share sheet, which is how a clip reaches WhatsApp as a video rather than as a document
+   somebody has to save before they can watch it. Stubbed, because the one thing a headless
+   browser will not do is open a sheet — and the answer that shapes the whole button is the refusal
+   this cannot get any other way. */
+const sheet = (canShare: ((d: { files: File[] }) => boolean) | null, share?: () => Promise<void>) =>
+  Object.defineProperty(globalThis, 'navigator', {
+    value: canShare ? { canShare, share } : {}, configurable: true, writable: true,
+  })
+
+test('the sheet is asked about a video separately from a picture', () => {
+  sheet((d) => d.files.every((f) => /^(image|video)\//.test(f.type)))
+  assert.equal(canShareFiles(), true)
+  assert.equal(canShareVideo(), true)
+  // a sheet that takes a picture is not the same answer as one that takes a video, and offering
+  // the second because the first said yes is a button that fails on the press
+  sheet((d) => d.files.every((f) => f.type.startsWith('image/')))
+  assert.equal(canShareFiles(), true)
+  assert.equal(canShareVideo(), false)
+  sheet(null)
+  assert.equal(canShareFiles(), false)
+  assert.equal(canShareVideo(), false)
+})
+
+test('a sheet that refuses for want of a press is not a sheet that refused', async () => {
+  const clip = new File([new Uint8Array(4)], 'SOLUSDT.mp4', { type: 'video/mp4' })
+  const takes = (d: { files: File[] }) => d.files.every((f) => /^(image|video)\//.test(f.type))
+
+  let got: File | null = null
+  sheet(takes, async function (this: unknown, d?: { files: File[] }) { got = d!.files[0]! })
+  assert.equal(await shareFile(clip), 'shared')
+  assert.equal((got as File | null)?.name, 'SOLUSDT.mp4')
+
+  // opened and dismissed: that was an answer, and not one to override with a download
+  sheet(takes, async () => { throw Object.assign(new Error(), { name: 'AbortError' }) })
+  assert.equal(await shareFile(clip), 'shared')
+
+  /* And the one the two-press flow exists for: a sheet may only be opened while the press that
+     asked for it still counts as one, and twenty seconds of recording outlives that everywhere.
+     'stale' is what tells the dialog to hold the file and ask again rather than quietly save it. */
+  sheet(takes, async () => { throw Object.assign(new Error(), { name: 'NotAllowedError' }) })
+  assert.equal(await shareFile(clip), 'stale')
+
+  sheet(null)
+  assert.equal(await shareFile(clip), 'none')
 })

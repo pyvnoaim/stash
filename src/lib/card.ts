@@ -800,29 +800,46 @@ async function asMp4(blob: Blob): Promise<Blob | null> {
   }
 }
 
+/** A finished clip: the file to hand over, and whether it ended up as the format a chat app will
+ *  play. `how` is what the caller says out loud — a WebM is a file the person is about to try to
+ *  send and find out about at the far end. */
+export type Clip = { file: File; how: 'mp4' | 'webm' }
+
 /**
- * The clip to the download folder, the same way the picture goes, and which format it went as —
- * which the caller says out loud, because a WebM is a file the person is about to try to share
- * and find out about at the far end.
+ * Record the card over its clip and come back with a file worth handing to something.
  *
  * `onConvert` is the second wait. The recording is real time and counts itself off; the transcode
  * that follows it on a WebM browser is a few more seconds with nothing to count, and a button
  * still saying "20s of 20s" through it reads as a press that hung.
+ *
+ * The type is set from the format rather than carried over from the recorder, whose own is
+ * `video/webm;codecs=vp9,opus` — parameters and all. A share sheet matches what it is offered
+ * against what the app it is offering to will take, and the plain type is the one every one of
+ * them lists.
  */
+export async function clipFile(
+  svg: string, stem: string, src: string,
+  onTick?: (done: number, total: number) => void,
+  onConvert?: () => void,
+): Promise<Clip> {
+  const rec = await recordCard(svg, stem, src, onTick)
+  const as = (blob: Blob, name: string, how: 'mp4' | 'webm'): Clip =>
+    ({ file: new File([blob], name, { type: `video/${how}` }), how })
+  if (rec.name.endsWith('.mp4')) return as(rec.blob, rec.name, 'mp4')
+  onConvert?.()
+  const mp4 = await asMp4(rec.blob)
+  return mp4 ? as(mp4, rec.name.replace(/\.webm$/, '.mp4'), 'mp4') : as(rec.blob, rec.name, 'webm')
+}
+
+/** The clip to the download folder, the same way the picture goes. */
 export async function downloadClip(
   svg: string, stem: string, src: string,
   onTick?: (done: number, total: number) => void,
   onConvert?: () => void,
 ): Promise<'mp4' | 'webm'> {
-  const { blob, name } = await recordCard(svg, stem, src, onTick)
-  if (name.endsWith('.mp4')) {
-    save(blob, name)
-    return 'mp4'
-  }
-  onConvert?.()
-  const mp4 = await asMp4(blob)
-  save(mp4 ?? blob, mp4 ? name.replace(/\.webm$/, '.mp4') : name)
-  return mp4 ? 'mp4' : 'webm'
+  const { file, how } = await clipFile(svg, stem, src, onTick, onConvert)
+  saveFile(file)
+  return how
 }
 
 function save(blob: Blob, name: string) {
@@ -839,22 +856,50 @@ function save(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-/** Whether this device has a share sheet that takes a picture — the phones do, desktop browsers
- *  mostly do not, and a Share button on a machine with no sheet is a Save button with the wrong name. */
-export const canShareFiles = () => typeof navigator !== 'undefined'
-  && !!navigator.canShare?.({ files: [new File([''], 'x.png', { type: 'image/png' })] })
+/** Whether this device has a share sheet that takes a file of this kind — the phones do, desktop
+ *  browsers mostly do not, and a Share button on a machine with no sheet is a Save button with the
+ *  wrong name. Asked per type: a sheet that takes a picture is not the same answer as one that
+ *  takes a video, and offering the second because the first said yes is a button that fails. */
+const sheetTakes = (type: string, ext: string) => typeof navigator !== 'undefined'
+  && !!navigator.canShare?.({ files: [new File([''], `x.${ext}`, { type })] })
+export const canShareFiles = () => sheetTakes('image/png', 'png')
+export const canShareVideo = () => sheetTakes('video/mp4', 'mp4')
 
-/** The share sheet where there is one, the download folder where there is not. */
+/**
+ * Hand a file to the machine's own share sheet, which is the whole point of the thing on a phone:
+ * a video that goes out through the sheet arrives in WhatsApp as a video, where the same file
+ * attached from the downloads folder goes in through Document and arrives as something the person
+ * on the other end has to save before they can watch it.
+ *
+ * `stale` is the answer that shapes the caller. A sheet may only be opened while the press that
+ * asked for it still counts as one — about five seconds in Chrome — and a clip is up to twenty
+ * seconds of recording and a transcode after it, so by the time there is a file to share the
+ * gesture is long gone and the browser says no. Nothing can be done about that from here: the
+ * caller holds the file and offers a second press, which arrives with a gesture of its own.
+ */
+export async function shareFile(file: File): Promise<'shared' | 'stale' | 'none'> {
+  if (!navigator.canShare?.({ files: [file] })) return 'none'
+  try {
+    await navigator.share({ files: [file] })
+    return 'shared'
+  } catch (e) {
+    const err = e as Error
+    // the sheet was opened and dismissed: that was an answer, and not one to override
+    if (err.name === 'AbortError') return 'shared'
+    return err.name === 'NotAllowedError' ? 'stale' : 'none'
+  }
+}
+
+/** Straight to the download folder under the name it carries. */
+export const saveFile = (file: File) => save(file, file.name)
+
+/** The card's picture to the share sheet where there is one, the download folder where there is
+ *  not. Rasterising a PNG is quick enough that the press is usually still good, so a sheet that
+ *  refuses is treated the same as no sheet: the file lands in the downloads folder either way. */
 export async function shareCard(svg: string, stem: string): Promise<'shared' | 'saved'> {
   const { blob, name } = await cardBlob(svg, stem)
   const file = new File([blob], name, { type: 'image/png' })
-  if (navigator.canShare?.({ files: [file] })) {
-    const done = await navigator.share({ files: [file] })
-      .then(() => true)
-      // the sheet was opened and dismissed: that was an answer, and not one to override
-      .catch((e: Error) => e.name === 'AbortError')
-    if (done) return 'shared'
-  }
+  if (await shareFile(file) === 'shared') return 'shared'
   save(blob, name)
   return 'saved'
 }

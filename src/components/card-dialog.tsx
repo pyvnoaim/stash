@@ -8,8 +8,9 @@ import {
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import {
-  CARD_SECONDS, canRecord, canShareFiles, cardFrame, cardImage, copyCard, downloadCard, downloadClip,
-  PRESETS, recordsMp4, shareCard, type PresetId,
+  CARD_SECONDS, canRecord, canShareFiles, canShareVideo, cardFrame, cardImage, type Clip, clipFile,
+  copyCard, downloadCard, downloadClip, PRESETS, recordsMp4, saveFile, shareCard, shareFile,
+  type PresetId,
 } from '@/lib/card'
 
 /** How the numbers are laid out. The ledger is the card as it has always been; the ticket is a
@@ -65,7 +66,12 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
   })
   const [bg, setBg] = useState<Bg | null>(null)
   /** which press is running, and what it wants to say while it runs */
-  const [busy, setBusy] = useState<{ job: 'copy' | 'png' | 'share' | 'video'; say: string } | null>(null)
+  const [busy, setBusy] = useState<{ job: 'copy' | 'png' | 'share' | 'video' | 'clip'; say: string } | null>(null)
+  /* A recorded clip waiting on a second press. The share sheet may only be opened while the press
+     that asked for it still counts as one, and a clip is up to twenty seconds of recording and a
+     transcode after it — so the first press makes the file and this holds it, and the button turns
+     into the one that opens the sheet. Dropped with the background it was recorded from. */
+  const [held, setHeld] = useState<Clip | null>(null)
   const file = useRef<HTMLInputElement>(null)
   const video = useRef<HTMLVideoElement>(null)
   /** the preview's sound, on unless the browser refused it — see the effect below */
@@ -75,6 +81,10 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
      the way out of the effect hands back the one being replaced, so picking three clips in a row
      does not leak all three. */
   useEffect(() => () => { if (bg?.kind === 'video') URL.revokeObjectURL(bg.url) }, [bg])
+
+  /* A held clip belongs to the clip it was recorded from. Picking another background, or closing,
+     leaves a file whose Send button would send a card for a trade nobody is looking at any more. */
+  useEffect(() => { setHeld(null) }, [bg, open])
 
   /* Playing it out loud, and dropping to silent only where that is refused. A clip picked for its
      sound is a clip you want to hear, and the press that opened this dialog is the interaction
@@ -136,6 +146,32 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
     } finally {
       setBusy(null)
     }
+  }
+
+  /* What a finished clip says, in one place, because there are three ways to finish one and the
+     WebM caveat has to come out of all of them. A file that went out through the sheet says
+     nothing: the sheet was the answer. */
+  const said = (how: Clip['how'], where: 'shared' | 'saved') => {
+    if (how === 'mp4') { if (where === 'saved') toast('Video saved'); return }
+    toast(where === 'shared' ? 'Shared as WebM' : 'Video saved as WebM', {
+      description: 'This browser cannot record MP4 and the server did not convert it.'
+        + ' Chat apps will show it as a file rather than play it.',
+    })
+  }
+
+  /* The clip to the machine's own share sheet, which is the only way it reaches WhatsApp as a
+     video: the same file attached from the downloads folder goes in through Document and arrives
+     as something the person at the other end has to save before they can watch it.
+     Two presses, and not because anybody wanted two. A sheet may only be opened while the press
+     that asked for it still counts as one, and this one is twenty seconds of recording and a
+     transcode old by the time there is a file. The first press is tried anyway — a short clip on a
+     quick machine still makes it — and where the browser says no the file is held for a second
+     press that arrives with a gesture of its own. */
+  const sendHeld = async (clip: Clip) => {
+    const how = await shareFile(clip.file)
+    if (how === 'shared') { setHeld(null); said(clip.how, 'shared'); return true }
+    if (how === 'none') { setHeld(null); saveFile(clip.file); said(clip.how, 'saved'); return true }
+    return false   // stale: hold it, and let the button ask for the press it needs
   }
 
   /* A mute is for the clip it was pressed on. Closing puts the sound back on, so the next open
@@ -266,26 +302,47 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
             <p className="text-muted-foreground text-xs">
               {!canRecord()
                 ? 'This browser cannot record video — the picture still saves.'
-                : `The clip with its own sound, up to ${CARD_SECONDS} seconds. It records as it plays, so this takes about as long as the clip does.`
-                  // said here rather than discovered in the chat window it was shared into
-                  + (recordsMp4() ? '' : ' This browser only records WebM, which chat apps will not'
-                    + ' preview, so the clip goes to the server to come back as MP4 — that needs an account.')}
+                : held
+                  /* The one thing the person cannot be expected to work out: the recording is done
+                     and the button changed, because a share sheet needs a press of its own. */
+                  ? 'Recorded. Press Send clip to open the share sheet — a video sent that way plays in the chat, where the same file attached as a document does not.'
+                  : `The clip with its own sound, up to ${CARD_SECONDS} seconds. It records as it plays, so this takes about as long as the clip does.`
+                    // said here rather than discovered in the chat window it was shared into
+                    + (recordsMp4() ? '' : ' This browser only records WebM, which chat apps will not'
+                      + ' preview, so the clip goes to the server to come back as MP4 — that needs an account.')}
             </p>
-            <Button size="sm" className="ml-auto tabular-nums" disabled={!!busy || !canRecord()}
+            {/* The sheet, where there is one that takes a video — which is a different question
+                from whether it takes a picture, and asked separately. */}
+            {canShareVideo() && (
+              <Button variant="outline" size="sm" className="ml-auto tabular-nums"
+                disabled={!!busy || !canRecord()}
+                onClick={() => void (held
+                  /* A second press is a fresh gesture and the sheet takes it. Where it somehow
+                     still will not, the file goes to the downloads folder — a button that does
+                     nothing at all is the one outcome worse than saving. */
+                  ? sendHeld(held).then((done) => {
+                    if (done) return
+                    setHeld(null)
+                    saveFile(held.file)
+                    said(held.how, 'saved')
+                  })
+                  : run('clip', 'Recording…', async () => {
+                    const clip = await clipFile(draw('', template), name, bg.url,
+                      (done, total) => setBusy({ job: 'clip', say: `${done}s of ${Math.round(total)}s` }),
+                      () => setBusy({ job: 'clip', say: 'Converting…' }))
+                    if (!await sendHeld(clip)) setHeld(clip)
+                  }, '', 'Not shared'))}>
+                <Share2 /> {busy?.job === 'clip' ? busy.say : held ? 'Send clip' : 'Share'}
+              </Button>
+            )}
+            <Button size="sm" className={cn('tabular-nums', !canShareVideo() && 'ml-auto')}
+              disabled={!!busy || !canRecord()}
               onClick={() => void run('video', 'Recording…',
                 // whole seconds, and the recorder only says so when one turns over
                 () => downloadClip(draw('', template), name, bg.url,
                   (done, total) => setBusy({ job: 'video', say: `${done}s of ${Math.round(total)}s` }),
                   () => setBusy({ job: 'video', say: 'Converting…' }),
-                ).then((how) => {
-                  // the saved toast is spoken here rather than by run, because a WebM is a save
-                  // that worked and still has something to say about the file it left behind
-                  if (how === 'mp4') { toast('Video saved'); return }
-                  toast('Video saved as WebM', {
-                    description: 'This browser cannot record MP4 and the server did not convert it.'
-                      + ' Chat apps will show it as a file rather than play it.',
-                  })
-                }),
+                ).then((how) => said(how, 'saved')),
                 '', 'No video')}>
               <Video /> {busy?.job === 'video' ? busy.say : 'Export video'}
             </Button>
