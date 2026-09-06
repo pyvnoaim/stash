@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { sign } from './bitget.ts'
-import { cancel, floorTo, reads, sizeOf, spec } from './trade.ts'
+import { cancel, floorTo, reads, setLevels, sizeOf, spec, tpsl } from './trade.ts'
 
 /* The signature covers the body now, or a POST signed like a GET is refused by the exchange —
    and the empty default is what keeps every read in bitget.ts signing exactly as it did. */
@@ -61,5 +61,60 @@ assert.throws(() => sizeOf(1, 1, 50_000, btc), /smallest size/)
   assert.deepEqual(seen!.body, { symbol: 'LINKUSDT', productType: 'USDT-FUTURES', orderId: '123' })
   globalThis.fetch = answer('43001') as typeof fetch
   await assert.rejects(() => cancel(cred, 'LINKUSDT', '123'), /does not exist/)
+  globalThis.fetch = real
+}
+
+/* Moving the levels on a position that is already open. Place or modify is the whole decision and
+   it is invisible if it goes wrong — a place where a modify was wanted is refused for a duplicate,
+   and the stop stays where it was while the chart says it moved. */
+const resting = [
+  { planType: 'pos_loss', holdSide: 'long', orderId: '900' },
+  { planType: 'pos_profit', holdSide: 'short', orderId: '901' },
+]
+
+// a stop already resting against the long: moved, at its own order id
+{
+  const { path, body } = tpsl('stop', 'long', 'BTCUSDT', '61000.5', resting)
+  assert.equal(path, '/api/v2/mix/order/modify-tpsl-order')
+  assert.deepEqual(body, {
+    marginCoin: 'USDT', productType: 'USDT-FUTURES', symbol: 'BTCUSDT',
+    triggerPrice: '61000.5', triggerType: 'mark_price', orderId: '900',
+  })
+}
+// nothing resting for the long's target: placed, and told which side it belongs to
+{
+  const { path, body } = tpsl('target', 'long', 'BTCUSDT', '70000', resting)
+  assert.equal(path, '/api/v2/mix/order/place-tpsl-order')
+  assert.deepEqual(body, {
+    marginCoin: 'USDT', productType: 'USDT-FUTURES', symbol: 'BTCUSDT',
+    triggerPrice: '70000', triggerType: 'mark_price', planType: 'pos_profit', holdSide: 'long',
+  })
+}
+/* The side is half the match, not garnish: a hedged account holds both ways at once, and the
+   short's own stop must not be modified by a drag on the long's line. */
+assert.equal(tpsl('stop', 'short', 'BTCUSDT', '1', resting).path, '/api/v2/mix/order/place-tpsl-order')
+assert.equal(tpsl('target', 'short', 'BTCUSDT', '1', resting).body.orderId, '901')
+// and an empty book is every level placed rather than every level thrown
+assert.equal(tpsl('stop', 'long', 'BTCUSDT', '1', []).path, '/api/v2/mix/order/place-tpsl-order')
+
+/* And over a stubbed fetch: a key that may not trade never reaches the exchange with a level. */
+{
+  const real = globalThis.fetch
+  /* Per path, because `desk` asks four questions before any level is sent and only one of them is
+     about rights: a stub that refuses all of them proves nothing about which check fired. */
+  globalThis.fetch = (async (url: string | URL | Request) => new Response(JSON.stringify(
+    String(url).includes('cancel-order')
+      ? { code: '40014', msg: 'Incorrect permission' }
+      : { code: '00000', data: String(url).includes('contracts') ? [{}] : {} },
+  ))) as typeof fetch
+  await assert.rejects(
+    () => setLevels({ key: 'ro', secret: 's', passphrase: 'p' }, 'BTCUSDT', 'long', { stop: 1 }),
+    /read-only/,
+  )
+  // and a level nobody named is not a call at all
+  await assert.rejects(
+    () => setLevels({ key: 'ro', secret: 's', passphrase: 'p' }, 'BTCUSDT', 'long', {}),
+    /nothing to move/,
+  )
   globalThis.fetch = real
 }

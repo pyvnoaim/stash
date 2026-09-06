@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Loader2, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
-  TrendingDown, TrendingUp, Waypoints,
+  TrendingDown, TrendingUp, Waypoints, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -13,7 +13,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TradeDialog } from '@/components/trade-dialog'
-import { cancel as cancelOrder, desk as deskOf, suggest } from '@/lib/trade'
+import { cancel as cancelOrder, desk as deskOf, setLevels, suggest } from '@/lib/trade'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
@@ -179,7 +179,7 @@ function CopyNum({ v, className, children }: { v: string; className?: string; ch
 export default function MarketPage() {
   const s = useStash()
   const {
-    chart, watches, marketAsset: asset, marketInterval: chosenInterval,
+    chart, watches, results, marketAsset: asset, marketInterval: chosenInterval,
   } = s
   // the one pair everything that means up or down on this chart is painted in
   const hue = candlePair(s)
@@ -209,6 +209,22 @@ export default function MarketPage() {
   const [trading, setTrading] = useState<
     { side: 'long' | 'short', entry: number, stop: number | null, target: number | null } | null
   >(null)
+  /* A level being moved by hand: which one, where it has been dragged to, and whether the exchange
+     has been told yet. It outlives the drag on purpose — a release does not send anything. A drag
+     is not a deliberate gesture, and on a phone a stop that moved because a thumb landed on it is
+     found out about at the fill; so the release leaves the line where it was let go and a chip
+     asks for the press that means it. `sent` is what keeps the moved line drawn while the position
+     feed, which is a minute slow, still reports where the stop used to be. */
+  const [drag, setDrag] = useState<
+    { which: 'stop' | 'target', price: number, sent?: boolean } | null
+  >(null)
+  /** Which level the pointer currently has hold of — a ref, since the pan handlers read it on every
+   *  move and a re-render per pixel is what `last` above exists to avoid. */
+  const dragging = useRef<'stop' | 'target' | null>(null)
+  const [moving, setMoving] = useState(false)
+  /** Whether the cursor is over a level it could pick up — the only thing that says these two lines
+   *  are different from the ten others on this chart. Set on crossing, not on every move. */
+  const [onLevel, setOnLevel] = useState<'stop' | 'target' | null>(null)
   /* The unbroken swings, the range they span, and the gaps price has not come back for. On by
      default — they are the levels every other reading on this page is measured against, and they
      are most of what the readings below are actually about. A toggle rather than always-on because
@@ -542,6 +558,10 @@ export default function MarketPage() {
   /* Same fuchsia as the position it would become, at half weight and its own dash: a resting order
      is not a level the trade is being measured against, it is the level the trade starts at if
      price comes. */
+  /* Where a level is drawn while it is being moved: the dragged price until the exchange has been
+     told and the feed has caught up with it, and the venue's own the rest of the time. */
+  const at = (which: 'stop' | 'target') =>
+    (drag?.which === which ? drag.price : null) ?? held?.[which] ?? null
   const posLines = [
     // the price is in the label so two orders on the same book are two chips, not one drawn twice
     ...resting.map((o) => ({
@@ -549,8 +569,8 @@ export default function MarketPage() {
     })),
     ...(held ? [
       { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
-      ...(held.stop != null ? [{ label: 'stop', lvl: held.stop, w: 1, dash: '2 3', op: 0.6 }] : []),
-      ...(held.target != null ? [{ label: 'target', lvl: held.target, w: 1, dash: '8 4', op: 0.6 }] : []),
+      ...(at('stop') != null ? [{ label: 'stop', lvl: at('stop')!, w: 1, dash: '2 3', op: drag?.which === 'stop' ? 1 : 0.6 }] : []),
+      ...(at('target') != null ? [{ label: 'target', lvl: at('target')!, w: 1, dash: '8 4', op: drag?.which === 'target' ? 1 : 0.6 }] : []),
     ] : mine ? [
       { label: 'entry', lvl: mine.entry, w: 1.5, dash: '6 3', op: 1 },
       { label: 'stop', lvl: mine.stop, w: 1, dash: '2 3', op: 0.6 },
@@ -593,6 +613,96 @@ export default function MarketPage() {
   const xSpan = n > 1 ? n - 1 + future : 1
   const xAt = (i: number) => (n > 1 ? (i / xSpan) * 100 : 0)
   const barW = (100 / xSpan) * 0.6
+
+  /* ---------- the two levels you can take hold of ---------- */
+
+  /** `y` the other way round: where in the frame a pointer is, as a price. */
+  const priceAt = (yPct: number) => hi - (yPct / 100) * (hi - lo)
+  /* The levels a drag may move: the exchange's own, on a venue whose key can write. A hand-entered
+     position's levels are a note about a trade, not the trade — there is nothing at a venue to
+     move — and MEXC's futures writes have been shut since 2022, the same reason nothing places an
+     order there. Both are drawn exactly as before; they just cannot be picked up. */
+  const draggable: ('stop' | 'target')[] = held?.venue === 'bitget'
+    ? (['stop', 'target'] as const).filter((k) => at(k) != null)
+    : []
+  /** Which level, if any, a pointer at this height has hold of. A finger is given twice the reach
+   *  of a cursor: the same few pixels that are a comfortable grab with a mouse are a miss on a
+   *  phone, and every miss here is a pan the chart did instead. */
+  const levelAt = (clientY: number, box: DOMRect, touch: boolean) => {
+    const yPct = ((clientY - box.top) / box.height) * 100
+    return draggable.find((k) => Math.abs(y(at(k)!) - yPct) <= (touch ? 5 : 2.5)) ?? null
+  }
+  /* A stop belongs beyond the price and a target short of it — dragged through, each becomes an
+     order the exchange fires the moment it arrives, which is not a level anybody meant to set. So
+     the line stops at the price rather than following the finger past it: what it can't do is
+     visible, which beats a refusal read off a toast after the fact. */
+  const clamp = (which: 'stop' | 'target', p: number) => {
+    if (!held || last == null) return p
+    const below = (held.side === 'long') === (which === 'stop')
+    return below ? Math.min(p, last) : Math.max(p, last)
+  }
+  /* Let go, and the feed still says the old price for up to a minute. The moved line stays drawn
+     until the venue's own row agrees with it — near enough, since the exchange rounds to the
+     contract's own step — and drops the moment it does. */
+  useEffect(() => {
+    if (!drag?.sent) return
+    const now = held?.[drag.which]
+    if (now != null && Math.abs(now - drag.price) / drag.price < 0.001) setDrag(null)
+  }, [held, drag])
+  // a level belongs to the trade it was dragged on: another asset is another position, or none
+  useEffect(() => { setDrag(null) }, [current.id])
+  const moveLevel = async () => {
+    if (!drag || !held) return
+    setMoving(true)
+    try {
+      await setLevels(held.symbol, held.side, { [drag.which]: drag.price })
+      toast(`${drag.which === 'stop' ? 'Stop' : 'Target'} moved to ${fmt(drag.price)}`)
+      setDrag({ ...drag, sent: true })
+    } catch (e) {
+      // kept where it was dragged to, so the press can be tried again rather than done again
+      toast((e as Error).message)
+    } finally {
+      setMoving(false)
+    }
+  }
+
+  /* ---------- what you actually did on this chart ---------- */
+
+  /**
+   * Every fill this desk has a record of on this asset, as a mark on the bar it happened on: the
+   * open and the close of each finished trade, and the open of the one still running. The record
+   * has carried the prices and the stamps all along — the chart drew the levels a trade was aiming
+   * at and never once where it was actually entered.
+   *
+   * Only trades that really ran. A watched setup files itself into the same list with the same two
+   * exits, and a mark for a fill nobody took is the chart claiming a trade that never happened —
+   * the same gate the Log and the calendar hold to.
+   */
+  const barMs = n > 1 ? vis[1].t - vis[0].t : 0
+  const fills = useMemo(() => {
+    if (!n || !barMs) return []
+    const at0 = vis[0].t
+    const bar = (t: number) => {
+      const i = Math.round((t - at0) / barMs)
+      return i >= 0 && i <= n - 1 ? i : null
+    }
+    const rows = results.filter((r) => r.asset === current.id && isReal(r))
+    return [
+      ...rows.flatMap((r) => [
+        { i: bar(r.entryAt), price: r.entry, buy: r.dir === 'long', open: true, row: r },
+        { i: bar(r.closedAt), price: r.exit, buy: r.dir === 'short', open: false, row: r },
+      ]),
+      // and the one still on: its exit has not happened, so it gets the open mark and nothing else
+      ...(held?.openedAt
+        ? [{ i: bar(Date.parse(held.openedAt)), price: held.entry, buy: held.side === 'long', open: true, row: null }]
+        : []),
+    ].filter((m): m is typeof m & { i: number } => m.i != null && m.price > 0)
+  }, [results, current.id, held, vis, n, barMs])
+  // drawn only where the frame reaches them — a mark clamped to the edge is a fill at a price it
+  // was not made at
+  const visFills = fills.filter((m) => m.price >= lo && m.price <= hi)
+  /** The marks on the bar under the crosshair, which is where their detail is read. */
+  const hoverFills = hover == null ? [] : fills.filter((m) => m.i === hover)
   /* The standing swings that are actually drawable: inside the frame, and made by a bar the window
      has reached. A pivot to the right of where you have scrolled has no x to be drawn from, and a
      line starting off the edge of the view says the level came from somewhere it didn't. */
@@ -804,10 +914,23 @@ export default function MarketPage() {
                     page and hands the horizontal one to the pan; a mostly-vertical drag arrives
                     as pointercancel, which just lets go. */}
                 <div
-                  className="absolute inset-0 cursor-crosshair touch-pan-y active:cursor-grabbing"
+                  className={cn('absolute inset-0 touch-pan-y',
+                    onLevel ? 'cursor-ns-resize' : 'cursor-crosshair active:cursor-grabbing')}
                   onPointerDown={(e) => {
                     // capture, so a drag that leaves the box keeps panning instead of stalling
                     e.currentTarget.setPointerCapture(e.pointerId)
+                    /* A level under the pointer takes the drag before the pan does — the whole
+                       gesture, so the chart does not walk sideways while a stop is being placed.
+                       One finger only: a second one is a pinch, and a zoom that also moved a stop
+                       is not a thing anybody meant. */
+                    const level = pts.current.size ? null
+                      : levelAt(e.clientY, e.currentTarget.getBoundingClientRect(), e.pointerType !== 'mouse')
+                    if (level) {
+                      dragging.current = level
+                      setDrag({ which: level, price: at(level)! })
+                      setHover(null)
+                      return
+                    }
                     pts.current.set(e.pointerId, e.clientX)
                     const span = spanOf()
                     if (span) {
@@ -820,6 +943,9 @@ export default function MarketPage() {
                     if (e.pointerType === 'mouse') setHover(null)
                   }}
                   onPointerUp={(e) => {
+                    /* A released level is not a sent one: `drag` stays exactly where it was let go
+                       and the chip beside it asks for the press that means it. */
+                    if (dragging.current) { dragging.current = null; return }
                     // a finger has no hover, so the crosshair rides on the tap: a press that never
                     // travelled reads the bar under it rather than having panned nowhere. A second
                     // tap on the bar it is already on puts it away — a read-out with no pointer to
@@ -837,6 +963,11 @@ export default function MarketPage() {
                   onPointerMove={(e) => {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
+                    if (dragging.current) {
+                      const which = dragging.current
+                      setDrag({ which, price: clamp(which, priceAt(((e.clientY - r.top) / r.height) * 100)) })
+                      return
+                    }
                     if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, e.clientX)
                     const span = spanOf()
                     if (pinch.current && span) {
@@ -854,20 +985,26 @@ export default function MarketPage() {
                       return
                     }
                     if (e.pointerType !== 'mouse') return // touch never hovers; its crosshair is the tap above
+                    const over = levelAt(e.clientY, r, false)
+                    if (over !== onLevel) setOnLevel(over)
                     const f = (e.clientX - r.left) / r.width
                     // clamps in the future strip, so hovering it reads the last bar rather than nothing
                     setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
                   }}
                   onPointerCancel={(e) => {
+                    // a cancelled drag keeps the level where it reached: the chip is still the
+                    // only thing that sends it, so nothing is lost by not throwing the move away
+                    dragging.current = null
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
                     grab.current = null
                   }}
                   onPointerLeave={(e) => {
+                    dragging.current = null
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
                     grab.current = null
-                    if (e.pointerType === 'mouse') setHover(null)
+                    if (e.pointerType === 'mouse') { setHover(null); setOnLevel(null) }
                   }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
@@ -1051,6 +1188,20 @@ export default function MarketPage() {
                   </span>
                 )}
 
+                {/* Where the money actually went in and out. HTML rather than SVG for the same
+                    reason the tooltip is: preserveAspectRatio=none squashes a shape into whatever
+                    the pane's aspect happens to be, and a triangle is a shape. Pointer-transparent,
+                    so a mark sitting on a level does not eat the drag — the detail is read off the
+                    crosshair below, which is the one reading a phone can do too. */}
+                {visFills.map((m, k) => (
+                  <span key={`f-${k}`}
+                    className={cn('pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 text-[9px] leading-none',
+                      m.buy ? 'text-emerald-500' : 'text-destructive', !m.open && 'opacity-70')}
+                    style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }}>
+                    {m.buy ? '▲' : '▼'}
+                  </span>
+                ))}
+
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
                     HTML overlay, not SVG shapes — preserveAspectRatio=none would squash those */}
                 {hc && (
@@ -1058,6 +1209,48 @@ export default function MarketPage() {
                     style={{ left: `${Math.min(85, Math.max(15, xAt(hover!)))}%` }}>
                     <span className="tabular-nums">{fmt(hc.c)}</span>
                     <span className="text-muted-foreground ml-2">{stamp(hc.t)}</span>
+                    {/* and what you did on this bar, if anything — the mark's own detail, read
+                        where the crosshair already is rather than on a hover a phone cannot do */}
+                    {hoverFills.map((m, k) => (
+                      <span key={`h-${k}`} className="mt-0.5 flex items-center gap-1.5 border-t pt-0.5">
+                        <span className={cn('text-[9px] leading-none', m.buy ? 'text-emerald-500' : 'text-destructive')}>
+                          {m.buy ? '▲' : '▼'}
+                        </span>
+                        <span>{m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>
+                        {m.row && !m.open && (
+                          <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+                            {m.row.r >= 0 ? '+' : ''}{m.row.r.toFixed(2)}R
+                            {m.row.cash != null && ` · ${m.row.cash >= 0 ? '+' : ''}$${Math.abs(m.row.cash).toFixed(2)}`}
+                          </span>
+                        )}
+                        {!m.row && <span className="text-muted-foreground">open</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* The level under the drag, and the press that sends it. Beside the line rather
+                    than in a dialog: the number and the chart it means something on have to be
+                    readable at the same time, which is the whole reason for dragging it there. */}
+                {drag && (
+                  <div className="bg-popover text-popover-foreground absolute right-0 z-20 flex -translate-y-1/2 items-center gap-1.5 rounded-md border py-1 pr-1 pl-2 text-[11px] shadow-md"
+                    style={{ top: `${Math.min(94, Math.max(6, y(drag.price)))}%` }}>
+                    <span className="tabular-nums">
+                      {drag.which} <span className="text-muted-foreground">→</span> {fmt(drag.price)}
+                    </span>
+                    {drag.sent ? <span className="text-muted-foreground pr-1">sent</span> : (
+                      <>
+                        <Button size="sm" className="h-5 px-2 text-[11px]" disabled={moving}
+                          onClick={() => void moveLevel()}>
+                          {moving ? <Loader2 className="size-3 animate-spin" /> : 'move'}
+                        </Button>
+                        <Button size="sm" variant="ghost" aria-label="Leave it"
+                          className="text-muted-foreground size-5 px-0" disabled={moving}
+                          onClick={() => setDrag(null)}>
+                          <X className="size-3" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 )}
                 </div>
@@ -1188,6 +1381,9 @@ export default function MarketPage() {
                     to hover, and being told to use one is how a chart reads as broken */}
                 <span className={cn('opacity-70', !structure && 'mr-4')}>
                   {phone ? 'drag to pan · pinch to zoom · tap a bar' : 'drag to pan · scroll to zoom'} · {n} bars
+                  {/* the one thing nobody would try unprompted: two of the lines on this chart are
+                      the live order, and they can be taken hold of */}
+                  {!!draggable.length && ' · drag the stop or target'}
                 </span>
                 {!structure && <>support {fmt(view.support)} · resistance {fmt(view.resistance)}</>}
               </span>

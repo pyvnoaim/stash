@@ -46,6 +46,21 @@ export const place = (o: Order): Promise<{ id: string, size: number, price: numb
     body: JSON.stringify(o),
   }).then(json)
 
+/**
+ * Move the stop or the take-profit resting against a position that is already open — the levels
+ * the chart draws, dragged to where they should have been.
+ *
+ * A level left out is a level left alone: this never removes one. Bitget only, like `place`.
+ */
+export const setLevels = (
+  symbol: string, side: 'long' | 'short', levels: { stop?: number, target?: number },
+): Promise<{ ok: true }> =>
+  fetch('/api/trade', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ symbol, side, ...levels }),
+  }).then(json)
+
 /** Take a resting order back off the book. Bitget only, like `place`. */
 export const cancel = (symbol: string, id: string): Promise<{ ok: true }> =>
   fetch(`/api/trade?symbol=${encodeURIComponent(symbol)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' })

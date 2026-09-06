@@ -33,7 +33,7 @@ import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
 import { closed as mexcClosed, pending as mexcPending, positions as mexcPositions } from './mexc.ts'
-import { cancel, desk, place, type Cred } from './trade.ts'
+import { cancel, desk, place, setLevels, type Cred } from './trade.ts'
 import { createStash } from './mcp.ts'
 import { BARS, MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -1423,10 +1423,11 @@ export function start({
 
     /* The desk, and the one thing on this server that can move money.
        GET says what the account has and whether its key may trade at all; POST places one order,
-       with its stop and target riding it; DELETE takes a resting one back off the book. Bitget
+       with its stop and target riding it; PATCH moves the stop or the target resting against a
+       position that is already open; DELETE takes a resting one back off the book. Bitget
        only — MEXC's futures order endpoints have been shut since 2022, so there is nothing to
        call and the app offers no button for it.
-       Both refuse without a stored key, the same 501 the positions route answers with. */
+       All of them refuse without a stored key, the same 501 the positions route answers with. */
     if (path === '/api/trade') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
@@ -1455,6 +1456,33 @@ export function start({
         try {
           await cancel(cred, symbol, id)
           log(`cancel ${symbol} ${id}`, user.name, via(req))
+          return send(res, 200, { ok: true })
+        } catch (e) {
+          return send(res, 502, { error: String((e as Error).message) })
+        }
+      }
+      /* Moving the levels on a position that is already open. Its own counter and a looser one
+         than placing: this is the request a person makes over and over while a trade is running,
+         and every one of them either narrows the risk or moves a target — it commits nothing new.
+         What it must not become is a loop, which is what the ceiling is for. Its own key, so a
+         morning spent minding one stop cannot use up the ten orders placing has. */
+      if (req.method === 'PATCH') {
+        let b: any
+        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
+        const symbol = String(b?.symbol ?? '').toUpperCase()
+        const side = b?.side === 'short' ? 'short' as const : 'long' as const
+        const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : NaN }
+        const level = (v: unknown) => (v == null || v === '' ? null : n(v))
+        const stop = level(b?.stop), target = level(b?.target)
+        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
+        for (const [what, v] of [['stop', stop], ['target', target]] as const) {
+          if (v !== null && !(v > 0)) return send(res, 400, { error: `${what} has to be a price over zero` })
+        }
+        if (stop === null && target === null) return send(res, 400, { error: 'nothing to move' })
+        if (limited(`levels:${user.id}`)) return send(res, 429, { error: 'ten moves in fifteen minutes is the limit — wait it out' })
+        try {
+          await setLevels(cred, symbol, side, { stop, target })
+          log(`levels ${side} ${symbol} stop=${stop ?? '-'} target=${target ?? '-'}`, user.name, via(req))
           return send(res, 200, { ok: true })
         } catch (e) {
           return send(res, 502, { error: String((e as Error).message) })

@@ -243,3 +243,72 @@ export async function place(c: Cred, o: Order): Promise<{ id: string, size: numb
   if (order?.code !== '00000') throw new Error(String(order?.msg ?? 'the exchange refused the order'))
   return { id: String((order.data as { orderId?: unknown })?.orderId ?? ''), size, price }
 }
+
+/** Bitget's own words for the two levels resting against a position, as `planType`. The plain
+ *  `loss_plan`/`profit_plan` pair belongs to an order that has not filled yet; these two are the
+ *  ones attached to a position that is already open, which is the only thing being moved here. */
+const PLAN = { stop: 'pos_loss', target: 'pos_profit' } as const
+
+/**
+ * Where one level goes and what it says: the modify endpoint when a plan order of that kind is
+ * already resting against this side of the position, the place endpoint when there is none.
+ *
+ * Split out because it is the whole decision — everything around it is a fetch — and because
+ * getting it the wrong way round is silent at compile time and expensive at the exchange: a place
+ * where a modify was wanted is refused for a duplicate, and the stop stays where it was while the
+ * chart says it moved.
+ *
+ * `holdSide` is what tells a hedged account's long stop from its short one; a one-way account has
+ * only ever one of each and the field costs nothing there.
+ */
+export function tpsl(
+  which: 'stop' | 'target', side: 'long' | 'short', symbol: string, price: string,
+  resting: Record<string, unknown>[],
+): { path: string, body: Record<string, unknown> } {
+  const has = resting.find((r) => r.planType === PLAN[which] && r.holdSide === side)
+  /* `mark_price` for both, which is Bitget's own default for a position's TP/SL and the reading a
+     wick cannot reach — the same terms a preset placed with the order goes in on. */
+  const on = { marginCoin: COIN, productType: PRODUCT, symbol, triggerPrice: price, triggerType: 'mark_price' }
+  return has
+    ? { path: '/api/v2/mix/order/modify-tpsl-order', body: { ...on, orderId: String(has.orderId ?? '') } }
+    : { path: '/api/v2/mix/order/place-tpsl-order', body: { ...on, planType: PLAN[which], holdSide: side } }
+}
+
+/**
+ * Move the stop or the take-profit resting against an open position.
+ *
+ * Placing and modifying are two different endpoints at Bitget and which one applies is not
+ * something the caller can know: a position may carry a stop already, or have been opened without
+ * one, and the answer changes between the drag and the release. So the resting plan orders are
+ * read first and each level goes to whichever call fits. The alternative — cancel, then place — is
+ * a window where the position has no stop at all, which is the one state this must never create.
+ *
+ * `null` is not "remove": a level left out is a level left alone. Taking a stop off a live position
+ * is a thing to do deliberately at the exchange, not something a drag should be able to do.
+ *
+ * One at a time rather than in parallel. They are two independent plan orders and could race
+ * safely, but this is money and a sequence is what the log can be read back as.
+ */
+export async function setLevels(
+  c: Cred, symbol: string, side: 'long' | 'short',
+  levels: { stop?: number | null, target?: number | null },
+): Promise<void> {
+  const want = (['stop', 'target'] as const).filter((k) => levels[k] != null)
+  if (!want.length) throw new Error('nothing to move')
+  const d = await desk(c, symbol)
+  if (!d.trade) throw new Error('this key is read-only — it can see the account but not trade it')
+
+  /* What is already resting on this symbol. `profit_loss` is the family both of these live in;
+     the rows carry the plan type and the side, which is what tells a hedged account's long stop
+     from its short one. */
+  const pending = await call(c, 'GET',
+    `/api/v2/mix/order/orders-plan-pending?productType=${PRODUCT}&planType=profit_loss&symbol=${symbol}`)
+  if (pending?.code !== '00000') throw new Error(String(pending?.msg ?? 'the exchange did not answer'))
+  const resting = (((pending.data as { entrustedList?: unknown })?.entrustedList ?? []) as Record<string, unknown>[])
+
+  for (const which of want) {
+    const { path, body } = tpsl(which, side, symbol, String(roundTo(levels[which]!, d.pricePlace)), resting)
+    const r = await call(c, 'POST', path, body)
+    if (r?.code !== '00000') throw new Error(`${which}: ${String(r?.msg ?? 'the exchange refused it')}`)
+  }
+}
