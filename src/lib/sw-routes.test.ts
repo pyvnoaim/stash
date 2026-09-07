@@ -38,6 +38,7 @@ globalThis.fetch = ((url: string) => {
   return Promise.resolve({ json: () => Promise.resolve([]) })
 }) as typeof fetch
 const { ASSETS, fetchCandles, fetchPrices, fetchTrending } = await import('./market.ts')
+const { rateOf } = await import('./card.ts')
 const asked = async (fn: () => Promise<unknown>) => {
   seen.length = 0
   await fn().catch(() => {})
@@ -77,5 +78,12 @@ assert.ok(priceUrls.some((u) => u.includes('/api/mexc/price')), 'the MEXC relay 
 const trendUrls = await asked(() => fetchTrending())
 assert.ok(trendUrls.length, 'fetchTrending asked for nothing')
 for (const url of trendUrls) assert.ok(!cached(url), `trending must never be served from cache: ${url}`)
+
+/* The rate a card converts its money at is a price like the ticker is, and the card is the one
+   thing here that leaves the app: served from a month-old cache, a figure goes out to strangers in
+   euros nobody could have sold it for. */
+const rateUrls = await asked(() => rateOf('€'))
+assert.ok(rateUrls.length, 'rateOf asked for nothing')
+for (const url of rateUrls) assert.ok(!cached(url), `the card's rate must never be served from cache: ${url}`)
 
 console.log('sw routes ok')

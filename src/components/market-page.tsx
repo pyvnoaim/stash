@@ -2711,7 +2711,7 @@ const cardOf = (r: CardRow) => {
  *  the ticket, and the symbol as the file's name. One place, so your own rows and everyone else's
  *  open the same card. */
 const tradeCard = (p: CardPosition, r: number | null, who: CardWho | null) => ({
-  draw: (bg: string | null, t: Template, unit: Unit) => (t === 'ticket' ? ticketSvg(p, r, who, bg, PIXEL_FONT, unit) : cardSvg(p, r, who, bg, unit)),
+  draw: (bg: string | null, t: Template, unit: Unit, rate: number) => (t === 'ticket' ? ticketSvg(p, r, who, bg, PIXEL_FONT, unit, rate) : cardSvg(p, r, who, bg, unit, rate)),
   name: p.symbol,
   title: `Share ${p.symbol}`,
   templates: ['ledger', 'ticket'] as Template[],
@@ -2858,7 +2858,7 @@ function RecapButton({ all, who }: { all: Result[]; who: CardWho | null }) {
   const rec = useMemo(() => recapOf(all), [all])
   if (!rec) return null
   return (
-    <CardDialog draw={(bg, _t, unit) => recapSvg(rec, who, bg, unit)} name={rec.title} title={`Share ${rec.title}`}>
+    <CardDialog draw={(bg, _t, unit, rate) => recapSvg(rec, who, bg, unit, rate)} name={rec.title} title={`Share ${rec.title}`}>
       <Button variant="outline" size="sm" className="h-7 gap-1.5">
         <Sparkles className="size-3.5" /> Recap {rec.title.startsWith('Week') ? 'this week' : 'this month'}
       </Button>

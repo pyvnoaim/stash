@@ -69,10 +69,19 @@ test('the money wears whichever name was picked', () => {
   // the token trails the figure and a sign leads it, and the sign of the money comes first either way
   assert.match(cardSvg({ ...P, pnl: 5.83 }, null, null, null, '$'), />\+\$5\.83</)
   assert.match(cardSvg({ ...P, pnl: -5.83 }, null, null, null, '€'), />−€5\.83</)
-  // nothing is converted: the same figure, and USDT is what it says when nobody picks
+  // USDT is what it says when nobody picks, and a rate of one is the identity
   assert.match(cardSvg({ ...P, pnl: 5.83 }), />\+5\.83 USDT</)
   assert.match(ticketSvg({ ...P, pnl: 5.83 }, null, null, null, null, '$'), />\+\$5\.83</)
   assert.match(recapSvg({ ...RECAP, usd: 5.83 }, null, null, '€'), />\+€5\.83</)
+})
+
+test('the figure converts with the sign, in all three layouts', () => {
+  // 5.83 USDT at 0.8611 €/USDT is 5.02 — the sign without the arithmetic is the lie this stops
+  assert.match(cardSvg({ ...P, pnl: 5.83 }, null, null, null, '€', 0.8611), />\+€5\.02</)
+  assert.match(ticketSvg({ ...P, pnl: 5.83 }, null, null, null, null, '€', 0.8611), />\+€5\.02</)
+  assert.match(recapSvg({ ...RECAP, usd: 5.83 }, null, null, '€', 0.8611), />\+€5\.02</)
+  // the sign survives the multiply, and rounding is on the converted figure rather than before it
+  assert.match(cardSvg({ ...P, pnl: -1234.56 }, null, null, null, '$', 0.9998), />−\$1,234\.31</)
 })
 
 test('a plan nobody took keeps the percent as its headline', () => {

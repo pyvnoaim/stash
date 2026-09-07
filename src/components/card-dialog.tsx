@@ -9,7 +9,7 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import {
   CARD_SECONDS, canRecord, canShareFiles, canShareVideo, cardFrame, cardImage, type Clip, clipFile,
-  copyCard, downloadCard, downloadClip, PRESETS, saveFile, shareCard, shareFile, UNITS,
+  copyCard, downloadCard, downloadClip, PRESETS, rateOf, saveFile, shareCard, shareFile, UNITS,
   type PresetId, type Unit,
 } from '@/lib/card'
 
@@ -31,9 +31,9 @@ type Bg = { kind: 'image'; url: string } | { kind: 'video'; url: string } | { ki
    colour picked for a different trade — the plain card, which is the one most of them want, took a
    press to get back to. Every card starts on the card's own ground. */
 const TPL_KEY = 'stash-card-template'
-/* And so is what the money is called. The venue settles in USDT and that is what the card says by
+/* And so is what the money is in. The venue settles in USDT and that is what the card says by
    default, but the card is the one thing here that leaves the app — whoever is posting it knows
-   whether their audience reads a token or a currency sign. Nothing is converted: see UNITS. */
+   whether their audience reads a token or a currency. The figure moves with the sign: see UNITS. */
 const UNIT_KEY = 'stash-card-unit'
 const remembered = <T extends string>(key: string, ok: readonly T[], fallback: T): T => {
   try { const v = localStorage.getItem(key) as T | null; return v && ok.includes(v) ? v : fallback } catch { return fallback }
@@ -54,8 +54,8 @@ const remember = (key: string, v: string) => { try { localStorage.setItem(key, v
  */
 export function CardDialog({ draw, name, title, templates = ['ledger'], children }: {
   /** The card as SVG for a background — a data URI, `preset:<id>`, `''` for media drawn under it,
-   *  null for none — a template, and what to call the money. */
-  draw: (bg: string | null, template: Template, unit: Unit) => string
+   *  null for none — a template, what the money is in, and what one USDT buys of it. */
+  draw: (bg: string | null, template: Template, unit: Unit, rate: number) => string
   /** the file's stem — the symbol, the week */
   name: string
   title: string
@@ -69,6 +69,19 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
     return templates.includes(t) ? t : templates[0]!
   })
   const [unit, setUnit] = useState<Unit>(() => remembered(UNIT_KEY, UNITS, 'USDT'))
+  /* What one USDT buys, per unit, for as long as the dialog lives — a card is looked at for a
+     minute and a share is one press, so a rate fetched on open is the rate the picture goes out
+     with. Missing means not yet, or the venue would not say: either way the card stays in USDT
+     rather than putting a euro sign over a token's figure, which is `shown` below. */
+  const [rates, setRates] = useState<Partial<Record<Unit, number>>>({ USDT: 1 })
+  useEffect(() => {
+    if (!open || rates[unit]) return
+    let live = true
+    void rateOf(unit).then((r) => { if (live && r) setRates((m) => ({ ...m, [unit]: r })) })
+    return () => { live = false }
+  }, [open, unit, rates])
+  const rate = rates[unit]
+  const shown = rate ? unit : 'USDT'
   const [bg, setBg] = useState<Bg | null>(null)
   /** which press is running, and what it wants to say while it runs */
   const [busy, setBusy] = useState<{ job: 'copy' | 'png' | 'share' | 'video' | 'clip'; say: string } | null>(null)
@@ -119,8 +132,8 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
      and percent-encoded fifty SVGs on every poll, for a dialog nobody had pressed. Closed, Radix
      has unmounted everything that reads it. */
   const overlay = useMemo(
-    () => (open ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(draw(under, template, unit)) : ''),
-    [open, draw, under, template, unit],
+    () => (open ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(draw(under, template, shown, rate ?? 1)) : ''),
+    [open, draw, under, template, shown, rate],
   )
 
   /* What the still card bakes in: the picture itself, the frame the clip is paused on, or the
@@ -128,7 +141,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
      picture, and a clip always has one to give. */
   const still = () => draw(bg?.kind === 'image' ? bg.url
     : bg?.kind === 'video' ? (video.current ? cardFrame(video.current) : '')
-      : under, template, unit)
+      : under, template, shown, rate ?? 1)
 
   const pick = async (f: File) => {
     if (f.type.startsWith('video/')) return setBg({ kind: 'video', url: URL.createObjectURL(f) })
@@ -245,9 +258,9 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
               ))}
             </div>
           )}
-          {/* What the money is called. A relabel and nothing else — the figure is the venue's USDT
-              whichever of these is lit — so the tooltip says so rather than letting a "€" on a
-              perp read as a conversion that never happened. */}
+          {/* What the money is in. The figure converts with it, at the venue's own spot price for
+              its settlement token, which is what the tooltip names — a card that leaves the app
+              gets read at face value, so the sign and the number have to agree. */}
           <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5" role="radiogroup" aria-label="Currency">
             {/* `title`, not a Hint: on the recap card there is no template switch, which makes this
                 the first control in the dialog — and a Hint answers to focus, so every one of those
@@ -256,7 +269,9 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
             {UNITS.map((u) => (
               <Button key={u} size="sm" variant={unit === u ? 'secondary' : 'ghost'}
                 role="radio" aria-checked={unit === u} aria-label={u === 'USDT' ? 'USDT' : u === '$' ? 'Dollars' : 'Euros'}
-                title={u === 'USDT' ? 'What the venue settles in' : 'The same figure, relabelled — nothing is converted'}
+                title={u === 'USDT' ? 'What the venue settles in'
+                  : rates[u] ? `Converted at ${rates[u]!.toLocaleString('en-US', { maximumFractionDigits: 4 })} per USDT`
+                    : 'Converted at the venue’s spot price for USDT'}
                 className={cn('h-7', unit !== u && 'text-muted-foreground')}
                 onClick={() => { setUnit(u); remember(UNIT_KEY, u) }}>
                 {u}
@@ -350,7 +365,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
                     said(held.how, 'saved')
                   })
                   : run('clip', 'Recording…', async () => {
-                    const clip = await clipFile(draw('', template, unit), name, bg.url,
+                    const clip = await clipFile(draw('', template, shown, rate ?? 1), name, bg.url,
                       (done, total) => setBusy({ job: 'clip', say: `${done}s of ${Math.round(total)}s` }),
                       () => setBusy({ job: 'clip', say: 'Converting…' }))
                     if (!await sendHeld(clip)) setHeld(clip)
@@ -362,7 +377,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
               disabled={!!busy || !canRecord()}
               onClick={() => void run('video', 'Recording…',
                 // whole seconds, and the recorder only says so when one turns over
-                () => downloadClip(draw('', template, unit), name, bg.url,
+                () => downloadClip(draw('', template, shown, rate ?? 1), name, bg.url,
                   (done, total) => setBusy({ job: 'video', say: `${done}s of ${Math.round(total)}s` }),
                   () => setBusy({ job: 'video', say: 'Converting…' }),
                 ).then((how) => said(how, 'saved')),
