@@ -1,10 +1,14 @@
 import { strict as assert } from 'node:assert'
 import test from 'node:test'
-import { canShareFiles, canShareVideo, cardSvg, type CardPosition, shareFile } from './card.ts'
+import { canShareFiles, canShareVideo, cardSvg, type CardPosition, type Recap, recapSvg, shareFile, ticketSvg } from './card.ts'
 
 const P: CardPosition = {
   symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 60_000, mark: 67_400,
   pct: 12.33, pnl: 3700, openedAt: '2026-08-03T09:00:00.000Z', venue: 'bitget',
+}
+const RECAP: Recap = {
+  title: 'Week 36', sub: '31 Aug–6 Sept   ·   3 trades', n: 3, won: 2,
+  total: 1.9, best: 2.4, worst: -1, usd: 42, seq: [true, false, true],
 }
 
 test('the card names the asset, the side and the profit', () => {
@@ -59,6 +63,16 @@ test('the headline shrinks rather than running the width of the card', () => {
   assert.match(cardSvg({ ...P, pnl: -1234567890.12 }), /font-size="53"[^>]*>−1,234,567,890\.12 USDT</)
   assert.match(cardSvg({ ...P, pnl: -123456.78 }), /font-size="70"[^>]*>−123,456\.78 USDT</)
   assert.match(cardSvg({ ...P, pnl: 3700 }), /font-size="76"[^>]*>\+3,700\.00 USDT</)
+})
+
+test('the money wears whichever name was picked', () => {
+  // the token trails the figure and a sign leads it, and the sign of the money comes first either way
+  assert.match(cardSvg({ ...P, pnl: 5.83 }, null, null, null, '$'), />\+\$5\.83</)
+  assert.match(cardSvg({ ...P, pnl: -5.83 }, null, null, null, '€'), />−€5\.83</)
+  // nothing is converted: the same figure, and USDT is what it says when nobody picks
+  assert.match(cardSvg({ ...P, pnl: 5.83 }), />\+5\.83 USDT</)
+  assert.match(ticketSvg({ ...P, pnl: 5.83 }, null, null, null, null, '$'), />\+\$5\.83</)
+  assert.match(recapSvg({ ...RECAP, usd: 5.83 }, null, null, '€'), />\+€5\.83</)
 })
 
 test('a plan nobody took keeps the percent as its headline', () => {

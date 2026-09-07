@@ -9,8 +9,8 @@ import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import {
   CARD_SECONDS, canRecord, canShareFiles, canShareVideo, cardFrame, cardImage, type Clip, clipFile,
-  copyCard, downloadCard, downloadClip, PRESETS, saveFile, shareCard, shareFile,
-  type PresetId,
+  copyCard, downloadCard, downloadClip, PRESETS, saveFile, shareCard, shareFile, UNITS,
+  type PresetId, type Unit,
 } from '@/lib/card'
 
 /** How the numbers are laid out. The ledger is the card as it has always been; the ticket is a
@@ -31,6 +31,10 @@ type Bg = { kind: 'image'; url: string } | { kind: 'video'; url: string } | { ki
    colour picked for a different trade — the plain card, which is the one most of them want, took a
    press to get back to. Every card starts on the card's own ground. */
 const TPL_KEY = 'stash-card-template'
+/* And so is what the money is called. The venue settles in USDT and that is what the card says by
+   default, but the card is the one thing here that leaves the app — whoever is posting it knows
+   whether their audience reads a token or a currency sign. Nothing is converted: see UNITS. */
+const UNIT_KEY = 'stash-card-unit'
 const remembered = <T extends string>(key: string, ok: readonly T[], fallback: T): T => {
   try { const v = localStorage.getItem(key) as T | null; return v && ok.includes(v) ? v : fallback } catch { return fallback }
 }
@@ -50,8 +54,8 @@ const remember = (key: string, v: string) => { try { localStorage.setItem(key, v
  */
 export function CardDialog({ draw, name, title, templates = ['ledger'], children }: {
   /** The card as SVG for a background — a data URI, `preset:<id>`, `''` for media drawn under it,
-   *  null for none — and a template. */
-  draw: (bg: string | null, template: Template) => string
+   *  null for none — a template, and what to call the money. */
+  draw: (bg: string | null, template: Template, unit: Unit) => string
   /** the file's stem — the symbol, the week */
   name: string
   title: string
@@ -64,6 +68,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
     const t = remembered(TPL_KEY, TEMPLATES.map((x) => x.id), 'ledger')
     return templates.includes(t) ? t : templates[0]!
   })
+  const [unit, setUnit] = useState<Unit>(() => remembered(UNIT_KEY, UNITS, 'USDT'))
   const [bg, setBg] = useState<Bg | null>(null)
   /** which press is running, and what it wants to say while it runs */
   const [busy, setBusy] = useState<{ job: 'copy' | 'png' | 'share' | 'video' | 'clip'; say: string } | null>(null)
@@ -114,8 +119,8 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
      and percent-encoded fifty SVGs on every poll, for a dialog nobody had pressed. Closed, Radix
      has unmounted everything that reads it. */
   const overlay = useMemo(
-    () => (open ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(draw(under, template)) : ''),
-    [open, draw, under, template],
+    () => (open ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(draw(under, template, unit)) : ''),
+    [open, draw, under, template, unit],
   )
 
   /* What the still card bakes in: the picture itself, the frame the clip is paused on, or the
@@ -123,7 +128,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
      picture, and a clip always has one to give. */
   const still = () => draw(bg?.kind === 'image' ? bg.url
     : bg?.kind === 'video' ? (video.current ? cardFrame(video.current) : '')
-      : under, template)
+      : under, template, unit)
 
   const pick = async (f: File) => {
     if (f.type.startsWith('video/')) return setBg({ kind: 'video', url: URL.createObjectURL(f) })
@@ -240,6 +245,24 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
               ))}
             </div>
           )}
+          {/* What the money is called. A relabel and nothing else — the figure is the venue's USDT
+              whichever of these is lit — so the tooltip says so rather than letting a "€" on a
+              perp read as a conversion that never happened. */}
+          <div className="bg-muted/50 flex gap-1 rounded-lg p-0.5" role="radiogroup" aria-label="Currency">
+            {/* `title`, not a Hint: on the recap card there is no template switch, which makes this
+                the first control in the dialog — and a Hint answers to focus, so every one of those
+                cards would open with a speech bubble over its own preview. A native tooltip only
+                answers to the mouse. */}
+            {UNITS.map((u) => (
+              <Button key={u} size="sm" variant={unit === u ? 'secondary' : 'ghost'}
+                role="radio" aria-checked={unit === u} aria-label={u === 'USDT' ? 'USDT' : u === '$' ? 'Dollars' : 'Euros'}
+                title={u === 'USDT' ? 'What the venue settles in' : 'The same figure, relabelled — nothing is converted'}
+                className={cn('h-7', unit !== u && 'text-muted-foreground')}
+                onClick={() => { setUnit(u); remember(UNIT_KEY, u) }}>
+                {u}
+              </Button>
+            ))}
+          </div>
           {/* The shelf: nothing, the four built in, and the upload. Each swatch is the card's own
               shape, so the eye reads "this goes behind it" without a label. */}
           <div className="ml-auto flex items-center gap-1.5" role="radiogroup" aria-label="Background">
@@ -327,7 +350,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
                     said(held.how, 'saved')
                   })
                   : run('clip', 'Recording…', async () => {
-                    const clip = await clipFile(draw('', template), name, bg.url,
+                    const clip = await clipFile(draw('', template, unit), name, bg.url,
                       (done, total) => setBusy({ job: 'clip', say: `${done}s of ${Math.round(total)}s` }),
                       () => setBusy({ job: 'clip', say: 'Converting…' }))
                     if (!await sendHeld(clip)) setHeld(clip)
@@ -339,7 +362,7 @@ export function CardDialog({ draw, name, title, templates = ['ledger'], children
               disabled={!!busy || !canRecord()}
               onClick={() => void run('video', 'Recording…',
                 // whole seconds, and the recorder only says so when one turns over
-                () => downloadClip(draw('', template), name, bg.url,
+                () => downloadClip(draw('', template, unit), name, bg.url,
                   (done, total) => setBusy({ job: 'video', say: `${done}s of ${Math.round(total)}s` }),
                   () => setBusy({ job: 'video', say: 'Converting…' }),
                 ).then((how) => said(how, 'saved')),

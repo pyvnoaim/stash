@@ -91,11 +91,21 @@ const CHAR: Record<string, number> = { ' ': 0.28, '.': 0.28, ',': 0.28, '-': 0.3
 const ems = (text: string) => [...text].reduce((w, c) => w + (CHAR[c] ?? (c >= '0' && c <= '9' ? 0.58 : c === c.toUpperCase() ? 0.68 : 0.55)), 0)
 
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
-/* Named, not dressed as dollars: every venue this app reads settles in USDT, and the card is the
-   one thing here that leaves the app — a stranger reading "$12.44" is being told a currency nobody
-   quoted. The chip sizes itself to whatever it is handed (see chip), so the five extra characters
-   cost the headline a few points of type and nothing else. */
-const money = (n: number) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+/**
+ * What the money on a card is called. USDT is the true one — every venue this app reads settles in
+ * it, and a stranger reading "$12.44" is being told a currency nobody quoted — so it is the
+ * default and the one a card wears unless someone says otherwise. The other two are a relabel and
+ * nothing more: no rate is fetched and no figure moves, they are there because the person posting
+ * the card knows their audience better than this file does. The chip sizes itself to whatever it
+ * is handed (see chip), so the longer name costs the headline a few points of type and nothing else.
+ */
+export const UNITS = ['USDT', '$', '€'] as const
+export type Unit = (typeof UNITS)[number]
+const money = (n: number, unit: Unit = 'USDT') => {
+  const fig = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const sign = n >= 0 ? '+' : '−'
+  return unit === 'USDT' ? `${sign}${fig} USDT` : `${sign}${unit}${fig}`
+}
 
 /**
  * The card, as SVG. Pure string in, pure string out — which is what makes it testable.
@@ -339,7 +349,7 @@ const open = (family = FONT_STACK, style = '') =>
  * gradient. Empty and null are deliberately not the same: both draw no picture here, but only one
  * of them expects something underneath and so keeps the scrim that makes white text readable over it.
  */
-export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null): string {
+export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null, unit: Unit = 'USDT'): string {
   /* The money is the headline and the price move is the note under it, which is the way round a
      leveraged trade is actually read. A percent here has always been the move in the price, not
      the return on the margin behind it — so a 50× position that paid a hundred euros announced
@@ -347,7 +357,7 @@ export function cardSvg(p: CardPosition, r: number | null = null, who: CardWho |
      happened by the whole leverage. Where there is no money to show — a plan that was watched
      rather than taken — the percent keeps the headline, because a card with nothing big on it is
      not a card. */
-  const headline = p.pnl != null ? money(p.pnl) : null
+  const headline = p.pnl != null ? money(p.pnl, unit) : null
   const up = (p.pnl ?? p.pct ?? 0) >= 0
   /* grey, not green, when there is neither number: an unknown that wears the winning colour is a
      lie. It follows whichever of them is the headline, and those two can disagree — funding is in
@@ -397,7 +407,7 @@ ${band(rows)}
  * is still a receipt. Left and right anchors only, so nothing here needs the width of a glyph
  * the em table above has never measured.
  */
-export function ticketSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null, font: string | null = null): string {
+export function ticketSvg(p: CardPosition, r: number | null = null, who: CardWho | null = null, bg: string | null = null, font: string | null = null, unit: Unit = 'USDT'): string {
   const up = (p.pnl ?? p.pct ?? 0) >= 0
   // the paper's own inks: a darker green and red than the dark card wears, because this is black on cream
   const ink = p.pnl == null && p.pct == null ? '#5b5b60' : up ? '#0f9d6e' : '#d43a3a'
@@ -414,7 +424,7 @@ export function ticketSvg(p: CardPosition, r: number | null = null, who: CardWho
     ran,
   ].filter(Boolean) as [string, string][]
   // what the slip totals to: the money, or the move where there is none, or the R where there is neither
-  const [headLabel, head] = p.pnl != null ? ['Paid', money(p.pnl)]
+  const [headLabel, head] = p.pnl != null ? ['Paid', money(p.pnl, unit)]
     : p.pct != null ? ['Move', pct]
       : r != null ? ['Risk', rOf(r)] : ['Result', '—']
   const stamp = p.closedAt ?? p.openedAt
@@ -521,8 +531,8 @@ export function recapOf(rows: RecapRow[], now = Date.now()): Recap | null {
  * week is the thing the numbers under it cannot say. The name rides in the line under the title,
  * where a byline would have collided with the strip.
  */
-export function recapSvg(rec: Recap, who: CardWho | null = null, bg: string | null = null): string {
-  const head = rec.usd != null ? money(rec.usd) : rOf(rec.total)
+export function recapSvg(rec: Recap, who: CardWho | null = null, bg: string | null = null, unit: Unit = 'USDT'): string {
+  const head = rec.usd != null ? money(rec.usd, unit) : rOf(rec.total)
   const up = (rec.usd ?? rec.total) >= 0
   const ink = !rec.n ? '#a1a1aa' : up ? '#34d399' : '#f87171'
   /* Capped at thirty and cut from the front: a month of scalping is not a card, and the newest

@@ -19,7 +19,7 @@ import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
 import { CardDialog, type Template } from '@/components/card-dialog'
-import { cardSvg, recapOf, recapSvg, ticketSvg, type CardPosition, type CardWho } from '@/lib/card'
+import { cardSvg, recapOf, recapSvg, ticketSvg, type CardPosition, type CardWho, type Unit } from '@/lib/card'
 import { PIXEL_FONT } from '@/lib/card-font'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
@@ -2711,7 +2711,7 @@ const cardOf = (r: CardRow) => {
  *  the ticket, and the symbol as the file's name. One place, so your own rows and everyone else's
  *  open the same card. */
 const tradeCard = (p: CardPosition, r: number | null, who: CardWho | null) => ({
-  draw: (bg: string | null, t: Template) => (t === 'ticket' ? ticketSvg(p, r, who, bg, PIXEL_FONT) : cardSvg(p, r, who, bg)),
+  draw: (bg: string | null, t: Template, unit: Unit) => (t === 'ticket' ? ticketSvg(p, r, who, bg, PIXEL_FONT, unit) : cardSvg(p, r, who, bg, unit)),
   name: p.symbol,
   title: `Share ${p.symbol}`,
   templates: ['ledger', 'ticket'] as Template[],
@@ -2858,7 +2858,7 @@ function RecapButton({ all, who }: { all: Result[]; who: CardWho | null }) {
   const rec = useMemo(() => recapOf(all), [all])
   if (!rec) return null
   return (
-    <CardDialog draw={(bg) => recapSvg(rec, who, bg)} name={rec.title} title={`Share ${rec.title}`}>
+    <CardDialog draw={(bg, _t, unit) => recapSvg(rec, who, bg, unit)} name={rec.title} title={`Share ${rec.title}`}>
       <Button variant="outline" size="sm" className="h-7 gap-1.5">
         <Sparkles className="size-3.5" /> Recap {rec.title.startsWith('Week') ? 'this week' : 'this month'}
       </Button>
