@@ -84,14 +84,18 @@ const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] 
    ponytail: a table of the eight characters that are nowhere near the average, and three buckets
    for everything else. Every position on this card is arithmetic — a chip sized to its line, a band
    of cells with the leftover split between them — and a flat 0.6em a character got the chip's
-   padding visibly wrong on the side the "$" and the "." were on. Measuring properly needs a canvas
+   padding visibly wrong on the side the "+" and the "." were on. Measuring properly needs a canvas
    this file deliberately does not have; this is within a few pixels, which is what the layout
    needs. Widen a bucket, never narrow it: too wide leaves a gap, too narrow overlaps. */
 const CHAR: Record<string, number> = { ' ': 0.28, '.': 0.28, ',': 0.28, '-': 0.36, '–': 0.5, '+': 0.58, '−': 0.58, '$': 0.56, '%': 0.95 }
 const ems = (text: string) => [...text].reduce((w, c) => w + (CHAR[c] ?? (c >= '0' && c <= '9' ? 0.58 : c === c.toUpperCase() ? 0.68 : 0.55)), 0)
 
 const num = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: 8 })
-const money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+/* Named, not dressed as dollars: every venue this app reads settles in USDT, and the card is the
+   one thing here that leaves the app — a stranger reading "$12.44" is being told a currency nobody
+   quoted. The chip sizes itself to whatever it is handed (see chip), so the five extra characters
+   cost the headline a few points of type and nothing else. */
+const money = (n: number) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
 
 /**
  * The card, as SVG. Pure string in, pure string out — which is what makes it testable.
@@ -306,9 +310,9 @@ ${t(at, RULE + 116, vfs, fill, 600, value, end)}`
 /* The block behind the headline, sized to the line it holds. The one loud thing on the card.
    28px of padding each side, and the line centred in it rather than set from its left edge, so
    whatever the measurement is out by is split between the two sides instead of piling up on the
-   right. Money is longer than a percent — "−$123,456.78" is twelve characters where "+12.33%" was
-   seven — so the headline shrinks rather than let its block run the width of the card. 620 is the
-   widest the block may be before its padding, which leaves it stopping short of the middle column
+   right. Money is longer than a percent — "−123,456.78 USDT" is sixteen characters where "+12.33%"
+   was seven — so the headline shrinks rather than let its block run the width of the card. 620 is
+   the widest the block may be before its padding, which leaves it stopping short of the middle column
    of the band below it, and 76 is the size the card was drawn at.
 
    Solid, over anything. It was glass for a while — a blurred copy of the picture under a

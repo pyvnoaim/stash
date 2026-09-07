@@ -14,6 +14,21 @@ export type Alert = {
 }
 
 export const euro = (n: number) => '€' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/**
+ * The venue's own money, named rather than dressed as dollars. Every book this desk reads settles
+ * in USDT — the margin on a perp, its P&L, the equity behind it — and none of it is a dollar: it is
+ * a token that is usually worth about one, which is a different thing to say and the sort of
+ * difference that matters at the point where you are deciding how much to put on.
+ *
+ * The euros above are the other currency here, and the one real money: they are what you typed in
+ * yourself. The two are never added — see the note over the Money card.
+ */
+export const usdt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT'
+
+/** Signed, for the same reason signedEuro is. */
+export const signedUsdt = (n: number) => (n >= 0 ? '+' : '−') + usdt(Math.abs(n))
+
 const daysUntil = (date: string, from: string) => Math.round((Date.parse(date) - Date.parse(from)) / 864e5)
 
 const price = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })

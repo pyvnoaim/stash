@@ -16,7 +16,7 @@ import { TradeDialog } from '@/components/trade-dialog'
 import { cancel as cancelOrder, desk as deskOf, setLevels, suggest } from '@/lib/trade'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue } from '@/lib/venue'
-import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, stakeOf, suggestLine } from '@/lib/notify'
+import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
 import { CardDialog, type Template } from '@/components/card-dialog'
 import { cardSvg, recapOf, recapSvg, ticketSvg, type CardPosition, type CardWho } from '@/lib/card'
@@ -1228,9 +1228,9 @@ export default function MarketPage() {
                         {m.row && !m.open && (
                           <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
                             {m.row.r >= 0 ? '+' : ''}{m.row.r.toFixed(2)}R
-                            {/* the sign goes in front of the currency, not nowhere: a loser read
-                                as "$12.44" is a winner */}
-                            {m.row.cash != null && ` · ${m.row.cash < 0 ? '−' : '+'}$${Math.abs(m.row.cash).toFixed(2)}`}
+                            {/* the sign goes in front of the figure, not nowhere: a loser read
+                                as "12.44 USDT" is a winner */}
+                            {m.row.cash != null && ` · ${signedUsdt(m.row.cash)}`}
                           </span>
                         )}
                         {!m.row && <span className="text-muted-foreground">open</span>}
@@ -1437,18 +1437,29 @@ export default function MarketPage() {
                         </Button>
                       ))}
                   </div>
-                  {/* the four numbers the order rides on, each with its name over it — a sentence
-                      of them wrapped mid-figure and read as one long grey line */}
+                  {/* The four numbers the order rides on. They were four equal grey cells, which is
+                      the shape of a list and not of a trade: the two that describe the bracket wear
+                      the same pair as the buttons over them — losing side, winning side — and the
+                      one that says what it costs you is the only one at full weight. Their names
+                      shrink to the label size the rest of this column uses, so the figures lead. */}
                   <Hint label="Stop one ATR out, target two ATR up. Nothing is placed until the dialog's second press.">
-                    <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs tabular-nums sm:grid-cols-4 lg:grid-cols-2">
-                      <div><dt className="text-muted-foreground">Stop</dt><dd>{fmt(view.atr)} away</dd></div>
-                      <div><dt className="text-muted-foreground">Target</dt><dd>{fmt(view.atr * 2)} away</dd></div>
-                      {sized && sized.margin > 0 && risking != null && (
-                        <>
-                          <div><dt className="text-muted-foreground">Opens at</dt><dd>${sized.margin.toFixed(2)} · {sized.leverage}×</dd></div>
-                          <div><dt className="text-muted-foreground">Risking</dt><dd>${risking.toFixed(2)}</dd></div>
-                        </>
-                      )}
+                    <dl className="bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2 rounded-md px-3 py-2 tabular-nums sm:grid-cols-4 lg:grid-cols-2">
+                      {([
+                        ['Stop', <>{fmt(view.atr)} <span className="text-muted-foreground text-xs">away</span></>, hue.down],
+                        ['Target', <>{fmt(view.atr * 2)} <span className="text-muted-foreground text-xs">away</span></>, hue.up],
+                        ...(sized && sized.margin > 0 && risking != null ? [
+                          ['Opens at', <>{usdt(sized.margin)} <span className="text-muted-foreground text-xs">· {sized.leverage}×</span></>, null],
+                          /* What the stop costs, and — the question a bare 0.13 USDT never answers —
+                             how much of the desk that is. The share is the number position sizing
+                             is actually about, and it was one division away the whole time. */
+                          ['Risking', <>{usdt(risking)}{avail ? <span className="text-muted-foreground text-xs"> · {((risking / avail) * 100).toFixed(1)}% of free</span> : null}</>, null],
+                        ] as const : []),
+                      ] as const).map(([name, value, tone]) => (
+                        <div key={name}>
+                          <dt className="text-muted-foreground text-[10px] tracking-wider uppercase">{name}</dt>
+                          <dd className="text-sm" style={tone ? { color: tone } : undefined}>{value}</dd>
+                        </div>
+                      ))}
                     </dl>
                   </Hint>
                 </>
@@ -1978,7 +1989,7 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
          in profit files as 'target', at a loss as 'stopped'. The record has no third word, and the
          R beside it is exact either way. */
       level: r >= 0 ? 'target' : 'stop', exit, r,
-      /* what it paid, in the venue's dollars, where the history said. No size or leverage: the
+      /* what it paid, in the venue's own USDT, where the history said. No size or leverage: the
          feed's size is coins and Watch.size is euros, so the app cannot price this row itself —
          which is exactly why the venue's own figure rides along instead of a guess. */
       ...(hit?.pnl != null ? { cash: hit.pnl } : {}),
@@ -2126,9 +2137,6 @@ function useSuggested(rows: ExchangePosition[]) {
   return atrs
 }
 
-/** Money the way every tile prints it: signed, two decimals, in the currency the venue quotes. */
-const cashLabel = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
-
 /* One track per tile, as many as fit, and the last row stretches to fill the width. Two fixed
    breakpoints meant two open positions on a wide window sat in the left two-thirds of the card
    with a column of nothing beside them — the count of tiles is the thing that varies here, not
@@ -2193,9 +2201,9 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   // whichever of them the row has: a document row has no money on it, and some venues rest no stop
   const up = (pnl ?? pct ?? r ?? 0) >= 0
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
-  /* dollars and percent beside each other: same sign by construction, one colour carries both */
+  /* money and percent beside each other: same sign by construction, one colour carries both */
   const lead = [
-    pnl != null && cashLabel(pnl),
+    pnl != null && signedUsdt(pnl),
     pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
   ].filter(Boolean).join(' · ') || null
   /* Where price stands between the level that ends the trade against you and the one that ends it
@@ -2226,14 +2234,14 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     !bar && target != null && level('target', target),
     // the liq only where the bar is not already standing on it — a stopless position's losing end
     liq != null && !(bar && !bar.stopped) && level('liq', liq),
-    // two decimals like every other figure on the tile: $239.5 beside $219.26 read as a rounding
+    // two decimals like every other figure on the tile: 239.5 beside 219.26 read as a rounding
     // nobody asked for, in the one column where money is supposed to line up
-    value != null && `worth $${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    value != null && `worth ${usdt(value)}`,
     /* what the price move did to the margin behind it — the number a leveraged trade is actually
        felt in. pct stays the price move it has always been; this is that times the multiplier, and
        it only appears where the venue said what the multiplier is. */
     pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% on margin`,
-    funding != null && `funding ${cashLabel(funding)}`,
+    funding != null && `funding ${signedUsdt(funding)}`,
     openedAt != null && `opened ${new Date(openedAt).toLocaleString(undefined, {
       day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
     })}`,
@@ -2278,12 +2286,12 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
             <span className="text-destructive">
               {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
               <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
-              {bar.lost != null && <> {cashLabel(bar.lost)}</>}
+              {bar.lost != null && <> {signedUsdt(bar.lost)}</>}
             </span>
             <span className="text-emerald-600 dark:text-emerald-400">
               target {fmtPrice(bar.win)}
               <span className="text-muted-foreground"> {away(bar.win, bar.mark)}</span>
-              {bar.won != null && <> {cashLabel(bar.won)}</>}
+              {bar.won != null && <> {signedUsdt(bar.won)}</>}
             </span>
           </div>
         </div>
@@ -2393,11 +2401,10 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
   // had no single place that read them together with what the exchanges hold
   const { watches } = useStash()
   const risk = openRisk(rows, watches.filter(isPosition), equity)
-  /* Two currencies, never one total: the exchanges answer in their dollars and a hand-entered
-     position is what you typed in euros. Joined with a + rather than added, because the sum of
+  /* Two currencies, never one total: the exchanges settle in USDT and a hand-entered position is
+     what you typed in euros. Joined with a + rather than added, because the sum of
      the two is a number no rate ever produced. */
-  const usd = (n: number) => '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  const atRisk = [risk.exch > 0 && usd(risk.exch), risk.mine > 0 && euro(risk.mine)].filter(Boolean)
+  const atRisk = [risk.exch > 0 && usdt(risk.exch), risk.mine > 0 && euro(risk.mine)].filter(Boolean)
   /* The balance, which the card used to keep to itself: it was only ever printed beside rows, so
      the one number that is true every day of the year was invisible on every day nothing was
      open — which is most of them. Flat, it is the wallet balance, and the hint says so rather
@@ -2412,7 +2419,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
       ? 'Balance plus open positions, before fees'
       : 'Balance, nothing open'}>
       <span className={cn('text-muted-foreground font-mono text-xs tabular-nums', right && 'ml-auto')}>
-        equity {usd(equity)}
+        equity {usdt(equity)}
       </span>
     </Hint>
   )
@@ -2434,7 +2441,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
     // the desk's own is that nothing is open and this is what is in the account
     return (
       <p className="text-muted-foreground text-xs">
-        Nothing open · <span className="text-foreground tabular-nums">{usd(equity)}</span> in the account
+        Nothing open · <span className="text-foreground tabular-nums">{usdt(equity)}</span> in the account
       </p>
     )
   }
@@ -2688,9 +2695,9 @@ const cardOf = (r: CardRow) => {
        The venue's own, where it said; off the leverage where this app sized the trade itself,
        which is the same sum done forwards — margin × lev is the notional the move ran on. */
     roi: r.roi ?? (r.lev && pct != null ? (pct * r.lev) / 100 : null),
-    /* only the venue's own dollars: the card draws a $ figure, and the euros this app works out for
-       its own rows are not dollars. A row without one prints the R and the prices, which is the
-       honest half of the same card. */
+    /* only the venue's own USDT: the card draws the settled figure, and the euros this app works
+       out for its own rows are not that. A row without one prints the R and the prices, which is
+       the honest half of the same card. */
     pnl: r.cash ?? null,
     openedAt: new Date(r.entryAt).toISOString(),
     closedAt: new Date(r.closedAt).toISOString(),
@@ -2715,7 +2722,7 @@ const tradeCard = (p: CardPosition, r: number | null, who: CardWho | null) => ({
  * desk and anything else that says it, so no two of them can disagree about the same list.
  *
  * Two totals, never one: the euros are this app's own arithmetic over the size you typed, and the
- * dollars are what a venue actually settled. A row that has the venue's figure is counted there and
+ * USDT is what a venue actually settled. A row that has the venue's figure is counted there and
  * nowhere else — priced here as well, it would be the same trade twice, once in a currency it was
  * never in. Net of funding to the close and of the fee at both ends, the same subtraction the
  * bell's result alert makes.
@@ -2731,9 +2738,6 @@ function recordTally(all: Result[], dials: Dials) {
     usd: all.some((r) => r.cash != null) ? all.reduce((n, r) => n + (r.cash ?? 0), 0) : null,
   }
 }
-
-/** Money the record prints for a settled row: the venue's dollars. */
-const usdLabel = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
 
 /**
  * The record along the bottom of the desk: how many finished, how many hit, and what it came to,
@@ -2752,7 +2756,7 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
           <span>{t.n} finished</span>
           <span className="text-muted-foreground">{Math.round((t.won / t.n) * 100)}% hit target</span>
           <span className={cn('font-mono', tone(t.total))}>{rLabel(t.total)}</span>
-          {t.usd !== null && <span className={cn('font-mono', tone(t.usd))}>{usdLabel(t.usd)} settled</span>}
+          {t.usd !== null && <span className={cn('font-mono', tone(t.usd))}>{signedUsdt(t.usd)} settled</span>}
           {t.money !== null && <span className={cn('font-mono', tone(t.money))}>{signedEuro(t.money)} priced here</span>}
         </>
       ) : (
@@ -2900,11 +2904,11 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
      Net of funding to the close and of the fee at both ends, the same subtraction the bell's
      result alert makes. */
   const cashOf = (r: typeof all[number]) => netOf(r, r.r, dials, r.closedAt)
-  /* An exchange-closed row prints the venue's own dollars instead: it has no size in euros to be
+  /* An exchange-closed row prints the venue's own USDT instead: it has no size in euros to be
      priced from, and the figure it does have is the settled one — fees and funding already in it,
      rather than this app's flat rates over a size it never knew. */
   const paid = (r: typeof all[number]) => {
-    if (r.cash != null) return `${r.cash >= 0 ? '+' : '−'}$${Math.abs(r.cash).toFixed(2)}`
+    if (r.cash != null) return signedUsdt(r.cash)
     const cash = cashOf(r)
     return cash === null ? '' : signedEuro(cash)
   }
@@ -2929,7 +2933,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
      and one total wearing the other's colour is the record saying the opposite of what it means.
      Which is also why they get their own cells below rather than one line of three numbers. */
   /* What a row is worth for the purpose of stacking it. Its own money where it has any, and its R
-     where it has none — and dollars and euros are compared as the numbers they are, because the
+     where it has none — and USDT and euros are compared as the numbers they are, because the
      alternative is a rate this app refuses to invent for a sum and would then invent for a sort.
      ponytail: near enough while the two currencies are within a tenth of each other. */
   const worth = (r: typeof all[number]) => r.cash ?? cashOf(r) ?? r.r
@@ -3014,7 +3018,7 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
             'How many reached the target'],
           ...(money === null ? [] : [['Priced here', signedEuro(money), 'euros', money >= 0,
             `Trades you sized by hand, after the ${dials.fee}% fee and funding`] as Stat]),
-          ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0,
+          ...(usd === null ? [] : [['Settled', signedUsdt(usd), 'on the venue', usd >= 0,
             'What the exchange paid out, fees included'] as Stat]),
           ['Total in R', rLabel(total), 'units of risk', total >= 0,
             'R is what one trade risked. +2R made twice what it could have lost.'],
@@ -3123,15 +3127,14 @@ function Record({ onPick }: { onPick: (asset: string) => void }) {
   )
 }
 
-/** A settled figure as the desk prints it: the venue's dollars, or nothing where there are none. */
-const deskPaid = (cash: number | null) =>
-  cash === null ? '' : `${cash >= 0 ? '+' : '−'}$${Math.abs(cash).toFixed(2)}`
+/** A settled figure as the desk prints it: the venue's own USDT, or nothing where there are none. */
+const deskPaid = (cash: number | null) => (cash === null ? '' : signedUsdt(cash))
 
 /**
  * What a desk's finished trades add up to. One function for the row and the table behind it, so the
  * summary and the footer under it can never disagree about the same list.
  *
- * The dollars are only over the rows a venue settled, and null when it settled none — a sum that
+ * The USDT is only over the rows a venue settled, and null when it settled none — a sum that
  * quietly skipped half the list while sitting beside a count of all of it would read as the whole
  * record's money. The R is over every row, because every row has one.
  */
@@ -3163,7 +3166,7 @@ const oneEach = (rs: DeskRow['results']) => rs.filter((r, i) => !r.cash || !rs.s
  * as your own record, signed with their name and their face. It was a dialog behind a small
  * outlined button on a line of text; a friend is a tile now, and pressing it opens this in place.
  *
- * The money is the venue's own settled dollars and only that. A trade someone sized by hand prices
+ * The money is the venue's own settled USDT and only that. A trade someone sized by hand prices
  * itself off a size and a funding dial that never leave their device — those rows print their R
  * and an empty Paid, and the total counts only the ones a venue settled, so it is never half a
  * sum passed off as a whole one. A row whose document lost one of its two prices has no card to
@@ -3192,7 +3195,7 @@ function FriendRecord({ p, onPick, onBack }: { p: DeskRow; onPick: (asset: strin
         <StatRow stats={[
           ['Finished', String(rows.length), '', null, 'Trades they were really in'],
           ['Hit target', String(won), `${rows.length ? Math.round((won / rows.length) * 100) : 0}%`, null, 'How many reached the target'],
-          ...(usd === null ? [] : [['Settled', usdLabel(usd), 'dollars', usd >= 0, 'What their exchange paid out, fees included'] as Stat]),
+          ...(usd === null ? [] : [['Settled', signedUsdt(usd), 'on the venue', usd >= 0, 'What their exchange paid out, fees included'] as Stat]),
           ['Total in R', rLabel(total), 'units of risk', total >= 0, 'R is what one trade risked. +2R made twice what it could have lost.'],
         ]} />
         {/* what they are in right now — the same tile as your own book, off the same numbers */}
@@ -3308,7 +3311,7 @@ function FriendTile({ p, onOpen }: { p: DeskRow; onOpen: () => void }) {
           {p.open.length ? `${p.open.length} open right now` : 'nothing open right now'}
         </span>
         {/* Both, side by side, never summed into one: the R is over every finished trade and the
-            dollars only over the ones a venue settled. A desk can be down in R and up in money on
+            USDT only over the ones a venue settled. A desk can be down in R and up in money on
             the same list, so each is coloured by itself rather than by the other. */}
         {!!p.results.length && (
           <span className="ml-auto flex items-baseline gap-2 font-mono tabular-nums">
@@ -3327,7 +3330,7 @@ function FriendTile({ p, onOpen }: { p: DeskRow; onOpen: () => void }) {
 
 /**
  * Everyone else on this server who has switched their desk on: a tile each, and their record
- * behind it. Money only where an exchange settled or is marking it — a position's running dollars,
+ * behind it. Money only where an exchange settled or is marking it — a position's running USDT,
  * a finished trade's settled ones. What somebody typed a size for stays in R: that figure is
  * worked out from a size and a funding rate this server never receives.
  *

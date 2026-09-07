@@ -13,7 +13,7 @@ test('the card names the asset, the side and the profit', () => {
   assert.match(svg, /Long {3}· {3}0\.5 {3}· {3}Bitget {3}· {3}unrealised</)
   // the money is the headline, in a block of the trade's colour with the ink knocked out of it
   assert.match(svg, /<rect x="76" y="214" width="\d+" height="104" rx="14" fill="#34d399"\/>/)
-  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+\$3,700\.00</)
+  assert.match(svg, /font-size="76" fill="#0a0a0a" font-weight="800" text-anchor="middle">\+3,700\.00 USDT</)
   // and the rest of it reads as label-and-figure, not as a sentence with middots in it
   assert.match(svg, />MOVE</)
   assert.match(svg, />\+12\.33%</)
@@ -46,7 +46,7 @@ test('the return on the margin stands beside the move in the price', () => {
 
 test('a loss is red and signed, and green is kept for profit', () => {
   const red = cardSvg({ ...P, side: 'short', pct: -4.5, pnl: -1234.5 })
-  assert.match(red, />−\$1,234\.50</)
+  assert.match(red, />−1,234\.50 USDT</)
   assert.match(red, />-4\.50%</)
   assert.match(red, /#f87171/)
   assert.doesNotMatch(red, /#34d399/)
@@ -54,10 +54,11 @@ test('a loss is red and signed, and green is kept for profit', () => {
 })
 
 test('the headline shrinks rather than running the width of the card', () => {
-  // a billion-dollar line at 76px would run past the middle of the card; ordinary money never does
-  assert.match(cardSvg({ ...P, pnl: -1234567890.12 }), /font-size="67"[^>]*>−\$1,234,567,890\.12</)
-  assert.match(cardSvg({ ...P, pnl: -123456.78 }), /font-size="76"[^>]*>−\$123,456\.78</)
-  assert.match(cardSvg({ ...P, pnl: 3700 }), /font-size="76"[^>]*>\+\$3,700\.00</)
+  // a billion at 76px would run past the middle of the card; ordinary money never does — and the
+  // ticker rides along in the measurement, which is what pulled the second of these under the cap
+  assert.match(cardSvg({ ...P, pnl: -1234567890.12 }), /font-size="53"[^>]*>−1,234,567,890\.12 USDT</)
+  assert.match(cardSvg({ ...P, pnl: -123456.78 }), /font-size="70"[^>]*>−123,456\.78 USDT</)
+  assert.match(cardSvg({ ...P, pnl: 3700 }), /font-size="76"[^>]*>\+3,700\.00 USDT</)
 })
 
 test('a plan nobody took keeps the percent as its headline', () => {
@@ -82,7 +83,7 @@ test('a finished trade says realised, and prints an exit rather than a mark', ()
     symbol: 'DOGEUSDT', side: 'short', entry: 0.1985, mark: 0.1909, pct: 3.83, pnl: 9.2,
     openedAt: '2026-08-09T10:00:00Z', closedAt: '2026-08-10T14:00:00Z', venue: 'VWAP pull-back',
   }, 2)
-  assert.match(svg, />\+\$9\.20</)
+  assert.match(svg, />\+9\.20 USDT</)
   assert.match(svg, /· {3}realised</)
   assert.doesNotMatch(svg, /unrealised/)
   assert.match(svg, />EXIT</)

@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { hhmm, hourOf, hourWindow, mondayOf, today } from '@/lib/parse'
 import { PROJECT_DRAG } from '@/lib/utils'
 import { chargesBetween, isReal, patch, project, select, setCalView, SUBS, useStash, type Item, type Project, type Sub } from '@/lib/store'
-import { euro, netOf, rLabel, signedEuro } from '@/lib/notify'
+import { euro, netOf, rLabel, signedEuro, signedUsdt } from '@/lib/notify'
 import { calendar, type CalEvent } from '@/lib/sync'
 import { useIsMobile } from '@/hooks/use-mobile'
 
@@ -94,7 +94,7 @@ function Pnl({ pnl }: { pnl: { cash: number | null; usd: number | null; r: numbe
      nobody set is not a number this app is going to invent. */
   const money = [
     pnl.cash !== null && signedEuro(pnl.cash),
-    pnl.usd !== null && `${pnl.usd >= 0 ? '+' : '−'}$${Math.abs(pnl.usd).toFixed(2)}`,
+    pnl.usd !== null && signedUsdt(pnl.usd),
   ].filter(Boolean).join(' · ')
   return (
     <span
