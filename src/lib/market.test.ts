@@ -413,8 +413,25 @@ const crossAt = (agoBars: number) => {
 }
 assert.equal(crossAt(2)?.tone, 'bull') // fresh: it votes
 assert.equal(crossAt(60)?.tone, 'flat') // stale: still shown, no longer voting
-assert.ok(crossAt(60)!.detail.includes('background, not news'))
+assert.ok(crossAt(60)!.detail.includes('background now, not news'))
 assert.equal(FRESH_CROSS, 20)
+
+/* And a cross price has since walked back over does not vote either, however fresh it is: the panel
+   showed "Bullish MA cross" a few rows above "Downtrend" and counted one for each side. A rally that
+   crosses up, then a drop that puts price back under the slow MA while the fast is still over it. */
+const undone = signals([
+  ...Array.from({ length: 80 }, (_, i) => 300 - i * 2.5), // the downtrend it crossed out of
+  ...Array.from({ length: 16 }, (_, i) => 110 + i * 5), //   the rally that crossed the MAs up
+  185, 165, 145, //                                          and the drop back under the 21-MA
+].map((c, i) => ({ t: i, o: c, h: c + 1, l: c - 1, c })), { fast: 9, slow: 21, srWindow: 20 }).signals
+const uc = undone.find((x) => x.kind === 'ma-cross')!
+assert.equal(uc.label, 'Bullish MA cross') // still the cross that happened, still on the page
+assert.equal(uc.tone, 'flat') // …but not a vote for a side the chart has left
+assert.ok(uc.detail.includes('back under'))
+assert.ok(undone.some((x) => x.label === 'Downtrend'))
+
+// a mid-range RSI has nothing to say, so it says nothing — no row at all
+assert.ok(!signals(bull).signals.some((x) => x.kind === 'rsi' && x.tone === 'flat'))
 
 /* The tally the desk and the MCP server both read: only the sides count, and an even split is no
    trade rather than a coin flip. The flat cards describe conditions, so they must never tip it. */

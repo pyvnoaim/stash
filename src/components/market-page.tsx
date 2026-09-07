@@ -139,6 +139,10 @@ const DOT = {
   flat: 'bg-muted-foreground/40',
 } as const
 
+/** The three answers a reading can give, and the order the panel groups them in — the sides that
+ *  vote first, then the cards that only describe the tape. */
+const SIDES = [['bull', 'For a long'], ['bear', 'For a short'], ['flat', 'Context, neither way']] as const
+
 /** Map a price to the 0..100 SVG box, hi at the top. Nulls (a warming-up MA) break the path.
  *  `xSpan` is the x domain in bars — wider than the data, so the right end stays empty for the future. */
 const pathOf = (v: (number | null)[], lo: number, hi: number, xSpan: number) => {
@@ -844,7 +848,9 @@ export default function MarketPage() {
                   <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
                     <bias.Icon className="size-3.5" />
                     {bias.label}
-                    <span className="opacity-70 tabular-nums">{bulls}/{bears}</span>
+                    {/* Arrows, not "3/4" — a slash between two numbers reads as three out of four,
+                        and it was three up against four down. */}
+                    <span className="opacity-70 tabular-nums">{bulls}↑ {bears}↓</span>
                   </span>
                 </Hint>
               )}
@@ -1501,16 +1507,31 @@ export default function MarketPage() {
                     </span>
                   </Hint>
                 </div>
-                <div className="grid gap-1.5 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                  {shownSignals.map((sig, i) => (
-                    <div key={i} className="flex min-w-0 items-start gap-2 text-sm">
-                      <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[sig.tone])} />
-                      <span className="min-w-0">
-                        {sig.label}
-                        <span className="text-muted-foreground block text-xs">{sig.detail}</span>
-                      </span>
-                    </div>
-                  ))}
+                {/* Sorted into the three answers, not left in the order the scan happened to produce
+                    them. Fourteen rows of bull, flat, bear interleaved is a list you have to read
+                    all of to count, which is the one thing the pill above has already done — and it
+                    put "Bullish MA cross" three rows above "Downtrend" with nothing to say they were
+                    on opposite sides. The tally is unchanged: this is the same list, sorted. */}
+                <div className="grid gap-3 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+                  {SIDES.map(([tone, head]) => {
+                    const rows = shownSignals.filter((s) => s.tone === tone)
+                    return rows.length ? (
+                      <div key={tone} className="grid gap-1.5">
+                        <span className="text-muted-foreground text-[10px] tracking-wider uppercase">
+                          {head} <span className="tabular-nums opacity-70">{rows.length}</span>
+                        </span>
+                        {rows.map((sig, i) => (
+                          <div key={i} className="flex min-w-0 items-start gap-2 text-sm">
+                            <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[sig.tone])} />
+                            <span className="min-w-0">
+                              {sig.label}
+                              <span className="text-muted-foreground block text-xs">{sig.detail}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null
+                  })}
                   {!shownSignals.length && <p className="text-muted-foreground text-sm">Nothing standing out on these bars.</p>}
                 </div>
               </section>
@@ -1760,8 +1781,10 @@ function OpenNow({ at }: { at?: number }) {
           <span className="opacity-70 tabular-nums">till {closeAt(s, at)}</span>
         </span>
       ))}
-      {both && <span className="text-amber-600 dark:text-amber-500">the overlap — where most of the day's range gets made</span>}
-      {!desks.length && <span>No exchange open — thin hours, and a break made in them is the kind that gets given back</span>}
+      {/* Both lines used to run to a dozen words each, on a strip that is otherwise times and
+          labels. The reason is worth one clause, not a sentence. */}
+      {both && <span className="text-amber-600 dark:text-amber-500">both open — the day's widest hours</span>}
+      {!desks.length && <span>nobody open — thin hours, and breaks made in them get given back</span>}
     </div>
   )
 }

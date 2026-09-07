@@ -2219,26 +2219,42 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      What that walk cannot see is the half the desk actually applies: the higher-timeframe filter
      and the cascade, which is what a tier-3 row on the Scan card means. The paper desk measures
      exactly that subset, forward, which is the number worth waiting for. */
+  const slow = smaSlow.at(-1)
   const cross = lastCross(smaFast, smaSlow)
   if (cross) {
+    const up = cross.dir === 'up'
     const stale = cross.ago > FRESH_CROSS
-    const aged = stale ? ' — long enough ago that it is background, not news' : ''
-    out.push(cross.dir === 'up'
-      ? { label: classic ? 'Golden cross' : 'Bullish MA cross', tone: stale ? 'flat' : 'bull', kind: 'ma-cross' as const, detail: `${fast}-MA rose above ${slowP}-MA ${cross.ago} bars ago${aged}` }
-      : { label: classic ? 'Death cross' : 'Bearish MA cross', tone: stale ? 'flat' : 'bear', kind: 'ma-cross' as const, detail: `${fast}-MA fell below ${slowP}-MA ${cross.ago} bars ago${aged}` })
+    /* A cross price has since walked back over is a cross that did not take, and it used to vote
+       anyway: the panel showed "Bullish MA cross" three rows above "Downtrend" and counted one for
+       each side, which is two cards arguing about one fact. Inside FRESH_CROSS it is still worth
+       seeing — that is the regime it crossed into — so it stays, as context, without the vote.
+
+       Walked before it went in, the same way FRESH_CROSS was: 8 perps, 1900 bars each of 15m and
+       1h, the short rule. Pooled expectancy +0.0877R over 1437 trades against +0.0915R for the
+       version that let it vote, better on 6 of the 16 runs. That is a wash — four thousandths of an
+       R, in-sample and gross — so this is a clarity fix bought at no measurable cost, which is the
+       only claim it makes. The daily walk is untouched: accumulation never reads the tally. */
+    const undone = slow != null && up !== (price > slow)
+    out.push({
+      label: classic ? (up ? 'Golden cross' : 'Death cross') : `${up ? 'Bullish' : 'Bearish'} MA cross`,
+      tone: stale || undone ? 'flat' : up ? 'bull' : 'bear',
+      kind: 'ma-cross' as const,
+      detail: `${fast}-MA ${up ? 'rose above' : 'fell below'} ${slowP}-MA ${cross.ago} bars ago${
+        undone ? `, and price is back ${up ? 'under' : 'over'} that ${slowP}-MA since` : stale ? ' — background now, not news' : ''}`,
+    })
   }
 
-  const slow = smaSlow.at(-1)
   if (slow != null) out.push(price > slow
     ? { label: 'Uptrend', tone: 'bull', kind: 'trend' as const, detail: `price is above the ${slowP}-MA` }
     : { label: 'Downtrend', tone: 'bear', kind: 'trend' as const, detail: `price is below the ${slowP}-MA` })
 
+  /* Only when it is saying something. A mid-range reading printed "RSI 44 — neither overbought nor
+     oversold": a row, a dot and a line of prose to report that one of the fourteen cards has no
+     opinion. The number itself is a click away on the RSI panel, and every other row here earns its
+     line by claiming something. */
   const r = rsiSeries.at(-1)
-  if (r != null) {
-    if (r >= 70) out.push({ label: 'Overbought', tone: 'bear', kind: 'rsi' as const, detail: `RSI ${r.toFixed(0)} — stretched, guides warn of a pullback` })
-    else if (r <= 30) out.push({ label: 'Oversold', tone: 'bull', kind: 'rsi' as const, detail: `RSI ${r.toFixed(0)} — guides watch for a bounce` })
-    else out.push({ label: `RSI ${r.toFixed(0)}`, tone: 'flat', kind: 'rsi' as const, detail: 'neither overbought nor oversold' })
-  }
+  if (r != null && r >= 70) out.push({ label: `Overbought ${r.toFixed(0)}`, tone: 'bear', kind: 'rsi' as const, detail: 'stretched — guides warn of a pullback' })
+  else if (r != null && r <= 30) out.push({ label: `Oversold ${r.toFixed(0)}`, tone: 'bull', kind: 'rsi' as const, detail: 'washed out — guides watch for a bounce' })
 
   const span = resistance - support
   if (span > 0) {
@@ -2272,12 +2288,12 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
   const sb = structureBreak(closed)
   if (sb) {
     const up = sb.dir === 'up', stale = sb.ago > FRESH_CROSS
-    const aged = stale ? ' — long enough ago that it is background, not news' : ''
+    const aged = stale ? ', and long enough ago to be background' : ''
     out.push({
       label: sb.choch ? `Character change ${up ? 'up' : 'down'}` : `Structure break ${up ? 'up' : 'down'}`,
       tone: sb.choch && !stale ? (up ? 'bull' : 'bear') : 'flat',
       kind: 'structure' as const,
-      detail: `price closed ${up ? 'above the last swing high' : 'below the last swing low'} at ${fmtPrice(sb.level, price)} ${sb.ago} bar${sb.ago === 1 ? '' : 's'} ago — ${sb.choch ? `the first structural crack in the ${up ? 'down' : 'up'}trend (CHoCH)` : `the ${up ? 'up' : 'down'}trend extending itself (BOS)`}${aged}`,
+      detail: `closed ${up ? 'over the last swing high' : 'under the last swing low'} ${fmtPrice(sb.level, price)} ${sb.ago} bar${sb.ago === 1 ? '' : 's'} ago — ${sb.choch ? `the first crack in the ${up ? 'down' : 'up'}trend (CHoCH)` : `the ${up ? 'up' : 'down'}trend extending itself (BOS)`}${aged}`,
     })
   }
 
@@ -2303,12 +2319,12 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
   const raid = liquiditySweep(closed)
   if (raid) {
     const took = raid.side === 'high', stale = raid.ago > FRESH_CROSS
-    const aged = stale ? ' — long enough ago that it is background, not news' : ''
+    const aged = stale ? ', and long enough ago to be background' : ''
     out.push({
       label: took ? 'Swept the highs' : 'Swept the lows',
       tone: stale ? 'flat' : took ? 'bear' : 'bull',
       kind: 'sweep' as const,
-      detail: `price traded through the swing ${took ? 'high' : 'low'} at ${fmtPrice(raid.level, price)} ${raid.ago} bar${raid.ago === 1 ? '' : 's'} ago and closed back ${took ? 'under' : 'over'} it — the orders resting past it were taken and the break did not hold${aged}`,
+      detail: `took the orders resting past the swing ${took ? 'high' : 'low'} ${fmtPrice(raid.level, price)} ${raid.ago} bar${raid.ago === 1 ? '' : 's'} ago, then closed back ${took ? 'under' : 'over'} it — the break did not hold${aged}`,
     })
   }
 
@@ -2373,11 +2389,11 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
        Re-run it with `drop: ['fvg']` if the market ever makes this worth revisiting. */
     if (away === 0) out.push({
       label: 'Filling a gap', tone: 'flat', kind: 'fvg' as const,
-      detail: `price is inside the ${size} imbalance now — the stretch the book skipped is being traded back`,
+      detail: `price is inside ${size} now — the stretch the book skipped is being traded back`,
     })
     else if (away <= atrValue) out.push(price > near.top
-      ? { label: 'Gap below', tone: 'flat', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits under price, inside one ATR — the nearest thing price has left to come back for` }
-      : { label: 'Gap above', tone: 'flat', kind: 'fvg' as const, detail: `an unfilled ${size} imbalance sits over price, inside one ATR — the nearest thing price has left to come back for` })
+      ? { label: 'Gap below', tone: 'flat', kind: 'fvg' as const, detail: `${size} is unfilled just under price, inside one ATR — the nearest thing price has to come back for` }
+      : { label: 'Gap above', tone: 'flat', kind: 'fvg' as const, detail: `${size} is unfilled just over price, inside one ATR — the nearest thing price has to come back for` })
   }
 
   /* The gap that failed, read the other way round. A box price closed clean through has stopped
@@ -2401,7 +2417,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
         label: up ? 'Failed support' : 'Failed resistance',
         tone: up ? 'bear' : 'bull',
         kind: 'ifvg' as const,
-        detail: `price closed clean through the ${box} imbalance, so the ${up ? 'floor under that move is overhead supply' : 'ceiling over that move is a floor'} now — and it is back within one ATR of it (inverse FVG)`,
+        detail: `price closed clean through ${box}, so that ${up ? 'floor is overhead supply' : 'ceiling is a floor'} now — and price is back within one ATR of it (inverse FVG)`,
       })
     }
   }
