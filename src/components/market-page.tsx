@@ -707,9 +707,11 @@ export default function MarketPage() {
         : []),
     ].filter((m): m is typeof m & { i: number } => m.i != null && m.price > 0)
   }, [results, current.id, held, vis, n, barMs])
-  // drawn only where the frame reaches them — a mark clamped to the edge is a fill at a price it
-  // was not made at
-  const visFills = fills.filter((m) => m.price >= lo && m.price <= hi)
+  /* There was a second gate here, dropping any fill whose price sat outside the frame — it was
+     what kept a mark from being clamped to an edge and reading as a fill at a price it was not
+     made at. The mark hangs off its bar now rather than off the price, so the frame's vertical
+     reach has stopped being a question a fill has to pass: `bar()` above already refuses anything
+     the window does not cover, and which bar it happened on is the whole of what a mark claims. */
   /** The marks on the bar under the crosshair, which is where their detail is read. */
   const hoverFills = hover == null ? [] : fills.filter((m) => m.i === hover)
   /** What a mark says about itself: on the crosshair, which is the reading a phone can do, and in
@@ -1226,12 +1228,20 @@ export default function MarketPage() {
                     Drawn at 18px rather than the 12 the inline one uses, and over the candles and
                     the price tag both: this is a record of money that moved, and a wick in front of
                     it is the chart hiding the one thing on the pane that actually happened. The two
-                    chips that carry a reading still win over it — see their z-30. */}
-                {visFills.map((m, k) => (
+                    chips that carry a reading still win over it — see their z-30.
+                    Parked clear above the bar rather than on the fill price. Sitting on the price
+                    put it inside the candle it belongs to — a disc across the body, and at a low
+                    entry it read as something under the bar rather than something about it. Which
+                    bar it was is the thing this mark says; the price it filled at is a number, and
+                    a number belongs in the tooltip where it can be read exactly. The floor on the
+                    top is headroom for the disc itself: the frame pads the highest bar by 8% of
+                    the range, which on the shortest pane this draws in is about twenty pixels, and
+                    the mark and its margin want twenty-two. */}
+                {fills.map((m, k) => (
                   <Hint key={`f-${k}`} label={<span className="flex items-center gap-1.5">{note(m)}</span>}>
                     <FillMark buy={m.buy} open={m.open}
-                      className="absolute z-20 size-[18px] -translate-x-1/2 -translate-y-1/2"
-                      style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }} />
+                      className="absolute z-20 -mt-1 size-[18px] -translate-x-1/2 -translate-y-full"
+                      style={{ left: `${xAt(m.i)}%`, top: `${Math.max(y(vis[m.i].h), 7.5)}%` }} />
                   </Hint>
                 ))}
 
