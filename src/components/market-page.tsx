@@ -1222,11 +1222,15 @@ export default function MarketPage() {
                     whatever the pane's aspect happens to be, and a disc is a shape.
                     Hoverable, unlike before: a pointerdown on one still bubbles to the pane, so the
                     crosshair and the scrub are unaffected, and the touch reading stays on the
-                    crosshair box below for the devices that cannot hover at all. */}
+                    crosshair box below for the devices that cannot hover at all.
+                    Drawn at 18px rather than the 12 the inline one uses, and over the candles and
+                    the price tag both: this is a record of money that moved, and a wick in front of
+                    it is the chart hiding the one thing on the pane that actually happened. The two
+                    chips that carry a reading still win over it — see their z-30. */}
                 {visFills.map((m, k) => (
                   <Hint key={`f-${k}`} label={<span className="flex items-center gap-1.5">{note(m)}</span>}>
                     <FillMark buy={m.buy} open={m.open}
-                      className="absolute z-10 -translate-x-1/2 -translate-y-1/2"
+                      className="absolute z-20 size-[18px] -translate-x-1/2 -translate-y-1/2"
                       style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }} />
                   </Hint>
                 ))}
@@ -1234,7 +1238,7 @@ export default function MarketPage() {
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
                     HTML overlay, not SVG shapes — preserveAspectRatio=none would squash those */}
                 {hc && (
-                  <div className="bg-popover text-popover-foreground pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-md border px-2 py-1 text-xs shadow-md"
+                  <div className="bg-popover text-popover-foreground pointer-events-none absolute top-1 z-30 -translate-x-1/2 rounded-md border px-2 py-1 text-xs shadow-md"
                     style={{ left: `${Math.min(85, Math.max(15, xAt(hover!)))}%` }}>
                     <span className="tabular-nums">{fmt(hc.c)}</span>
                     <span className="text-muted-foreground ml-2">{stamp(hc.t)}</span>
@@ -1253,7 +1257,7 @@ export default function MarketPage() {
                     than in a dialog: the number and the chart it means something on have to be
                     readable at the same time, which is the whole reason for dragging it there. */}
                 {drag && (
-                  <div className="bg-popover text-popover-foreground absolute right-0 z-20 flex -translate-y-1/2 items-center gap-1.5 rounded-md border py-1 pr-1 pl-2 text-[11px] shadow-md"
+                  <div className="bg-popover text-popover-foreground absolute right-0 z-30 flex -translate-y-1/2 items-center gap-1.5 rounded-md border py-1 pr-1 pl-2 text-[11px] shadow-md"
                     style={{ top: `${Math.min(94, Math.max(6, y(drag.price)))}%` }}>
                     <span className="tabular-nums">
                       {drag.which} <span className="text-muted-foreground">→</span> {fmt(drag.price)}
