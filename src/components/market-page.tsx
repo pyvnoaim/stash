@@ -1237,13 +1237,27 @@ export default function MarketPage() {
                     top is headroom for the disc itself: the frame pads the highest bar by 8% of
                     the range, which on the shortest pane this draws in is about twenty pixels, and
                     the mark and its margin want twenty-two. */}
-                {fills.map((m, k) => (
-                  <Hint key={`f-${k}`} label={<span className="flex items-center gap-1.5">{note(m)}</span>}>
-                    <FillMark buy={m.buy} open={m.open}
-                      className="absolute z-20 -mt-1 size-[18px] -translate-x-1/2 -translate-y-full"
-                      style={{ left: `${xAt(m.i)}%`, top: `${Math.max(y(vis[m.i].h), 7.5)}%` }} />
-                  </Hint>
-                ))}
+                {fills.map((m, k) => {
+                  /* Two fills can land on one bar — an exit and the next entry, most often — and
+                     hanging both off the same high put one exactly behind the other, so the pane
+                     showed a single mark and lied about half of what happened. They stack upwards
+                     instead, in the order the list has them: 22px a mark, its 18 and the gap. The
+                     top floor climbs with the stack for the same reason it exists at all — the
+                     headroom the frame pads in is one mark's worth, and the second wants its own.
+                     ponytail: O(n²) count over a list that is a handful of fills per window. */
+                  const stack = fills.slice(0, k).filter((p) => p.i === m.i).length
+                  return (
+                    <Hint key={`f-${k}`} label={<span className="flex items-center gap-1.5">{note(m)}</span>}>
+                      <FillMark buy={m.buy} open={m.open}
+                        className="absolute z-20 size-[18px] -translate-x-1/2 -translate-y-full"
+                        style={{
+                          left: `${xAt(m.i)}%`,
+                          top: `${Math.max(y(vis[m.i].h), 7.5 * (stack + 1))}%`,
+                          marginTop: -4 - stack * 22,
+                        }} />
+                    </Hint>
+                  )
+                })}
 
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
                     HTML overlay, not SVG shapes — preserveAspectRatio=none would squash those */}
