@@ -150,9 +150,13 @@ export async function desk(c: Cred, symbol: string): Promise<Desk> {
   const t = (Array.isArray(ticker?.data) ? ticker.data[0] : null) as Record<string, unknown> | null
   return {
     trade,
-    /* What a new position may actually put up. `available` is the free balance in crossed mode and
-       `isolatedMaxAvailable` the one that matters in isolated; the smaller reading is the honest
-       one to size against, since the order is refused at whichever runs out first. */
+    /* What a new position may actually put up — the account's free balance, and only that.
+       ponytail: Bitget also reports `isolatedMaxAvailable`, which is the reading that binds in
+       isolated mode and can be the smaller of the two; sizing against `available` alone means an
+       isolated account can be shown a margin the exchange then refuses the order for. Left as is
+       because the field's behaviour in crossed mode is not something this desk can check without
+       an isolated account to try it on, and a `Math.min` that picks up a 0 there would block every
+       trade. Take the smaller of the two once there is an account to confirm it against. */
     available: num(a.available),
     marginMode: a.marginMode === 'isolated' ? 'isolated' : 'crossed',
     hedge: a.posMode === 'hedge_mode',

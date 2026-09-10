@@ -30,9 +30,14 @@ export type Order = {
   target: number | null
 }
 
+/* Every refusal this server writes carries its own words — see the /api/trade route. So a failure
+   with no `error` in it did not come from this app at all: it is the proxy in front of it, which
+   answers 502 when the process is down and 504 when it took too long, in HTML nobody can parse.
+   The status is the whole difference between those, so it goes in the message rather than being
+   flattened into one sentence that cannot be chased. */
 const json = async (r: Response) => {
   const b = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(String(b?.error ?? 'the server did not answer'))
+  if (!r.ok) throw new Error(String(b?.error ?? `HTTP ${r.status} — no answer this app wrote`))
   return b
 }
 

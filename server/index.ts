@@ -1265,6 +1265,13 @@ export function start({
         const parts = venue === 'bitget' ? [key, secret, passphrase] : [key, secret]
         const given = parts.filter(Boolean).length
         if (given !== 0 && given !== parts.length) return send(res, 400, { error: 'every part of the credential arrives together' })
+        /* Every one of these ends up as an HTTP header value on a signed call to the exchange, so
+           printable ASCII and nothing else. A newline pasted in with a key is refused here, where
+           it can be explained, rather than at the fetch that throws on it — which surfaced as a
+           500 with no words on it, at the moment somebody was trying to place a trade. */
+        if (parts.some((p) => p.length > 256 || /[^\x20-\x7e]/.test(p))) {
+          return send(res, 400, { error: 'a key, secret or passphrase is plain text — check what was pasted' })
+        }
         set.run(key ? JSON.stringify(venue === 'bitget' ? { key, secret, passphrase } : { key, secret }) : null, user.id)
         log(venue, user.name, via(req))
         return send(res, 200, { set: !!key })

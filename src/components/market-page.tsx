@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Loader2, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
   TrendingDown, TrendingUp, Waypoints, X,
@@ -712,6 +712,22 @@ export default function MarketPage() {
   const visFills = fills.filter((m) => m.price >= lo && m.price <= hi)
   /** The marks on the bar under the crosshair, which is where their detail is read. */
   const hoverFills = hover == null ? [] : fills.filter((m) => m.i === hover)
+  /** What a mark says about itself: on the crosshair, which is the reading a phone can do, and in
+   *  its own tooltip on hover. One line, so the two cannot drift apart. */
+  const note = (m: (typeof fills)[number]) => (
+    <>
+      <span>{m.buy ? 'Buy' : 'Sell'} {m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>
+      {m.row && !m.open && (
+        <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
+          {m.row.r >= 0 ? '+' : ''}{m.row.r.toFixed(2)}R
+          {/* the sign goes in front of the figure, not nowhere: a loser read as "12.44 USDT" is
+              a winner */}
+          {m.row.cash != null && ` · ${signedUsdt(m.row.cash)}`}
+        </span>
+      )}
+      {!m.row && <span className="text-muted-foreground">open</span>}
+    </>
+  )
   /* The standing swings that are actually drawable: inside the frame, and made by a bar the window
      has reached. A pivot to the right of where you have scrolled has no x to be drawn from, and a
      line starting off the edge of the view says the level came from somewhere it didn't. */
@@ -1200,16 +1216,19 @@ export default function MarketPage() {
                   </span>
                 )}
 
-                {/* Where the money actually went in and out. HTML rather than SVG for the same
-                    reason the tooltip is: preserveAspectRatio=none squashes a shape into whatever
-                    the pane's aspect happens to be, and a triangle is a shape. Pointer-transparent,
-                    so a mark sitting on a level does not eat the drag — the detail is read off the
-                    crosshair below, which is the one reading a phone can do too. */}
+                {/* Where the money actually went in and out — a plus where the desk bought, a minus
+                    where it sold, centred on the price it happened at. HTML rather than SVG for the
+                    same reason the tooltip is: preserveAspectRatio=none squashes a shape into
+                    whatever the pane's aspect happens to be, and a disc is a shape.
+                    Hoverable, unlike before: a pointerdown on one still bubbles to the pane, so the
+                    crosshair and the scrub are unaffected, and the touch reading stays on the
+                    crosshair box below for the devices that cannot hover at all. */}
                 {visFills.map((m, k) => (
-                  <FillMark key={`f-${k}`} buy={m.buy} open={m.open}
-                    className={cn('pointer-events-none absolute z-10 -translate-x-1/2',
-                      !m.buy && '-translate-y-full')}
-                    style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }} />
+                  <Hint key={`f-${k}`} label={<span className="flex items-center gap-1.5">{note(m)}</span>}>
+                    <FillMark buy={m.buy} open={m.open}
+                      className="absolute z-10 -translate-x-1/2 -translate-y-1/2"
+                      style={{ left: `${xAt(m.i)}%`, top: `${y(m.price)}%` }} />
+                  </Hint>
                 ))}
 
                 {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
@@ -1224,16 +1243,7 @@ export default function MarketPage() {
                     {hoverFills.map((m, k) => (
                       <span key={`h-${k}`} className="mt-0.5 flex items-center gap-1.5 border-t pt-0.5">
                         <FillMark buy={m.buy} open={m.open} />
-                        <span>{m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>
-                        {m.row && !m.open && (
-                          <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
-                            {m.row.r >= 0 ? '+' : ''}{m.row.r.toFixed(2)}R
-                            {/* the sign goes in front of the figure, not nowhere: a loser read
-                                as "12.44 USDT" is a winner */}
-                            {m.row.cash != null && ` · ${signedUsdt(m.row.cash)}`}
-                          </span>
-                        )}
-                        {!m.row && <span className="text-muted-foreground">open</span>}
+                        {note(m)}
                       </span>
                     ))}
                   </div>
@@ -1610,23 +1620,33 @@ export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
 
 /** A fill mark. Its own little SVG at a fixed pixel size, not a shape in the plot's stretched
  *  viewBox and not the ▲ glyph before that: a text arrow is whatever the platform's font draws,
- *  and it went soft and dim at 9px against candles. The apex is the price — the triangle hangs
- *  off it, so a buy points up at its own level from below.
+ *  and it went soft and dim at 9px against candles.
+ *
+ *  A disc with the side written in it — plus for a buy, minus for a sell — centred on the price it
+ *  happened at. The triangle it replaces said the side by which way it pointed, which is a thing
+ *  you have to already know; and pointing meant hanging off the price rather than sitting on it,
+ *  so a buy and a sell at the same number drew at two different heights.
  *
  *  Visibility is the keyline, not the size. The chart under it is white wicks, two moving averages
- *  and a wash of dashed levels, all of which a flat triangle sinks into; a stroke in the pane's own
- *  colour cuts the mark out of whatever it lands on, in either theme. Entries are that solid shape,
+ *  and a wash of dashed levels, all of which a flat shape sinks into; a stroke in the pane's own
+ *  colour cuts the mark out of whatever it lands on, in either theme. Entries are the solid disc,
  *  exits the same outline hollowed out — in and out at a glance, which one triangle at 60% opacity
  *  never said. */
-function FillMark({ buy, open = true, className, style }: {
-  buy: boolean; open?: boolean; className?: string; style?: CSSProperties
-}) {
+function FillMark({ buy, open = true, className, ...rest }: {
+  buy: boolean; open?: boolean
+} & React.ComponentProps<'svg'>) {
   return (
-    <svg viewBox="0 0 12 10" aria-hidden className={cn('h-2.5 w-3 shrink-0', className)} style={style}>
-      <path d={buy ? 'M6 1 11 9 1 9Z' : 'M6 9 1 1 11 1Z'} strokeWidth={1.5} strokeLinejoin="round"
+    <svg viewBox="0 0 12 12" aria-hidden className={cn('size-3 shrink-0', className)} {...rest}>
+      {/* keyline first, in the pane's own colour, so a mark landing on a wick still reads as a
+          disc and not as part of the candle behind it */}
+      <circle cx="6" cy="6" r="5" strokeWidth={1.5}
         className={cn(buy ? 'text-emerald-400' : 'text-rose-400',
           open ? 'fill-current stroke-card' : 'fill-card stroke-current')}
         style={{ paintOrder: 'stroke' }} />
+      {/* the sign, cut out of the disc when it is solid and drawn in the colour when it is not */}
+      <path d={buy ? 'M6 3.4v5.2M3.4 6h5.2' : 'M3.4 6h5.2'} strokeWidth={1.6} strokeLinecap="round"
+        className={cn(buy ? 'text-emerald-400' : 'text-rose-400',
+          open ? 'stroke-card' : 'stroke-current')} fill="none" />
     </svg>
   )
 }

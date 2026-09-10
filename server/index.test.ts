@@ -950,6 +950,20 @@ assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
 assert.equal(r.headers.get('cache-control'), 'no-cache')
 assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`)).status, 403)
 
+/* The exchange credential, which is the one thing this server stores that it later signs a
+   request with. Every part goes into an HTTP header, so a newline in one is refused at the door:
+   left to the fetch it throws there instead, as a 500 with nothing on it, at whatever moment the
+   key is next used — which is the moment somebody is trying to place a trade. */
+assert.equal((await post('/api/bitget', { key: 'k', secret: 's' }, leon)).status, 400, 'half a credential')
+assert.equal((await post('/api/bitget',
+  { key: 'k\r\nX-Evil: 1', secret: 's', passphrase: 'p' }, leon)).status, 400, 'a header break went in')
+assert.equal((await post('/api/bitget',
+  { key: 'k'.repeat(257), secret: 's', passphrase: 'p' }, leon)).status, 400, 'no ceiling on a key')
+assert.equal((await post('/api/bitget', { key: 'k', secret: 's', passphrase: 'p p' }, leon)).status, 200)
+// and it never comes back out — GET says only whether one is set
+assert.deepEqual(await (await get('/api/bitget', leon)).json(), { set: true })
+assert.equal((await post('/api/bitget', { key: '', secret: '', passphrase: '' }, leon)).status, 200)
+
 server.close()
 
 /* The first account on a fresh install signs up with a code from the command line, and that is a
