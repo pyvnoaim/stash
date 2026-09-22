@@ -29,7 +29,7 @@ import {
 } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, mxSymbol, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
   venueName, offMexc, priceDigits,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
@@ -302,16 +302,32 @@ export default function MarketPage() {
   // those is bytes and venue weight spent to move one candle's close.
   // Once the bar's own duration is up it has closed, so the window is refetched properly and the
   // new bar arrives from the feed rather than being invented here.
-  // ponytail: polling, not a websocket. A socket means reconnects, backoff and a second code path
-  // for each venue; swap it in if this ever needs to be tick-accurate.
+  // The price itself comes off the venue's socket, landing twice a second; the poll below is what
+  // rolls the bar over, and reprices only while the socket has gone quiet.
   const lastAt = useRef(0)
   const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
+  const venueKey = feed === 'mexc' ? 'mexc' : 'bitget'
+  const tickPx = useLiveMarks(live && feed !== undefined && screen === 'desk'
+    ? [{ venue: venueKey, symbol: current.id }] : [], true)[`${venueKey}:${current.id}`]
+  const liveAt = useRef(0) // when the socket last moved the bar
+  useEffect(() => {
+    const t = lastAt.current
+    // a closed bar is not this price's to stretch — the roll below brings the next one
+    if (tickPx == null || !t || Date.now() >= t + BAR_MS[interval]) return
+    liveAt.current = Date.now()
+    setNotLive(false)
+    setCandles((prev) => {
+      const bar = prev.at(-1)
+      if (!bar || bar.t !== t) return prev
+      return [...prev.slice(0, -1), { ...bar, c: tickPx, h: Math.max(bar.h, tickPx), l: Math.min(bar.l, tickPx) }]
+    })
+  }, [tickPx]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setNotLive(false) // a new view has not probed yet, so it makes no claim either way
     // nothing to poll for with no feed to poll, and nothing to reprice on a page nobody is reading
     if (!live || !online || feed === undefined || screen !== 'desk') return
-    let on = true
+    let on = true, polled = 0
     const tick = () => {
       const t = lastAt.current
       if (!t) return
@@ -327,6 +343,9 @@ export default function MarketPage() {
           .catch(() => {})
         return
       }
+      // the socket is answering: nothing for a poll to add
+      if (Date.now() - liveAt.current < LIVE || Date.now() - polled < LIVE) return
+      polled = Date.now()
       fetchPrices([current.id], feed).then((pr) => {
         const px = pr[current.id]
         if (!on) return
@@ -341,7 +360,8 @@ export default function MarketPage() {
         })
       }).catch(() => {})
     }
-    const h = window.setInterval(tick, LIVE)
+    // every second so a closed bar gives way to the next within one; the price poll gates itself
+    const h = window.setInterval(tick, 1000)
     return () => { on = false; window.clearInterval(h) }
     /* `feed` belongs in here as much as the rest of them: it is `undefined` on every first render
        (useVenue answers in an effect), so the run that happens on mount always returns early — and
@@ -479,7 +499,7 @@ export default function MarketPage() {
   const vwap = useMemo(() => (candles.length ? sessionVwap(candles) : null), [candles])
 
   /* Closed bars only, which is the same cut signals() makes before its own structure read (see the
-     note on `closed` there). The last candle is repriced every few seconds by the live poll above,
+     note on `closed` there). The last candle is repriced on every tick by the socket above,
      so scanning it would let a tick that pokes a level count as a close through it: the unbroken-
      level line would vanish mid-bar and come back when the tick retraced, while the card below —
      which never sees that bar — went on saying the level holds. Two readings of one thing, which
@@ -1698,7 +1718,7 @@ function Watchlist({ current, onPick, inputRef }: {
   inputRef: React.RefObject<HTMLInputElement | null>
 }) {
   const feed = useVenue()
-  const [rows, setRows] = useState<{ a: Asset; price: number; change: number; closes: number[] }[]>([])
+  const [rows, setRows] = useState<{ a: Asset; price: number; open: number; change: number; closes: number[] }[]>([])
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [nonce, setNonce] = useState(0)
   const [q, setQ] = useState('')
@@ -1710,7 +1730,7 @@ function Watchlist({ current, onPick, inputRef }: {
         if (!on) return
         const next = bars
           .map(({ a, c }) => ({
-            a, price: c.at(-1)!.c, change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100,
+            a, price: c.at(-1)!.c, open: c[0].o, change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100,
             closes: c.map((k) => k.c),
           }))
           .filter((r) => isFinite(r.price) && isFinite(r.change))
@@ -1731,8 +1751,16 @@ function Watchlist({ current, onPick, inputRef }: {
   }, [])
 
   const hit = (a: Asset) => !q.trim() || `${a.label} ${a.id}`.toLowerCase().includes(q.trim().toLowerCase())
+  /* The minute's poll brings the day's bars; the socket moves the price, the move and the
+     sparkline's last point with every trade in between. */
+  const venueKey = feed === 'mexc' ? 'mexc' : 'bitget'
+  const live = useLiveMarks(feed === undefined ? [] : ASSETS.map((a) => ({ venue: venueKey, symbol: a.id })), true)
   // the rows in the picker's own order and groups, with the prices hung on them where they arrived
-  const priced = new Map(rows.map((r) => [r.a.id, r]))
+  const priced = new Map(rows.map((r) => {
+    const px = live[`${venueKey}:${r.a.id}`]
+    return [r.a.id, px == null ? r
+      : { ...r, price: px, change: ((px - r.open) / r.open) * 100, closes: [...r.closes.slice(0, -1), px] }]
+  }))
   return (
     <div className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
       {/* the search only where there is a column to search down; a strip of eleven is scanned */}
@@ -2117,10 +2145,12 @@ function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on:
  * The mark price of each held symbol, straight off the venue's public socket — the same price each
  * venue figures its P&L from (MEXC's fairPrice, Bitget's markPrice), so a repriced row agrees with
  * the exchange rather than drifting by the spread. Keyed `venue:SYMBOL`.
- * ponytail: one socket per venue per hook instance, and the page mounts two; share one store if a
- * venue ever complains about connections.
+ * `last` asks for the last trade instead, which is what a candle closes on. MEXC reprices its
+ * ticker only every two or three seconds, so that one comes off the trades channel instead.
+ * ponytail: one socket per venue per hook instance, and the desk mounts several (positions, chart,
+ * watchlist); share one store if a venue ever complains about connections.
  */
-function useLiveMarks(rows: { venue?: string, symbol: string }[]) {
+function useLiveMarks(rows: { venue?: string, symbol: string }[], last = false) {
   const [marks, setMarks] = useState<Record<string, number>>({})
   const key = [...new Set(rows.map((r) => `${r.venue}:${r.symbol}`))].sort().join(',')
   useEffect(() => {
@@ -2138,17 +2168,25 @@ function useLiveMarks(rows: { venue?: string, symbol: string }[]) {
     }, 500)
     const close = [
       mx.length && sock('wss://contract.mexc.com/edge',
-        (ws) => mx.forEach((s) => ws.send(JSON.stringify({ method: 'sub.ticker', param: { symbol: s.replace(/USDT$/, '_USDT') } }))),
+        (ws) => mx.forEach((s) => ws.send(JSON.stringify({ method: last ? 'sub.deal' : 'sub.ticker', param: { symbol: mxSymbol(s) } }))),
         JSON.stringify({ method: 'ping' }),
-        (d) => d.channel === 'push.ticker' && put(`mexc:${String(d.data?.symbol).replace('_', '')}`, d.data?.fairPrice)),
+        (d) => {
+          if (d.channel === 'push.ticker') put(`mexc:${String(d.data?.symbol).replace('_', '')}`, d.data?.fairPrice)
+          // a push can carry several trades; the newest is the price
+          if (d.channel === 'push.deal') {
+            const ts: { p: number, t: number }[] = [d.data].flat().filter(Boolean)
+            const t = ts.reduce((a, b) => (b.t >= a.t ? b : a), ts[0])
+            if (t) put(`mexc:${String(d.symbol).replace('_', '')}`, t.p)
+          }
+        }),
       bg.length && sock('wss://ws.bitget.com/v2/ws/public',
         (ws) => ws.send(JSON.stringify({ op: 'subscribe',
           args: bg.map((s) => ({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s })) })),
         'ping',
-        (d) => d.arg?.channel === 'ticker' && d.data?.forEach((t: any) => put(`bitget:${t.instId}`, t.markPrice))),
+        (d) => d.arg?.channel === 'ticker' && d.data?.forEach((t: any) => put(`bitget:${t.instId}`, last ? t.lastPr : t.markPrice))),
     ]
     return () => { window.clearInterval(flush); close.forEach((c) => c && c()) }
-  }, [key])
+  }, [key, last])
   return marks
 }
 
