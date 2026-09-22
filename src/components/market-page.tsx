@@ -2191,6 +2191,15 @@ function useSuggested(rows: ExchangePosition[]) {
    the window. auto-fit rather than auto-fill: an empty track is the dead space this replaces. */
 const TILE_GRID = 'grid gap-2 grid-cols-[repeat(auto-fit,minmax(min(19rem,100%),1fr))]'
 
+/** One fact on a tile's quiet line: the words, an optional tint, an optional hover. */
+type Bit = { t: string, c?: string, title?: string }
+
+/** How long something has been running, to the two units that matter: 3d 4h, 5h 12m, 7m. */
+function span(ms: number) {
+  const m = Math.max(0, Math.floor(ms / 6e4)), h = Math.floor(m / 60), d = Math.floor(h / 24)
+  return d ? `${d}d ${h % 24}h` : h ? `${h}h ${m % 60}m` : `${m}m`
+}
+
 /* The finest interval whose one call still reaches back to the fill, with its bar length. */
 const PEAK_IV: [Interval, number][] = [['5m', 3e5], ['1h', 36e5], ['4h', 144e5], ['1d', 864e5]]
 
@@ -2291,6 +2300,10 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   const lead = [
     pnl != null && signedUsdt(pnl),
     pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
+    /* what the price move did to the margin behind it — the number a leveraged trade is actually
+       felt in, so it stands in the headline beside the move it multiplies, not in the grey line.
+       Only where the venue said what the multiplier is. */
+    pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% margin`,
   ].filter(Boolean).join(' · ') || null
   /* Where price stands between the level that ends the trade against you and the one that ends it
      for you. Six prices in a row of prose is the one thing on this tile nobody was reading, and
@@ -2310,46 +2323,62 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     const hi = Math.max(ext.hi, now ?? ext.hi)
     const lo = Math.min(ext.lo, now ?? ext.lo)
     const [best, worst] = side === 'long' ? [hi, lo] : [lo, hi]
-    const say = (v: number) => {
-      if (qty != null) return signedUsdt(cashAt(side, from, v, qty))
-      const p = (v / from - 1) * (side === 'long' ? 100 : -100)
-      return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`
-    }
-    return [`peak ${say(best)}`, `worst ${say(worst)}`]
+    const val = (v: number) => (qty != null
+      ? cashAt(side, from, v, qty)
+      : (v / from - 1) * (side === 'long' ? 100 : -100))
+    const say = (n: number) => (qty != null ? signedUsdt(n) : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`)
+    const b = val(best)
+    // how much of the peak has gone back since — the gap between the green ghost and the live fill.
+    // Only off a peak that was a profit: "gave back" from a high that was still red means nothing.
+    const gave = now != null && b > 0 ? b - val(now) : 0
+    return { best, worst, up: say(b), down: say(val(worst)),
+      gave: gave > 0 ? (qty != null ? usdt(gave) : `${gave.toFixed(2)}%`) : null }
   })()
   const bar = lose != null && target != null && now != null && lose !== target
     ? (() => {
         const at = (v: number) => Math.max(0, Math.min(1, (v - lose) / (target - lose)))
         const cash = (v: number) => (qty != null ? cashAt(side, from, v, qty) : null)
         return { now: at(now), from: at(from), lose, win: target, mark: now, stopped: stop != null,
-          lost: cash(lose), won: cash(target) }
+          lost: cash(lose), won: cash(target),
+          best: peak && at(peak.best), worst: peak && at(peak.worst) }
       })()
     : null
   const level = (name: string, v: number) =>
     `${name} ${fmtPrice(v)}${now != null ? ` (${away(v, now)})` : ''}`
   /* The levels lead the line, and the bar takes its two ends out of it — the same numbers said
      twice is what made the line long enough to stop being read. */
-  const line = [
-    !bar && stop != null && level('stop', stop),
-    !bar && target != null && level('target', target),
-    // the liq only where the bar is not already standing on it — a stopless position's losing end
-    liq != null && !(bar && !bar.stopped) && level('liq', liq),
+  const t0 = openedAt != null ? new Date(openedAt) : null
+  /* Grouped rather than one even run: what ends it, what it is, what it has been through, and
+     whatever only the caller can say — six facts spaced alike read as one sentence. */
+  const line = ([
+    [
+      !bar && stop != null && { t: level('stop', stop) },
+      !bar && target != null && { t: level('target', target) },
+      // the liq only where the bar is not already standing on it — a stopless position's losing end
+      liq != null && !(bar && !bar.stopped) && { t: level('liq', liq) },
+    ],
     // two decimals like every other figure on the tile: 239.5 beside 219.26 read as a rounding
     // nobody asked for, in the one column where money is supposed to line up
-    value != null && `worth ${usdt(value)}`,
-    /* what the price move did to the margin behind it — the number a leveraged trade is actually
-       felt in. pct stays the price move it has always been; this is that times the multiplier, and
-       it only appears where the venue said what the multiplier is. */
-    pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% on margin`,
-    ...(peak ?? []),
-    funding != null && `funding ${signedUsdt(funding)}`,
-    openedAt != null && `opened ${new Date(openedAt).toLocaleString(undefined, {
-      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-    })}`,
-    ...meta,
-  ].filter((x): x is string => !!x)
+    [value != null && { t: `worth ${usdt(value)}` }],
+    [
+      // tinted like the ghosts on the bar, which is what ties an unlabelled band to its number
+      peak && { t: `peak ${peak.up}`, c: 'text-emerald-600/80 dark:text-emerald-400/80' },
+      peak && { t: `worst ${peak.down}`, c: 'text-destructive/80' },
+      peak?.gave && { t: `gave back ${peak.gave}` },
+      funding != null && { t: `funding ${signedUsdt(funding)}` },
+      // how long it has run is what a glance wants; the clock time is there on hover.
+      // ponytail: ticks with the mark's re-renders, not a timer of its own
+      t0 && !isNaN(+t0) && {
+        t: `open ${span(Date.now() - +t0)}`,
+        title: t0.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
+      },
+    ],
+    meta.map((m) => m && { t: m }),
+  ] as (Bit | false | null | undefined | '')[][])
+    .map((g) => g.filter((x): x is Bit => !!x))
+    .filter((g) => g.length)
   return (
-    <div className="grid gap-1 rounded-md border px-2.5 py-2">
+    <div className="grid gap-1.5 rounded-md border px-3 py-2.5">
       <div className="flex items-center gap-2">
         {/* the side as a pill, not a word in the sentence: it is what the eye sorts the tiles by,
             and green or red on its own said it twice as quietly */}
@@ -2369,8 +2398,14 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
         {r != null && <span className={cn('ml-auto font-mono', good)}>{rLabel(r)}</span>}
       </div>
       {bar && (
-        <div className="mt-0.5 grid gap-1">
-          <div className="bg-muted relative h-1 rounded-full">
+        <div className="mt-0.5 grid gap-1.5">
+          <div className="bg-muted relative h-1.5 rounded-full">
+            {/* how far each way it has been since the fill, faint under the live fill — a peak hold:
+                the gap between the ghost and the fill is what it has given back */}
+            {([[bar.best, 'bg-emerald-500/25'], [bar.worst, 'bg-destructive/25']] as const).map(([x, c]) => x != null && (
+              <div key={c} className={cn('absolute inset-y-0 rounded-full', c)}
+                style={{ left: `${Math.min(bar.from, x) * 100}%`, width: `${Math.abs(x - bar.from) * 100}%` }} />
+            ))}
             {/* how far it has travelled from the entry, and which way — the fill is the trade */}
             <div className={cn('absolute inset-y-0 rounded-full', up ? 'bg-emerald-500' : 'bg-destructive')}
               style={{ left: `${Math.min(bar.from, bar.now) * 100}%`,
@@ -2383,7 +2418,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
           {/* what each end is worth from here, beside how far away it is: a percent is a distance
               and money is the thing anybody actually decides on. Only where the venue prices the
               position — a row from someone's document has no size to put a figure on. */}
-          <div className="flex justify-between text-[10px] tabular-nums">
+          <div className="flex justify-between text-[11px] tabular-nums">
             <span className="text-destructive">
               {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
               <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
@@ -2401,8 +2436,12 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
           four unrelated facts strung into one grey line is the shape of prose, and none of them
           is prose — spacing separates them where the interpuncts were only filling it */}
       {!!line.length && (
-        <div className="text-muted-foreground flex flex-wrap gap-x-3 border-t pt-1 text-xs tabular-nums">
-          {line.map((t) => <span key={t}>{t}</span>)}
+        <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 border-t pt-1.5 text-xs tabular-nums">
+          {line.map((g, i) => (
+            <div key={i} className={cn('flex flex-wrap gap-x-3', i > 0 && 'border-l pl-3')}>
+              {g.map((b) => <span key={b.t} className={b.c} title={b.title}>{b.t}</span>)}
+            </div>
+          ))}
         </div>
       )}
     </div>
