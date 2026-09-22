@@ -245,6 +245,8 @@ export default function MarketPage() {
      The ticker poll below is never cached, so a tick that comes back with no price is the one
      honest signal that the feed is not answering. Either way the page stops claiming to be live. */
   const [notLive, setNotLive] = useState(false)
+  // the socket has gone quiet and the poll is carrying the price — slower, and the dot says so
+  const [polling, setPolling] = useState(false)
   const stale = !online || notLive
   const cfg = HORIZONS[READ]
   // the exchange's word on what's held, so the chart draws the trade that is actually on
@@ -307,9 +309,11 @@ export default function MarketPage() {
   const lastAt = useRef(0)
   const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
-  const venueKey = feed === 'mexc' ? 'mexc' : 'bitget'
+  // the daily bars come off MEXC whatever the key (see offMexc), and the price that stretches them
+  // has to come off the same book or the forming bar carries the basis between the two
+  const priceBook: 'mexc' | 'bitget' = feed === 'mexc' || offMexc(interval) ? 'mexc' : 'bitget'
   const tickPx = useLiveMarks(live && feed !== undefined && screen === 'desk'
-    ? [{ venue: venueKey, symbol: current.id }] : [], true)[`${venueKey}:${current.id}`]
+    ? [{ venue: priceBook, symbol: current.id }] : [], true)[`${priceBook}:${current.id}`]
   const liveAt = useRef(0) // when the socket last moved the bar
   useEffect(() => {
     const t = lastAt.current
@@ -344,9 +348,11 @@ export default function MarketPage() {
         return
       }
       // the socket is answering: nothing for a poll to add
-      if (Date.now() - liveAt.current < LIVE || Date.now() - polled < LIVE) return
+      const quiet = Date.now() - liveAt.current >= LIVE
+      setPolling(quiet)
+      if (!quiet || Date.now() - polled < LIVE) return
       polled = Date.now()
-      fetchPrices([current.id], feed).then((pr) => {
+      fetchPrices([current.id], priceBook).then((pr) => {
         const px = pr[current.id]
         if (!on) return
         // fetchPrices resolves either way and simply omits what it could not get, so an absent
@@ -930,10 +936,11 @@ export default function MarketPage() {
                 </Hint>
                 <span className="bg-border mx-1 h-4 w-px" />
                 <Hint label={!online ? 'Offline' : notLive ? 'Feed not answering'
-                  : live ? `Live, every ${LIVE / 1000}s` : 'Live off'}>
+                  : !live ? 'Live off' : polling ? `Stream quiet — polling every ${LIVE / 1000}s` : 'Live, streaming'}>
                   <Button size="sm" variant="ghost" className={cn('h-6 gap-1.5 px-2 text-xs', (!live || stale) && 'text-muted-foreground')}
                     onClick={() => setLive((v) => !v)}>
-                    <span className={cn('size-1.5 rounded-full', live && !stale ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground')} />
+                    <span className={cn('size-1.5 rounded-full', !live || stale ? 'bg-muted-foreground'
+                      : polling ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse')} />
                     Live
                   </Button>
                 </Hint>
@@ -2369,7 +2376,7 @@ function useExtremes(symbol: string, openedAt: number | string | null | undefine
  * adapters (`bitget.ts`, `mexc.ts`) round the identical expression, and one of them is one too many.
  */
 function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, value,
-  stop, target, liq, funding, openedAt, meta = [] }: {
+  stop, target, liq, funding, fee, openedAt, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
@@ -2393,6 +2400,8 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   liq?: number | null
   /** What holding it has cost so far, as the venue signs it. */
   funding?: number | null
+  /** Taker fee, percent per side (the Settings dial) — what `net` takes off for getting in and out. */
+  fee?: number
   /** When it filled, however the feed stamps it. Left out where the venue never said. */
   openedAt?: number | string | null
   /** Anything only one side of the desk can say, appended to the quiet line; falsy entries drop. */
@@ -2406,6 +2415,11 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   const r = now != null && risk != null
     ? (side === 'long' ? now - from : from - now) / risk
     : null
+  /* What closing now would leave: the venue's P&L is price alone, so the fee paid getting in, the
+     one closing would cost and the funding so far come off here. Priced on the current notional —
+     the entry's differs by the move, cents on a fee.
+     ponytail: one flat taker rate from Settings, not the venue's tier; set it to what yours charges. */
+  const net = pnl != null && value != null && fee ? pnl + (funding ?? 0) - value * fee / 100 * 2 : null
   // whichever of them the row has: a document row has no money on it, and some venues rest no stop
   const up = (pnl ?? pct ?? r ?? 0) >= 0
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
@@ -2474,7 +2488,10 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     ],
     // two decimals like every other figure on the tile: 239.5 beside 219.26 read as a rounding
     // nobody asked for, in the one column where money is supposed to line up
-    [value != null && { t: `worth ${usdt(value)}` }],
+    [
+      value != null && { t: `worth ${usdt(value)}` },
+      net != null && { t: `net ${signedUsdt(net)}`, title: `after a ${fee}% fee each way${funding ? ' and the funding so far' : ''} — the fee is in Settings` },
+    ],
     [
       // tinted like the ghosts on the bar, which is what ties an unlabelled band to its number
       peak && { t: `peak ${peak.up}`, c: 'text-emerald-600/80 dark:text-emerald-400/80' },
@@ -2652,7 +2669,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
   const atrs = useSuggested(rows)
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
   // had no single place that read them together with what the exchanges hold
-  const { watches } = useStash()
+  const { watches, dials } = useStash()
   const risk = openRisk(rows, watches.filter(isPosition), equity)
   /* Two currencies, never one total: the exchanges settle in USDT and a hand-entered position is
      what you typed in euros. Joined with a + rather than added, because the sum of
@@ -2756,7 +2773,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev}
             from={p.entry} now={p.mark} size={String(p.size)} pnl={p.pnl} value={p.value}
             stop={p.stop} target={p.target} liq={p.liq}
-            funding={p.funding}
+            funding={p.funding} fee={dials.fee}
             openedAt={p.openedAt}
             meta={[suggestLine(p, atrs[assetOf(p.symbol)])]} />
         ))}
