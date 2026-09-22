@@ -29,7 +29,7 @@ import {
 } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ASSETS, assetOf, atr, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
+  ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
   venueName, offMexc, priceDigits,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
@@ -2191,6 +2191,44 @@ function useSuggested(rows: ExchangePosition[]) {
    the window. auto-fit rather than auto-fill: an empty track is the dead space this replaces. */
 const TILE_GRID = 'grid gap-2 grid-cols-[repeat(auto-fit,minmax(min(19rem,100%),1fr))]'
 
+/* The finest interval whose one call still reaches back to the fill, with its bar length. */
+const PEAK_IV: [Interval, number][] = [['5m', 3e5], ['1h', 36e5], ['4h', 144e5], ['1d', 864e5]]
+
+/**
+ * The highest and lowest price since a position filled, off the bars since then — what its peak
+ * profit and its worst drawdown were printed at. Fetched once per fill; the tile folds the live
+ * mark in on top, so the answer keeps up without a poll of its own.
+ * ponytail: the fill's own bar counts whole, so a price from minutes before the entry can stand as
+ * the peak — at most one bar of it, 5m on anything under three days old.
+ */
+function useExtremes(symbol: string, openedAt: number | string | null | undefined, now: number | null) {
+  const feed = useVenue()
+  const [x, setX] = useState<{ hi: number, lo: number } | null>(null)
+  const t0 = openedAt != null ? new Date(openedAt).getTime() : NaN
+  // a new high between polls has to stay the peak after the mark comes back off it
+  useEffect(() => {
+    if (now != null) setX((p) => p && { hi: Math.max(p.hi, now), lo: Math.min(p.lo, now) })
+  }, [now])
+  useEffect(() => {
+    // the same tile can outlive its trade — a reopened symbol keeps its key — so never carry the
+    // last fill's extremes into the next one
+    setX(null)
+    const a = ASSETS.find((y) => y.id === assetOf(symbol))
+    if (feed === undefined || !a || !Number.isFinite(t0)) return
+    const age = Date.now() - t0
+    const [iv, ms] = PEAK_IV.find(([, ms]) => age / ms < BARS - 2) ?? PEAK_IV[PEAK_IV.length - 1]
+    let on = true
+    fetchCandles(a, iv, feed, Math.min(BARS, Math.ceil(age / ms) + 2)).then((c) => {
+      const since = c.filter((b) => b.t + ms > t0)
+      if (on && since.length) {
+        setX({ hi: Math.max(...since.map((b) => b.h)), lo: Math.min(...since.map((b) => b.l)) })
+      }
+    }).catch(() => {})
+    return () => { on = false }
+  }, [symbol, t0, feed])
+  return x
+}
+
 /**
  * One open trade, as a tile: who it is and which way, what it is doing, and the levels behind it.
  * The same block for your own book and for everyone else's on the Desk — a position is a position,
@@ -2265,6 +2303,20 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
      count size in different units (contracts on one venue, coins on the other) and only one of them
      sends a size at all, while both send the notional. */
   const qty = value != null && now != null && now > 0 ? value / now : null
+  /* The best and worst it has been since the fill, in money where the tile has a size and in
+     percent of the move where it does not — the same unit the headline speaks. */
+  const ext = useExtremes(symbol, openedAt, now)
+  const peak = ext && (() => {
+    const hi = Math.max(ext.hi, now ?? ext.hi)
+    const lo = Math.min(ext.lo, now ?? ext.lo)
+    const [best, worst] = side === 'long' ? [hi, lo] : [lo, hi]
+    const say = (v: number) => {
+      if (qty != null) return signedUsdt(cashAt(side, from, v, qty))
+      const p = (v / from - 1) * (side === 'long' ? 100 : -100)
+      return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`
+    }
+    return [`peak ${say(best)}`, `worst ${say(worst)}`]
+  })()
   const bar = lose != null && target != null && now != null && lose !== target
     ? (() => {
         const at = (v: number) => Math.max(0, Math.min(1, (v - lose) / (target - lose)))
@@ -2289,6 +2341,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
        felt in. pct stays the price move it has always been; this is that times the multiplier, and
        it only appears where the venue said what the multiplier is. */
     pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% on margin`,
+    ...(peak ?? []),
     funding != null && `funding ${signedUsdt(funding)}`,
     openedAt != null && `opened ${new Date(openedAt).toLocaleString(undefined, {
       day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
