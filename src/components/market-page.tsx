@@ -2126,19 +2126,23 @@ const cancelled = new Set<string>()
 /** A public socket that stays up: subscribes on every (re)connect, pings to stay alive, and backs
  *  off to 30s between retries. Returns the way to close it for good. */
 function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on: (d: any) => void) {
-  let ws: WebSocket, beat = 0, retry = 0, wait = 1000, dead = false
+  let ws: WebSocket | undefined, beat = 0, retry = 0, wait = 1000, dead = false
   const open = () => {
-    ws = new WebSocket(url)
-    ws.onopen = () => { wait = 1000; subscribe(ws); beat = window.setInterval(() => ws.send(ping), 20_000) }
+    // a socket the page's policy refuses throws right here in Firefox, rather than closing — and
+    // thrown from an effect it takes the whole page down with it. No socket is no live price, and
+    // the polls underneath still answer.
+    let s: WebSocket
+    try { s = ws = new WebSocket(url) } catch { return }
+    s.onopen = () => { wait = 1000; subscribe(s); beat = window.setInterval(() => s.send(ping), 20_000) }
     // bitget answers its ping with a bare "pong", which is not JSON and not news
-    ws.onmessage = (e) => { try { on(JSON.parse(String(e.data))) } catch { /* pong */ } }
-    ws.onclose = () => {
+    s.onmessage = (e) => { try { on(JSON.parse(String(e.data))) } catch { /* pong */ } }
+    s.onclose = () => {
       window.clearInterval(beat)
       if (!dead) retry = window.setTimeout(open, wait = Math.min(wait * 2, 30_000))
     }
   }
   open()
-  return () => { dead = true; window.clearInterval(beat); window.clearTimeout(retry); ws.close() }
+  return () => { dead = true; window.clearInterval(beat); window.clearTimeout(retry); ws?.close() }
 }
 
 /**

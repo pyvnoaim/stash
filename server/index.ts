@@ -2228,12 +2228,13 @@ export function start({
             // own device, played back to them and recorded. Nothing here fetches media over the
             // network, so no host is named.
             + "media-src 'self' blob:; "
-            // MEXC is absent on purpose: its contract API sends no allow-origin header, so those
-            // bars come through this server's own relay and ride 'self'.
+            // MEXC's REST is absent on purpose: its contract API sends no allow-origin header, so
+            // those bars come through this server's own relay and ride 'self'. Its socket and
+            // Bitget's are the live prices, and a socket carries no CORS to be refused by.
             // GeckoTerminal came off with the Trending panel: no browser code reaches it any more
             // (the MCP tool asks from this process), so the grant was permission for nothing —
             // and a connect-src host nothing uses is a host anything injected could use.
-            + "connect-src 'self' https://api.bitget.com; "
+            + "connect-src 'self' https://api.bitget.com wss://ws.bitget.com wss://contract.mexc.com; "
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),
