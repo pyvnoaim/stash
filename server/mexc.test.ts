@@ -8,7 +8,7 @@ const sizes = new Map([['BTC_USDT', 0.0001], ['ETH_USDT', 0.01]])
 
 const rows = shape([
   // 5000 contracts × 0.0001 = 0.5 BTC — the same trade every other venue's test holds
-  { symbol: 'BTC_USDT', positionType: 1, holdVol: 5000, openAvgPrice: 100, liquidatePrice: '80.5', createTime: 1754400000000, leverage: 10, positionId: 77, holdFee: -0.42 },
+  { symbol: 'BTC_USDT', positionType: 1, holdVol: 5000, openAvgPrice: 100, liquidatePrice: '80.5', createTime: 1754400000000, leverage: 10, positionId: 77, holdFee: -0.42, realised: -0.39 },
   { symbol: 'ETH_USDT', positionType: 2, holdVol: 200, openAvgPrice: 200, liquidatePrice: 0 },
   // no contractSize known: dropped, not shown at contract-count scale
   { symbol: 'DOGE_USDT', positionType: 1, holdVol: 10, openAvgPrice: 0.1 },
@@ -23,7 +23,7 @@ assert.equal(rows.length, 2)
 assert.deepEqual(rows[0], {
   symbol: 'BTCUSDT', side: 'long', size: 0.5, entry: 100, mark: 110, pct: 10,
   pnl: 5, value: 55, openedAt: '2025-08-05T13:20:00.000Z', stop: 90, target: 130, liq: 80.5,
-  funding: -0.42, lev: 10,
+  funding: -0.42, paid: -0.39, lev: 10,
   // the next settlement is public and asked for per symbol held, not shaped off the row
 })
 assert.equal(rows[1].side, 'short')
@@ -33,6 +33,7 @@ assert.equal(rows[1].liq, null) // 0 is the feed's word for none
 assert.equal(rows[1].lev, null) // a row that does not say is not a row at 1×
 assert.equal(rows[1].stop, null) // no stop order against it, so no level to show
 assert.equal(rows[1].funding, null)
+assert.equal(rows[1].paid, null)
 
 // closed positions: the underscore goes, the close price stays, and a row without one is dropped
 assert.deepEqual(shapeClosed([

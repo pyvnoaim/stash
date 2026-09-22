@@ -45,6 +45,10 @@ export type Position = {
    *  to hold, positive what holding it has paid. Bitget totals it on the position row and MEXC
    *  calls it holdFee; neither is in `pnl`, which is price alone. */
   funding: number | null
+  /** What the venue has already booked against the position while it is open — MEXC's `realised`:
+   *  the opening fee, and the funding. MEXC's own screen takes it off the P&L it shows, so the tile
+   *  does too. Null where the venue keeps no such figure. */
+  paid: number | null
   /** The multiplier the position is held at, where the venue's row says. It is not in `pct` — that
    *  stays a price move — but it is the difference between a 2% drift and a margin call, so the
    *  card that shows one shows the other. */
@@ -113,6 +117,7 @@ export function shape(rows: unknown[]): Position[] {
       // totalFee is the funding accrued on this position — signed, so it needs the parser that
       // lets a negative through rather than the one that reads 0-or-less as "the feed said none"
       funding: signed(p.totalFee),
+      paid: null,
       lev: num(p.leverage),
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.size) && p.size > 0)

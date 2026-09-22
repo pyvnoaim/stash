@@ -1902,6 +1902,8 @@ type ExchangePosition = {
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
   stop: number | null; target: number | null; funding: number | null
+  /** What the venue already booked against it — see `paid` in server/bitget.ts */
+  paid?: number | null
   /** The multiplier the venue holds it at, where its row says. */
   lev?: number | null
   /** The exchange's own liquidation price, where its feed says one. */
@@ -2376,7 +2378,7 @@ function useExtremes(symbol: string, openedAt: number | string | null | undefine
  * adapters (`bitget.ts`, `mexc.ts`) round the identical expression, and one of them is one too many.
  */
 function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, value,
-  stop, target, liq, funding, fee, openedAt, meta = [] }: {
+  stop, target, liq, funding, fee, paid, openedAt, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
@@ -2402,6 +2404,9 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   funding?: number | null
   /** Taker fee, percent per side (the Settings dial) — what `net` takes off for getting in and out. */
   fee?: number
+  /** What the venue has already booked against it — the opening fee, the funding. Its own screen
+   *  takes that off the P&L (MEXC does), so the headline does too. */
+  paid?: number | null
   /** When it filled, however the feed stamps it. Left out where the venue never said. */
   openedAt?: number | string | null
   /** Anything only one side of the desk can say, appended to the quiet line; falsy entries drop. */
@@ -2415,17 +2420,21 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   const r = now != null && risk != null
     ? (side === 'long' ? now - from : from - now) / risk
     : null
-  /* What closing now would leave: the venue's P&L is price alone, so the fee paid getting in, the
-     one closing would cost and the funding so far come off here. Priced on the current notional —
-     the entry's differs by the move, cents on a fee.
+  /* The feed's P&L is price alone. Where the venue books what has already been paid, the headline
+     takes it off the way the venue's own screen does; `net` takes the fee closing would cost off as
+     well — what closing now would leave. A venue that books nothing gets the opening fee at the
+     Settings rate, on the entry's notional, and the funding so far instead.
      ponytail: one flat taker rate from Settings, not the venue's tier; set it to what yours charges. */
-  const net = pnl != null && value != null && fee ? pnl + (funding ?? 0) - value * fee / 100 * 2 : null
+  const fees = pnl != null && value != null && now && fee
+    ? { open: (value / now) * from * fee / 100, close: value * fee / 100 } : null
+  const shown = pnl != null && paid != null ? pnl + paid : pnl
+  const net = fees && pnl != null ? pnl + (paid ?? (funding ?? 0) - fees.open) - fees.close : null
   // whichever of them the row has: a document row has no money on it, and some venues rest no stop
-  const up = (pnl ?? pct ?? r ?? 0) >= 0
+  const up = (shown ?? pct ?? r ?? 0) >= 0
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
   /* money, percent and R beside each other: same sign by construction, one colour carries all */
   const lead = [
-    pnl != null && signedUsdt(pnl),
+    shown != null && signedUsdt(shown),
     /* one percent, not two: what the move did to the margin behind it where the venue said the
        multiplier — the number a leveraged trade is felt in, and the bare move is from/now already —
        and the move itself only where there is nothing to multiply it by */
@@ -2773,7 +2782,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev}
             from={p.entry} now={p.mark} size={String(p.size)} pnl={p.pnl} value={p.value}
             stop={p.stop} target={p.target} liq={p.liq}
-            funding={p.funding} fee={dials.fee}
+            funding={p.funding} fee={dials.fee} paid={p.paid}
             openedAt={p.openedAt}
             meta={[suggestLine(p, atrs[assetOf(p.symbol)])]} />
         ))}

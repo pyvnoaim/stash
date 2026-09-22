@@ -104,6 +104,7 @@ export function shape(
       liq: num(p.liquidatePrice),
       // holdFee is the funding accrued while it has been held, as MEXC signs it
       funding: signed(p.holdFee),
+      paid: signed(p.realised),
       lev: num(p.leverage),
     }
   }).filter((p) => p.symbol && isFinite(p.entry) && p.entry > 0 && isFinite(p.size) && p.size > 0)
