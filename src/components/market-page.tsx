@@ -2095,6 +2095,63 @@ const oid = (o: RestingOrder) => `${o.venue ?? ''}-${o.id}`
    ponytail: never pruned. It holds a short string per cancel anyone makes in one page load. */
 const cancelled = new Set<string>()
 
+/** A public socket that stays up: subscribes on every (re)connect, pings to stay alive, and backs
+ *  off to 30s between retries. Returns the way to close it for good. */
+function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on: (d: any) => void) {
+  let ws: WebSocket, beat = 0, retry = 0, wait = 1000, dead = false
+  const open = () => {
+    ws = new WebSocket(url)
+    ws.onopen = () => { wait = 1000; subscribe(ws); beat = window.setInterval(() => ws.send(ping), 20_000) }
+    // bitget answers its ping with a bare "pong", which is not JSON and not news
+    ws.onmessage = (e) => { try { on(JSON.parse(String(e.data))) } catch { /* pong */ } }
+    ws.onclose = () => {
+      window.clearInterval(beat)
+      if (!dead) retry = window.setTimeout(open, wait = Math.min(wait * 2, 30_000))
+    }
+  }
+  open()
+  return () => { dead = true; window.clearInterval(beat); window.clearTimeout(retry); ws.close() }
+}
+
+/**
+ * The mark price of each held symbol, straight off the venue's public socket — the same price each
+ * venue figures its P&L from (MEXC's fairPrice, Bitget's markPrice), so a repriced row agrees with
+ * the exchange rather than drifting by the spread. Keyed `venue:SYMBOL`.
+ * ponytail: one socket per venue per hook instance, and the page mounts two; share one store if a
+ * venue ever complains about connections.
+ */
+function useLiveMarks(rows: { venue?: string, symbol: string }[]) {
+  const [marks, setMarks] = useState<Record<string, number>>({})
+  const key = [...new Set(rows.map((r) => `${r.venue}:${r.symbol}`))].sort().join(',')
+  useEffect(() => {
+    const on = (k: string) => key.split(',').filter((x) => x.startsWith(`${k}:`)).map((x) => x.slice(k.length + 1))
+    const mx = on('mexc'), bg = on('bitget')
+    /* Bitget pushes several times a second and each render here is the whole market page, chart
+       and all — so ticks gather and land twice a second, which no eye reading a P&L can outrun. */
+    let due: Record<string, number> = {}
+    const put = (k: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) due[k] = n }
+    const flush = window.setInterval(() => {
+      if (!Object.keys(due).length) return
+      const d = due
+      due = {}
+      setMarks((m) => ({ ...m, ...d }))
+    }, 500)
+    const close = [
+      mx.length && sock('wss://contract.mexc.com/edge',
+        (ws) => mx.forEach((s) => ws.send(JSON.stringify({ method: 'sub.ticker', param: { symbol: s.replace(/USDT$/, '_USDT') } }))),
+        JSON.stringify({ method: 'ping' }),
+        (d) => d.channel === 'push.ticker' && put(`mexc:${String(d.data?.symbol).replace('_', '')}`, d.data?.fairPrice)),
+      bg.length && sock('wss://ws.bitget.com/v2/ws/public',
+        (ws) => ws.send(JSON.stringify({ op: 'subscribe',
+          args: bg.map((s) => ({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s })) })),
+        'ping',
+        (d) => d.arg?.channel === 'ticker' && d.data?.forEach((t: any) => put(`bitget:${t.instId}`, t.markPrice))),
+    ]
+    return () => { window.clearInterval(flush); close.forEach((c) => c && c()) }
+  }, [key])
+  return marks
+}
+
 /**
  * The exchange feed, polled while something is looking. Only an answered request moves anything:
  * a failed fetch keeps the last state, and — the part that matters — never reaches fileClosed,
@@ -2136,7 +2193,21 @@ export function useExchangePositions() {
     const h = window.setInterval(load, 60_000)
     return () => { dead = true; window.clearInterval(h) }
   }, [])
-  return { ...feed, orders: feed.orders.filter((o) => !cancelled.has(oid(o))), loading }
+  /* The poll brings the positions; the socket brings the price. Each row moves off the venue's own
+     P&L by what the mark has done since, so fees and funding the venue folded in stay folded in. */
+  const live = useLiveMarks(feed.rows)
+  const rows = useMemo(() => feed.rows.map((p) => {
+    const l = live[`${p.venue}:${p.symbol}`]
+    if (l == null || l === p.mark) return p
+    const sign = p.side === 'long' ? 1 : -1
+    const qty = p.value != null && p.mark ? p.value / p.mark : null
+    const round = (n: number) => Math.round(n * 100) / 100
+    return { ...p, mark: l,
+      pct: p.entry > 0 ? (l / p.entry - 1) * 100 * sign : p.pct,
+      pnl: p.pnl != null && qty != null && p.mark ? round(p.pnl + (l - p.mark) * qty * sign) : p.pnl,
+      value: qty != null ? round(qty * l) : p.value }
+  }), [feed.rows, live])
+  return { ...feed, rows, orders: feed.orders.filter((o) => !cancelled.has(oid(o))), loading }
 }
 
 /** How many tiles the last look held — what to keep room for while this one is still being asked.
@@ -2296,14 +2367,16 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   // whichever of them the row has: a document row has no money on it, and some venues rest no stop
   const up = (pnl ?? pct ?? r ?? 0) >= 0
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
-  /* money and percent beside each other: same sign by construction, one colour carries both */
+  /* money, percent and R beside each other: same sign by construction, one colour carries all */
   const lead = [
     pnl != null && signedUsdt(pnl),
-    pct != null && `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
-    /* what the price move did to the margin behind it — the number a leveraged trade is actually
-       felt in, so it stands in the headline beside the move it multiplies, not in the grey line.
-       Only where the venue said what the multiplier is. */
-    pct != null && lev != null && `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% margin`,
+    /* one percent, not two: what the move did to the margin behind it where the venue said the
+       multiplier — the number a leveraged trade is felt in, and the bare move is from/now already —
+       and the move itself only where there is nothing to multiply it by */
+    pct != null && (lev != null
+      ? `${pct * lev >= 0 ? '+' : ''}${(pct * lev).toFixed(1)}% margin`
+      : `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`),
+    r != null && rLabel(r),
   ].filter(Boolean).join(' · ') || null
   /* Where price stands between the level that ends the trade against you and the one that ends it
      for you. Six prices in a row of prose is the one thing on this tile nobody was reading, and
@@ -2378,7 +2451,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     .map((g) => g.filter((x): x is Bit => !!x))
     .filter((g) => g.length)
   return (
-    <div className="grid gap-1.5 rounded-md border px-3 py-2.5">
+    <div className="grid gap-2 rounded-md border px-3.5 py-3 text-[15px]">
       <div className="flex items-center gap-2">
         {/* the side as a pill, not a word in the sentence: it is what the eye sorts the tiles by,
             and green or red on its own said it twice as quietly */}
@@ -2392,17 +2465,15 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
         {venue && <span className="text-muted-foreground truncate text-xs">{venue}</span>}
         {lead && <span className={cn('ml-auto shrink-0 font-mono tabular-nums', good)}>{lead}</span>}
       </div>
-      <div className="text-muted-foreground flex flex-wrap items-baseline gap-x-3 text-xs tabular-nums">
+      <div className="text-muted-foreground flex flex-wrap items-baseline gap-x-3 text-[13px] tabular-nums">
         <span>{size ? `${size} from ` : 'from '}<span className="text-foreground">{fmtPrice(from)}</span></span>
-        {now != null && <span>now <span className="text-foreground">{fmtPrice(now)}</span></span>}
-        {r != null && <span className={cn('ml-auto font-mono', good)}>{rLabel(r)}</span>}
-      </div>
+        {now != null && <span>now <span className="text-foreground">{fmtPrice(now)}</span></span>}      </div>
       {bar && (
-        <div className="mt-0.5 grid gap-1.5">
-          <div className="bg-muted relative h-1.5 rounded-full">
+        <div className="mt-0.5 grid gap-2">
+          <div className="bg-muted relative h-2 rounded-full">
             {/* how far each way it has been since the fill, faint under the live fill — a peak hold:
                 the gap between the ghost and the fill is what it has given back */}
-            {([[bar.best, 'bg-emerald-500/25'], [bar.worst, 'bg-destructive/25']] as const).map(([x, c]) => x != null && (
+            {([[bar.best, 'bg-emerald-500/35'], [bar.worst, 'bg-destructive/25']] as const).map(([x, c]) => x != null && (
               <div key={c} className={cn('absolute inset-y-0 rounded-full', c)}
                 style={{ left: `${Math.min(bar.from, x) * 100}%`, width: `${Math.abs(x - bar.from) * 100}%` }} />
             ))}
@@ -2418,7 +2489,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
           {/* what each end is worth from here, beside how far away it is: a percent is a distance
               and money is the thing anybody actually decides on. Only where the venue prices the
               position — a row from someone's document has no size to put a figure on. */}
-          <div className="flex justify-between text-[11px] tabular-nums">
+          <div className="flex justify-between text-xs tabular-nums">
             <span className="text-destructive">
               {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
               <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
@@ -2436,7 +2507,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
           four unrelated facts strung into one grey line is the shape of prose, and none of them
           is prose — spacing separates them where the interpuncts were only filling it */}
       {!!line.length && (
-        <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 border-t pt-1.5 text-xs tabular-nums">
+        <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 border-t pt-2 text-[13px] tabular-nums">
           {line.map((g, i) => (
             <div key={i} className={cn('flex flex-wrap gap-x-3', i > 0 && 'border-l pl-3')}>
               {g.map((b) => <span key={b.t} className={b.c} title={b.title}>{b.t}</span>)}
