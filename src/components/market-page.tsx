@@ -3634,9 +3634,10 @@ function useDeskRows(live: boolean) {
 }
 
 /**
- * What the others with their desk on are in right now, under your own book on the desk — the same
- * tiles as their record page, signed with their name. Nothing at all when nobody is in anything:
- * this is a glance beside the chart, not a screen that has to explain an empty state.
+ * What the others with their desk on are in right now, under your own book on the desk: one line
+ * each — who, what, which way, and how it is going. The full tile was a whole trade's worth of
+ * numbers in a column that has room for a glance, and it put the name last; the tiles are on their
+ * record page, a click away on the Record.
  */
 function FriendsOpen({ onPick }: { onPick: (asset: string) => void }) {
   // mounted only while the desk is on screen, so that is the whole of when it asks
@@ -3644,18 +3645,27 @@ function FriendsOpen({ onPick }: { onPick: (asset: string) => void }) {
   const open = rows.flatMap((p) => p.open.map((w) => ({ p, w })))
   if (!open.length) return null
   return (
-    <div className="grid gap-1.5">
+    <section className="grid gap-1">
       <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Friends are in</p>
-      <div className={TILE_GRID}>
-        {open.map(({ p, w }) => (
-          <PositionTile key={`${p.name}-${w.id}`} side={w.dir} symbol={w.label} onPick={onPick}
-            venue={w.horizon || null} lev={w.lev} pnl={w.pnl} value={w.value}
-            from={w.entry} now={w.mark} stop={w.stop} target={w.target} liq={w.liq}
-            openedAt={w.entryAt}
-            meta={[p.name, !w.entryAt && 'waiting for the entry']} />
-        ))}
-      </div>
-    </div>
+      {open.map(({ p, w }) => {
+        // the venue's running money where it marks the trade, the move off the entry where not
+        const pct = w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null
+        const up = (w.pnl ?? pct ?? 0) >= 0
+        return (
+          <div key={`${p.name}-${w.id}`} className="flex min-w-0 items-center gap-2 text-sm">
+            <Avatar name={p.name} avatar={p.avatar} className="size-5 shrink-0 text-[10px]" />
+            <span className="text-muted-foreground max-w-20 shrink-0 truncate text-xs">{p.name}</span>
+            <TradeName name={w.label} onPick={onPick} className="font-medium" />
+            <span className={cn('shrink-0 text-xs', w.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {w.dir}{w.lev ? ` ${w.lev}×` : ''}
+            </span>
+            <span className={cn('ml-auto shrink-0 font-mono text-xs tabular-nums', up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+              {w.pnl != null ? signedUsdt(w.pnl) : pct != null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : w.entryAt ? '' : 'waiting'}
+            </span>
+          </div>
+        )
+      })}
+    </section>
   )
 }
 
