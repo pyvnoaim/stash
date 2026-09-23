@@ -1,11 +1,12 @@
 {
   "name": "stash",
   "private": true,
-  "version": "2.14.2",
+  "version": "2.14.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
     "lint": "oxlint",
     "server": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/index.ts",
     "mcp": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/mcp.ts",
