@@ -2363,6 +2363,64 @@ function useExtremes(symbol: string, openedAt: number | string | null | undefine
 }
 
 /**
+ * Where price stands between the level that ends a trade against it and the one that ends it for
+ * it, as fractions of that span — with the best and worst it has been since the fill (`ext`) as the
+ * ghosts under the live fill. Null without both ends: a half-drawn scale lies about the half it
+ * left out. `qty` prices each end in money where the row has a size.
+ */
+function levelBar(side: 'long' | 'short', from: number, now: number | null, lose: number | null,
+  stopped: boolean, target: number | null | undefined, qty: number | null, ext: { hi: number, lo: number } | null) {
+  if (lose == null || target == null || now == null || lose === target) return null
+  const at = (v: number) => Math.max(0, Math.min(1, (v - lose) / (target - lose)))
+  const cash = (v: number) => (qty != null ? cashAt(side, from, v, qty) : null)
+  const hi = ext && Math.max(ext.hi, now)
+  const lo = ext && Math.min(ext.lo, now)
+  const [best, worst] = side === 'long' ? [hi, lo] : [lo, hi]
+  return { now: at(now), from: at(from), lose, win: target, mark: now, stopped,
+    lost: cash(lose), won: cash(target),
+    best: best != null ? at(best) : null, worst: worst != null ? at(worst) : null }
+}
+
+/** The stop-to-target track `levelBar` measures, with each end's price, distance and money under it. */
+function LevelBar({ bar, up }: { bar: NonNullable<ReturnType<typeof levelBar>>; up: boolean }) {
+  return (
+    <div className="mt-0.5 grid gap-2">
+      <div className="bg-muted relative h-2 rounded-full">
+        {/* how far each way it has been since the fill, faint under the live fill — a peak hold:
+            the gap between the ghost and the fill is what it has given back */}
+        {([[bar.best, 'bg-emerald-500/35'], [bar.worst, 'bg-destructive/25']] as const).map(([x, c]) => x != null && (
+          <div key={c} className={cn('absolute inset-y-0 rounded-full', c)}
+            style={{ left: `${Math.min(bar.from, x) * 100}%`, width: `${Math.abs(x - bar.from) * 100}%` }} />
+        ))}
+        {/* how far it has travelled from the entry, and which way — the fill is the trade */}
+        <div className={cn('absolute inset-y-0 rounded-full', up ? 'bg-emerald-500' : 'bg-destructive')}
+          style={{ left: `${Math.min(bar.from, bar.now) * 100}%`,
+            width: `${Math.abs(bar.now - bar.from) * 100}%` }} />
+        {/* the entry as a tick standing proud of the track: it is where the money went in, and
+            the fill's own edge said that too quietly to find on a losing trade */}
+        <span className="bg-foreground/60 absolute -top-0.5 -bottom-0.5 w-px"
+          style={{ left: `${bar.from * 100}%` }} />
+      </div>
+      {/* what each end is worth from here, beside how far away it is: a percent is a distance
+          and money is the thing anybody actually decides on. Only where the venue prices the
+          position — a row from someone's document has no size to put a figure on. */}
+      <div className="flex flex-wrap justify-between gap-x-2 text-xs tabular-nums">
+        <span className="text-destructive">
+          {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
+          <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
+          {bar.lost != null && <> {signedUsdt(bar.lost)}</>}
+        </span>
+        <span className="text-emerald-600 dark:text-emerald-400">
+          target {fmtPrice(bar.win)}
+          <span className="text-muted-foreground"> {away(bar.win, bar.mark)}</span>
+          {bar.won != null && <> {signedUsdt(bar.won)}</>}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
  * One open trade, as a tile: who it is and which way, what it is doing, and the levels behind it.
  * The same block for your own book and for everyone else's on the Desk — a position is a position,
  * and two layouts for one thing meant reading the other tab twice as slowly.
@@ -2474,15 +2532,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
     return { best, worst, up: say(b), down: say(val(worst)),
       gave: gave > 0 ? (qty != null ? usdt(gave) : `${gave.toFixed(2)}%`) : null }
   })()
-  const bar = lose != null && target != null && now != null && lose !== target
-    ? (() => {
-        const at = (v: number) => Math.max(0, Math.min(1, (v - lose) / (target - lose)))
-        const cash = (v: number) => (qty != null ? cashAt(side, from, v, qty) : null)
-        return { now: at(now), from: at(from), lose, win: target, mark: now, stopped: stop != null,
-          lost: cash(lose), won: cash(target),
-          best: peak && at(peak.best), worst: peak && at(peak.worst) }
-      })()
-    : null
+  const bar = levelBar(side, from, now, lose, stop != null, target, qty, ext)
   const level = (name: string, v: number) =>
     `${name} ${fmtPrice(v)}${now != null ? ` (${away(v, now)})` : ''}`
   /* The levels lead the line, and the bar takes its two ends out of it — the same numbers said
@@ -2538,41 +2588,7 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
       <div className="text-muted-foreground flex flex-wrap items-baseline gap-x-3 text-[13px] tabular-nums">
         <span>{size ? `${size} from ` : 'from '}<span className="text-foreground">{fmtPrice(from)}</span></span>
         {now != null && <span>now <span className="text-foreground">{fmtPrice(now)}</span></span>}      </div>
-      {bar && (
-        <div className="mt-0.5 grid gap-2">
-          <div className="bg-muted relative h-2 rounded-full">
-            {/* how far each way it has been since the fill, faint under the live fill — a peak hold:
-                the gap between the ghost and the fill is what it has given back */}
-            {([[bar.best, 'bg-emerald-500/35'], [bar.worst, 'bg-destructive/25']] as const).map(([x, c]) => x != null && (
-              <div key={c} className={cn('absolute inset-y-0 rounded-full', c)}
-                style={{ left: `${Math.min(bar.from, x) * 100}%`, width: `${Math.abs(x - bar.from) * 100}%` }} />
-            ))}
-            {/* how far it has travelled from the entry, and which way — the fill is the trade */}
-            <div className={cn('absolute inset-y-0 rounded-full', up ? 'bg-emerald-500' : 'bg-destructive')}
-              style={{ left: `${Math.min(bar.from, bar.now) * 100}%`,
-                width: `${Math.abs(bar.now - bar.from) * 100}%` }} />
-            {/* the entry as a tick standing proud of the track: it is where the money went in, and
-                the fill's own edge said that too quietly to find on a losing trade */}
-            <span className="bg-foreground/60 absolute -top-0.5 -bottom-0.5 w-px"
-              style={{ left: `${bar.from * 100}%` }} />
-          </div>
-          {/* what each end is worth from here, beside how far away it is: a percent is a distance
-              and money is the thing anybody actually decides on. Only where the venue prices the
-              position — a row from someone's document has no size to put a figure on. */}
-          <div className="flex justify-between text-xs tabular-nums">
-            <span className="text-destructive">
-              {bar.stopped ? 'stop' : 'liq'} {fmtPrice(bar.lose)}
-              <span className="text-muted-foreground"> {away(bar.lose, bar.mark)}</span>
-              {bar.lost != null && <> {signedUsdt(bar.lost)}</>}
-            </span>
-            <span className="text-emerald-600 dark:text-emerald-400">
-              target {fmtPrice(bar.win)}
-              <span className="text-muted-foreground"> {away(bar.win, bar.mark)}</span>
-              {bar.won != null && <> {signedUsdt(bar.won)}</>}
-            </span>
-          </div>
-        </div>
-      )}
+      {bar && <LevelBar bar={bar} up={up} />}
       {/* the same flex rhythm as the entry/now row above rather than a sentence joined by dots:
           four unrelated facts strung into one grey line is the shape of prose, and none of them
           is prose — spacing separates them where the interpuncts were only filling it */}
@@ -3634,10 +3650,10 @@ function useDeskRows(live: boolean) {
 }
 
 /**
- * What the others with their desk on are in right now, under your own book on the desk: one line
- * each — who, what, which way, and how it is going. The full tile was a whole trade's worth of
- * numbers in a column that has room for a glance, and it put the name last; the tiles are on their
- * record page, a click away on the Record.
+ * What the others with their desk on are in right now, under your own book on the desk: a line
+ * each and the stop-to-target track under it. The full tile was a whole trade's worth of numbers
+ * in a column that has room for a glance, and it put the name last; the tiles are on their record
+ * page, a click away on the Record.
  */
 function FriendsOpen({ onPick }: { onPick: (asset: string) => void }) {
   // mounted only while the desk is on screen, so that is the whole of when it asks
@@ -3647,25 +3663,36 @@ function FriendsOpen({ onPick }: { onPick: (asset: string) => void }) {
   return (
     <section className="grid gap-1">
       <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Friends are in</p>
-      {open.map(({ p, w }) => {
-        // the venue's running money where it marks the trade, the move off the entry where not
-        const pct = w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null
-        const up = (w.pnl ?? pct ?? 0) >= 0
-        return (
-          <div key={`${p.name}-${w.id}`} className="flex min-w-0 items-center gap-2 text-sm">
-            <Avatar name={p.name} avatar={p.avatar} className="size-5 shrink-0 text-[10px]" />
-            <span className="text-muted-foreground max-w-20 shrink-0 truncate text-xs">{p.name}</span>
-            <TradeName name={w.label} onPick={onPick} className="font-medium" />
-            <span className={cn('shrink-0 text-xs', w.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-              {w.dir}{w.lev ? ` ${w.lev}×` : ''}
-            </span>
-            <span className={cn('ml-auto shrink-0 font-mono text-xs tabular-nums', up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-              {w.pnl != null ? signedUsdt(w.pnl) : pct != null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : w.entryAt ? '' : 'waiting'}
-            </span>
-          </div>
-        )
-      })}
+      {open.map(({ p, w }) => <FriendLine key={`${p.name}-${w.id}`} p={p} w={w} onPick={onPick} />)}
     </section>
+  )
+}
+
+/** One friend's open position on the desk: who, what, which way, how it is going — and the same
+ *  stop-to-target track your own tile draws, ghosts and all. */
+function FriendLine({ p, w, onPick }: { p: DeskRow; w: DeskRow['open'][number]; onPick: (asset: string) => void }) {
+  const ext = useExtremes(w.label, w.entryAt, w.mark)
+  // the venue's running money where it marks the trade, the move off the entry where not
+  const pct = w.mark != null && w.entry > 0 ? (w.mark / w.entry - 1) * (w.dir === 'long' ? 100 : -100) : null
+  const up = (w.pnl ?? pct ?? 0) >= 0
+  const qty = w.value != null && w.mark != null && w.mark > 0 ? w.value / w.mark : null
+  const bar = levelBar(w.dir, w.entry, w.mark, w.stop ?? w.liq, w.stop != null, w.target, qty, ext)
+  return (
+    <div className="grid gap-1.5 py-1">
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        <Avatar name={p.name} avatar={p.avatar} className="size-5 shrink-0 text-[10px]" />
+        <span className="text-muted-foreground max-w-20 shrink-0 truncate text-xs">{p.name}</span>
+        {/* the coin, not the pair: every one of them is against USDT, and the pair is what ran out of room */}
+        <TradeName name={w.label.replace(/[_-]?USDT$/i, '')} asset={w.label} onPick={onPick} className="font-medium" />
+        <span className={cn('shrink-0 text-xs', w.dir === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+          {w.dir}{w.lev ? ` ${w.lev}×` : ''}
+        </span>
+        <span className={cn('ml-auto shrink-0 font-mono text-xs tabular-nums', up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+          {w.pnl != null ? signedUsdt(w.pnl) : pct != null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : w.entryAt ? '' : 'waiting'}
+        </span>
+      </div>
+      {bar && <LevelBar bar={bar} up={up} />}
+    </div>
   )
 }
 
