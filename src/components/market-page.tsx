@@ -1568,6 +1568,8 @@ export default function MarketPage() {
             {/* what the exchange says you hold, account-wide — the one block here that is fact
                 rather than reading. Absent unless a venue reports something open. */}
             <ExchangePositions onOpen={setAsset} />
+            {/* and what the others with their desk on are in, the same tiles signed with a name */}
+            <FriendsOpen onPick={setAsset} />
             </div>
             {/* Every reading the chart makes, as a list beside it — the sweeps, the gaps, the
                 structure break, the higher timeframe, the VWAP, the averages. They were a grid of
@@ -3608,6 +3610,56 @@ function FriendTile({ p, onOpen }: { p: DeskRow; onOpen: () => void }) {
 }
 
 /**
+ * The others' desks, asked on a minute while `live`. `asked` is whether anyone has answered yet:
+ * without it an empty state is shown to a full desk for as long as the request takes — "nobody
+ * else has switched their desk on" is a claim, and making it before asking is the same pop-in as
+ * an empty book that fills a second later.
+ */
+function useDeskRows(live: boolean) {
+  const [rows, setRows] = useState<DeskRow[]>([])
+  const [asked, setAsked] = useState(false)
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  useEffect(() => {
+    if (!live) return
+    const load = () => {
+      void deskRows()
+        .then((ds) => setRows(ds.map((d) => ({ ...d, results: oneEach(d.results) }))))
+        .finally(() => setAsked(true))
+    }
+    load()
+    const h = window.setInterval(load, 60_000)
+    return () => window.clearInterval(h)
+  }, [user?.name, live])
+  return { rows, asked, user }
+}
+
+/**
+ * What the others with their desk on are in right now, under your own book on the desk — the same
+ * tiles as their record page, signed with their name. Nothing at all when nobody is in anything:
+ * this is a glance beside the chart, not a screen that has to explain an empty state.
+ */
+function FriendsOpen({ onPick }: { onPick: (asset: string) => void }) {
+  // mounted only while the desk is on screen, so that is the whole of when it asks
+  const { rows } = useDeskRows(true)
+  const open = rows.flatMap((p) => p.open.map((w) => ({ p, w })))
+  if (!open.length) return null
+  return (
+    <div className="grid gap-1.5">
+      <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Friends are in</p>
+      <div className={TILE_GRID}>
+        {open.map(({ p, w }) => (
+          <PositionTile key={`${p.name}-${w.id}`} side={w.dir} symbol={w.label} onPick={onPick}
+            venue={w.horizon || null} lev={w.lev} pnl={w.pnl} value={w.value}
+            from={w.entry} now={w.mark} stop={w.stop} target={w.target} liq={w.liq}
+            openedAt={w.entryAt}
+            meta={[p.name, !w.entryAt && 'waiting for the entry']} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
  * Everyone else on this server who has switched their desk on: a tile each, and their record
  * behind it. Money only where an exchange settled or is marking it — a position's running USDT,
  * a finished trade's settled ones. What somebody typed a size for stays in R: that figure is
@@ -3627,26 +3679,9 @@ function FriendTile({ p, onOpen }: { p: DeskRow; onOpen: () => void }) {
  * it on all read the same, because from here they are the same.
  */
 function Desk({ live, onPick }: { live: boolean; onPick: (asset: string) => void }) {
-  const [rows, setRows] = useState<DeskRow[]>([])
-  /* Whether anyone has answered yet. Without it the empty state below is shown to a full desk for
-     as long as the request takes — "nobody else has switched their desk on" is a claim, and making
-     it before asking is the same pop-in as an empty book that fills a second later. */
-  const [asked, setAsked] = useState(false)
+  const { rows, asked, user } = useDeskRows(live)
   // whose record is open, by name — the row itself is looked up fresh, so a poll updates the page
   const [who, setWho] = useState<string | null>(null)
-  const { user } = useSyncExternalStore(subscribeSync, getSync)
-
-  useEffect(() => {
-    if (!live) return
-    const load = () => {
-      void deskRows()
-        .then((ds) => setRows(ds.map((d) => ({ ...d, results: oneEach(d.results) }))))
-        .finally(() => setAsked(true))
-    }
-    load()
-    const h = window.setInterval(load, 60_000)
-    return () => window.clearInterval(h)
-  }, [user?.name, live])
 
   const people = rows.filter((p) => p.results.length || p.open.length)
   const open = who ? people.find((p) => p.name === who) : null
