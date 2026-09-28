@@ -1067,6 +1067,15 @@ assert.equal(sparkPath([NaN, NaN]), null)
   assert.equal((await fetchCandles(btc, '1h', null, 25)).length, 25, 'the fast intervals never page')
   assert.equal(asked.length, 1)
 
+  // closed bars are kept: the same daily read again asks only for the recent window
+  asked.length = 0
+  assert.equal((await fetchCandles(btc, '1d')).length, 488)
+  assert.equal(asked.filter((u) => u.includes('/history-candles')).length, 0, 'history pages are cached')
+
   failHistory = true
-  assert.equal((await fetchCandles(btc, '1d')).length, 90, 'a failed history page keeps the recent bars')
+  const eth = ASSETS.find((a) => a.id === 'ETHUSDT')!
+  assert.equal((await fetchCandles(eth, '1d')).length, 90, 'a failed history page keeps the recent bars')
+  // and a failure is not what gets remembered
+  failHistory = false
+  assert.equal((await fetchCandles(eth, '1d')).length, 488, 'a failed page is asked again next time')
 }
