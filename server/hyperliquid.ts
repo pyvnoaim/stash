@@ -271,7 +271,9 @@ let ctxCache: { at: number; ctx: Promise<Record<string, Ctx>> } | null = null
 export function contexts(): Promise<Record<string, Ctx>> {
   if (ctxCache && Date.now() - ctxCache.at < 30_000) return ctxCache.ctx
   const got = info({ type: 'metaAndAssetCtxs' }, 20).then(shapeCtx)
-  got.catch(() => { if (ctxCache?.ctx === got) ctxCache = null })
+  /* A failure is held for ten seconds rather than dropped: the route is public, and a dropped one
+     makes every request during an outage a fresh call out of the budget everyone's charts share. */
+  got.catch(() => { if (ctxCache?.ctx === got) ctxCache = { at: Date.now() - 20_000, ctx: got } })
   ctxCache = { at: Date.now(), ctx: got }
   return got
 }
