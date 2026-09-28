@@ -173,8 +173,9 @@ function InOut({ made, done }: { made: { day: string; n: number }[]; done: { day
     .map((d, i) => `${i ? 'L' : 'M'}${data.length > 1 ? (i / (data.length - 1)) * 100 : 0} ${3 + (1 - d.n / max) * 97}`)
     .join(' ')
   return (
-    <div className="flex flex-col gap-2">
-      <div className="border-border relative h-30 border-b">
+    // the line takes whatever height the card has, never less than it always had
+    <div className="flex h-full flex-col gap-2">
+      <div className="border-border relative min-h-30 flex-1 border-b">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
           <path d={`${path(done)} L100 100 L0 100 Z`} className="fill-foreground/10" />
           <path d={path(made)} className="stroke-muted-foreground fill-none" strokeWidth={1.25}
@@ -238,7 +239,9 @@ const Panel = ({ title, sub, action, className, children }: {
         </button>
       )}
     </CardHeader>
-    <CardContent className="flex flex-col gap-2.5">{children}</CardContent>
+    {/* flex-1: a panel stretched to its row-mate's height gives the room to what it holds,
+        rather than leaving it as a band of nothing under the content */}
+    <CardContent className="flex flex-1 flex-col gap-2.5">{children}</CardContent>
   </Card>
 )
 
@@ -507,10 +510,10 @@ export default function Overview({ onNavigate, onOpen }: {
 
         <Panel title="In and out" className="lg:col-start-1 lg:row-start-3"
           sub={`${captured} captured against ${finished} finished in the last ${BACK} days${captured ? ` · ${(captured / BACK).toFixed(1)} a day in, ${(finished / BACK).toFixed(1)} out` : ''}`}>
-          <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+          <div className="grid flex-1 gap-4 sm:grid-cols-[1fr_auto]">
             <InOut made={flow.made} done={flow.done} />
             {/* capped on a phone too: twelve columns across a full-width frame is a wall of grey */}
-            <div className="flex max-w-48 flex-col gap-1 sm:w-44">
+            <div className="flex max-w-48 flex-col justify-end gap-1 sm:w-44">
               <span className="text-muted-foreground text-[10px]">finished, last {WEEKS} weeks</span>
               <Heat data={flow.heat} />
             </div>
