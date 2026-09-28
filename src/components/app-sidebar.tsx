@@ -386,8 +386,10 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
        click, and on Markets — which folds it itself — the chart gets the width. */
     <Sidebar collapsible="icon">
       {/* h-14 + border-b to match the main content header, so STASH and the page title share a baseline */}
-      <SidebarHeader className="h-14 justify-center border-b px-3 py-0 group-data-[collapsible=icon]:px-2">
-        <div className="flex items-center gap-2">
+      <SidebarHeader className="h-14 justify-center border-b px-3 py-0 group-data-[collapsible=icon]:px-0">
+        {/* folded, the mark centres on the same axis as the icons under it rather than keeping
+            the open sidebar's left inset */}
+        <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
           <span className="bg-foreground text-background grid size-6 shrink-0 place-items-center rounded-md text-[12px] font-bold">S</span>
           <span className="font-heading text-[13px] tracking-[0.18em] uppercase group-data-[collapsible=icon]:hidden">Stash</span>
         </div>
