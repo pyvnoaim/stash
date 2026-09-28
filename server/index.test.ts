@@ -49,6 +49,7 @@ globalThis.fetch = ((u: any, o?: any) => {
     ? { marginSummary: { accountValue: '1240.5' }, assetPositions: [{ position: { coin: 'ETH', szi: '-2', entryPx: '2000', positionValue: '3900', unrealizedPnl: '100', liquidationPx: '2450', leverage: { value: 10 } } }] }
     : body.type === 'candleSnapshot' ? [{ t: 1, o: '1', h: '2', l: '0.5', c: '1.5', v: '3' }, { t: 2, o: '1.5', h: '2', l: '1', c: '1.8', v: '4' }]
     : body.type === 'allMids' ? { BTC: '100000', PAXG: '2400' }
+    : body.type === 'metaAndAssetCtxs' ? [{ universe: [{ name: 'BTC' }] }, [{ funding: '0.00001', openInterest: '10', dayNtlVlm: '1000', prevDayPx: '99000', markPx: '100000' }]]
     : body.type === 'meta' ? { universe: [{ name: 'BTC' }, { name: 'HYPE' }, { name: 'OLD', isDelisted: true }] }
     : []
   return Promise.resolve(new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } }))
@@ -962,6 +963,8 @@ assert.equal((await get('/api/hl/candles?coin=BTC%26x%3D1&interval=1d')).status,
 assert.equal((await get('/api/hl/candles?coin=FAKECOIN&interval=1d')).status, 400)
 assert.equal((await get('/api/hl/candles?coin=PAXG&interval=1d')).status, 200)
 assert.deepEqual(await (await get('/api/hl/mids')).json(), { BTC: 100000, PAXG: 2400 })
+assert.deepEqual(await (await get('/api/hl/ctx?coin=BTC')).json(), { funding: 0.00001, openInterest: 10, dayVolume: 1000, prevDayPx: 99000, mark: 100000 })
+assert.equal((await get('/api/hl/ctx?coin=NOPE')).status, 404)
 // a perp off the desk's list charts too, once the venue's own listing says it exists
 assert.equal((await get('/api/hl/candles?coin=HYPE&interval=1h')).status, 200)
 assert.equal((await get('/api/hl/candles?coin=NOTLISTED&interval=1h')).status, 400)

@@ -1,7 +1,7 @@
 // npm test — the Hyperliquid shaping: an address's state into positions, trigger orders into
 // stops and targets, and fills rebuilt into whole closed trades
 import assert from 'node:assert/strict'
-import { info, setBudget, coinOf, idOf, openedAt, shape, shapeCandles, shapeClosed, shapeLevels, shapeOrders, equityOf, COIN, ADDRESS } from './hyperliquid.ts'
+import { info, setBudget, coinOf, idOf, openedAt, shape, shapeCandles, shapeClosed, shapeLevels, shapeOrders, shapeCtx, equityOf, COIN, ADDRESS } from './hyperliquid.ts'
 
 // symbols: the app's ids and the venue's coins, gold the one that is not a rename
 assert.equal(coinOf('BTCUSDT'), 'BTC')
@@ -102,5 +102,16 @@ assert.deepEqual(shapeCandles([
   setBudget(1e9)
   globalThis.fetch = real
 }
+
+/* The day's context: two index-aligned lists, names off the first; a junk name and a missing ctx
+   are skipped, and a blank field is null rather than zero. */
+assert.deepEqual(shapeCtx([
+  { universe: [{ name: 'BTC' }, { name: '../x' }, { name: 'ETH' }, { name: 'SOL' }] },
+  [{ funding: '0.0000125', openInterest: '1000', dayNtlVlm: '5e9', prevDayPx: '82000', markPx: '83000' }, {}, { funding: '', markPx: '3000' }],
+]), {
+  BTC: { funding: 0.0000125, openInterest: 1000, dayVolume: 5e9, prevDayPx: 82000, mark: 83000 },
+  ETH: { funding: null, openInterest: null, dayVolume: null, prevDayPx: null, mark: 3000 },
+})
+assert.deepEqual(shapeCtx(null), {})
 
 console.log('hyperliquid ok')
