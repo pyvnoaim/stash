@@ -36,7 +36,7 @@ import {
   positions as hlPositions, universe as hlUniverse, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
-import { holdings as solHoldings, logo as solLogo, swaps as solSwaps } from './solana.ts'
+import { holdings as solHoldings, logo as solLogo, swaps as solSwaps, tokenTrades } from './solana.ts'
 import { candles as dexCandles, NETWORKS, pool as dexPool, POOL, search as dexSearch, TIMEFRAME } from './dex.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
 
@@ -215,6 +215,19 @@ function icsOf(json: string, who: string): string {
 
   out.push('END:VCALENDAR')
   return out.map(fold).join('\r\n') + '\r\n'
+}
+
+/** SOL's dollar price at a moment, for pricing a token swap paid in SOL: off Hyperliquid's hourly
+ *  SOL bars (about six weeks of them), then its daily ones for anything older. The bar the moment
+ *  falls in, at its close — a swap is priced to within the hour it happened in. */
+async function solUsdAt(t: number): Promise<number | null> {
+  for (const iv of ['1h', '1d'] as const) {
+    const bars = await hlCandles('SOL', iv, 1000, 'sweep').catch(() => [])
+    const step = iv === '1h' ? 3_600_000 : 86_400_000
+    const b = bars.find((c) => t >= c.t && t < c.t + step)
+    if (b) return b.c
+  }
+  return null
 }
 
 function readBody(req: IncomingMessage): Promise<any> {
@@ -1249,6 +1262,21 @@ export function start({
       try {
         const all = (await Promise.all(sol.map((a) => solSwaps(a, mint)))).flat().sort((a, b) => a.t - b.t)
         return send(res, 200, { fills: all.map(({ t, side, amount }) => ({ t, side, amount })) }, { 'cache-control': 'private, max-age=60' })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
+    }
+
+    /* Your finished token trades — every token bought and sold back out of your watched Solana
+       wallets, with what it cost and what it paid. Your own wallets only; nothing is asked for. */
+    if (path === '/api/token-trades' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
+        .filter((w) => w.chain === 'solana').map((w) => w.address)
+      try {
+        const all = (await Promise.all(sol.map((a) => tokenTrades(a, solUsdAt)))).flat().sort((a, b) => b.closedAt - a.closedAt)
+        return send(res, 200, { trades: all }, { 'cache-control': 'private, max-age=60' })
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }

@@ -1,7 +1,7 @@
 // npm test — a Solana wallet into holdings: both token programs summed per mint, each mint priced
 // off its deepest pool, and dust and scam coins left out of what the wallet is worth
 import assert from 'node:assert/strict'
-import { balancesOf, bestPairs, shapeHoldings, shapeSwap } from './solana.ts'
+import { balancesOf, bestPairs, shapeHoldings, shapeSwap, shapeTx, tradesOf } from './solana.ts'
 
 const acc = (mint: string, ui: string) => ({ account: { data: { parsed: { info: { mint, tokenAmount: { uiAmountString: ui } } } } } })
 const balances = balancesOf([
@@ -56,5 +56,38 @@ assert.equal(shapeSwap(tx([bal('other', SIM, '0')], [bal('other', SIM, '5')]), O
 assert.equal(shapeSwap(tx([], [bal(OWN, 'OTHERMINT', '5')]), OWN, SIM, 'd'), null)
 assert.equal(shapeSwap(tx([], [bal(OWN, SIM, '5')], { InstructionError: [] }), OWN, SIM, 'e'), null)
 assert.equal(shapeSwap(null, OWN, SIM, 'f'), null)
+
+/* A token trade's money: a buy paid in SOL that opened the account (its rent is not the price), a
+   sell into USDC, a transfer with nothing coming back (not a trade), and two tokens at once (not
+   priceable). */
+const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+const buyTx = { blockTime: 1759000000, transaction: { message: { accountKeys: [{ pubkey: OWN }] } },
+  meta: { err: null, preBalances: [1_000_000_000], postBalances: [1_000_000_000 - 50_000_000 - 2_039_280 - 5000],
+    preTokenBalances: [], postTokenBalances: [bal(OWN, SIM, '414.47')] } }
+const b1 = shapeTx(buyTx, OWN, 'b1')!
+assert.equal(b1.side, 'buy')
+assert.equal(b1.amount, 414.47)
+assert.ok(Math.abs(b1.sol - 0.050005) < 1e-9, `rent left in the price: ${b1.sol}`)
+const sellTx = { blockTime: 1759100000, transaction: { message: { accountKeys: [{ pubkey: OWN }] } },
+  meta: { err: null, preBalances: [1e9], postBalances: [1e9 - 5000],
+    preTokenBalances: [bal(OWN, SIM, '414.47'), bal(OWN, USDC, '1')], postTokenBalances: [bal(OWN, SIM, '0'), bal(OWN, USDC, '16.07')] } }
+const s1 = shapeTx(sellTx, OWN, 's1')!
+assert.deepEqual([s1.side, s1.amount, s1.usdc], ['sell', 414.47, 15.07])
+// a token arriving with nothing going out is a gift or a transfer, not a buy
+assert.equal(shapeTx({ ...buyTx, meta: { ...buyTx.meta, postBalances: buyTx.meta.preBalances } }, OWN, 'x'), null)
+// two tokens moving in one transaction cannot be priced one against the other
+assert.equal(shapeTx({ ...buyTx, meta: { ...buyTx.meta, postTokenBalances: [bal(OWN, SIM, '1'), bal(OWN, 'OTHERMINT', '2')] } }, OWN, 'y'), null)
+
+// round trips: bought in two, sold in two back to dust, and a trade still held is not finished
+const sw = (t: number, side: 'buy' | 'sell', amount: number, usdc: number, mint = SIM) => ({ t, sig: String(t), mint, side, amount, sol: 0, usdc })
+const trades = tradesOf([
+  sw(1, 'buy', 100, 5), sw(2, 'buy', 100, 5), sw(3, 'sell', 150, 12), sw(4, 'sell', 49.5, 4),
+  sw(5, 'buy', 10, 1), // held, not finished
+  sw(6, 'buy', 10, 2, 'CATE'), sw(7, 'sell', 10, 1, 'CATE'),
+], (s) => s.usdc)
+assert.deepEqual(trades.map((t) => [t.mint, t.cost, t.proceeds, t.pnl, t.buys, t.sells]), [['CATE', 2, 1, -1, 1, 1], [SIM, 10, 16, 6, 2, 2]])
+assert.equal(trades[1].pct, 60)
+// a swap that could not be priced leaves its trade out rather than half-summed
+assert.deepEqual(tradesOf([sw(1, 'buy', 10, 2), sw(2, 'sell', 10, 3)], (s) => (s.side === 'buy' ? null : 3)), [])
 
 console.log('solana ok')
