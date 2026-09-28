@@ -392,7 +392,7 @@ function extremesOf(row: Row, bars: Candle[]) {
 
 /**
  * The range a position ran through, in money: the worst it was, the best, a tick where it started
- * (nothing made or lost) and a dot where it is now or closed. Both ends take in zero, so the tick is
+ * (nothing made or lost) and a solid stretch from there to where it is now or closed. Both ends take in zero, so the tick is
  * always on the bar, and a position never up reads "best $0.00" rather than a loss in green.
  */
 function RangeBar({ worst: w, peak: p, at: v }: { worst: number, peak: number, at: number }) {
@@ -401,11 +401,12 @@ function RangeBar({ worst: w, peak: p, at: v }: { worst: number, peak: number, a
   return (
     <>
       <div className="relative mx-1 my-1.5 h-1.5 rounded-full" aria-hidden>
-        <span className="bg-destructive/35 absolute inset-y-0 left-0 rounded-l-full" style={{ width: `${at(0)}%` }} />
-        <span className="absolute inset-y-0 rounded-r-full bg-emerald-500/35" style={{ left: `${at(0)}%`, right: 0 }} />
+        {/* the range it has been through, faint; where it stands now, solid from zero to it */}
+        <span className="bg-destructive/20 absolute inset-y-0 left-0 rounded-l-full" style={{ width: `${at(0)}%` }} />
+        <span className="absolute inset-y-0 rounded-r-full bg-emerald-500/20" style={{ left: `${at(0)}%`, right: 0 }} />
+        <span className={cn('absolute inset-y-0', v >= 0 ? 'rounded-r-full bg-emerald-500' : 'bg-destructive rounded-l-full')}
+          style={{ left: `${Math.min(at(0), at(v))}%`, width: `${Math.abs(at(v) - at(0))}%` }} />
         <span className="bg-foreground/80 absolute -top-1.5 h-4.5 w-px" style={{ left: `${at(0)}%` }} />
-        <span className={cn('ring-card absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2', v >= 0 ? 'bg-emerald-500' : 'bg-destructive')}
-          style={{ left: `${at(v)}%` }} />
       </div>
       <div className="flex justify-between font-mono text-xs tabular-nums">
         <span className="text-destructive">{worst < 0 ? money(worst) : '$0.00'} <span className="text-muted-foreground font-sans">worst</span></span>
