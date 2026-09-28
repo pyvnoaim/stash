@@ -439,40 +439,7 @@ export interface State {
    *  because the push server reads it too — a threshold set here has to be the one that decides
    *  whether a shut phone rings. See Dials in market.ts, which owns the defaults and the ranges. */
   dials: Dials
-  /**
-   * Alerts you have silenced, id → the moment they may speak again. In the document rather than in
-   * the bell's own state, because silencing is a decision and it was being made again on every
-   * device and after every reload. Every entry runs out: an alert is silenced "until", never
-   * "never" — an alert whose reason is still true tomorrow is worth saying again then.
-   *
-   * Swiping one away is a day of quiet (DISMISS_TTL), which is the only length there is: from the
-   * bell's side there is one question, and it is whether this one is allowed to speak yet.
-   */
-  dismissed: Record<string, number>
 }
-
-/** How long swiping one away holds, and how many are kept. Bounded on both ends: the ids are other
- *  people's pool addresses and today's date, so without this the document grows forever. The count
- *  is generous because tasks are the one alert there can be a hundred of — clearing a pile of
- *  overdue work must not leave the tail of it to come straight back. */
-export const DISMISS_TTL = 24 * 3600_000
-const KEEP_DISMISSED = 200
-
-/** The one shape the list is allowed to have: run-out entries dropped, capped. Used on the way in
- *  and on every write, so neither a hand-edited backup nor a long session can grow a document that
- *  gets pushed to the server whole.
- *
- *  The order is the map's own — dismissAlerts puts what was just chosen at the front, so the cap
- *  drops the oldest decision rather than the newest one.
- *
- *  ponytail: a document written before these were "until" times holds moments already past, so it
- *  comes back empty and the day's swipes are said once more. One reload, once, ever. */
-const pruneDismissed = (d: unknown, now = Date.now()): Record<string, number> =>
-  Object.fromEntries(
-    Object.entries(d && typeof d === 'object' ? d as Record<string, unknown> : {})
-      .filter((e): e is [string, number] => typeof e[1] === 'number' && e[1] > now)
-      .slice(0, KEEP_DISMISSED),
-  )
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
@@ -564,7 +531,7 @@ const blank = (): State => ({
   // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
   // not silently move everybody's chart
   marketAsset: 'BTCUSDT', marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', marketPins: [],
-  dials: { ...DIALS }, dismissed: {},
+  dials: { ...DIALS },
 })
 
 /** How long a deleted item is kept before it goes for good. */
@@ -813,11 +780,10 @@ export function load(data: unknown): State {
       && all.findIndex((x) => x?.id === p.id) === i)
     .slice(0, MAX_PINS)
     .map((p: MarketPin) => ({ id: p.id, label: p.label.slice(0, 40), ...(p.mint ? { mint: p.mint } : {}) }))
-  // dialsOf owns the ranges: a hand-edited backup cannot set a threshold the bell has no wording for
+  // dialsOf owns the ranges: a hand-edited backup cannot set a cost outside them
   st.dials = dialsOf(st)
-  /* Expiry runs here as well as on write: this is what every device does with a document it takes
-     from another, so a dismissal that has run out never travels any further. */
-  st.dismissed = pruneDismissed(st.dismissed)
+  // the bell's silenced alerts, from before there was no bell: an old document sheds them here
+  delete (st as Partial<State> & { dismissed?: unknown }).dismissed
   return st
 }
 
@@ -1382,20 +1348,6 @@ export const addWatch = (w: Watch) =>
     ...s,
     watches: [w, ...s.watches.filter((x) => !(x.asset === w.asset && x.dir === w.dir && x.horizon === w.horizon))],
   }))
-/** Swiped away: quiet for a day, on every device — the bell reads this out of the document the
- *  sync carries. Nothing is silenced for good; an overdue task is overdue again tomorrow. */
-export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
-  const until = at + DISMISS_TTL
-  /* The new ones go in first, so that when the cap bites it drops the oldest and not these:
-     "Clear" writes every id on the same millisecond, and a tie has to fall the way the person
-     just chose — losing it is the alert they swiped reappearing on the next load.
-     Pruned on the way in as well as on the way out, so a tab left open all day cannot carry every
-     dismissal it ever made into a document that gets pushed to the server whole. */
-  const next: Record<string, number> = Object.fromEntries(ids.map((id) => [id, until]))
-  for (const [id, when] of Object.entries(s.dismissed)) if (!(id in next)) next[id] = when
-  return { ...s, dismissed: pruneDismissed(next, at) }
-})
-
 /* One field, set to a value — and not set at all when it already holds it. The ORB preset pins the
    interval to 15m from an effect that runs on every mount, which unguarded was a write to disk and
    a dirty document per mount, for a setting nobody touched. `commit` drops what comes back as `s`. */
@@ -1409,11 +1361,11 @@ export const togglePin = (pin: MarketPin) => set((s) => {
   return { ...s, marketPins: has ? s.marketPins.filter((p) => p.id !== pin.id) : [...s.marketPins, pin] }
 })
 
-/** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
+/** Which asset the Markets desk opens on — set by a mover tile or ⌘K before navigating. */
 export const setMarketAsset = field('marketAsset')
 export const setMarketInterval = field('marketInterval')
 /* No setters for marketHorizon or marketPreset: `load` pins both, because the page they were the
-   controls for draws one chart now. The fields are still in the document for push.ts to read. */
+   controls for draws one chart now. The fields stay in the document for the MCP tools to read. */
 /** One dial, clamped to what it may be — the same guard a loaded document goes through. */
 export const setDial = (k: keyof Dials, v: number) =>
   set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))

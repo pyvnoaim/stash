@@ -57,11 +57,6 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        /* The push half, kept out of the generated worker: generateSW writes the caching and
-           nothing else, so the two handlers a notification needs — one to show it, one to open
-           the app where it points — ride in as a plain script rather than by owning the whole
-           worker (injectManifest) for thirty lines. */
-        importScripts: ['/push-sw.js'],
         // pdf.js is heavier than everything else together, but offline is the point here
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         // never serve the app shell where the sync API was asked for
@@ -69,9 +64,8 @@ export default defineConfig({
         /* Candle history, kept so the Markets tool still draws with no network: the signals are
            maths over bars that already closed, and they read the same on a plane as at a desk.
            Network first, so a live reading is never the cache's to give — it answers only once the
-           feed has failed. Bars only. The ticker is deliberately absent: a stale price fires the
-           alerts in notification-bell against a number that isn't true any more, and the watcher
-           is written so a *missing* price fires nothing. Missing is the honest answer offline. */
+           feed has failed. Bars only. The ticker is deliberately absent: a stale price shown as
+           a live one is worse than no price, and missing is the honest answer offline. */
         runtimeCaching: [{
           /* The bars, through this app's own relay: the candles route only, never the mids beside
              it. Same-origin, so a regex on the path is the whole match. */

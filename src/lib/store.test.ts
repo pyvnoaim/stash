@@ -12,8 +12,9 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
-  openWatch, closeWatch, clearResults, dismissAlerts, tagsFor,
+  openWatch, closeWatch, clearResults, tagsFor,
   readHash, emptyTrash, restoreTrash, restoreItem,
+  replaceAll,
 } = await import('./store.ts')
 type Sub = import('./store.ts').Sub
 const mkSub = (p: Partial<Sub>): Sub =>
@@ -896,45 +897,8 @@ console.log('store: ok')
   assert.deepEqual(load({}).hotkeys, {})
 }
 
-/* ---------- silenced alerts: the trust boundary, and the two bounds on it ---------- */
-{
-  const now = Date.now()
-  const day = 24 * 3600_000
-  const ahead = now + day
-
-  // an entry is the moment an alert may speak again: one already past has run out, and the alert
-  // is worth saying now
-  assert.deepEqual(load({ dismissed: { fresh: ahead, stale: now - 1000 } }).dismissed, { fresh: ahead })
-  // junk out of a hand-edited backup is not a silence, whatever it looks like
-  assert.deepEqual(load({ dismissed: { a: 'yesterday', b: null, c: {} } }).dismissed, {})
-  for (const junk of [null, 7, 'nope', []]) assert.deepEqual(load({ dismissed: junk }).dismissed, {})
-
-  // capped, the furthest-off kept — the document is pushed to the server whole, so it cannot grow
-  // forever
-  const many = Object.fromEntries(Array.from({ length: 260 }, (_, i) => [`a${i}`, ahead - i * 1000]))
-  const kept = load({ dismissed: many }).dismissed
-  assert.equal(Object.keys(kept).length, 200)
-  assert.ok('a0' in kept && !('a259' in kept), 'the oldest are the ones that fall off')
-
-  // and the same on the way in, so a long session cannot outgrow what a reload would have allowed
-  dismissAlerts(Object.keys(many), now)
-  assert.equal(Object.keys(getState().dismissed).length, 200)
-
-  /* At the cap, with every id written on the same millisecond, the one just swiped is the one that
-     has to survive — losing that tie is the alert coming straight back after you cleared it. */
-  dismissAlerts(['just-swiped'], now)
-  assert.equal(getState().dismissed['just-swiped'], now + day)   // a swipe is a day of quiet
-  assert.equal(Object.keys(getState().dismissed).length, 200)
-
-  /* Dismissing is not an edit to walk back: ⌘Z belongs to the work, not to the bell. So the undo
-     after it returns the item, and leaves the dismissal exactly where it was. */
-  addItem(item({ id: 'walk-back' }))
-  const withIt = getState().items
-  dismissAlerts(['swiped'], now)
-  undo()
-  assert.notEqual(getState().items, withIt, 'the item came back, not the dismissal')
-  assert.equal(getState().dismissed.swiped, now + day)
-}
+/* ---------- the bell's leftovers: an old document sheds its silenced alerts on load ---------- */
+assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false)
 
 /* ---------- tags to offer: the project's own family before the rest of the stash ---------- */
 {
@@ -964,9 +928,9 @@ console.log('store: ok')
 
 /* ---------- the trash: what a delete means, and what the fortnight takes ---------- */
 {
-  wipe()
-  // the wipes above filled it; start from an empty one so the counts below are this block's
-  emptyTrash()
+  /* A blank stash, not a wipe: the sharing block above leaves read-only rows that no delete can
+     take, and the counts below are this block's alone. */
+  replaceAll({})
 
   addItem(item({ id: 'gone', text: 'deleted' }))
   const undoIt = removeItem('gone')

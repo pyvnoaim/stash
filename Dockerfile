@@ -13,9 +13,8 @@ WORKDIR /app
 # play. /api/clip hands those bytes to this and gives back H.264/AAC. See server/clip.ts.
 RUN apk add --no-cache ffmpeg
 COPY --from=build /app/dist ./dist
-COPY server/index.ts server/push.ts server/cal.ts server/blob.ts server/clip.ts server/hyperliquid.ts server/solana.ts server/dex.ts server/mcp.ts ./server/
-# What the server shares with the app: the market maths for push.ts, and — for the hosted /mcp
-# route — the store, the parser and the hotkey table the store leans on. store.ts imports react
+COPY server/index.ts server/cal.ts server/blob.ts server/clip.ts server/hyperliquid.ts server/solana.ts server/dex.ts server/mcp.ts ./server/
+# What the server shares with the app, for the hosted /mcp route: the market maths, the store, the parser and the hotkey table the store leans on. store.ts imports react
 # (one hook, never called out here), which is why a single dependency rides into the image.
 COPY src/lib/market.ts src/lib/store.ts src/lib/parse.ts src/lib/keys.ts ./src/lib/
 COPY --from=build /app/node_modules/react ./node_modules/react

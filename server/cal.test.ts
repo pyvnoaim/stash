@@ -1,6 +1,6 @@
 // npm test — the subscribed calendar: what it reads, and what it refuses to fetch
 import assert from 'node:assert/strict'
-import { allowed, parseIcs, shape } from './cal.ts'
+import { allowed, chargeAt, nextCharge, parseIcs, shape } from './cal.ts'
 
 const wrap = (body: string) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\n${body}\r\nEND:VCALENDAR\r\n`
 const ev = (...lines: string[]) => wrap(['BEGIN:VEVENT', ...lines, 'END:VEVENT'].join('\r\n'))
@@ -127,5 +127,20 @@ for (const url of ['file:///etc/passwd', 'ftp://host/cal.ics', 'javascript:alert
 assert.equal(shape('https://calendar.google.com/calendar/ical/x/basic.ics')?.protocol, 'https:')
 assert.equal(shape('webcal://calendar.google.com/calendar/ical/x/basic.ics')?.href,
   'https://calendar.google.com/calendar/ical/x/basic.ics')
+
+/* ---------- the cycle maths, the same answers store.ts gives, for the calendar feed ---------- */
+
+// stepping off the anchor rather than off the last result is what keeps the 31st the 31st:
+// a short month clamps, and the month after it comes back to the anchor day
+assert.equal(chargeAt('2026-05-31', 'monthly', 1), '2026-06-30')
+assert.equal(chargeAt('2026-05-31', 'monthly', 2), '2026-07-31')
+assert.equal(chargeAt('2026-01-30', 'monthly', 1), '2026-03-02')   // Feb 28 is a Saturday
+assert.equal(chargeAt('2026-03-14', 'weekly', 1), '2026-03-23')    // the 21st is a Saturday
+assert.equal(chargeAt('2026-03-13', 'quarterly', 1), '2026-06-15') // the 13th is a Saturday
+assert.equal(chargeAt('2026-08-03', 'yearly', 1), '2027-08-03')
+// a bank does not debit at the weekend: Saturday and Sunday both clear on the Monday
+assert.equal(chargeAt('2026-08-08', 'monthly', 0), '2026-08-10')
+assert.equal(chargeAt('2026-08-09', 'monthly', 0), '2026-08-10')
+assert.equal(nextCharge('2026-01-15', 'monthly', '2026-08-03'), '2026-08-17')  // the 15th is a Saturday
 
 console.log('# calendar in: ok')

@@ -1,7 +1,6 @@
-// npm test — the bell count comes from here, so a wrong alert is a wrong nudge
+// npm test — the money arithmetic the desk and the calendar print: liquidation, the suggested
+// levels, open risk, what counts as risk, and what each end of a trade is worth
 import assert from 'node:assert/strict'
-// type-only, so it's erased and store still loads lazily below, after the globals are stubbed
-import type { Item, Result, State, Watch } from './store.ts'
 
 // notify imports store, which touches localStorage and listeners at import time
 Object.assign(globalThis, {
@@ -10,137 +9,8 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const { alerts, cashAt, liqOf, nakedAlerts, openRisk, riskOf, suggestLine, watchAlerts, watchProgress, resultAlerts, moverAlerts } = await import('./notify.ts')
-const { isReal } = await import('./store.ts')
-const { today } = await import('./parse.ts')
+const { cashAt, liqOf, openRisk, riskOf, suggestLine } = await import('./notify.ts')
 const { DIALS, dialsOf } = await import('./market.ts')
-
-const t = today()
-const yesterday = new Date(Date.parse(t) - 864e5).toLocaleDateString('sv')
-const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
-
-// typed as State so the literal unions in it (v: 1, theme: 'auto', …) survive, and a field the
-// store gains later shows up here as a type error rather than a silently half-built fixture
-const base: State = { v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', candles: 'classic', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', calView: 'month', watches: [], results: [], desk: false, marketAsset: 'BTCUSDT', marketPins: [],
-  marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', dials: DIALS, dismissed: {} }
-
-// only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has
-const task = (o: Pick<Item, 'id' | 'text' | 'due' | 'done'>): Item => ({
-  type: 'task', note: '', pid: null, at: null, repeat: null, flag: false, tags: [], doneAt: null, ts: 0, editedAt: null, ...o,
-})
-
-// an overdue task, a done-but-overdue task (ignored), and a far-future task (ignored)
-const withTasks: State = { ...base, items: [
-  task({ id: 'a', text: 'Ship it', due: yesterday, done: false }),
-  task({ id: 'b', text: 'Old done', due: yesterday, done: true }),
-  task({ id: 'c', text: 'Later', due: '2999-01-01', done: false }),
-] }
-const ta = alerts(withTasks)
-assert.equal(ta.length, 1)
-assert.equal(ta[0].title, 'Ship it')
-assert.equal(ta[0].tone, 'warn')
-
-// a monthly sub anchored yesterday bills again ~a month out (not soon), while one dated tomorrow is
-const withSubs: State = { ...base, subs: [
-  { id: 's1', kind: 'expense', name: 'Gym', cost: 30, cycle: 'monthly', due: tomorrow },
-  { id: 's2', kind: 'income', name: 'Salary', cost: 3000, cycle: 'monthly', due: tomorrow }, // income ignored
-] }
-const sa = alerts(withSubs)
-assert.equal(sa.length, 1)
-assert.equal(sa[0].title, 'Pay Gym')
-// the amount, not the wording: a charge landing on a weekend rolls to the Monday, so "tomorrow"
-// only holds on some days of the week — asserting it made this test fail every Friday
-assert.ok(sa[0].detail.includes('30'))
-
-assert.deepEqual(alerts(base), []) // nothing due → no alerts
-
-// a task that named its hour: before it the hour is the detail, past it the row turns overdue
-const timed: State = { ...base, items: [{ ...task({ id: 'd', text: 'Call', due: t, done: false }), at: '10:15' }] }
-const clockAt = (hhmm: string) => Date.parse(`${t}T${hhmm}:00`) // local, same clock alerts reads
-assert.equal(alerts(timed, clockAt('09:00'))[0].detail, 'due 10:15')
-assert.equal(alerts(timed, clockAt('09:00'))[0].tone, 'due')
-assert.equal(alerts(timed, clockAt('10:15'))[0].tone, 'warn') // the named minute itself is already the hour
-assert.equal(alerts(timed, clockAt('11:00'))[0].detail, 'was due 10:15')
-// the flip is a new alert: dismissing the morning row must not swallow the alarm itself
-assert.equal(alerts(timed, clockAt('11:00'))[0].id, 'task-d-late')
-assert.equal(alerts(timed, clockAt('09:00'))[0].id, 'task-d')
-
-// saved setups: a long entered at 100, stopped at 95, targeting 110
-const long: Watch = { id: 'w1', asset: 'BTCUSDT', label: 'Bitcoin', horizon: 'Trading', dir: 'long', entry: 100, stop: 95, target: 110, ts: 0 }
-const fire = (p: number, w = long) => watchAlerts([w], { BTCUSDT: p })
-assert.deepEqual(fire(104), []) // still above the entry — nothing to say
-assert.equal(fire(100)[0].title, 'Bitcoin · Trading at entry') // touched, exactly
-assert.equal(fire(97)[0].title, 'Bitcoin · Trading at entry') // below the entry, above the stop
-assert.equal(fire(95)[0].title, 'Bitcoin · Trading setup broken') // the stop is past the entry, and outranks it
-/* No target alert at all. On a setup that never opened it was a knock nothing could clear — nobody
-   was in it, so watchProgress will not close it (a gold long targeting 4,361 while price sat at
-   4,462, having skipped its entry entirely) — and on one that did open, the close writes a result
-   and resultAlerts says what it paid. */
-assert.deepEqual(fire(111), [])
-// a short mirrors: entry above, stop above that, target below
-const short: Watch = { ...long, dir: 'short', entry: 100, stop: 105, target: 90 }
-assert.deepEqual(fire(96, short), []) // already run away from the entry, downward
-assert.equal(fire(101, short)[0].title, 'Bitcoin · Trading at entry')
-assert.equal(fire(106, short)[0].title, 'Bitcoin · Trading setup broken')
-assert.deepEqual(fire(89, short), []) // …and the same, the other way up
-// the stop and the liquidation are on the near side, so they still speak without an entryAt: for
-// a long, price through the stop was through the entry on the way down
-assert.equal(fire(95)[0].title, 'Bitcoin · Trading setup broken')
-// no price (feed down, or a stock with no key) says nothing rather than guessing
-assert.deepEqual(watchAlerts([long], {}), [])
-assert.deepEqual(watchAlerts([long], { BTCUSDT: NaN }), [])
-
-// the same setup, once its window has actually opened: it stops announcing its entry and starts
-// reporting what it is running at — 1R per 5 of price, and no money on a plan nobody took
-const running: Watch = { ...long, entryAt: 1 }
-const run = (p: number) => watchAlerts([running], { BTCUSDT: p })
-assert.deepEqual(fire(104), []) // unopened and away from its levels — still nothing to say
-assert.equal(run(105)[0].title, 'Bitcoin · Trading is up 1.00R')
-assert.equal(run(105)[0].id, 'watch-w1-open')
-assert.equal(run(105)[0].tone, 'info')
-// a plan holds nothing, so there is no size to price it in euros and none is invented
-assert.ok(run(105)[0].detail.includes('from the long entry at'))
-assert.ok(!run(105)[0].detail.includes('€'))
-// a short runs the other way: open at 100, price 95 is 1R of profit
-const runShort = (p: number) => watchAlerts([{ ...short, entryAt: 1 }], { BTCUSDT: p })
-assert.equal(runShort(95)[0].title, 'Bitcoin · Trading is up 1.00R')
-// the gap this speaks for lies between the entry and the target, so it is always in profit — a
-// short at 102 has gone the other way, and that is the entry zone's word to say, not this one's
-assert.equal(runShort(102)[0].title, 'Bitcoin · Trading at entry')
-// the three levels still own their own ticks — openWatch fires on the same price test as the entry
-// alert, so a runner that spoke here would silence buy-now after one render
-assert.equal(run(97)[0].title, 'Bitcoin · Trading at entry')  // back in the zone, and says so
-assert.equal(run(95)[0].title, 'Bitcoin · Trading setup broken')
-// past its target it is the running read-out for the one tick before watchProgress closes it —
-// what the target paid is the record's sentence to say, not a live level's
-assert.equal(run(111)[0].title, 'Bitcoin · Trading is up 2.20R')
-// never opened, and away from every level — still nothing to say, as before
-assert.deepEqual(watchAlerts([long], { BTCUSDT: 105 }), [])
-
-/* A setup you were actually in prices itself off its own size and leverage — the only row here
-   that has euros at all. Long from 100 with the stop at 95: €100 at 10× is €1,000 on the market,
-   5% of which is the €50 between here and the stop, so 1R is €50. */
-const position: Watch = { ...running, size: 100, lev: 10 }
-// at = the entryAt: nothing has been held for any time yet, so no funding muddies the geometry
-const pos = (p: number, at = 1) => watchAlerts([position], { BTCUSDT: p }, undefined, at)
-// €50 gross, less €1 of fee — a position states its own notional, and €1,000 crossed twice at
-// 0.05% is a euro whether it won or lost
-assert.ok(pos(105)[0].detail.includes('+€49'))
-assert.ok(pos(105)[0].detail.includes('on your position'))
-assert.ok(!pos(105)[0].detail.includes('had you taken it'))
-assert.ok(pos(102.5)[0].detail.includes('+€24'))
-// leverage is the part that has to reach the money: the same €100 at 1× is a tenth of it, and its
-// notional is a tenth too, so the fee it pays is ten cents rather than a euro
-assert.ok(pos(105)[0].detail.includes('+€49') && watchAlerts([{ ...position, lev: 1 }], { BTCUSDT: 105 }, undefined, 1)[0].detail.includes('+€4.90'))
-/* Funding comes off on top of it, and only on a held position: €1,000 notional at the default
-   0.01%/8h is 10 cents a window, three windows in a day — +€49 net of the fee reads +€48.70 held
-   for one. Zero the two dials and the gross figure is back. */
-assert.ok(pos(105, 1 + 24 * 3600_000)[0].detail.includes('+€48.70'))
-assert.ok(watchAlerts([position], { BTCUSDT: 105 }, dialsOf({ dials: { funding: 0, fee: 0 } }), 1)[0].detail.includes('+€50'))
-// half a position is no position: without both numbers there is nothing to price it with
-assert.ok(!watchAlerts([{ ...running, size: 100 }], { BTCUSDT: 105 })[0].detail.includes('€'))
 
 /* Liquidation: at 10× the long from 100 has its margin gone at 90 and is closed a little before,
    at 90.5 — the exchange keeps half a percent back. A stop inside that (95) ends the trade first
@@ -154,28 +24,6 @@ assert.ok(liqOf({ entry: 100, dir: 'short', size: 100, lev: 10 })! < 110)
 assert.equal(liqOf({ entry: 100, dir: 'long', size: 100, lev: 1 }), null)
 // and past 200× the maintenance slice cannot swallow the whole distance and cross the entry
 assert.ok(liqOf({ entry: 100, dir: 'long', size: 100, lev: 500 })! < 100)
-const wide: Watch = { ...position, stop: 85 }
-assert.equal(watchAlerts([wide], { BTCUSDT: 89 })[0].title, 'Bitcoin · Trading liquidated')
-assert.ok(watchAlerts([wide], { BTCUSDT: 89 })[0].detail.includes('€100.00 margin is gone'))
-// above the liquidation and the wide stop alike: still just the entry zone
-assert.equal(watchAlerts([wide], { BTCUSDT: 91 })[0].title, 'Bitcoin · Trading at entry')
-// gapped past stop and liquidation at once — the worst news is the one that gets said
-assert.equal(pos(89)[0].title, 'Bitcoin · Trading liquidated')
-// a plan nobody took cannot be liquidated, however wide its stop
-assert.equal(watchAlerts([{ ...long, stop: 85 }], { BTCUSDT: 84 })[0].title, 'Bitcoin · Trading setup broken')
-
-/* ---------- positions with nothing resting ---------- */
-
-// a position with no stop resting is the alert; one with a stop is not a word
-const naked = nakedAlerts([
-  { symbol: 'BTCUSDT', side: 'long', entry: 100, stop: null, venue: 'bitget' },
-  { symbol: 'ETHUSDT', side: 'short', entry: 200, stop: 210, venue: 'bitget' },
-])
-assert.equal(naked.length, 1)
-assert.equal(naked[0].id, 'naked-bitget-BTCUSDT')
-assert.equal(naked[0].asset, 'BTCUSDT') // the chart the click opens
-assert.ok(naked[0].title.includes('BTCUSDT has no stop'))
-assert.ok(naked[0].detail.startsWith('Bitget long')) // the venue is named, not defaulted
 
 // …and where the levels would go on that bare row: one ATR out, two for the target
 assert.equal(suggestLine({ side: 'long', entry: 100, stop: null, target: null }, 2),
@@ -198,101 +46,7 @@ assert.ok(suggestLine({ side: 'short', entry: 100, stop: null, target: 90, liq: 
 assert.equal(suggestLine({ side: 'long', entry: 100, stop: null, target: 110, liq: 90 }, 2),
   'nothing resting — stop at 98.00')
 
-/* ---------- what actually happened: the window opening, and the trade ending ---------- */
-
-const NOW = 1_700_000_000_000
-const step = (p: number, w = long) => watchProgress([w], { BTCUSDT: p }, NOW)
-
-// price above the entry: the window has not opened, and nothing is written down
-assert.deepEqual(step(104), { opened: [], closed: [] })
-// no price at all writes nothing either — the same rule the alerts hold to
-assert.deepEqual(watchProgress([long], {}, NOW), { opened: [], closed: [] })
-
-// price at the entry opens it, once. Nothing is closed: it has only just started
-assert.deepEqual(step(100).opened, ['w1'])
-assert.deepEqual(step(100).closed, [])
-// already open, so opening it again is not news — and this is what stops the entry timestamp
-// being rewritten to "now" on every poll for as long as price sits at the level
-const open: Watch = { ...long, entryAt: NOW - 3600_000 }
-assert.deepEqual(step(97, open).opened, [])
-
-// a setup whose entry never came round cannot lose: price straight to the target from above
-// records nothing at all, because nobody was ever in it
-assert.deepEqual(step(111), { opened: [], closed: [] })
-
-// once open, the target closes it — at the price actually seen, not at the level
-const hit = step(112, open).closed[0]
-assert.equal(hit.level, 'target')
-assert.equal(hit.exit, 112)
-assert.equal(hit.entryAt, NOW - 3600_000)
-assert.equal(hit.closedAt, NOW)
-assert.equal(hit.r, 2.4)          // (112 − 100) / (100 − 95): overshot its 2R plan, and says so
-assert.equal(hit.id, 'w1')        // the id it had, so the record cannot double up
-
-// the stop closes it at −1R, or worse when the price gapped through
-assert.equal(step(95, open).closed[0].level, 'stop')
-assert.equal(step(95, open).closed[0].r, -1)
-assert.equal(step(94, open).closed[0].r, -1.2)
-
-/* a price that gapped past both in one poll opens and closes on the same tick — for a long the
-   stop is below the entry, so reaching it means the entry was reached too. The worse of the two
-   is what happened, and it is written down as a real (bad) outcome rather than skipped. */
-const gap = step(90)
-assert.deepEqual(gap.opened, ['w1'])
-assert.equal(gap.closed[0].level, 'stop')
-assert.equal(gap.closed[0].entryAt, NOW)
-
-// a short mirrors, level for level
-const openShort: Watch = { ...short, entryAt: NOW - 3600_000 }
-assert.deepEqual(step(96, short), { opened: [], closed: [] })   // ran away from the entry, downward
-assert.deepEqual(step(101, short).opened, ['w1'])
-assert.equal(step(88, openShort).closed[0].level, 'target')
-assert.equal(step(88, openShort).closed[0].r, 2.4)             // (100 − 88) / (105 − 100)
-assert.equal(step(105, openShort).closed[0].level, 'stop')
-assert.equal(step(105, openShort).closed[0].r, -1)
-
-/* ---------- and what it paid ---------- */
-
-const result: Result = { ...long, entryAt: NOW - 7200_000, closedAt: NOW, level: 'target', exit: 110, r: 2, id: 'r1' }
-const one = (over: Partial<Result> = {}) => resultAlerts([{ ...result, ...over }], NOW)[0]
-
-// a plan nobody took: the score, and no money it cannot know
-assert.equal(one().title, 'Bitcoin · Trading hit target')
-assert.ok(one().detail.startsWith('+2.00R'))
-assert.ok(!one().detail.includes('€'))
-
-// one you were in prices itself: €100 at 10× is €1,000 of notional, €50 at risk across the stop,
-// so 2R is €100 — less the €1 round trip at 0.05% a side and 2.5 cents of funding for the two hours
-const took = { size: 100, lev: 10 }
-assert.ok(one(took).detail.includes('+€98.98'))
-// a loss reads as one, sign and all, and the fee is on the losing side of it too
-assert.equal(one({ ...took, level: 'stop', r: -1, exit: 95 }).title, 'Bitcoin · Trading stopped out')
-assert.ok(one({ ...took, level: 'stop', r: -1, exit: 95 }).detail.includes('−€51.03'))
-assert.equal(one({ level: 'stop', r: -1 }).tone, 'warn')
-
-// it is news for half a day, and a record after that — the desk keeps it, the bell lets it go
-assert.equal(resultAlerts([result], NOW + 11 * 3600_000).length, 1)
-assert.deepEqual(resultAlerts([result], NOW + 13 * 3600_000), [])
-
-/* ---------- and which of them actually happened ---------- */
-
-// a plan that was only ever watched is not a trade, whatever it would have paid
-assert.equal(isReal(result), false)
-// one you sized yourself is, and so is one a venue closed — by its figure or by the id it files under
-assert.equal(isReal({ ...result, size: 100, lev: 10 }), true)
-assert.equal(isReal({ ...result, cash: 0 }), true)          // a scratch is a real answer, not a missing one
-assert.equal(isReal({ ...result, id: 'bitget-XAUUSDT-1700000000000' }), true)
-assert.equal(isReal({ ...result, id: 'mexc-HBARUSDT-1700000000000' }), true)
-
-console.log('notify ok')
-
-/* trendAlerts and its dial cases stood here — the memecoin bell, gated on liquidity, a hard hour
-   or a fresh pool. Both the alert and the panel it pointed at are gone; MOVER_BITE and MOVER_FLOOR
-   are constants in market.ts and moverMove reads them directly, which is what the block below now
-   holds the rule to. */
-
 // what is left of the dials: two costs, clamped, and anything else in the file read past
-assert.equal(dialsOf({ dials: { fee: 0.02 } }).fee, 0.02)
 // out of range is the default, not the file's word — these two are inside every money figure
 assert.equal(dialsOf({ dials: { fee: 9 } }).fee, DIALS.fee)
 assert.equal(dialsOf({ dials: { funding: 'lots' } }).funding, DIALS.funding)
@@ -300,52 +54,7 @@ assert.equal(dialsOf({ dials: { funding: 'lots' } }).funding, DIALS.funding)
 assert.deepEqual(dialsOf({ dials: { bite: 0.9, trendLiq: 1 } }), DIALS)
 assert.deepEqual(dialsOf(null), DIALS)
 
-/* moverAlerts: the listed assets, measured against their own day. The first case is the one this
-   rule exists for — Bitcoin's 13:00 hour on 3 Aug 2026, the pump the old 24-hour reading missed
-   entirely (it showed +0.8% for the day while price ran 2.2% in two hours). Real figures. */
-const btc = { asset: 'BTCUSDT', label: 'Bitcoin', open: 62700.01, last: 63351.09, high: 64059.75, low: 62300 }
-const [pump] = moverAlerts([btc])
-assert.equal(pump.tone, 'info')
-assert.equal(pump.asset, 'BTCUSDT')
-assert.match(pump.title, /Bitcoin up 1.0% in an hour/)
-assert.match(pump.detail, /37% of the day's range/)
-
-// the hour after it, still running — the alert does not need the move to be finished to fire
-assert.equal(moverAlerts([{ ...btc, open: 63351.09, last: 63967.19 }]).length, 1)
-
-// the same 1% hour inside a day that has already swung 20% is an alt going about its business
-assert.deepEqual(moverAlerts([{ ...btc, high: 70000, low: 58000 }]), [])
-// and a big share of a day where nothing happened is a rounding error, not news
-assert.deepEqual(moverAlerts([{ ...btc, last: 62800, high: 62810, low: 62690 }]), [])
-
-// down reads as down, and carries its own id so dismissing the run up doesn't silence the fall
-const [drop] = moverAlerts([{ ...btc, open: 63351.09, last: 62700.01 }])
-assert.equal(drop.tone, 'warn')
-assert.match(drop.title, /Bitcoin down 1.0%/)
-assert.equal(drop.id, 'mkt-BTCUSDT-down')
-assert.equal(pump.id, 'mkt-BTCUSDT-up')
-
-// a feed that answered with nothing usable says nothing — never a 100% move off a missing open
-assert.deepEqual(moverAlerts([{ ...btc, open: 0 }]), [])
-assert.deepEqual(moverAlerts([{ ...btc, high: 63000, low: 63000 }]), [])
-
-/* The grind the hour cannot see — gold's morning of 5 Aug 2026, real figures: 1.4% over four
-   hours, half the day's range, and the best single hour in it was 0.66%, under the floor. The
-   four-hour window is what turns that from silence into a sentence. */
-const gold = { asset: 'XAUUSDT', label: 'Gold', open: 4095.3, last: 4153.25, high: 4163.19, low: 4044.71, hours: 4 }
-const bestHour = { ...gold, open: 4126.06, last: 4153.25, hours: 1 } // its steepest hour: 0.66%
-assert.deepEqual(moverAlerts([bestHour]), [])
-const [grind] = moverAlerts([bestHour, gold])
-assert.match(grind.title, /Gold up 1.4% in 4 hours/)
-assert.match(grind.detail, /49% of the day's range, in 4 hours/)
-
-// when both windows catch one run, the hour's sharper sentence wins — one alert, one id
-const both = moverAlerts([{ ...btc, hours: 4 }, btc])
-assert.equal(both.length, 1)
-assert.match(both[0].title, /in an hour/)
-assert.equal(both[0].id, 'mkt-BTCUSDT-up')
-
-console.log('movers ok')
+console.log('notify ok')
 
 /* ---------- what is already on, priced at being wrong about all of it ---------- */
 

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  Bell, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck,
+  CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck,
   FileText, Flag, Inbox, Layers, Lightbulb, ListTodo, Monitor, PanelLeft, Plus, Search, StickyNote,
   Wallet,
 } from 'lucide-react'
@@ -188,10 +188,6 @@ function Teaser() {
           <span className="font-heading text-[10px] tracking-wider uppercase">Today</span>
           <span className="text-muted-foreground text-[10px] tabular-nums">3</span>
           <div className="ml-auto flex items-center gap-2">
-            <span className="relative">
-              <Bell className="text-muted-foreground size-3" />
-              <span className="bg-destructive absolute -top-1 -right-1 size-2 rounded-full" />
-            </span>
             <Monitor className="text-muted-foreground size-3" />
             <div className="text-muted-foreground/60 flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px]">
               <Search className="size-2.5" /> Search

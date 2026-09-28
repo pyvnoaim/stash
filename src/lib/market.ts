@@ -160,10 +160,7 @@ export async function fetchPrices(
  *  from. `c` is oldest → newest, up to twenty-five bars: the day, plus the one in progress. */
 export type Hours = { a: Asset; c: Candle[] }
 
-/** One asset's move over a window the movers sweep reads: the hour just gone or the four behind it.
- *  `open` is where the window started, `last` where it is now, and the high/low are the day's —
- *  the shape moverAlerts already takes. */
-export type Move = { id: string; label: string; hours: number; open: number; last: number; high: number; low: number }
+
 
 /**
  * The path a sparkline draws, in a stretched 0..100 box — null when there is nothing to draw.
@@ -210,23 +207,6 @@ export async function fetchHours(assets: Asset[], venue: Venue = null): Promise<
   }))
   return rows.flat()
 }
-
-/** The two windows, off those bars. A window the feed has no bars for is absent rather than
- *  defaulted: a missing open reads as a hundred-percent move, which is the one way this could
- *  shout about nothing. */
-export function movesOf(rows: Hours[]): Move[] {
-  return rows.flatMap(({ a, c }) => {
-    const last = c.at(-1)!.c
-    const high = Math.max(...c.map((x) => x.h))
-    const low = Math.min(...c.map((x) => x.l))
-    return [1, 4].flatMap((hours) => {
-      const from = c.at(-hours)
-      return from ? [{ id: a.id, label: a.label, hours, open: from.o, last, high, low }] : []
-    })
-  })
-}
-
-export const fetchMoves = (assets: Asset[], venue: Venue = null) => fetchHours(assets, venue).then(movesOf)
 
 /* The memecoin end of the market. These never reach Binance and have no ticker: they are pools,
    keyed by address on a chain, and they live and die inside a day. GeckoTerminal's trending list is
@@ -384,35 +364,6 @@ export const fmtPrice = (n: number, ref = n) => {
   return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
 }
 
-/* ---------- an hour worth interrupting someone for ---------- */
-
-/* Two dials, and they are dials. A single percent cannot serve gold and Dogecoin: 2% in an hour is
-   a remarkable day for one and a quiet morning for the other, and any number low enough to catch
-   the first drowns you in the second. So the yardstick is the asset's own day — how much of the
-   last 24 hours' entire range this one hour just ate. Sized against a move that got missed:
-   Bitcoin ran +1.04% in the 13:00 hour of 3 Aug 2026 and +0.97% in the next, 38% and 36% of the
-   day's range, making the high an hour after the first. A flat percent that caught that would have
-   to sit under 1%, which on the alts is most hours of most days.
-   MOVER_FLOOR is what stops a day where nothing happened, and whose range is therefore nearly
-   nothing, from making a rounding error look like half of it. Bell too loud? Raise MOVER_BITE.
-
-   This lives here, with the maths, rather than beside either bell: the one in the tab reads it
-   through notify.ts and the one that reaches a shut phone reads it from server/push.ts, and a
-   threshold kept in two places is two thresholds a month later. */
-export const MOVER_BITE = 0.35   // share of the day's range covered in the hour
-export const MOVER_FLOOR = 0.75  // percent, under which nothing counts however quiet the day was
-
-/* ---------- and the same numbers, turned by hand ---------- */
-
-/**
- * Every threshold the bell reads, as one object. They were constants with "Bell too loud? Raise
- * this" written beside them, which is a redeploy for a number that depends on what the chain did
- * that week. The defaults are the constants above and the ones in notify.ts, unchanged.
- *
- * One shape for both bells: the tab reads it out of the document, and server/push.ts reads it out
- * of the same document when it decides whether to wake a shut phone. A threshold kept in two
- * places is two thresholds a month later.
- */
 /**
  * The big three equity opens, each in its own tz so daylight saving is handled for free. These
  * markets don't trade the assets here (all 24/7 crypto/gold) — they mark when global volume and
@@ -471,33 +422,10 @@ export const localClock = (ms: number, tz: string) => {
 }
 
 /**
- * How long until a market opens, in minutes, or null on a day it does not open at all. Weekends
- * only — the world's holiday calendars are a table that goes stale, and a knock on Christmas
- * morning is a smaller wrong than a table nobody maintains.
- */
-export function opensIn(s: { tz: string, min: number }, at: number): number | null {
-  const { day, min } = localClock(at, s.tz)
-  const weekday = new Date(Date.UTC(+day.slice(0, 4), +day.slice(4, 6) - 1, +day.slice(6))).getUTCDay()
-  if (weekday === 0 || weekday === 6) return null
-  return s.min - min
-}
-
-/**
- * The numbers a reader is allowed to turn, and there used to be ten.
- *
- * The seven that went were all thresholds for when the bell is allowed to speak — how big an hour
- * has to be, how much money a pool needs, how many timeframes have to agree. They were a screen of
- * form fields tuning something nobody could see the effect of, and getting them right was a guess
- * you made once and never revisited. They are constants now: MOVER_BITE and MOVER_FLOOR above,
- * TREND_* in notify.ts, SETUP_AGREE below, OPEN_IN in server/push.ts. Every one of them is a single
- * line to change if the bell turns out to be loud.
- *
- * What is left is not about the bell at all: two costs a venue charges that only you know, and which
- * are inside every money figure on the desk. Nobody can look those up for you, which is the whole
- * test of whether a number belongs in Settings.
- *
- * Removing keys is safe by construction: `dialsOf` walks `DIALS`, so a stored document's leftover
- * `bite` or `setupAgree` is read past rather than rejected, and nothing has to be migrated.
+ * The two numbers a reader is allowed to turn: what their venue charges. Both are inside every
+ * money figure on the desk and nobody can look them up for you, which is the whole test of whether
+ * a number belongs in the document. A stored document's leftover keys from the old dials are read
+ * past by `dialsOf`, which walks `DIALS`, so nothing has to be migrated.
  */
 export type Dials = {
   /** Perp funding, percent of notional per 8 hours — what holding a position quietly costs.
@@ -519,18 +447,6 @@ export const DIALS: Dials = {
 /** Dollars in a pool before the MCP tool's New list will name it — the one reader left of a number
  *  that used to be a dial beside the bell's. A shortlist floor, not an interruption threshold. */
 export const NEW_POOL_LIQ = 15_000
-
-/**
- * How many of the six timeframes have to lean a scanned setup's way before it is worth a knock —
- * and before anything is filed off it.
- *
- * Half the charts, near enough. A "Buy now" only the timeframe you happen to be on can see is the
- * setup most likely to be noise, and an unasked-for notification is the thing that can least afford
- * to be — one loud afternoon is how a bell gets switched off for good. Set against a morning's
- * readings this passes a couple of assets a day rather than five in an hour. The desk's own
- * timeframe always counts itself, so 1 would be every setup the scan grades as here-now.
- */
-export const SETUP_AGREE = 3
 
 /**
  * A venue's maintenance margin: the slice of the position it keeps back, so it closes you while
@@ -568,22 +484,6 @@ export function dialsOf(s: unknown): Dials {
     if (isFinite(n) && n >= lo && n <= hi) out[k] = n
   }
   return out
-}
-
-/**
- * One asset's last hour measured against the day it happened in, or null when there is nothing
- * there worth saying. Both bells build their own sentence out of this; neither decides it.
- */
-export function moverMove(open: number, last: number, high: number, low: number):
-{ pct: number; bite: number; up: boolean } | null {
-  const range = high - low, moved = last - open
-  // a feed that answered with a missing open would otherwise read as a move of infinity, and a
-  // day with no range at all divides by zero — both are "say nothing", which is the honest answer
-  if (!(open > 0) || !(range > 0) || !isFinite(moved)) return null
-  const pct = (moved / open) * 100
-  const bite = Math.abs(moved) / range
-  if (Math.abs(pct) < MOVER_FLOOR || bite < MOVER_BITE) return null
-  return { pct, bite, up: moved >= 0 }
 }
 
 /** Simple moving average, aligned to the input: null until `p` points exist, so index i lines up.
@@ -2087,28 +1987,6 @@ export const HORIZONS = {
 export type Horizon = keyof typeof HORIZONS
 
 /**
- * Which horizons the desk may act on by itself: file a row into the forward test, and knock a phone
- * about a setup nobody saved. Both are the app volunteering a trade, which is a different act from
- * drawing the levels — the chart, the Scan card and the plan on it are untouched by this, and go on
- * saying what the rule reads. Read the levels; the desk just stops filing them as trades.
- *
- * The trading rule is not one of them, and `measured` above is why. Re-measured here over a wider
- * window than that note's: ten perps, 3000 hourly bars each, 1233 filed setups, 0.06% a side and
- * half a tick of stop slippage charged — −0.187R a trade at 34.2% hit, with eight of the ten assets
- * losing. The geometry needs 33.3% to break even at 2R, so the read is worth a coin flip and the
- * round trip is the whole of the loss.
- *
- * And it is not a tuning problem, which is the part worth writing down: the same walk over twelve
- * pairs of its two free numbers — the stop at 0.5, 1, 1.5, 2 and 3 ATR against targets of 1, 1.5, 2
- * and 3R — comes out negative in every cell. The best is 3 ATR at 1R, −0.017R, which is a loss
- * indistinguishable from zero rather than an edge. At a 1-ATR stop the rule does beat its own
- * geometry gross (58.5% where 1R needs 50%) and still loses net, because the fee and the slip are
- * a fifth of an ATR-wide risk. There is no setting of this rule that pays. Turning it back on is
- * one line, and wants a walk that clears costs first.
- */
-export const FILES: Record<Horizon, boolean> = { long: true, short: false }
-
-/**
  * Which bars a horizon is actually read on — here, and shared, for the same reason `tally` and
  * `deskSignals` are: the page, the Scan and the paper desk all have to answer it identically.
  *
@@ -2668,119 +2546,4 @@ export function sessionVwap(c: Candle[]): { vwap: number; where: string; signal:
       ? `price is at the average paid ${since} — the session is even, and this is the level it keeps returning to`
       : `price is ${Math.abs(gap).toFixed(2)}% ${gap > 0 ? 'above' : 'below'} the average paid ${since} — the ${gap > 0 ? 'buyers' : 'sellers'} who turned up are in front`
   return { vwap, where: anchor.where, signal: { label: 'Session VWAP', tone, kind: 'vwap' as const, detail } }
-}
-
-/* ---------- the scan: every keyless chart at once ---------- */
-
-/** Which way one timeframe leans, and by how much — the strip is five of these. */
-export type Lean = { dir: 'long' | 'short' | 'flat'; bulls: number; bears: number }
-
-/** One asset's answer, compressed to a row. `tier` is the sort: 3 the entry is here, 2 wait for
- *  the level, 1 a setup the desk would talk you out of, 0 nothing to do.
- *  `by` is every timeframe's lean; the loose fields are the desk's own, which is the one the
- *  phrase, the plan and the click all belong to. */
-export type ScanRow = {
-  a: Asset
-  by: Partial<Record<Interval, Lean>>
-  /** How many of the five lean the same way the desk's does — the row's real confidence. */
-  agree: number
-  /** The 4h → 15m → 5m cascade, off the same bars. Free here: they are all already fetched. */
-  cascade: Cascade
-  dir: 'long' | 'short' | 'flat'
-  bulls: number
-  bears: number
-  plan: Plan | null
-  tier: 0 | 1 | 2 | 3
-  say: string
-}
-
-/** Every interval's bars for one asset, which is the only part of a scan that touches a network.
- *  Split from the reading below because the push server runs the same scan for everyone: the bars
- *  are fetched once a pass and then read once per document, against that person's own dials. */
-export async function scanBars(a: Asset, venue: Venue = null): Promise<Record<Interval, Candle[]>> {
-  const pairs = await Promise.all(INTERVALS.map(async (iv) =>
-    [iv, await fetchCandles(a, iv, venue).catch(() => [] as Candle[])] as const))
-  return Object.fromEntries(pairs) as Record<Interval, Candle[]>
-}
-
-/**
- * The desk's exact read — higher-timeframe lean, session vwap, every signal, tally, setup — over
- * one asset's bars without rendering it. Same calls, same order, so a row here never disagrees
- * with what opening the asset shows.
- *
- * Run on every timeframe rather than only the desk's, because one interval's answer is not a view
- * of anything: 15m said Long and 1d said Short and the row changed its mind each time the desk
- * did, with no way to see that the two disagreed. Five leans side by side is the whole point —
- * a Long that four timeframes agree on is a different trade from one only the fastest chart sees.
- *
- * Pure: every bar it reads is handed in. Which is what lets the phone hear about a setup at all —
- * see setupsFor in server/push.ts.
- */
-// takes the horizon rather than its config, for the same reason it takes one interval: the row's
-// phrase depends on which strategy is on, not only on the four numbers that used to be the whole
-// difference between the two
-export function scanRead(
-  a: Asset, bars: Record<Interval, Candle[]>,
-  horizon: Horizon, interval: Interval, orbMode: boolean, fee: number,
-): ScanRow | null {
-  const cfg = HORIZONS[horizon]
-  // the interval is the desk's own, passed in — reading the horizon's default here while the desk
-  // sat on 15m bars is how a row said Long while the card the click lands on said Short
-  if (!bars[interval]?.length) return null
-
-  /** One timeframe through the desk's read. Null where the feed gave that interval nothing. */
-  const read = (iv: Interval) => {
-    const candles = bars[iv]
-    if (!candles?.length) return null
-    const up = HIGHER[iv]
-    const upBars = up ? bars[up] : undefined
-    const higher = up && upBars?.length ? trendFilter(upBars, cfg.slow, up) : null
-    const view = signals(candles, cfg)
-    // the opening range is a 15m reading — asking a weekly bar for one is asking for a date
-    const range = orbMode && iv === '15m' ? orb(candles) : null
-    // kept rather than recomputed: the trading strategy gates on this exact number below, and a
-    // second sessionVwap() over the same bars is a second pass for an answer already in hand
-    const vwap = sessionVwap(candles)
-    return { candles, view, higher, up, vwap, ...tally(deskSignals(higher, range, vwap, view.signals)) }
-  }
-
-  const by: Partial<Record<Interval, Lean>> = {}
-  for (const iv of INTERVALS) {
-    const r = read(iv)
-    if (r) by[iv] = { dir: r.dir, bulls: r.bulls, bears: r.bears }
-  }
-
-  const here = read(interval)!
-  const { bulls, bears, dir, view, higher, up, candles, vwap } = here
-  const price = candles.at(-1)!.c
-  const entryMA = view.smaFast.at(-1)
-  const slowMA = view.smaSlow.at(-1)
-  const { plan, block } = strategyPlan(horizon, {
-    dir, price, fast: entryMA ?? null, slow: slowMA ?? null,
-    levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null, toll: toll(candles, fee), fee,
-  })
-  const holding = horizon === 'long'
-  const against = !holding && !!plan && !!higher
-    && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
-  // the verdict ladder from the card above, compressed to a phrase — same branches, same order, and
-  // the same split by strategy, or a row would grade an asset by a rule the card it opens doesn't use
-  const [tier, say]: [ScanRow['tier'], string] = holding
-    /* Two rungs, not three: the regime is on or it is not, and there is no waiting rung left now
-       that the entry is the price. Every bar of a trend that holds is a 3, which would file a row a
-       quarter of an hour for months — what stops that is found(), which only files a read that was
-       not already there on the bar before. */
-    ? block === 'below' ? [0, `under the ${cfg.slow}-MA — out`]
-      : !plan ? [0, 'not enough history']
-      : [3, 'Own it']
-    : block === 'flat' ? [0, `split ${bulls}/${bears} — no side`]
-    : block === 'vwap' ? [0, `wrong side of the VWAP for a ${dir}`]
-    : block === 'quiet' ? [0, 'no ATR yet — no stop to size']
-    : block === 'warmup' ? [0, 'not enough bars to warm the averages this read is made of']
-    : block === 'toll' ? [0, 'the round trip costs more than a quarter of the risk on these bars']
-    : !plan ? [0, 'no clean setup — price already ran']
-    : plan.thin || against ? [1, against ? `fights the ${up} trend` : 'pays less than it risks, net of fees']
-    : Math.abs(plan.entry - price) <= (view.atr ?? 0) * 0.25 ? [3, dir === 'long' ? 'Buy now' : 'Sell now']
-    : [2, `${dir === 'long' ? 'buy' : 'sell'} the ${cfg.fast}-MA at ${fmtPrice(plan.entry, price)}`]
-  const agree = dir === 'flat' ? 0 : INTERVALS.filter((iv) => by[iv]?.dir === dir).length
-  return { a, by, agree, cascade: topDown(bars, cfg, fee), dir, bulls, bears, plan, tier, say }
 }

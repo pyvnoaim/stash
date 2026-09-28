@@ -344,3 +344,31 @@ export async function icsText(url: string, now = Date.now()): Promise<string | n
   inFlight.set(url, work)
   return work
 }
+
+/* The subscription cycle maths, again — store.ts owns the original and the tests over it, and this
+   process cannot import it: that module is the app's store, React and localStorage included, and
+   the container ships `server/` alone. Sixteen lines, stepping off the anchor rather than off the
+   last result so the 31st stays the 31st, and weekends clear on the Monday. Keep the two the same.
+   The calendar feed in index.ts reads them, for the subscriptions it puts on your calendar. */
+const PER: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 }
+export function chargeAt(anchor: string, cycle: string, n: number): string {
+  const d = new Date(anchor + 'T00:00Z')
+  if (cycle === 'weekly') d.setUTCDate(d.getUTCDate() + 7 * n)
+  else {
+    const day = d.getUTCDate()
+    d.setUTCMonth(d.getUTCMonth() + n * (PER[cycle] ?? 1))
+    if (d.getUTCDate() !== day) d.setUTCDate(0)
+  }
+  const wd = d.getUTCDay()
+  if (wd === 6) d.setUTCDate(d.getUTCDate() + 2)
+  else if (wd === 0) d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+/** The next charge on or after `from`, or null for a subscription with no date to step from. */
+export function nextCharge(due: string, cycle: string, from: string): string | null {
+  for (let n = 0; n < 500; n++) {
+    const d = chargeAt(due, cycle, n)
+    if (d >= from) return d
+  }
+  return null
+}

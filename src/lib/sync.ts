@@ -17,7 +17,6 @@ import {
   adoptRemote, adoptShared, getState, KEY, mergeRemote, mergeSlice, setMe, setOnPersist, sliceOf,
   uid, type Item, type Project, type Slice,
 } from './store.ts'
-import { disablePush } from './push.ts'
 import { forgetVenue } from './venue.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
@@ -244,12 +243,6 @@ export const signup = (user: string, pass: string, invite: string) =>
   account('/api/signup', { user, pass, invite })
 
 export async function logout(everywhere = false) {
-  /* Before the session goes, not after: dropping the subscription needs the cookie that is about
-     to be cut. A device left on the list is a server that keeps knocking at a browser which can no
-     longer read /api/alerts — an hourly notification saying nothing, forever. Signing out
-     everywhere can only reach this device's own subscription; the others find out when their next
-     knock comes back 401, which the worker now says out loud. */
-  try { await disablePush() } catch { /* no worker, no push, nothing to drop */ }
   try { await fetch(everywhere ? '/api/logout-all' : '/api/logout', { method: 'POST' }) } catch { /* gone is gone */ }
   forgetVenue()   // the key that answered it is no longer ours to read — see account() above
   setSnap({ user: null, status: 'out' })

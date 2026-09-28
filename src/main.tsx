@@ -11,7 +11,6 @@ import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 import { addShared, focus, getState, select } from './lib/store.ts'
 import { applyTheme } from './lib/utils.ts'
-import { refreshPush } from './lib/push.ts'
 import { holdRegistration } from './lib/update.ts'
 
 /* A new build is live, downloaded and waiting, while this tab still runs the old one. It says so
@@ -111,8 +110,6 @@ if (import.meta.env.PROD) {
    flipping under `auto`; this is only the first frame. */
 applyTheme(getState().theme)
 startSync()
-// the timezone the daily digest fires against, and a re-register after the server forgot us
-void refreshPush()
 
 /**
  * The gate stands until the server has said who you are. Three answers, three doors:

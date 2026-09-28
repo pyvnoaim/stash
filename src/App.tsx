@@ -3,7 +3,6 @@ import { ChevronDown, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
 import { MobileTabs } from '@/components/mobile-tabs'
-import { NotificationBell } from '@/components/notification-bell'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
@@ -471,7 +470,6 @@ export default function App() {
                 ? <ProjectProgress p={openProject} />
                 : (page ? '' : items.length || '')}
             </span>
-            <NotificationBell onNavigate={goTo} />
             <ThemeToggle />
             {/* a phone has no room for a permanent field: the icon opens it, and it takes the
                 whole row while it is open, which is also where the results are read */}
