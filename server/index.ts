@@ -1325,7 +1325,10 @@ export function start({
       const perps = coins.filter((c) => c.toLowerCase().includes(needle))
         .sort((a, b) => Number(!a.toLowerCase().startsWith(needle)) - Number(!b.toLowerCase().startsWith(needle)) || a.length - b.length)
         .slice(0, 8)
-      return send(res, 200, { perps, tokens })
+      /* A token Hyperliquid lists as a perp is charted as the perp: its DEX namesakes are wrapped
+         copies at best and copycats at worst, and the perp's book is the deepest price there is. */
+      const listed = new Set(coins.map((c) => c.toUpperCase()))
+      return send(res, 200, { perps, tokens: tokens.filter((t) => !listed.has(t.symbol.toUpperCase())) })
     }
 
     /* A DEX pool's bars, off GeckoTerminal through its own budget — see dex.ts — and the pool's
