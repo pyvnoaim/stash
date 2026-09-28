@@ -72,8 +72,8 @@ export function NotificationBell({ onNavigate }: { onNavigate: (id: string) => v
   const assets = [...new Set(s.watches.map((w) => w.asset))].sort().join(',')
   useEffect(() => {
     if (!assets) { setLive({}); return }
-    // and which book to price them on, or a MEXC reader's alerts would sit on Bitget's numbers for
-    // the whole session: this effect's deps are the watched ids, so it never re-ran on the answer
+    // and which book to price them on: this effect's deps are the watched ids, so it would never
+    // re-run on the answer
     if (feed === undefined) return
     let on = true
     // merged over the last answer rather than replacing it: an id the feed could not price this

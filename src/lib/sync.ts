@@ -218,7 +218,7 @@ async function account(path: string, body: object): Promise<string | null> {
     /* Whose exchange key this is has just changed. venue.ts asks once and holds the answer for the
        life of the tab — which is right while one person is signed in, and wrong the moment the
        person changes. Nothing here reloads the page, so a tab that read `null` signed out would
-       keep reading Binance's bars for an account whose orders rest on MEXC. */
+       go on treating an account with a Bitget key as one without. */
     forgetVenue()
     await syncNow()
     return null

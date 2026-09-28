@@ -18,16 +18,16 @@
 /** `v` is volume — optional, since not every feed sends it and every signal that uses it can sit out. */
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v?: number }
 
-/* No Binance and no spot. Every desk here trades perpetuals on Bitget or MEXC, so those are the
-   two books the app reads — a level is only worth what it is on the book the order rests on, and
-   Binance's spot price was neither of them.
+/* No Binance and no spot. Every desk here trades perpetuals on Bitget, so that is the one book
+   the app reads — a level is only worth what it is on the book the order rests on, and Binance's
+   spot price was not it.
    `twelvedata` used to stay in the union with no asset on it, its fetcher parked so that putting
    the stocks back would be a list again rather than a feed again. What it actually parked was a
    whole second feed nothing could reach: a key in the synced document, a key prompt, an
    is-the-US-open clock, two slower poll rates, a filter the sweep applied to nothing, and a stock
    bell that could never fire. Every asset here is a USDT perpetual. Putting stocks back is a feed
    again, and that is the honest price of it. */
-export type Source = 'bitget' | 'mexc'
+export type Source = 'bitget'
 export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
 
 /* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
@@ -38,9 +38,8 @@ export type Asset = { id: string; label: string; source: Source; group: string; 
 const logo = (name: string) => `/logos/${name}.png`
 
 /* Bitget's USDT-margined perpetuals, all of them, because that feed is keyless, CORS-open and the
-   book half the desks here actually trade. A reader whose key is MEXC is served the same contracts
-   off MEXC instead — see feedOf. Every row is a USDT perpetual, gold included: one kind of
-   instrument, one quote currency, and a symbol that means the same thing on either venue.
+   book the desks here actually trade. Every row is a USDT perpetual, gold included: one kind of
+   instrument, one quote currency.
    Stocks and ETFs are out for now: this desk is a futures desk, the stock feed needed a key, a
    market calendar and half the special cases in this file, and nobody was trading them. */
 export const ASSETS: Asset[] = [
@@ -64,65 +63,25 @@ export type Interval = (typeof INTERVALS)[number]
 
 // and Bitget capitalises everything from the hour up
 const BG_INTERVAL: Record<Interval, string> = { '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W' }
-// MEXC spells them out, and counts the hour in minutes
-export const MX_INTERVAL: Record<Interval, string> = { '5m': 'Min5', '15m': 'Min15', '1h': 'Min60', '4h': 'Hour4', '1d': 'Day1', '1w': 'Week1' }
-/** MEXC's contracts are the same pairs with a bar in them: SOLUSDT is SOL_USDT on that book. */
-export const mxSymbol = (id: string) => id.replace(/USDT$/, '_USDT')
 
 /** The exchange whose key the reader has set, where the app knows of one. Not a preference and not
  *  a setting: it is where their orders actually rest, which is the only reason a feed should move. */
-export type Venue = 'bitget' | 'mexc' | null
+export type Venue = 'bitget' | null
 
-/**
- * Which book an asset is read off. Two rules, in this order:
- *
- * The reader's own venue wins, because a level is only worth what it is on the book the order sits
- * on. Bitget's SOLUSDT low and Binance's differ by a few cents — a quarter of a 15m ATR on Solana —
- * and a trigger computed on one and placed on the other fires early every time.
- *
- * Everything else is the futures contract, never spot. The whole desk is written for perps: the
- * funding line, the liquidation price, the leverage on the record. Reading spot to trade a perp was
- * a basis-sized error in every level, and the bigger of the two gaps this fixes.
- *
- * ponytail: MEXC falls through to Binance's futures rather than its own — contract.mexc.com quotes
- * SOL_USDT in column arrays, a fetcher and two mappings for a venue nobody here has yet, and
- * perp-to-perp basis is cents where spot-to-perp was tens of them. Add it when someone sets that key.
- */
-const feedOf = (_a: Asset, venue: Venue): Source =>
-  // every id here is the same USDT perpetual on both books — SOLUSDT is SOL_USDT, gold included
-  // (MEXC lists XAU_USDT), so nothing is pinned to one venue and the whole list moves together
-  venue === 'mexc' ? 'mexc' : 'bitget'
-
-/** Routes to the right feed. Both return candles oldest → newest.
+/** Routes to the feed. Returns candles oldest → newest.
  *  `bars` is how many are wanted: a chart takes the venue's ceiling, the movers sweep takes a day
  *  of them — asking for a thousand and keeping the last twenty-five is fifty times the bytes, once
- *  a minute, per asset. */
+ *  a minute, per asset. `_venue` is the reader's key, kept in the signature for the day a second
+ *  book comes back. */
 export function fetchCandles(
-  asset: Asset, interval: Interval, venue: Venue = null, bars = BARS,
+  asset: Asset, interval: Interval, _venue: Venue = null, bars = BARS,
 ): Promise<Candle[]> {
-  /* The one place two books are ever mixed, and it buys the only rule on this desk that measures
-     positive. Bitget's daily endpoint serves 90 bars and no more, whatever you ask it for; the
-     regime rule is a 200-MA on daily bars, so on a Bitget desk it could never warm up and the card
-     said `warmup` for good — the reader was left with the trading rule, which is the one measured
-     to make nothing. MEXC keeps enough, is keyless and CORS-open the same way, and quotes the same
-     USDT perpetual. So a daily read that wants more bars than Bitget has goes to MEXC whichever
-     book the keys are on.
-     Nothing else crosses: the hourly sweep, the prices the alerts fire on and every level the desk
-     places all stay on the reader's own venue, which is the rule feedOf exists to keep. Perp-to-perp
-     basis on a daily close is cents — and a 200-MA is an average of two hundred of them. */
-  return feedOf(asset, venue) === 'mexc' || offMexc(interval, bars)
-    ? fetchMexc(asset.id, interval, bars)
-    : fetchBitget(asset.id, interval, bars)
+  return fetchBitget(asset.id, interval, bars)
 }
 
 /** What Bitget's daily candles top out at, measured against the endpoint rather than documented by
  *  it: ask for a thousand and ninety come back. The 200-MA is what this number blocks. */
 export const BG_DAILY_MAX = 90
-
-/** Whether a read is the daily one that has to come off MEXC whoever the reader banks with. The
- *  same test fetchCandles routes on, exported so the chart can say so rather than quietly showing
- *  one book's bars under another book's prices. */
-export const offMexc = (interval: Interval, bars = BARS) => interval === '1d' && bars > BG_DAILY_MAX
 
 /** The window a chart reads, and every venue's own ceiling for one call. */
 export const BARS = 1000
@@ -134,23 +93,13 @@ export const BARS = 1000
  * that is the right way round for something that would otherwise nag you about a number it guessed.
  */
 export async function fetchPrices(
-  ids: string[], venue: Venue = null,
+  ids: string[], _venue: Venue = null,
 ): Promise<Record<string, number>> {
-  const assets = ids.map((id) => ASSETS.find((a) => a.id === id)).filter((a): a is Asset => !!a)
-  // the same routing the candles take — an alert fired off a price from a book the chart never
-  // showed is the level being wrong twice
-  const mx = assets.filter((a) => feedOf(a, venue) === 'mexc').map((a) => a.id)
-  const bg = assets.filter((a) => feedOf(a, venue) === 'bitget').map((a) => a.id)
+  const bg = ids.filter((id) => ASSETS.some((a) => a.id === id))
   const out: Record<string, number> = {}
   const put = (id: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) out[id] = n }
 
   const jobs: Promise<void>[] = []
-  // through the server for the same CORS reason the candles are — see fetchMexc
-  for (const id of mx) jobs.push(
-    fetch(`/api/mexc/price?symbol=${mxSymbol(id)}`)
-      .then((r) => r.json())
-      .then((j: { data?: { lastPrice?: number } }) => put(id, j?.data?.lastPrice)),
-  )
   /* One call per symbol here rather than one for the lot: Bitget's batch ticker is every contract
      it lists, a couple of hundred KB to be told about gold. The desk has one symbol on this feed. */
   for (const id of bg) jobs.push(
@@ -166,24 +115,6 @@ export async function fetchPrices(
    the crypto sweep produces, gated on a US-session clock so a poll against a shut market did not
    spend the free tier's 800 daily credits being told a closing price. It fed a bell for assets the
    list no longer holds. */
-
-/**
- * MEXC's perpetuals, through this app's own server rather than from the browser: contract.mexc.com
- * answers a cross-origin GET with no access-control-allow-origin at all, so the fetch that works
- * from a terminal is blocked in the tab. The route is a thin proxy — see /api/mexc/candles — and
- * this is the only feed here that needs one.
- *
- * Columns, not rows: the venue sends parallel arrays and stamps its times in seconds.
- */
-async function fetchMexc(symbol: string, interval: Interval, bars = BARS): Promise<Candle[]> {
-  const url = `/api/mexc/candles?symbol=${mxSymbol(symbol)}&interval=${MX_INTERVAL[interval]}&bars=${bars}`
-  const j = await fetch(url).then((r) => r.json())
-  const d = j?.data
-  if (!d || !Array.isArray(d.time)) throw new Error(j?.error || j?.msg || 'No data for this symbol')
-  return d.time.map((t: number, i: number) => ({
-    t: t * 1000, o: +d.open[i], h: +d.high[i], l: +d.low[i], c: +d.close[i], v: +d.vol[i],
-  }))
-}
 
 /** Bitget's USDT-margined futures, keyless and CORS-open like Binance's. A thousand bars is the
  *  endpoint's ceiling and the contract's history may be shorter than that — a symbol listed this
@@ -411,13 +342,14 @@ export const priceDigits = (ref: number) => {
 }
 
 /** Locale-formatted price at the precision `ref` deserves. `ref` defaults to the value itself. */
-/** An exchange row's symbol into the id the rest of the app charts in. Bitget and MEXC rows arrive
+/** An exchange row's symbol into the id the rest of the app charts in. Bitget rows arrive
  *  already speaking BTCUSDT; only a coin-margined BTCUSD needs the quote spelled out. */
 export const assetOf = (symbol: string) => symbol.replace(/USD$/, 'USDT')
 
 /** The venue a position row came from, as a person spells it. An id the desk has never heard of
  *  reads back as itself rather than as some venue it isn't — which is what a default did when
  *  Kraken was one, and what made a stale row silently claim the wrong exchange. */
+// MEXC is off the desk, but trades already filed under it still carry its name
 export const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 
 export const fmtPrice = (n: number, ref = n) => {
@@ -2075,7 +2007,7 @@ export const HORIZONS = {
        entry-day stop, which is the rule they were filed under. Two rules, two names, one record. */
     strategy: 'Regime hold',
     rule: 'Long only. Own it at market while price is above the 200-MA, out on a daily close back under. No pull-back to wait for, no target, and nothing takes you out intraday. The wide high is a trim if you want one.',
-    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget keeps only 90 daily bars and a 200-MA cannot exist on them, so the daily read comes off MEXC whichever book your keys are on — the chart says so. Before that it said warmup for good, and a Bitget desk could never run this rule at all.',
+    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget keeps only 90 daily bars and a 200-MA cannot exist on them, so until a longer daily feed is wired in this rule reads warmup.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
@@ -2164,9 +2096,9 @@ export const FILES: Record<Horizon, boolean> = { long: true, short: false }
  *
  * Worth knowing what this refuses: Bitget keeps 90 daily bars for its perps, and paging its
  * history endpoint does not find more, so a 200-MA cannot exist there at all and the card now says
- * so through `warmup` instead of quietly reading a faster chart. MEXC keeps 2000, back to 2021 —
- * so accumulation on crypto is a venue setting, which is a thing you can act on, unlike a number
- * that was never what it claimed.
+ * so through `warmup` instead of quietly reading a faster chart — a feed with a longer daily
+ * history is what it takes, which is a thing you can act on, unlike a number that was never what
+ * it claimed.
  */
 export const readInterval = (h: Horizon, chosen: Interval): Interval =>
   h === 'long' ? HORIZONS.long.interval : chosen
@@ -2307,8 +2239,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      +0.143R vs +0.122R on 600 bars of 1h, +0.111R vs +0.071R on 900, +0.064R vs +0.048R on 500 bars
      of 4h — and −0.091R vs −0.069R on 300 bars of 4h, the shortest window and the one that
      disagrees. Per asset the voting version wins 5 to 7 of the 9 on the three that agree. Daily is
-     missing from the run: the 1d feed comes off MEXC through the app's own proxy, so a walk of it
-     needs the browser, and Bitget's 90 bars cannot fill the window.
+     missing from the run: Bitget's 90 daily bars cannot fill the window.
      That is a weak positive, and it is written down as one — three windows out of four, deltas of
      two to four hundredths of an R, in-sample and gross, which is the same standing every other
      number in this file has. It is a better showing than the plain gap card managed (it flipped

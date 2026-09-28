@@ -37,7 +37,6 @@ import {
 /* The one venue with a book this process can read. Everything else here is a public feed served
    the same to everyone; this is one account's own orders, off the key it stored. */
 import { pending as bitgetPending, positions as bitgetPositions, type Order } from './bitget.ts'
-import { pending as mexcPending, positions as mexcPositions } from './mexc.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -299,7 +298,7 @@ export type Book = {
 }
 
 /** Order ids namespaced by the venue that issued them: two exchanges each counting from one would
- *  otherwise let a Bitget order id stand in for a MEXC one in a key that must be unique forever. */
+ *  otherwise let one venue's order id stand in for another's in a key that must be unique forever. */
 export const tag = (venue: string, orders: Order[]): Order[] =>
   orders.map((o) => ({ ...o, id: `${venue}:${o.id}` }))
 
@@ -368,7 +367,7 @@ export function createPush(db: DatabaseSync) {
     seen: db.prepare('update pushes set seen = ? where endpoint = ?'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
     tzOf: db.prepare('select tz from pushes where user = ? limit 1'),
-    keys: db.prepare('select bitget, mexc from users where id = ?'),
+    keys: db.prepare('select bitget from users where id = ?'),
   }
 
   /* One keypair for this server, kept because the browsers tie a subscription to the key that
@@ -605,7 +604,7 @@ export function createPush(db: DatabaseSync) {
   /** Whichever venues this account stored a key for, each as the two calls a look takes — the same
    *  stored blobs and the same pair of readers /api/positions goes through. */
   const venuesOf = (user: number) => {
-    const row = q.keys.get(user) as { bitget: string | null, mexc: string | null } | undefined
+    const row = q.keys.get(user) as { bitget: string | null } | undefined
     const of = (raw: string | null | undefined, need: string[], look: (c: any) => Promise<Book>) => {
       if (!raw) return null
       try {
@@ -620,10 +619,6 @@ export function createPush(db: DatabaseSync) {
           bitgetPositions(c.key, c.secret, c.passphrase),
         ])
         return { orders: tag('bitget', orders), positions: feed.positions }
-      }),
-      of(row?.mexc, ['key', 'secret'], async (c) => {
-        const [orders, feed] = await Promise.all([mexcPending(c.key, c.secret), mexcPositions(c.key, c.secret)])
-        return { orders: tag('mexc', orders), positions: feed.positions }
       }),
     ].filter((v) => v !== null)
   }

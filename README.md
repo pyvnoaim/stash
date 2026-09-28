@@ -472,7 +472,7 @@ Deleting gives the same undo toast every other delete in the app does.
 ## Markets
 
 A read-only desk over other people's price feeds. Every asset is a USDT-margined perpetual on
-Bitget or MEXC — keyless, CORS-open, no signup — gold included, since Bitget lists XAUUSDT. One
+Bitget — keyless, CORS-open, no signup — gold included, since Bitget lists XAUUSDT. One
 feed, one kind of instrument, nothing to configure. The stocks and the index ETFs came off the list
 and their Twelve Data feed came off with them: a second provider, an API key riding the synced
 document, a US-session clock and two slower poll rates, all for a group nothing pointed at.
@@ -563,13 +563,11 @@ what the exchange actually has open: symbol, side, size, entry against the curre
 from entry signed by the side, and the stop and target resting against it where the venue's feed
 carries them.
 
-Two venues, **Bitget** and **MEXC**, picked one at a time from the top of that section — `· set`
-marks the ones already carrying a key, and a key on each means one list with the venue named on
-every row. Bitget cuts its credential in three parts (the passphrase is the one you chose making it) and
-MEXC in two; either way every part arrives together or not at all, since a fraction of a credential
-is a config that fails at three in the morning. Kraken Futures was the first venue here and is
-gone: its column is dropped on the next start, so the credential it held leaves the database rather
-than sitting in the file unread.
+One venue, **Bitget**. It cuts its credential in three parts (the passphrase is the one you chose
+making it), and every part arrives together or not at all, since a fraction of a credential is a
+config that fails at three in the morning. Kraken Futures and then MEXC were venues here and are
+gone: their columns are dropped on the next start, so the credentials they held leave the database
+rather than sitting in the file unread.
 
 The key is typed in the browser but kept on the server, because it signs requests. It is the only
 credential this app holds, and it never comes back out: the server will only say whether one is set,
@@ -889,7 +887,6 @@ is still in the file and still copies out.
 - `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
 - `server/bitget.ts` — Bitget Futures read-only: the signing, the shape every venue answers in, and the thirty-second cache
-- `server/mexc.ts` — MEXC Futures read-only: contracts turned into coins, held to that same shape
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page

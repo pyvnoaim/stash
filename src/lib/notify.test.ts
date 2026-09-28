@@ -168,14 +168,14 @@ assert.equal(watchAlerts([{ ...long, stop: 85 }], { BTCUSDT: 84 })[0].title, 'Bi
 
 // a position with no stop resting is the alert; one with a stop is not a word
 const naked = nakedAlerts([
-  { symbol: 'BTCUSDT', side: 'long', entry: 100, stop: null, venue: 'mexc' },
+  { symbol: 'BTCUSDT', side: 'long', entry: 100, stop: null, venue: 'bitget' },
   { symbol: 'ETHUSDT', side: 'short', entry: 200, stop: 210, venue: 'bitget' },
 ])
 assert.equal(naked.length, 1)
-assert.equal(naked[0].id, 'naked-mexc-BTCUSDT')
+assert.equal(naked[0].id, 'naked-bitget-BTCUSDT')
 assert.equal(naked[0].asset, 'BTCUSDT') // the chart the click opens
 assert.ok(naked[0].title.includes('BTCUSDT has no stop'))
-assert.ok(naked[0].detail.startsWith('MEXC long')) // the venue is named, not defaulted
+assert.ok(naked[0].detail.startsWith('Bitget long')) // the venue is named, not defaulted
 
 // …and where the levels would go on that bare row: one ATR out, two for the target
 assert.equal(suggestLine({ side: 'long', entry: 100, stop: null, target: null }, 2),

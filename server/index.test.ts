@@ -862,19 +862,19 @@ assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', inv
 const kInv = server.invite()
 const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
 // no session, no key business at all
-assert.equal((await get('/api/mexc')).status, 401)
+assert.equal((await get('/api/bitget')).status, 401)
 // no key on the account yet: the status says so, and positions has nothing to sign with
-assert.deepEqual(await (await get('/api/mexc', kUser)).json(), { set: false })
+assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: false })
 assert.equal((await get('/api/positions', kUser)).status, 501)
 // half a credential is refused rather than stored
-assert.equal((await post('/api/mexc', { key: 'only-half' }, kUser)).status, 400)
+assert.equal((await post('/api/bitget', { key: 'k', secret: 's' }, kUser)).status, 400)
 // a whole one lands, and the answer never carries the secret back
-assert.deepEqual(await (await post('/api/mexc', { key: 'k', secret: 's' }, kUser)).json(), { set: true })
-assert.deepEqual(await (await get('/api/mexc', kUser)).json(), { set: true })
+assert.deepEqual(await (await post('/api/bitget', { key: 'k', secret: 's', passphrase: 'p' }, kUser)).json(), { set: true })
+assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: true })
 // empty both takes it off again
-assert.deepEqual(await (await post('/api/mexc', {}, kUser)).json(), { set: false })
+assert.deepEqual(await (await post('/api/bitget', {}, kUser)).json(), { set: false })
 assert.equal((await get('/api/positions', kUser)).status, 501)
-// the closed book asks the same two keys, so with none on the account it answers the same way
+// the closed book asks the same key, so with none on the account it answers the same way
 assert.equal((await get('/api/closed')).status, 401)
 assert.equal((await get('/api/closed', kUser)).status, 501)
 

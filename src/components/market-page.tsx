@@ -29,9 +29,9 @@ import {
 } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
-  ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, mxSymbol, HORIZONS, INTERVALS,
+  ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
-  venueName, offMexc, priceDigits,
+  venueName, priceDigits,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
 
@@ -309,11 +309,8 @@ export default function MarketPage() {
   const lastAt = useRef(0)
   const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
-  // the daily bars come off MEXC whatever the key (see offMexc), and the price that stretches them
-  // has to come off the same book or the forming bar carries the basis between the two
-  const priceBook: 'mexc' | 'bitget' = feed === 'mexc' || offMexc(interval) ? 'mexc' : 'bitget'
   const tickPx = useLiveMarks(live && feed !== undefined && screen === 'desk'
-    ? [{ venue: priceBook, symbol: current.id }] : [], true)[`${priceBook}:${current.id}`]
+    ? [{ venue: 'bitget', symbol: current.id }] : [], true)[`bitget:${current.id}`]
   const liveAt = useRef(0) // when the socket last moved the bar
   useEffect(() => {
     const t = lastAt.current
@@ -352,7 +349,7 @@ export default function MarketPage() {
       setPolling(quiet)
       if (!quiet || Date.now() - polled < LIVE) return
       polled = Date.now()
-      fetchPrices([current.id], priceBook).then((pr) => {
+      fetchPrices([current.id], 'bitget').then((pr) => {
         const px = pr[current.id]
         if (!on) return
         // fetchPrices resolves either way and simply omits what it could not get, so an absent
@@ -650,8 +647,7 @@ export default function MarketPage() {
   const priceAt = (yPct: number) => hi - (yPct / 100) * (hi - lo)
   /* The levels a drag may move: the exchange's own, on a venue whose key can write. A hand-entered
      position's levels are a note about a trade, not the trade — there is nothing at a venue to
-     move — and MEXC's futures writes have been shut since 2022, the same reason nothing places an
-     order there. Both are drawn exactly as before; they just cannot be picked up. */
+     move. Those are drawn exactly as before; they just cannot be picked up. */
   const draggable: ('stop' | 'target')[] = held?.venue === 'bitget'
     ? (['stop', 'target'] as const).filter((k) => at(k) != null)
     : []
@@ -880,12 +876,6 @@ export default function MarketPage() {
                   <CloudOff className="size-3.5" />
                   {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
                 </span>
-              )}
-              {/* the one read that crosses books, said out loud — see offMexc */}
-              {feed !== 'mexc' && offMexc(interval) && candles.length > 0 && (
-                <Hint label="Bitget keeps only 90 daily bars, so this chart uses MEXC's. Prices you trade off stay on your venue.">
-                  <span className="text-muted-foreground text-xs">daily bars from MEXC</span>
-                </Hint>
               )}
               {view && (
                 <Hint label={`${bulls} readings lean up, ${bears} down. A count, not advice.`}>
@@ -1476,8 +1466,7 @@ export default function MarketPage() {
             <div className="flex flex-col gap-3 lg:max-h-[55%] lg:shrink-0 lg:overflow-y-auto">
             <section className="grid gap-2">
               <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Trade</p>
-              {/* The two buttons this page exists for. Bitget only — MEXC's futures place-order
-                  endpoint has been shut since 2022 — and the dialog does the arithmetic and asks
+              {/* The two buttons this page exists for. Bitget only, and the dialog does the arithmetic and asks
                   twice before anything reaches a book. Neither is a recommendation.
                   No ATR, no buttons: with no stop to size against, the dialog's own suggestion
                   falls back to a fifth of the whole free balance at 1× (see suggest in trade.ts). */}
@@ -1536,9 +1525,7 @@ export default function MarketPage() {
               )) : feed !== undefined ? (
                 /* why there are no buttons, rather than a section that quietly ends */
                 <p className="text-muted-foreground text-xs">
-                  Nothing here places an order. {feed === 'mexc'
-                    ? "MEXC's futures place-order endpoint has been shut since 2022 — the readings are the same, the button is only on a Bitget desk."
-                    : 'Add a Bitget key in Settings and the Long and Short buttons appear here.'}
+                  Nothing here places an order. Add a Bitget key in Settings and the Long and Short buttons appear here.
                 </p>
               ) : null}
               {/* What is already committed on this symbol, so neither button is pressed twice for one
@@ -1762,11 +1749,10 @@ function Watchlist({ current, onPick, inputRef }: {
   const hit = (a: Asset) => !q.trim() || `${a.label} ${a.id}`.toLowerCase().includes(q.trim().toLowerCase())
   /* The minute's poll brings the day's bars; the socket moves the price, the move and the
      sparkline's last point with every trade in between. */
-  const venueKey = feed === 'mexc' ? 'mexc' : 'bitget'
-  const live = useLiveMarks(feed === undefined ? [] : ASSETS.map((a) => ({ venue: venueKey, symbol: a.id })), true)
+  const live = useLiveMarks(feed === undefined ? [] : ASSETS.map((a) => ({ venue: 'bitget', symbol: a.id })), true)
   // the rows in the picker's own order and groups, with the prices hung on them where they arrived
   const priced = new Map(rows.map((r) => {
-    const px = live[`${venueKey}:${r.a.id}`]
+    const px = live[`bitget:${r.a.id}`]
     return [r.a.id, px == null ? r
       : { ...r, price: px, change: ((px - r.open) / r.open) * 100, closes: [...r.closes.slice(0, -1), px] }]
   }))
@@ -1846,8 +1832,7 @@ function Watchlist({ current, onPick, inputRef }: {
           )
         })}
       </div>
-      {/* the venue only once it is known — naming Bitget while the answer is still coming is a
-          MEXC reader being told, briefly, that these are somebody else's prices */}
+      {/* the venue only once it is known */}
       <p className="text-muted-foreground hidden px-4 pb-2 text-[10px] lg:block">
         Last price and the 24h move{feed !== undefined && <>, on {venueName(feed ?? 'bitget')}</>}
       </p>
@@ -1904,8 +1889,6 @@ type ExchangePosition = {
   mark: number | null; pct: number | null
   pnl: number | null; value: number | null; openedAt: string | null
   stop: number | null; target: number | null; funding: number | null
-  /** What the venue already booked against it — see `paid` in server/bitget.ts */
-  paid?: number | null
   /** The multiplier the venue holds it at, where its row says. */
   lev?: number | null
   /** The exchange's own liquidation price, where its feed says one. */
@@ -2158,10 +2141,9 @@ function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on:
 
 /**
  * The mark price of each held symbol, straight off the venue's public socket — the same price each
- * venue figures its P&L from (MEXC's fairPrice, Bitget's markPrice), so a repriced row agrees with
- * the exchange rather than drifting by the spread. Keyed `venue:SYMBOL`.
- * `last` asks for the last trade instead, which is what a candle closes on. MEXC reprices its
- * ticker only every two or three seconds, so that one comes off the trades channel instead.
+ * venue figures its P&L from (Bitget's markPrice), so a repriced row agrees with the exchange
+ * rather than drifting by the spread. Keyed `venue:SYMBOL`.
+ * `last` asks for the last trade instead, which is what a candle closes on.
  * ponytail: one socket per venue per hook instance, and the desk mounts several (positions, chart,
  * watchlist); share one store if a venue ever complains about connections.
  */
@@ -2170,7 +2152,7 @@ function useLiveMarks(rows: { venue?: string, symbol: string }[], last = false) 
   const key = [...new Set(rows.map((r) => `${r.venue}:${r.symbol}`))].sort().join(',')
   useEffect(() => {
     const on = (k: string) => key.split(',').filter((x) => x.startsWith(`${k}:`)).map((x) => x.slice(k.length + 1))
-    const mx = on('mexc'), bg = on('bitget')
+    const bg = on('bitget')
     /* Bitget pushes several times a second and each render here is the whole market page, chart
        and all — so ticks gather and land twice a second, which no eye reading a P&L can outrun. */
     let due: Record<string, number> = {}
@@ -2182,18 +2164,6 @@ function useLiveMarks(rows: { venue?: string, symbol: string }[], last = false) 
       setMarks((m) => ({ ...m, ...d }))
     }, 500)
     const close = [
-      mx.length && sock('wss://contract.mexc.com/edge',
-        (ws) => mx.forEach((s) => ws.send(JSON.stringify({ method: last ? 'sub.deal' : 'sub.ticker', param: { symbol: mxSymbol(s) } }))),
-        JSON.stringify({ method: 'ping' }),
-        (d) => {
-          if (d.channel === 'push.ticker') put(`mexc:${String(d.data?.symbol).replace('_', '')}`, d.data?.fairPrice)
-          // a push can carry several trades; the newest is the price
-          if (d.channel === 'push.deal') {
-            const ts: { p: number, t: number }[] = [d.data].flat().filter(Boolean)
-            const t = ts.reduce((a, b) => (b.t >= a.t ? b : a), ts[0])
-            if (t) put(`mexc:${String(d.symbol).replace('_', '')}`, t.p)
-          }
-        }),
       bg.length && sock('wss://ws.bitget.com/v2/ws/public',
         (ws) => ws.send(JSON.stringify({ op: 'subscribe',
           args: bg.map((s) => ({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s })) })),
@@ -2434,11 +2404,11 @@ function LevelBar({ bar, up }: { bar: NonNullable<ReturnType<typeof levelBar>>; 
  * someone else's does not, because the server reads their size to price the trade and never sends
  * the number itself. Everything a row has no answer for is simply left out.
  *
- * ponytail: pct is computed here rather than taken from the venue — same formula, both exchange
- * adapters (`bitget.ts`, `mexc.ts`) round the identical expression, and one of them is one too many.
+ * ponytail: pct is computed here rather than taken from the venue — same formula as the exchange
+ * adapter (`bitget.ts`) rounds, and one copy of it is one too many.
  */
 function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, value,
-  stop, target, liq, funding, fee, paid, openedAt, meta = [] }: {
+  stop, target, liq, funding, fee, openedAt, meta = [] }: {
   side: 'long' | 'short'
   symbol: string
   /** Opens the chart on what the tile is about. Absent where there is no chart to open. */
@@ -2464,9 +2434,6 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   funding?: number | null
   /** Taker fee, percent per side (the Settings dial) — what `net` takes off for getting in and out. */
   fee?: number
-  /** What the venue has already booked against it — the opening fee, the funding. Its own screen
-   *  takes that off the P&L (MEXC does), so the headline does too. */
-  paid?: number | null
   /** When it filled, however the feed stamps it. Left out where the venue never said. */
   openedAt?: number | string | null
   /** Anything only one side of the desk can say, appended to the quiet line; falsy entries drop. */
@@ -2480,15 +2447,14 @@ function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, 
   const r = now != null && risk != null
     ? (side === 'long' ? now - from : from - now) / risk
     : null
-  /* The feed's P&L is price alone. Where the venue books what has already been paid, the headline
-     takes it off the way the venue's own screen does; `net` takes the fee closing would cost off as
-     well — what closing now would leave. A venue that books nothing gets the opening fee at the
-     Settings rate, on the entry's notional, and the funding so far instead.
+  /* The feed's P&L is price alone. `net` takes off the opening fee at the Settings rate, on the
+     entry's notional, the funding so far, and the fee closing would cost — what closing now would
+     leave.
      ponytail: one flat taker rate from Settings, not the venue's tier; set it to what yours charges. */
   const fees = pnl != null && value != null && now && fee
     ? { open: (value / now) * from * fee / 100, close: value * fee / 100 } : null
-  const shown = pnl != null && paid != null ? pnl + paid : pnl
-  const net = fees && pnl != null ? pnl + (paid ?? (funding ?? 0) - fees.open) - fees.close : null
+  const shown = pnl
+  const net = fees && pnl != null ? pnl + (funding ?? 0) - fees.open - fees.close : null
   // whichever of them the row has: a document row has no money on it, and some venues rest no stop
   const up = (shown ?? pct ?? r ?? 0) >= 0
   const good = up ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
@@ -2646,8 +2612,7 @@ function PositionsPlaceholder() {
  * dialog — the same arming the trade dialog uses, for the same reason: it is one click beside a
  * number somebody is reading, and money is committed either way it goes.
  *
- * Bitget only. MEXC's futures order endpoints have been shut since 2022, so its rows read out and
- * nothing here can touch them — the same reason there is no button to place one.
+ * Bitget only: a row from anywhere else reads out and nothing here can touch it.
  */
 function CancelOrder({ order, onGone }: { order: RestingOrder, onGone: () => void }) {
   const [armed, setArmed] = useState(false)
@@ -2800,7 +2765,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
             onPick={onOpen} venue={venues.size > 1 ? venueName(p.venue) : null} lev={p.lev}
             from={p.entry} now={p.mark} size={String(p.size)} pnl={p.pnl} value={p.value}
             stop={p.stop} target={p.target} liq={p.liq}
-            funding={p.funding} fee={dials.fee} paid={p.paid}
+            funding={p.funding} fee={dials.fee}
             openedAt={p.openedAt}
             meta={[suggestLine(p, atrs[assetOf(p.symbol)])]} />
         ))}

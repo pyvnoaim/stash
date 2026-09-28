@@ -73,15 +73,6 @@ export default defineConfig({
            alerts in notification-bell against a number that isn't true any more, and the watcher
            is written so a *missing* price fires nothing. Missing is the honest answer offline. */
         runtimeCaching: [{
-          urlPattern: /\/api\/mexc\/candles/,
-          handler: 'NetworkFirst',
-          options: {
-            cacheName: 'candles-mexc',
-            networkTimeoutSeconds: 10,
-            cacheableResponse: { statuses: [200] },
-            expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
-          },
-        }, {
           /* Gold's feed, on the same footing as Binance's bars: the candles endpoint only, never
              the ticker beside it. Matched on the path, so the signed calls to the same host — which
              go through the server and never appear here anyway — could not join by accident. */
