@@ -1,7 +1,7 @@
 // npm test — the Hyperliquid shaping: an address's state into positions, trigger orders into
 // stops and targets, and fills rebuilt into whole closed trades
 import assert from 'node:assert/strict'
-import { coinOf, idOf, openedAt, shape, shapeCandles, shapeClosed, shapeLevels, shapeOrders, equityOf, COIN, ADDRESS } from './hyperliquid.ts'
+import { info, setBudget, coinOf, idOf, openedAt, shape, shapeCandles, shapeClosed, shapeLevels, shapeOrders, equityOf, COIN, ADDRESS } from './hyperliquid.ts'
 
 // symbols: the app's ids and the venue's coins, gold the one that is not a rename
 assert.equal(coinOf('BTCUSDT'), 'BTC')
@@ -88,5 +88,19 @@ assert.deepEqual(shapeCandles([
   { t: 1, o: 1, h: 2, l: 0.5, c: 1.5, v: 5 },
   { t: 2, o: 2, h: 3, l: 1, c: 2.5, v: 10 },
 ])
+
+/* Lanes: the server's sweeps spend only their share of the minute, in a line of their own, so a
+   person asking once the sweeps' share is spent is still answered at once. */
+{
+  const real = globalThis.fetch
+  globalThis.fetch = (() => Promise.resolve(new Response('{}'))) as unknown as typeof fetch
+  setBudget(100)
+  await info({ type: 'a' }, 60, 'sweep')              // the sweep's whole share
+  const t = Date.now()
+  await info({ type: 'c' }, 30, 'person')              // 60 + 30 is inside the whole budget
+  assert.ok(Date.now() - t < 1000, 'a person waited behind a sweep')
+  setBudget(1e9)
+  globalThis.fetch = real
+}
 
 console.log('hyperliquid ok')
