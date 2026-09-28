@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, Loader2, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
 import { MobileTabs } from '@/components/mobile-tabs'
@@ -65,12 +65,21 @@ export default function App() {
   const [searching, setSearching] = useState(false)
   // on a phone the search field is not permanently in the header; this is whether it is open
   const [phoneSearch, setPhoneSearch] = useState(false)
+  // the capture bar's overlay on a phone, where the header has no room to keep it open
+  const [phoneCapture, setPhoneCapture] = useState(false)
   // an item opened to fill the main area; navigating away or deleting it drops back to the list
   const [pageItem, setPageItem] = useState<string | null>(null)
   // scrollbars are hidden, so a chevron says the list runs on past the bottom edge
   const [moreBelow, setMoreBelow] = useState(false)
 
   const boxRef = useRef<HTMLInputElement>(null)
+  /** Puts the cursor in the capture bar — opening its overlay first on a phone, where it is folded
+   *  away behind the header's + and an input with no layout cannot take focus. */
+  const openCapture = () => {
+    if (boxRef.current?.offsetParent) { boxRef.current.focus(); return }
+    setPhoneCapture(true)
+    requestAnimationFrame(() => boxRef.current?.focus())
+  }
   const searchRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -309,7 +318,7 @@ export default function App() {
       if (palette) return               // the dialog owns every other key while it is open, esc included
 
       if (k('search')) { e.preventDefault(); searchRef.current?.select(); return }
-      if (k('capture')) { e.preventDefault(); boxRef.current?.focus(); return }
+      if (k('capture')) { e.preventDefault(); openCapture(); return }
       // inside a field the browser's own text undo is the one you meant, and the PDF tab has its own
       if (cmd && key === 'z' && (!typingIn(e.target) || emptyField(e.target)) && (query || !isPage(s.sel))) {
         e.preventDefault()
@@ -465,11 +474,25 @@ export default function App() {
             {!query && openProject && <Faces p={openProject} />}
             {/* how many, or — in a project, where the fraction is the more useful number — how
                 many of how many, with the bar that draws it */}
-            <span className="text-muted-foreground mr-auto flex items-center gap-2 font-mono text-xs tabular-nums">
+            <span className="text-muted-foreground flex items-center gap-2 font-mono text-xs tabular-nums">
               {!query && openProject
                 ? <ProjectProgress p={openProject} />
                 : (page ? '' : items.length || '')}
             </span>
+            {/* The capture bar, in the header of every page rather than over the lists alone: a
+                thought arrives wherever you are, and a line typed on the chart lands in Quick notes
+                (or the project you are in) the same as one typed over a list. On a phone the header
+                has no room for it, so + opens it across the whole row. */}
+            <div className={cn('min-w-0 flex-1', phoneCapture
+              ? 'bg-background absolute inset-x-2 z-20 md:static md:inset-auto md:bg-transparent'
+              : 'hidden md:block')}>
+              <Capture inputRef={boxRef} className="mx-auto max-w-2xl" announce={isPage(s.sel) || !!query}
+                onDone={() => setPhoneCapture(false)} />
+            </div>
+            {!phoneCapture && <span className="flex-1 md:hidden" />}
+            <Button variant="ghost" size="icon" aria-label="Add to Stash" className="size-8 md:hidden" onClick={openCapture}>
+              <Plus />
+            </Button>
             <ThemeToggle />
             {/* a phone has no room for a permanent field: the icon opens it, and it takes the
                 whole row while it is open, which is also where the results are read */}
@@ -563,8 +586,6 @@ export default function App() {
               focus(null)
             }}
           >
-            <Capture inputRef={boxRef} />
-
             {/* only a shared project has anything left to say down here — the progress moved up
                 beside the name, where it has something to sit next to */}
             {!query && openProject && <ProjectHeader p={openProject} />}
@@ -616,7 +637,7 @@ export default function App() {
               style={{ maskImage: 'linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)' }}
             >
               {items.length === 0 ? (
-                <EmptyState view={s.sel} query={query} onCapture={() => boxRef.current?.focus()} />
+                <EmptyState view={s.sel} query={query} onCapture={openCapture} />
               ) : (
                 items.map((it) => {
                   // every type-sorted list reads as sections by kind; the dated views keep their
