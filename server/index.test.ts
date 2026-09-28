@@ -18,6 +18,19 @@ setBudget(1e9)
 const realFetch = globalThis.fetch
 const hlAsked: any[] = []
 globalThis.fetch = ((u: any, o?: any) => {
+  // a Solana wallet holding 553 SI and no SOL, and SI's one deep pool
+  if (String(u) === 'https://api.mainnet-beta.solana.com') {
+    const { method, params } = JSON.parse(o?.body ?? '{}')
+    // the classic token program holds it; Token-2022 has nothing for this wallet
+    const result = method === 'getBalance' || params?.[1]?.programId !== 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ? { value: method === 'getBalance' ? 0 : [] }
+      : { value: [{ account: { data: { parsed: { info: { mint: 'SImint', tokenAmount: { uiAmountString: '553' } } } } } }] }
+    return Promise.resolve(new Response(JSON.stringify({ result })))
+  }
+  if (String(u).startsWith('https://api.dexscreener.com/')) {
+    return Promise.resolve(new Response(JSON.stringify([
+      { baseToken: { address: 'SImint', symbol: 'SI' }, priceUsd: '0.0231', liquidity: { usd: 900000 } },
+    ])))
+  }
   if (!String(u).startsWith('https://api.hyperliquid.xyz')) return realFetch(u, o)
   const body = JSON.parse(o?.body ?? '{}')
   hlAsked.push(body)
@@ -901,9 +914,12 @@ assert.match(w.found, /1 position, \$1240\.50 account value/)
 assert.deepEqual(w.wallets, [{ address: EVM.toLowerCase(), chain: 'evm', label: 'Fomo' }])
 await post('/api/wallets', { address: EVM.toUpperCase().replace('0X', '0x') }, kUser)
 assert.equal((await (await get('/api/wallets', kUser)).json()).wallets.length, 1)
-// Solana is recognised by its shape and kept, and says it is not read yet rather than pretending
+// Solana is recognised by its shape, looked up, and its tokens priced off their deepest pool
 w = await (await post('/api/wallets', { address: SOL }, kUser)).json()
-assert.match(w.found, /Solana/)
+assert.match(w.found, /found on Solana: 1 token, \$12\.77/)
+const held = await (await get('/api/holdings', kUser)).json()
+assert.deepEqual(held.holdings.map((h: any) => [h.symbol, h.value]), [['SI', 12.77]])
+assert.equal(held.total, 12.77)
 assert.deepEqual(w.wallets.map((x: any) => x.chain), ['evm', 'solana'])
 // the wallet is what positions read now: the short, off the address, never anything to sign with
 const book = await (await get('/api/positions', kUser)).json()
@@ -916,6 +932,8 @@ await del2('/api/wallets', { address: EVM }, kUser)
 await del2('/api/wallets', { address: SOL }, kUser)
 assert.deepEqual(await (await get('/api/wallets', kUser)).json(), { wallets: [] })
 assert.equal((await get('/api/positions', kUser)).status, 501)
+assert.deepEqual(await (await get('/api/holdings', kUser)).json(), { holdings: [], total: 0 })
+assert.equal((await get('/api/holdings')).status, 401)
 assert.equal((await get('/api/closed')).status, 401)
 
 /* The market relay: public, since the charts work signed out, and nothing reaches the venue that

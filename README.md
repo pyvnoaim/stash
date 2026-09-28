@@ -567,8 +567,15 @@ leverage, funding, the venue's own liquidation price, and the stop and target re
 Fomo uses one `0x` address on every EVM chain — that one is Hyperliquid — and one Solana address.
 Paste either: the chain is read off its shape, the server looks it up on the spot and says what it
 found there (*1 position, $1,240 account value*, or *nothing on Hyperliquid at this address*), and
-it is kept whatever the answer. Solana addresses are stored for the memecoin holdings that come next;
-nothing reads them yet. Up to five per account.
+it is kept whatever the answer. Up to five per account.
+
+A Solana address is read for what it holds — the memecoins Fomo buys, which are tokens in the wallet
+rather than positions on any book. The **Wallet** card on the Markets page lists each token with
+its amount, value and 24-hour move, and the total: balances off a Solana RPC (both token programs,
+since pump.fun mints on Token-2022), priced off each token's deepest DexScreener pool. Dust under
+fifty cents and coins whose pool holds under $1,000 are left out — that is what an airdropped scam
+coin looks like, and a total that counted one at its make-believe price would be a lie about money.
+A row opens the token's chart on DexScreener until the desk draws its own.
 
 **Watch-only.** An address is public and signs nothing, so there is no key here at all and nothing
 this server holds could place, move or cancel an order — trading happens in Fomo. The worst a copied
@@ -884,6 +891,7 @@ is still in the file and still copies out.
 - `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
 - `server/hyperliquid.ts` — Hyperliquid, read-only by address: the rate budget, the candle cache, positions, orders, and closed trades rebuilt from fills
+- `server/solana.ts` — what a Solana wallet holds, priced off DexScreener, dust and scam coins left out
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
@@ -1121,8 +1129,10 @@ Every push to `main` here lands as a versioned GitHub release, so pin a tag if y
 not track `main` live. Updating is `git pull && docker compose up -d --build` — schema migrations
 run on boot, and a tab that is already open offers **Reload** when the new bundle is waiting.
 
-No optional variables on the container. The watched wallets are not the container's either: each
-account adds its own in Settings → Markets.
+One optional variable: `SOLANA_RPC`, a Solana RPC URL for reading wallets. Unset, the public
+endpoint is used, which is rate-limited — if the Wallet card stops loading, a free Helius URL here
+is the fix. The watched wallets are not the container's: each account adds its own in Settings →
+Markets.
 
 Data sits in one named volume; backing it up is copying one SQLite file — via `vacuum into`, since
 the live file is in WAL mode and a raw `cp` of it can catch a write half-landed:

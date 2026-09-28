@@ -36,6 +36,7 @@ import {
   positions as hlPositions, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
+import { holdings as solHoldings } from './solana.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -1239,9 +1240,17 @@ export function start({
           return send(res, 400, { error: `${MAX_WALLETS} wallets is the most one account watches` })
         }
         const label = String(b?.label ?? '').trim().slice(0, 40).replace(/[^\x20-\x7e\u00a0-\uffff]/g, '') || null
-        /* What is there, said in words. Solana is only kept for now — its holdings are the next
-           step — so it says that rather than pretending to have looked. */
-        let found = chain === 'solana' ? 'saved — Solana holdings are not read yet' : ''
+        /* What is there, said in words, off the same reads the panels make. */
+        let found = ''
+        if (chain === 'solana') {
+          try {
+            const h = await solHoldings(address)
+            const worth = h.reduce((n, r) => n + r.value, 0)
+            found = h.length ? `found on Solana: ${h.length} token${h.length === 1 ? '' : 's'}, $${worth.toFixed(2)}` : 'nothing worth more than dust on this Solana address'
+          } catch {
+            found = 'saved, but Solana did not answer just now'
+          }
+        }
         if (chain === 'evm') {
           try {
             const f = await hlPositions(address)
@@ -1257,6 +1266,23 @@ export function start({
         return send(res, 200, { wallets: q.wallets.all(user.id), found })
       }
       return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* What the watched Solana wallets hold — the memecoins, which are tokens rather than positions
+       on a book. Every wallet or none, for the reason the positions route gives. */
+    if (path === '/api/holdings' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
+        .filter((w) => w.chain === 'solana').map((w) => w.address)
+      if (!sol.length) return send(res, 200, { holdings: [], total: 0 })
+      try {
+        const rows = (await Promise.all(sol.map(solHoldings))).flat().sort((a, b) => b.value - a.value)
+        const total = Math.round(rows.reduce((n, r) => n + r.value, 0) * 100) / 100
+        return send(res, 200, { holdings: rows, total })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
     }
 
     /* The market feed, relayed. Hyperliquid's info endpoint is a POST, which no service worker can
