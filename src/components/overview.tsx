@@ -176,7 +176,9 @@ function InOut({ made, done }: { made: { day: string; n: number }[]; done: { day
     // the line takes whatever height the card has, never less than it always had
     <div className="flex h-full flex-col gap-2">
       <div className="border-border relative min-h-30 flex-1 border-b">
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+        {/* absolute: a 100×100 viewBox left in the flow is a square as wide as the card, and it
+            set the row's height instead of filling the one the row already had */}
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
           <path d={`${path(done)} L100 100 L0 100 Z`} className="fill-foreground/10" />
           <path d={path(made)} className="stroke-muted-foreground fill-none" strokeWidth={1.25}
             strokeDasharray="3 3" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
