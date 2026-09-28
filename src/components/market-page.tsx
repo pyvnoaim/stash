@@ -203,7 +203,27 @@ export default function MarketPage() {
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
-  const [hoverY, setHoverY] = useState<number | null>(null) // and the pointer's height, % of the box — mouse only
+  /* The pointer's height, for the crosshair's level line and its price tag — mouse only, and moved
+     on the elements themselves rather than through state: it changes on every pixel, and a render
+     of this page per pixel is a render of every candle on it. `mouseIn` is the one bit that does
+     go through state, flipping once as the pointer comes and goes. */
+  const [mouseIn, setMouseIn] = useState(false)
+  const yLine = useRef<SVGLineElement>(null)
+  const yTag = useRef<HTMLSpanElement>(null)
+  const frame = useRef({ lo: 0, hi: 1, fmt: (v: number) => String(v) })
+  const lastY = useRef(50)
+  /** Puts the level line and its tag at the pointer's last height — on a move, and the moment either
+   *  mounts, so the first move after coming in is not a frame of blank tag. */
+  const placeY = () => {
+    const py = lastY.current
+    yLine.current?.setAttribute('y1', String(py))
+    yLine.current?.setAttribute('y2', String(py))
+    if (yTag.current) {
+      const { lo: flo, hi: fhi, fmt: ffmt } = frame.current
+      yTag.current.style.top = `${py}%`
+      yTag.current.textContent = ffmt(fhi - (py / 100) * (fhi - flo))
+    }
+  }
   const phone = useIsMobile() // which verbs the chart's footer offers, and how much room a label has
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
@@ -506,6 +526,7 @@ export default function MarketPage() {
   const pad = (rawHi - rawLo) * 0.08 || 1
   const lo = rawLo - pad, hi = rawHi + pad
   const y = (p: number) => ((hi - p) / (hi - lo)) * 100
+  frame.current = { lo, hi, fmt }
   const xSpan = n > 1 ? n - 1 + future : 1
   const xAt = (i: number) => (n > 1 ? (i / xSpan) * 100 : 0)
   const barW = (100 / xSpan) * 0.6
@@ -845,7 +866,9 @@ export default function MarketPage() {
                     const f = (e.clientX - r.left) / r.width
                     // clamps in the future strip, so hovering it reads the last bar rather than nothing
                     setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
-                    setHoverY(Math.max(0, Math.min(100, ((e.clientY - r.top) / r.height) * 100)))
+                    lastY.current = Math.max(0, Math.min(100, ((e.clientY - r.top) / r.height) * 100))
+                    placeY()
+                    if (!mouseIn) setMouseIn(true)
                   }}
                   onPointerCancel={(e) => {
                     pts.current.delete(e.pointerId)
@@ -856,7 +879,7 @@ export default function MarketPage() {
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
                     grab.current = null
-                    if (e.pointerType === 'mouse') { setHover(null); setHoverY(null) }
+                    if (e.pointerType === 'mouse') { setHover(null); setMouseIn(false) }
                   }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
@@ -876,8 +899,8 @@ export default function MarketPage() {
                     <line x1={xAt(hover!)} x2={xAt(hover!)} y1="0" y2="100" className="stroke-muted-foreground/60"
                       strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
                   )}
-                  {hc && hoverY != null && (
-                    <line x1="0" x2="100" y1={hoverY} y2={hoverY} className="stroke-muted-foreground/60"
+                  {hc && mouseIn && (
+                    <line ref={(el) => { yLine.current = el; placeY() }} x1="0" x2="100" y1="50" y2="50" className="stroke-muted-foreground/60"
                       strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
                   )}
                   {/* area fill only reads under a single price line, so it's line-mode only */}
@@ -978,10 +1001,16 @@ export default function MarketPage() {
                     corner. A box follows the pointer only when there is something of yours on the bar. */}
                 {hc && (
                   <>
-                    <span className="bg-foreground text-background pointer-events-none absolute right-0 z-20 -translate-y-1/2 rounded-sm px-1 text-[10px] tabular-nums"
-                      style={{ top: `${hoverY ?? y(hc.c)}%` }}>
-                      {fmt(hoverY != null ? hi - (hoverY / 100) * (hi - lo) : hc.c)}
-                    </span>
+                    {/* a mouse's tag is placed and written by the move handler — see mouseIn; a tap's
+                        sits at the bar's close */}
+                    {mouseIn
+                      ? <span ref={(el) => { yTag.current = el; placeY() }} className="bg-foreground text-background pointer-events-none absolute right-0 z-20 -translate-y-1/2 rounded-sm px-1 text-[10px] tabular-nums" />
+                      : (
+                        <span className="bg-foreground text-background pointer-events-none absolute right-0 z-20 -translate-y-1/2 rounded-sm px-1 text-[10px] tabular-nums"
+                          style={{ top: `${y(hc.c)}%` }}>
+                          {fmt(hc.c)}
+                        </span>
+                      )}
                     <span className="bg-foreground text-background pointer-events-none absolute top-full z-20 mt-1.5 -translate-x-1/2 rounded-sm px-1.5 text-[10px] whitespace-nowrap tabular-nums"
                       style={{ left: `${Math.min(94, Math.max(6, xAt(hover!)))}%` }}>
                       {stamp(hc.t)}
