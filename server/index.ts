@@ -32,10 +32,11 @@ import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import {
-  ADDRESS, candles as hlCandles, closed as hlClosed, COIN, INTERVAL, mids as hlMids, pending as hlPending,
+  ADDRESS, candles as hlCandles, closed as hlClosed, INTERVAL, mids as hlMids, pending as hlPending,
   positions as hlPositions, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
+import { ASSETS, hlCoin } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
 
 /** The whole document, not an upload endpoint. */
@@ -283,6 +284,8 @@ const REFUSED_FOR = 5 * 60_000
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 /** How many wallets one account watches. Each EVM one is a read of the venue per half minute. */
 const MAX_WALLETS = 5
+/** The coins the public candle relay will ask the venue about: the listed assets, by the venue's name. */
+const LISTED = new Set(ASSETS.map((a) => hlCoin(a.id)))
 
 /* Closed positions, per account, for the half minute /api/closed hands them out over. The venue
    caches its own open book; this list has no cache of its own down there, and a phone and a laptop
@@ -1269,7 +1272,10 @@ export function start({
       }
       const u = new URL(req.url ?? '/', 'http://x').searchParams
       const coin = u.get('coin') ?? '', interval = u.get('interval') ?? ''
-      if (!COIN.test(coin) || !INTERVAL[interval]) return send(res, 400, { error: 'not a market' })
+      /* The listed assets and nothing else. The pattern alone would let anyone ask for made-up
+         coins, and every new name is a cache entry and an upstream call out of the one budget the
+         whole server shares — a signed-out stranger could stall everyone's charts that way. */
+      if (!LISTED.has(coin) || !INTERVAL[interval]) return send(res, 400, { error: 'not a market' })
       const bars = Math.floor(Number(u.get('bars') ?? '1000')) || 1000
       try {
         return send(res, 200, await hlCandles(coin, interval, bars), { 'cache-control': 'private, max-age=5' })
