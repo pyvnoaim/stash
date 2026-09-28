@@ -232,6 +232,135 @@ export function swaps(owner: string, mint: string): Promise<Swap[]> {
   return got
 }
 
+/* ---------- what a token trade cost and paid ---------- */
+
+const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+/** What a token account holds back as rent: paid on the first buy of a token, handed back when the
+ *  account is closed on the last sell. It is not the trade, so it comes off both ends. */
+const RENT = 0.00203928
+
+/** One swap of one token, with what it cost or brought in: SOL (priced later, at its own moment)
+ *  and USDC, as the wallet's own balances moved. */
+export type Priced = { t: number, sig: string, mint: string, side: 'buy' | 'sell', amount: number, sol: number, usdc: number }
+
+/**
+ * One transaction read for the swap in it: which token the wallet's balance of went up or down, and
+ * what went the other way — SOL (native and wrapped together) and USDC. Anything else — two tokens
+ * moving at once, a transfer with nothing coming back, a failed transaction — is not a swap this
+ * can price, and is left out rather than guessed at.
+ */
+export function shapeTx(tx: any, owner: string, sig: string): Priced | null {
+  if (!tx?.meta || tx.meta.err || !tx.blockTime) return null
+  const bal = (list: any[] | undefined) => {
+    const m = new Map<string, number>()
+    for (const b of list ?? []) {
+      if (b?.owner !== owner || typeof b?.mint !== 'string') continue
+      m.set(b.mint, (m.get(b.mint) ?? 0) + (Number(b?.uiTokenAmount?.uiAmountString ?? b?.uiTokenAmount?.uiAmount) || 0))
+    }
+    return m
+  }
+  const pre = bal(tx.meta.preTokenBalances), post = bal(tx.meta.postTokenBalances)
+  const delta = (mint: string) => (post.get(mint) ?? 0) - (pre.get(mint) ?? 0)
+  const moved = [...new Set([...pre.keys(), ...post.keys()])]
+    .filter((m) => m !== SOL && m !== USDC && Math.abs(delta(m)) > 1e-9)
+  if (moved.length !== 1) return null
+  const mint = moved[0], amount = delta(mint)
+  // the wallet's own SOL, off its place among the transaction's accounts
+  const keys = (tx.transaction?.message?.accountKeys ?? []) as any[]
+  const at = keys.findIndex((k) => (typeof k === 'string' ? k : k?.pubkey) === owner)
+  const lamports = at >= 0 ? (Number(tx.meta.postBalances?.[at]) || 0) - (Number(tx.meta.preBalances?.[at]) || 0) : 0
+  let sol = lamports / 1e9 + delta(SOL)
+  // a buy that opened the account paid its rent, a sell that closed it got the rent back
+  if (amount > 0 && !pre.has(mint)) sol += RENT
+  if (amount < 0 && !post.has(mint)) sol -= RENT
+  const usdc = delta(USDC)
+  // money has to have gone the other way, or this was a transfer, not a trade
+  const counter = amount > 0 ? -(Math.min(sol, 0) + Math.min(usdc, 0)) : Math.max(sol, 0) + Math.max(usdc, 0)
+  if (!(counter > 0)) return null
+  return { t: tx.blockTime * 1000, sig, mint, side: amount > 0 ? 'buy' : 'sell', amount: Math.abs(amount), sol: Math.abs(sol), usdc: Math.abs(usdc) }
+}
+
+/** A token bought and sold back to nothing: what went in, what came out, and when. */
+export type TokenTrade = {
+  mint: string, symbol: string, pool: string | null, openedAt: number, closedAt: number,
+  amount: number, cost: number, proceeds: number, pnl: number, pct: number, buys: number, sells: number,
+}
+
+/**
+ * Swaps into trades, token by token: a trade runs from the first buy while holding none until the
+ * holding is sold back under a hundredth of its peak — what is left then is dust. A trade still
+ * held is not in the list: it is in the wallet. `usd` prices a swap in dollars; one it cannot price
+ * leaves that trade out rather than printing half a sum.
+ */
+export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null): Omit<TokenTrade, 'symbol' | 'pool'>[] {
+  const out: Omit<TokenTrade, 'symbol' | 'pool'>[] = []
+  const by = new Map<string, Priced[]>()
+  for (const s of [...swaps].sort((a, b) => a.t - b.t)) by.set(s.mint, [...(by.get(s.mint) ?? []), s])
+  for (const [mint, list] of by) {
+    let held = 0, peak = 0, cost = 0, proceeds = 0, openedAt = 0, buys = 0, sells = 0, amount = 0, priced = true
+    for (const s of list) {
+      if (s.side === 'sell' && held <= 0) continue // selling what was bought before the history reaches
+      const v = usd(s)
+      if (v == null) priced = false
+      if (s.side === 'buy') {
+        if (held <= 0) { openedAt = s.t; cost = proceeds = buys = sells = amount = peak = 0; priced = v != null }
+        held += s.amount; amount += s.amount; peak = Math.max(peak, held); cost += v ?? 0; buys++
+      } else {
+        held -= s.amount; proceeds += v ?? 0; sells++
+        if (held <= peak / 100) {
+          if (priced && cost > 0) out.push({ mint, openedAt, closedAt: s.t, amount, cost, proceeds, pnl: proceeds - cost, pct: ((proceeds - cost) / cost) * 100, buys, sells })
+          held = 0
+        }
+      }
+    }
+  }
+  return out.sort((a, b) => b.closedAt - a.closedAt)
+}
+
+/** How far back a wallet's history is read for its token trades. */
+const HISTORY = 100
+const tradeCache = new Map<string, { at: number, trades: Promise<TokenTrade[]> }>()
+
+/** `owner`'s finished token trades, priced — `solUsd` gives SOL's dollar price at a moment. Two
+ *  minutes fresh; every transaction read is kept for good, so a second look costs one call. */
+export function tokenTrades(owner: string, solUsd: (t: number) => Promise<number | null>): Promise<TokenTrade[]> {
+  if (!MINT.test(owner)) return Promise.resolve([])
+  const hit = tradeCache.get(owner)
+  if (hit && Date.now() - hit.at < 120_000) return hit.trades
+  const got = (async () => {
+    const sigs = ((await rpc('getSignaturesForAddress', [owner, { limit: HISTORY, commitment: 'confirmed' }]).catch(() => [])) ?? []) as { signature?: string, err?: unknown }[]
+    const want = sigs.filter((x) => !x?.err && typeof x?.signature === 'string').map((x) => x.signature!)
+    const swaps: Priced[] = []
+    for (let i = 0; i < want.length; i += 4) {
+      const txs = await Promise.all(want.slice(i, i + 4).map((sig) => txOf(sig).catch(() => null)))
+      txs.forEach((tx, j) => { const s = shapeTx(tx, owner, want[i + j]); if (s) swaps.push(s) })
+    }
+    // SOL's price at each swap's moment, asked once per swap
+    const px = new Map<string, number | null>()
+    await Promise.all(swaps.filter((s) => s.sol > 0).map(async (s) => { px.set(s.sig, await solUsd(s.t).catch(() => null)) }))
+    const rows = tradesOf(swaps, (s) => (s.sol > 0 ? (px.get(s.sig) == null ? null : s.sol * px.get(s.sig)! + s.usdc) : s.usdc))
+    // the names, logos and pools, off DexScreener, thirty mints a call
+    const mints = [...new Set(rows.map((r) => r.mint))]
+    const pages = await Promise.all(Array.from({ length: Math.ceil(mints.length / 30) }, (_, i) =>
+      fetch(`${DEX}/${mints.slice(i * 30, i * 30 + 30).join(',')}`, { signal: AbortSignal.timeout(15_000) })
+        .then((r) => (r.ok ? r.json() : [])).catch(() => [])))
+    const pairs = bestPairs(pages.flat())
+    return rows.map((r) => {
+      const p = pairs.get(r.mint)
+      noteLogo(r.mint, p?.info?.imageUrl)
+      return {
+        ...r,
+        symbol: String(p?.baseToken?.symbol ?? r.mint.slice(0, 4)).slice(0, 20),
+        pool: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(p?.pairAddress ?? '') ? p!.pairAddress! : null,
+      }
+    })
+  })()
+  got.catch(() => { if (tradeCache.get(owner)?.trades === got) tradeCache.delete(owner) })
+  if (tradeCache.size > 200) tradeCache.clear()
+  tradeCache.set(owner, { at: Date.now(), trades: got })
+  return got
+}
+
 /* ---------- logos, through this server ---------- */
 
 /** The logo URL DexScreener gave each mint a wallet here holds. Only these are ever fetched, so the
