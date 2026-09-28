@@ -959,9 +959,8 @@ export default function MarketPage() {
                     where it sold, centred on the price it happened at. HTML rather than SVG for the
                     same reason the tooltip is: preserveAspectRatio=none squashes a shape into
                     whatever the pane's aspect happens to be, and a disc is a shape.
-                    Hoverable, unlike before: a pointerdown on one still bubbles to the pane, so the
-                    crosshair and the scrub are unaffected, and the touch reading stays on the
-                    crosshair box below for the devices that cannot hover at all.
+                    The pointer passes through them to the pane, so the crosshair and the scrub
+                    are unaffected, and what a mark says is read in the crosshair's box.
                     Drawn at 18px rather than the 12 the inline one uses, and over the candles and
                     the price tag both: this is a record of money that moved, and a wick in front of
                     it is the chart hiding the one thing on the pane that actually happened. The two
@@ -984,15 +983,15 @@ export default function MarketPage() {
                      ponytail: O(n²) count over a list that is a handful of fills per window. */
                   const stack = fills.slice(0, k).filter((p) => p.i === m.i).length
                   return (
-                    <Hint key={`f-${k}`} label={<span className="flex items-center gap-1.5">{note(m)}</span>}>
-                      <FillMark buy={m.buy} open={m.open}
-                        className="absolute z-20 size-[18px] -translate-x-1/2 -translate-y-full"
-                        style={{
-                          left: `${xAt(m.i)}%`,
-                          top: `${Math.max(y(vis[m.i].h), 7.5 * (stack + 1))}%`,
-                          marginTop: -4 - stack * 22,
-                        }} />
-                    </Hint>
+                    // no tooltip of its own: the crosshair's box says the same, and the pointer passes
+                    // through to it, so a mark is read one way on a mouse and on a finger alike
+                    <FillMark key={`f-${k}`} buy={m.buy} open={m.open}
+                      className="pointer-events-none absolute z-20 size-[18px] -translate-x-1/2 -translate-y-full"
+                      style={{
+                        left: `${xAt(m.i)}%`,
+                        top: `${Math.max(y(vis[m.i].h), 7.5 * (stack + 1))}%`,
+                        marginTop: -4 - stack * 22,
+                      }} />
                   )
                 })}
 
