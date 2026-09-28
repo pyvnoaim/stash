@@ -14,7 +14,15 @@ const TYPES = [
   { id: 'note', label: 'Note', icon: StickyNote },
 ] as const
 
-export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputElement | null> }) {
+export function Capture({ inputRef, className, onDone, announce }: {
+  inputRef: React.RefObject<HTMLInputElement | null>
+  /** Where it sits — the header gives it a width and no padding of its own. */
+  className?: string
+  /** Called after an add, and on Escape: the phone's overlay closes itself with it. */
+  onDone?: () => void
+  /** Say where an add went — on a page that is not a list, nothing on screen would. */
+  announce?: boolean
+}) {
   const s = useStash()
   const [type, setType] = useState<ItemType>('task')
   const [raw, setRaw] = useState('')
@@ -88,8 +96,11 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!parsed.text) return
-    addItem(make(parsed))
+    const it = make(parsed)
+    addItem(it)
     setRaw('')
+    if (announce) toast(`Added to ${it.pid ? project(s, it.pid)?.name ?? 'Stash' : it.due ? 'your lists' : 'Quick notes'}`)
+    onDone?.()
   }
 
   /** More than one line off the clipboard is a list, not a title — take it a line at a time. */
@@ -114,11 +125,12 @@ export function Capture({ inputRef }: { inputRef: React.RefObject<HTMLInputEleme
   const locked = readOnly || s.sel === TRASH
 
   return (
-    <form onSubmit={submit} autoComplete="off" className="px-3 pt-2">
+    <form onSubmit={submit} autoComplete="off" className={cn('relative', className)}
+      onKeyDown={(e) => { if (e.key === 'Escape') onDone?.() }}>
       {/* 42px = the 28px toggle plus the addon's own py-1.5 either side plus the border, so the
           chip is inset by exactly its padding vertically and pl-1.5 matches it horizontally.
           At h-10 the leftover 5px above the chip fought the 8px beside it. */}
-      <InputGroup className="h-10.5">
+      <InputGroup className="h-9">
         {/* 12px of air either side of the divider: the addon's own gap-2 plus the toggle's px-2
             made the left side twice the input's pl-1.5, so both sides are set here instead */}
         <InputGroupAddon align="inline-start" className="gap-1 pl-1.5">
