@@ -527,7 +527,7 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
               <path d={chart.d} fill="none" className="stroke-foreground/80" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
             </svg>
             <FillMark buy={row.side !== 'short'} className="absolute size-4 -translate-x-1/2 -translate-y-1/2" style={{ left: `${chart.inX}%`, top: `${chart.inY}%` }} />
-            <FillMark buy={row.side === 'short'} open={false} className="absolute size-4 -translate-x-1/2 -translate-y-1/2" style={{ left: `${chart.outX}%`, top: `${chart.outY}%` }} />
+            <FillMark buy={row.side === 'short'} className="absolute size-4 -translate-x-1/2 -translate-y-1/2" style={{ left: `${chart.outX}%`, top: `${chart.outY}%` }} />
           </>
         ) : <p className="text-muted-foreground absolute inset-0 grid place-items-center text-xs">No chart for this one</p>}
       </div>
