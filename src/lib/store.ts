@@ -3,6 +3,12 @@ import { HOTKEYS } from './keys.ts'
 import { DIALS, dialsOf, INTERVALS, type Dials, type Interval } from './market.ts'
 import { isRepeat, nextAfter, parseList, today, type Parsed, type Repeat } from './parse.ts'
 
+export type MarketPin = { id: string, label: string, mint?: string }
+/** A perp's id or a DEX pool's — the two shapes assetById can turn back into a market. */
+const PIN_ID = /^(?:(?:[a-z]{1,10}:)?[A-Za-z0-9]{1,20}USDT|dex:[a-z]+:(?:[1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40}))$/
+const MINT_ID = /^(?:[1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40})$/
+export const MAX_PINS = 30
+
 export type ItemType = 'task' | 'idea' | 'note'
 export type Theme = 'auto' | 'light' | 'dark'
 
@@ -425,6 +431,10 @@ export interface State {
    *  15m one. A picker whose answer only exists in a tab is a picker a shut phone cannot honour. */
   marketInterval: Interval
   marketPreset: 'standard' | 'orb'
+  /** The markets the watchlist carries under the four it always shows — perps and DEX tokens alike,
+   *  in the order they were pinned. The label and mint ride along so a pinned token keeps its name
+   *  and logo on a device that has never searched for it. */
+  marketPins: MarketPin[]
   /** What the bell counts as worth interrupting you for. In the document rather than on the device
    *  because the push server reads it too — a threshold set here has to be the one that decides
    *  whether a shut phone rings. See Dials in market.ts, which owns the defaults and the ranges. */
@@ -553,7 +563,7 @@ const blank = (): State => ({
   watches: [], results: [], desk: false,
   // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
   // not silently move everybody's chart
-  marketAsset: 'BTCUSDT', marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard',
+  marketAsset: 'BTCUSDT', marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', marketPins: [],
   dials: { ...DIALS }, dismissed: {},
 })
 
@@ -796,6 +806,13 @@ export function load(data: unknown): State {
   st.marketHorizon = 'short'
   st.marketPreset = 'standard'
   st.marketInterval = (INTERVALS as readonly string[]).includes(st.marketInterval) ? st.marketInterval : '1d'
+  // a hand-edited or damaged list keeps what is well-formed, once each, and no more than a list holds
+  st.marketPins = (Array.isArray(st.marketPins) ? st.marketPins : [])
+    .filter((p: MarketPin, i: number, all: MarketPin[]) => typeof p?.id === 'string' && PIN_ID.test(p.id)
+      && typeof p.label === 'string' && (p.mint == null || (typeof p.mint === 'string' && MINT_ID.test(p.mint)))
+      && all.findIndex((x) => x?.id === p.id) === i)
+    .slice(0, MAX_PINS)
+    .map((p: MarketPin) => ({ id: p.id, label: p.label.slice(0, 40), ...(p.mint ? { mint: p.mint } : {}) }))
   // dialsOf owns the ranges: a hand-edited backup cannot set a threshold the bell has no wording for
   st.dials = dialsOf(st)
   /* Expiry runs here as well as on write: this is what every device does with a document it takes
@@ -1384,6 +1401,13 @@ export const dismissAlerts = (ids: string[], at = Date.now()) => set((s) => {
    a dirty document per mount, for a setting nobody touched. `commit` drops what comes back as `s`. */
 const field = <K extends keyof State>(k: K) => (v: State[K]) =>
   set((s) => (s[k] === v ? s : { ...s, [k]: v }))
+
+/** Pins a market, or unpins it if it is pinned already. */
+export const togglePin = (pin: MarketPin) => set((s) => {
+  const has = s.marketPins.some((p) => p.id === pin.id)
+  if (!has && s.marketPins.length >= MAX_PINS) return s
+  return { ...s, marketPins: has ? s.marketPins.filter((p) => p.id !== pin.id) : [...s.marketPins, pin] }
+})
 
 /** Which asset the Markets desk opens on — set by a mover tile or an alert before navigating. */
 export const setMarketAsset = field('marketAsset')

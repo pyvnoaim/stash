@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
+  ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Minus, RefreshCw, Rows3, Search, Share2, Sparkles, Star,
   TrendingDown, TrendingUp, Waypoints,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -23,8 +23,8 @@ import { PIXEL_FONT } from '@/lib/card-font'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import {
-  candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, useStash,
-  type Result,
+  candlePair, clearResults, closeWatch, isPosition, isReal, removeWatch, setMarketAsset, setMarketInterval, togglePin, useStash,
+  type MarketPin, type Result,
 } from '@/lib/store'
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
@@ -34,8 +34,6 @@ import {
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
 
-// asset ids grouped for the picker dropdown, in the order ASSETS lists them
-const GROUPS = ASSETS.reduce<Record<string, Asset[]>>((m, a) => ((m[a.group] ??= []).push(a), m), {})
 
 /**
  * One chart, one rule.
@@ -93,9 +91,13 @@ const useOnline = () => useSyncExternalStore(
 // logo out of public/logos; a miss just renders nothing (no broken-image box). Error is tracked in state and
 // reset whenever src changes, so the one persistent <img> in the header/trigger can't get stuck hidden
 // after a transient failure the way an inline display:none would.
-function AssetLogo({ src, className }: { src: string; className?: string }) {
+function AssetLogo({ src, className, letter }: { src: string; className?: string; letter?: string }) {
   const [ok, setOk] = useState(true)
   useEffect(() => { setOk(true) }, [src])
+  // a pinned token with no logo to serve keeps its place in the row: its first letter, in a disc
+  if ((!ok || !src) && letter) {
+    return <span className={cn('bg-muted text-muted-foreground grid size-4 shrink-0 place-items-center rounded-full text-[9px] font-medium', className)}>{letter.slice(0, 1).toUpperCase()}</span>
+  }
   if (!ok || !src) return null
   return <img src={src} alt="" loading="lazy" onError={() => setOk(false)}
     className={cn('size-4 shrink-0 rounded-full object-contain', className)} />
@@ -882,6 +884,11 @@ export default function MarketPage() {
                     ? [poolFacts?.name, coin, current.network === 'eth' ? 'Ethereum' : current.network && current.network[0].toUpperCase() + current.network.slice(1),
                       poolFacts?.createdAt ? `pool ${ageOf(poolFacts.createdAt)} old` : null].filter(Boolean).join(' · ')
                     : `${current.label} · ${hlCoin(current.id)} perp · Hyperliquid`}
+                  {/* the four the list always carries have nothing to pin */}
+                  {!CORE.includes(current.id) && (
+                    <PinStar a={current.source === 'dex' && poolFacts?.symbol ? { ...current, label: poolFacts.symbol } : current}
+                      pinned={s.marketPins.some((p) => p.id === current.id)} className="-my-1 ml-1 inline-grid size-5 align-middle" />
+                  )}
                 </span>
                 <span className="text-2xl leading-tight tabular-nums">{price != null ? fmt(price) : '—'}</span>
               </div>
@@ -1971,7 +1978,7 @@ function DexFacts({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
   )
 }
 
-type Found = { network: string, pool: string, mint: string, symbol: string, name: string, price: number, liquidity: number, change: number | null }
+type Found = { network: string, pool: string, mint: string, symbol: string, name: string, price: number, liquidity: number, volume?: number | null, change: number | null }
 
 /** What the field finds beyond the list, as you type: every perp Hyperliquid lists and tokens on
  *  DexScreener. A quarter second after the last key, and only for two letters or more. */
@@ -1992,6 +1999,33 @@ function useSearch(q: string) {
   return out
 }
 
+/** The four the watchlist always carries; everything else is there because it was pinned. */
+const CORE = ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT']
+
+/** A pin back into a market: a perp as the book names it, a token with the name and logo it was
+ *  pinned with — the registry may never have met it on this device. */
+function pinAsset(p: MarketPin): Asset | null {
+  const a = assetById(p.id)
+  if (!a) return null
+  if (a.source !== 'dex') return ASSETS.some((x) => x.id === a.id) ? a : { ...a, label: p.label || a.label }
+  return { ...a, label: p.label || a.label, mint: p.mint ?? a.mint, logo: p.mint ? `/api/logo/${p.mint}` : a.logo }
+}
+const pinOf = (a: Asset): MarketPin => ({ id: a.id, label: a.label, ...(a.mint ? { mint: a.mint } : {}) })
+
+/** A star that pins or unpins a market. `shown` keeps it visible off hover — on a pinned row, and
+ *  anywhere there is no hover to reveal it (a phone). */
+function PinStar({ a, pinned, className }: { a: Asset, pinned: boolean, className?: string }) {
+  return (
+    <Hint label={pinned ? 'Unpin' : 'Pin to the watchlist'}>
+      <button type="button" aria-label={pinned ? `Unpin ${a.label}` : `Pin ${a.label}`} aria-pressed={pinned}
+        onClick={(e) => { e.stopPropagation(); togglePin(pinOf(a)) }}
+        className={cn('text-muted-foreground hover:text-foreground grid size-6 shrink-0 place-items-center rounded-md transition-opacity', className)}>
+        <Star className={cn('size-3.5', pinned && 'fill-amber-400 text-amber-400')} />
+      </button>
+    </Hint>
+  )
+}
+
 function Watchlist({ current, onPick, inputRef }: {
   current: string
   onPick: (id: string) => void
@@ -1999,18 +2033,28 @@ function Watchlist({ current, onPick, inputRef }: {
   inputRef: React.RefObject<HTMLInputElement | null>
 }) {
   const feed = useVenue()
+  const { marketPins } = useStash()
   const [rows, setRows] = useState<{ a: Asset; price: number; open: number; change: number; closes: number[] }[]>([])
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [nonce, setNonce] = useState(0)
   const [q, setQ] = useState('')
   const found = useSearch(q)
+  /* What the list carries: the four, then the pins in the order they were made. */
+  const core = useMemo(() => CORE.map((id) => ASSETS.find((a) => a.id === id)!).filter(Boolean), [])
+  const pins = useMemo(() => marketPins.map(pinAsset).filter((a): a is Asset => !!a && !CORE.includes(a.id)), [marketPins])
+  const listed = useMemo(() => [...core, ...pins], [core, pins])
+  const pinned = new Set(marketPins.map((p) => p.id))
+  const onList = new Set(listed.map((a) => a.id))
   // the perps the list already carries are not offered twice
-  const morePerps = found.perps.filter((c) => !ASSETS.some((a) => hlCoin(a.id) === c))
+  const morePerps = found.perps.filter((c) => !onList.has(perpAsset(c).id) && !onList.has(ASSETS.find((a) => hlCoin(a.id) === c)?.id ?? ''))
+  const moreTokens = found.tokens.filter((t) => !onList.has(dexAsset(t).id))
+  const perpOf = (c: string) => ASSETS.find((a) => hlCoin(a.id) === c) ?? perpAsset(c)
   const pick = (a: Asset) => { remember(a); onPick(a.id); setQ('') }
+  const listKey = listed.map((a) => a.id).join(',')
   useEffect(() => {
     if (feed === undefined) return // which venue is still being asked — see useVenue
     let on = true
-    fetchHours(ASSETS, feed)
+    fetchHours(listed, feed)
       .then((bars) => {
         if (!on) return
         const next = bars
@@ -2026,7 +2070,7 @@ function Watchlist({ current, onPick, inputRef }: {
       // an error panel — it is the first read that has nothing to fall back on
       .catch(() => { if (on) setState((s) => (s === 'ready' ? s : 'error')) })
     return () => { on = false }
-  }, [feed, nonce])
+  }, [feed, nonce, listKey]) // eslint-disable-line react-hooks/exhaustive-deps
   // …and again on a timer, only while the tab is being looked at
   useEffect(() => {
     const h = setInterval(
@@ -2037,33 +2081,31 @@ function Watchlist({ current, onPick, inputRef }: {
 
   const hit = (a: Asset) => !q.trim() || `${a.label} ${a.id}`.toLowerCase().includes(q.trim().toLowerCase())
   /* The minute's poll brings the day's bars; the socket moves the price, the move and the
-     sparkline's last point with every trade in between. */
-  const live = useLiveMarks(feed === undefined ? [] : ASSETS.map((a) => ({ venue: 'hyperliquid', symbol: a.id })), true)
-  // the rows in the picker's own order and groups, with the prices hung on them where they arrived
+     sparkline's last point with every trade in between — for the perps, which is what it streams. */
+  const live = useLiveMarks(feed === undefined ? [] : listed.filter((a) => a.source !== 'dex').map((a) => ({ venue: 'hyperliquid', symbol: a.id })), true)
+  // the rows with the prices hung on them where they arrived
   const priced = new Map(rows.map((r) => {
     const px = live[`hyperliquid:${r.a.id}`]
     return [r.a.id, px == null ? r
       : { ...r, price: px, change: ((px - r.open) / r.open) * 100, closes: [...r.closes.slice(0, -1), px] }]
   }))
+  const groups: [string, Asset[]][] = [['Main · perps', core], ['Pinned', pins]]
   return (
     <div className="flex min-h-0 flex-col">
-      {/* the search only where there is a column to search down; a strip of eleven is scanned */}
       {/* the icon is centred on the box directly around the field, not on the padded wrapper: that
-          one has more room above than below, and centring on it put it a couple of pixels high of
-          the text it sits beside. The / key focuses this; it does not say so — a badge in the field
-          never sat right in it. */}
+          one has more room above than below. The / key focuses this. */}
       <div className="hidden p-2 pb-1 lg:block">
         <div className="relative">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
-          <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an asset"
-            aria-label="Find an asset" className="h-8 pl-7 text-xs"
+          <Input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a perp or token"
+            aria-label="Find a perp or token" className="h-8 pl-7 text-xs"
             onKeyDown={(e) => {
               // Enter takes the first match, Escape gives the keys back to the chart
               if (e.key === 'Enter') {
-                const f = ASSETS.find(hit)
+                const f = listed.find(hit)
                 if (f) { onPick(f.id); setQ('') }
-                else if (morePerps[0]) pick(perpAsset(morePerps[0]))
-                else if (found.tokens[0]) pick(dexAsset(found.tokens[0]))
+                else if (morePerps[0]) pick(perpOf(morePerps[0]))
+                else if (moreTokens[0]) pick(dexAsset(moreTokens[0]))
               }
               if (e.key === 'Escape' || e.key === 'Enter') e.currentTarget.blur()
             }} />
@@ -2075,87 +2117,116 @@ function Watchlist({ current, onPick, inputRef }: {
             <p>Prices are not loading — the exchange feed didn't answer.</p>
             <Button size="sm" variant="outline" onClick={() => setNonce((n) => n + 1)}>Try again</Button>
           </div>
-        ) : Object.entries(GROUPS).map(([group, list]) => {
+        ) : groups.map(([group, list]) => {
           const shown = list.filter(hit)
+          if (group === 'Pinned' && !shown.length) {
+            // the way to the pins, said once where they would be — not while a search has filtered them out
+            return !q.trim() && (
+              <p key={group} className="text-muted-foreground hidden px-2 pt-3 text-xs lg:block">
+                Pin any perp or token with its <Star className="inline size-3 -translate-y-px" /> — search for it above, or pin the one on the chart.
+              </p>
+            )
+          }
           if (!shown.length) return null
           return (
             <div key={group} className="contents lg:block">
               <p className="text-muted-foreground font-heading hidden px-2 pt-2 pb-1 text-[10px] tracking-wider uppercase first:pt-0 lg:block">{group}</p>
               {shown.map((a) => {
                 const r = priced.get(a.id)
+                const dex = a.source === 'dex'
                 /* Two lines, not one: the name and the day's move on the first, the day's shape
                    and the price on the second. On one line the four of them did not fit a rail
-                   and the name was the column that gave — a watchlist with no names on it. As a
-                   tile it is the same shape in the strip on a phone. */
+                   and the name was the column that gave. */
                 return (
-                  <button
-                    key={a.id} type="button" onClick={() => onPick(a.id)}
-                    aria-label={`Open ${a.label} chart`} aria-current={a.id === current}
-                    className={cn('hover:bg-accent grid w-40 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 rounded-md px-2 py-1.5 text-left lg:w-full',
-                      a.id === current && 'bg-muted')}
-                  >
-                    <AssetLogo src={a.logo} />
-                    <span className="truncate text-sm">{a.label}</span>
-                    {state === 'loading' ? (
-                      <>
-                        <Skeleton className="h-3 w-10" />
-                        <span />
-                        <Skeleton className="h-3 w-full" />
-                        <Skeleton className="h-3 w-14" />
-                      </>
-                    ) : !r ? (
-                      // the feed answered and had nothing for this one — say so, rather than pulse forever
-                      <><span /><span /><span className="text-muted-foreground col-span-2 text-xs">no price</span></>
-                    ) : (
-                      <>
-                        <span className={cn('text-xs tabular-nums',
-                          r.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                          {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}%
-                        </span>
-                        <span />
-                        {/* the shape behind the percentage — the same twenty-five bars both numbers on this
-                            row are read off, so it is the day, not a second opinion about it */}
-                        <Sparkline data={r.closes} up={r.change >= 0} id={`row-${a.id}`} className="h-4 w-full" />
-                        <span className="text-muted-foreground text-xs tabular-nums">{fmtPrice(r.price)}</span>
-                      </>
+                  <div key={a.id} className="group/row relative shrink-0">
+                    <button
+                      type="button" onClick={() => onPick(a.id)}
+                      aria-label={`Open ${a.label} chart`} aria-current={a.id === current}
+                      className={cn('hover:bg-accent grid w-40 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 rounded-md px-2 py-1.5 text-left lg:w-full',
+                        a.id === current && 'bg-muted', pinned.has(a.id) && 'lg:pr-8')}
+                    >
+                      <AssetLogo src={a.logo} letter={a.label} />
+                      <span className="flex min-w-0 items-baseline gap-1.5">
+                        <span className="truncate text-sm">{a.label}</span>
+                        {/* what kind of market it is, where the list mixes them */}
+                        {group === 'Pinned' && <span className="text-muted-foreground shrink-0 text-[10px]">{dex ? a.network : 'perp'}</span>}
+                      </span>
+                      {state === 'loading' && !r ? (
+                        <>
+                          <Skeleton className="h-3 w-10" />
+                          <span />
+                          <Skeleton className="h-3 w-full" />
+                          <Skeleton className="h-3 w-14" />
+                        </>
+                      ) : !r ? (
+                        // the feed answered and had nothing for this one — say so, rather than pulse forever
+                        <><span /><span /><span className="text-muted-foreground col-span-2 text-xs">no price</span></>
+                      ) : (
+                        <>
+                          <span className={cn('text-xs tabular-nums',
+                            r.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                            {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}%
+                          </span>
+                          <span />
+                          {/* the shape behind the percentage — the same bars both numbers on this row are read off */}
+                          <Sparkline data={r.closes} up={r.change >= 0} id={`row-${a.id.replace(/[^A-Za-z0-9]/g, '')}`} className="h-4 w-full" />
+                          <span className="text-muted-foreground text-xs tabular-nums">{fmtPrice(r.price)}</span>
+                        </>
+                      )}
+                    </button>
+                    {pinned.has(a.id) && (
+                      <PinStar a={a} pinned className="absolute top-1/2 right-1 hidden -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 lg:grid" />
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>
           )
         })}
       </div>
-      {/* Beyond the list: the rest of the book, and the DEXes. Only while searching — the list is
-          what the desk is about, and these are the way to anything else. */}
-      {(morePerps.length > 0 || found.tokens.length > 0) && (
-        <div className="hidden flex-col gap-0.5 border-t p-2 lg:flex">
+      {/* Beyond the list: every perp on the book and the DEXes, while searching — each one opens,
+          and each one can be pinned to stay. */}
+      {(morePerps.length > 0 || moreTokens.length > 0) && (
+        <div className="hidden min-h-0 flex-col gap-0.5 overflow-y-auto border-t p-2 lg:flex">
           {morePerps.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-1 text-[10px] tracking-wider uppercase">Perps on Hyperliquid</p>}
-          {morePerps.map((c) => (
-            <button key={c} type="button" onClick={() => pick(perpAsset(c))}
-              className="hover:bg-accent flex items-center justify-between rounded-md px-2 py-1.5 text-left text-sm">
-              <span>{c}</span><span className="text-muted-foreground text-xs">perp</span>
-            </button>
-          ))}
-          {found.tokens.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-2 text-[10px] tracking-wider uppercase">Tokens on DEXes</p>}
-          {found.tokens.map((t) => (
-            <button key={`${t.network}:${t.pool}`} type="button" onClick={() => pick(dexAsset(t))}
-              className="hover:bg-accent grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left">
-              <span className="truncate text-sm">{t.symbol} <span className="text-muted-foreground text-xs">{t.name}</span></span>
-              <span className="text-xs tabular-nums">{fmtPrice(t.price)}</span>
-              <span className="text-muted-foreground text-xs">{t.network} · {compact(t.liquidity)} liquidity</span>
-              {t.change != null && (
-                <span className={cn('text-xs tabular-nums', t.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                  {t.change >= 0 ? '+' : ''}{t.change.toFixed(2)}%
-                </span>
-              )}
-            </button>
-          ))}
+          {morePerps.map((c) => {
+            const a = perpOf(c)
+            return (
+              <div key={c} className="flex items-center gap-1">
+                <button type="button" onClick={() => pick(a)}
+                  className="hover:bg-accent flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm">
+                  <AssetLogo src={a.logo} letter={a.label} />
+                  <span className="flex-1 truncate">{a.label}</span><span className="text-muted-foreground text-xs">perp</span>
+                </button>
+                <PinStar a={a} pinned={pinned.has(a.id)} />
+              </div>
+            )
+          })}
+          {moreTokens.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-2 text-[10px] tracking-wider uppercase">Tokens on DEXes</p>}
+          {moreTokens.map((t) => {
+            const a = dexAsset(t)
+            return (
+              <div key={`${t.network}:${t.pool}`} className="flex items-center gap-1">
+                <button type="button" onClick={() => pick(a)}
+                  className="hover:bg-accent grid flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left">
+                  <span className="truncate text-sm">{t.symbol} <span className="text-muted-foreground text-xs">{t.name}</span></span>
+                  <span className="text-xs tabular-nums">{fmtPrice(t.price)}</span>
+                  <span className="text-muted-foreground text-xs">{t.network} · {compact(t.volume ?? null)} traded 24h</span>
+                  {t.change != null && (
+                    <span className={cn('text-xs tabular-nums', t.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                      {t.change >= 0 ? '+' : ''}{t.change.toFixed(2)}%
+                    </span>
+                  )}
+                </button>
+                <PinStar a={a} pinned={pinned.has(a.id)} />
+              </div>
+            )
+          })}
         </div>
       )}
       {/* the venue only once it is known */}
       <p className="text-muted-foreground hidden px-4 pb-2 text-[10px] lg:block">
-        Last price and the 24h move{feed !== undefined && <>, on Hyperliquid</>}
+        Last price and the 24h move{feed !== undefined && <> — perps on Hyperliquid, tokens off their pool</>}
       </p>
     </div>
   )

@@ -16,6 +16,7 @@ import {
   setMarketAsset, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
 import { ASSETS, assetById, dexAsset, fmtPrice, hlCoin, perpAsset, remember, type Asset } from '@/lib/market'
+import { TokenIcon } from '@/components/holdings'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
    VIEWS, so a view added there and forgotten here rendered `<undefined />` — which is not a missing
@@ -195,7 +196,9 @@ export function CommandPalette({
                 {posHits.map((p) => (
                   <CommandItem key={`pos-${p.symbol}`} value={`position ${p.symbol} ${p.side} ${q}`}
                     onSelect={run(() => { const a = assetById(p.symbol); if (a) chart(a); else select(MARKET) })}>
-                    <CandlestickChart />
+                    {assetById(p.symbol)?.logo
+                      ? <img src={assetById(p.symbol)!.logo} alt="" className="size-7 shrink-0 rounded-full" />
+                      : <CandlestickChart />}
                     <span className="flex min-w-0 flex-col">
                       <span>{p.symbol.replace(/USDT$/, '')} <span className={cn('text-xs uppercase', p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>{p.side}{p.lev ? ` ${p.lev}×` : ''}</span></span>
                       <span className="text-muted-foreground text-xs tabular-nums">from {fmtPrice(p.entry)}{p.mark != null && ` · now ${fmtPrice(p.mark)}`}</span>
@@ -211,7 +214,7 @@ export function CommandPalette({
                     onSelect={run(() => (h.pool
                       ? chart(dexAsset({ network: 'solana', pool: h.pool, symbol: h.symbol, mint: h.mint }))
                       : select(MARKET)))}>
-                    <Coins />
+                    <TokenIcon mint={h.mint} symbol={h.symbol} className="size-7" />
                     <span className="flex min-w-0 flex-col">
                       <span>{h.symbol}</span>
                       <span className="text-muted-foreground truncate text-xs tabular-nums">{h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} {h.symbol} · in your wallet</span>

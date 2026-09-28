@@ -573,6 +573,13 @@ assert.deepEqual(getState().watches.map((w) => w.horizon), ['Investing'])
 assert.equal(load({ marketAsset: 'ETHUSDT' }).marketAsset, 'ETHUSDT')
 assert.equal(load({ marketAsset: 7 }).marketAsset, 'BTCUSDT')
 assert.equal(load({}).marketAsset, 'BTCUSDT')
+// pins: well-formed ones kept once each, junk and duplicates dropped, a missing list is empty
+const POOLID = 'dex:solana:DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD'
+assert.deepEqual(load({ marketPins: [
+  { id: 'XRPUSDT', label: 'XRP' }, { id: 'XRPUSDT', label: 'again' }, { id: '../x', label: 'bad' },
+  { id: POOLID, label: 'SI', mint: 'Ae9ypEFSbwdTgpvhm28m1uNxmkjdY4oFrB3nSPtWpump' }, { id: POOLID + 'x', label: 'long' }, 7,
+] }).marketPins, [{ id: 'XRPUSDT', label: 'XRP' }, { id: POOLID, label: 'SI', mint: 'Ae9ypEFSbwdTgpvhm28m1uNxmkjdY4oFrB3nSPtWpump' }])
+assert.deepEqual(load({}).marketPins, [])
 
 // a backup written before horizons existed loads with an empty one rather than being thrown away
 assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 2, stop: 1, target: 3 }] }).watches[0].horizon, '')
