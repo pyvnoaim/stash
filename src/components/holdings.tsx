@@ -22,6 +22,24 @@ const dollars = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDi
 /** Amounts run from 0.0004 SOL to 552,000 of a coin: enough digits to tell, never a wall of them. */
 const amountOf = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: n >= 1000 ? 0 : n >= 1 ? 2 : 4 })
 
+/** The token's logo, through this app's own server (/api/logo) — the page loads images from its own
+ *  origin only, and no reader's address goes to DexScreener for the sake of an icon. A token with
+ *  no logo, or one that will not load, wears its first letter. */
+function TokenIcon({ mint, symbol }: { mint: string, symbol: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    return (
+      <span className="bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium">
+        {symbol.slice(0, 1).toUpperCase()}
+      </span>
+    )
+  }
+  return (
+    <img src={`/api/logo/${mint}`} alt="" loading="lazy" onError={() => setFailed(true)}
+      className="bg-muted size-6 shrink-0 rounded-full object-cover" />
+  )
+}
+
 /**
  * What the watched Solana wallets hold — the memecoins Fomo buys, which are tokens in a wallet
  * rather than positions on a book. Priced off each token's deepest pool; dust and coins with no
@@ -65,12 +83,7 @@ export function Holdings() {
             <a key={r.mint} href={r.url ?? undefined} target="_blank" rel="noreferrer noopener"
               title={r.name ? `${r.name} — chart on DexScreener` : 'Chart on DexScreener'}
               className="hover:bg-muted/50 -mx-1.5 flex items-center gap-2 rounded px-1.5 py-1">
-              {/* a letter rather than the token's logo: those live on DexScreener's CDN, which the
-                  page's policy does not load from, and every reader's address is not a thing to
-                  hand a third party for the sake of an icon */}
-              <span className="bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium">
-                {r.symbol.slice(0, 1).toUpperCase()}
-              </span>
+              <TokenIcon mint={r.mint} symbol={r.symbol} />
               <span className="min-w-0">
                 <span className="block truncate font-medium">{r.symbol}</span>
                 <span className="text-muted-foreground block text-xs tabular-nums">{amountOf(r.amount)} {r.symbol}</span>

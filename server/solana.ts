@@ -13,6 +13,8 @@
  * it was written. A field named otherwise shows as a token left out, not as a wrong number.
  */
 
+import { sniff } from './blob.ts'
+
 const RPC = process.env.SOLANA_RPC || 'https://api.mainnet-beta.solana.com'
 const DEX = 'https://api.dexscreener.com/tokens/v1/solana'
 const PROGRAMS = [
@@ -140,10 +142,50 @@ export function holdings(address: string): Promise<Holding[]> {
       fetch(`${DEX}/${mints.slice(i * 30, i * 30 + 30).join(',')}`, { signal: AbortSignal.timeout(15_000) })
         .then((r) => (r.ok ? r.json() : []))
         .catch(() => [])))
-    return shapeHoldings(balances, bestPairs(pages.flat()))
+    const rows = shapeHoldings(balances, bestPairs(pages.flat()))
+    for (const r of rows) if (r.logo) logoUrls.set(r.mint, r.logo)
+    return rows
   })()
   rows.catch(() => { if (cached.get(address)?.rows === rows) cached.delete(address) })
   if (cached.size >= 64) cached.clear()
   cached.set(address, { at: Date.now(), rows })
   return rows
+}
+
+/* ---------- logos, through this server ---------- */
+
+/** The logo URL DexScreener gave each mint a wallet here holds. Only these are ever fetched, so the
+ *  logo route below serves the tokens people actually hold rather than whatever it is asked for. */
+const logoUrls = new Map<string, string>()
+const logos = new Map<string, Promise<{ type: string, bytes: Buffer } | null>>()
+/** An icon is a few kilobytes; anything past this is not one. */
+const MAX_LOGO = 256 * 1024
+
+/**
+ * A held token's logo as bytes this app can serve from its own origin — so the page's image policy
+ * stays 'self' and no reader's address reaches DexScreener for the sake of an icon.
+ *
+ * Fetched from DexScreener's own hosts only, redirects refused (a redirect is how an allowlisted
+ * fetch ends up somewhere it was never allowed), size-capped, and kept only if the bytes sniff as
+ * a raster image: SVG is a document that can carry script, and this is served same-origin.
+ */
+export function logo(mint: string): Promise<{ type: string, bytes: Buffer } | null> {
+  const url = logoUrls.get(mint)
+  if (!url || !/^https:\/\/[a-z0-9-]+\.dexscreener\.com\//.test(url)) return Promise.resolve(null)
+  const hit = logos.get(mint)
+  if (hit) return hit
+  const got = fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10_000) })
+    .then(async (r) => {
+      if (!r.ok || Number(r.headers.get('content-length') ?? 0) > MAX_LOGO) return null
+      const bytes = Buffer.from(await r.arrayBuffer())
+      if (bytes.length > MAX_LOGO) return null
+      const type = sniff(bytes)
+      return type ? { type, bytes } : null
+    })
+    .catch(() => null)
+  // a miss is not remembered: the next look asks again rather than showing a letter for good
+  got.then((v) => { if (!v && logos.get(mint) === got) logos.delete(mint) })
+  if (logos.size >= 300) logos.clear()
+  logos.set(mint, got)
+  return got
 }
