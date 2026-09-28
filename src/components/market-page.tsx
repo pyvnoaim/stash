@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Minus, RefreshCw, Rows3, Search, Share2, Sparkles, Star,
-  TrendingDown, TrendingUp,
+  ArrowLeft, ChevronRight, CloudOff, LayoutGrid, RefreshCw, Rows3, Search, Share2, Sparkles, Star,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -13,7 +12,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
-import { amountOf, dollars, Holdings, useHolding } from '@/components/holdings'
+import { amountOf, dollars, Holdings, TokenIcon, useHolding, useWalletRows } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
@@ -30,7 +29,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, sessionVwap, signals, sparkPath, tally, trendFilter,
-  venueName, priceDigits, priced, hlCoin, assetById, remember, perpAsset, dexAsset,
+  venueName, priceDigits, hlCoin, assetById, remember, perpAsset, dexAsset,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal,
 } from '@/lib/market'
 
@@ -127,13 +126,7 @@ function TradeName({ name, asset = name, onPick, className }: {
     : <span className={cls}>{body}</span>
 }
 
-// which side a signal is on, as a dot. Colour used to be on the label text of every card, which
-// made a page of eight readings look like an alarm going off rather than a read-out.
-const DOT = {
-  bull: 'bg-emerald-500',
-  bear: 'bg-destructive',
-  flat: 'bg-muted-foreground/40',
-} as const
+
 
 /** The three answers a reading can give, and the order the panel groups them in — the sides that
  *  vote first, then the cards that only describe the tape. */
@@ -215,8 +208,6 @@ export default function MarketPage() {
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
-  // the readings past the four that decide the verdict — see the panel beside the chart
-  const [allReadings, setAllReadings] = useState(false)
   const wide = useWide()
   const online = useOnline()
   /* navigator.onLine only knows whether there is *a* network — a captive wifi or a dead uplink
@@ -490,10 +481,10 @@ export default function MarketPage() {
   const { bulls, bears, dir } = tally(shownSignals)
   // tinted rather than solid: a filled red pill reads as an emergency, and a 1/5 tally is a lean
   const bias = dir === 'long'
-    ? { label: 'Leaning long', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400', Icon: TrendingUp }
+    ? { label: 'Leaning long', text: 'text-emerald-600 dark:text-emerald-400' }
     : dir === 'short'
-      ? { label: 'Leaning short', cls: 'bg-destructive/10 text-destructive', Icon: TrendingDown }
-      : { label: 'No lean', cls: 'bg-muted text-muted-foreground', Icon: Minus }
+      ? { label: 'Leaning short', text: 'text-destructive' }
+      : { label: 'No lean', text: 'text-muted-foreground' }
 
   const last = candles.at(-1)?.c
   const coin = current.source === 'dex' ? current.label : current.id.replace(/USDT$/, '')
@@ -504,10 +495,7 @@ export default function MarketPage() {
      price nobody has traded yet — the one thing the desk knew about and never drew, so an entry
      placed on the exchange looked, on this page, exactly like an entry nobody had placed. */
   const resting = exch.orders.filter((o) => assetOf(o.symbol) === current.id)
-  /* How the position is doing on its own entry, the venue's sign convention: up is up whichever
-     way it is facing. */
-  const heldMove = held && last != null && held.entry > 0
-    ? (last / held.entry - 1) * (held.side === 'long' ? 100 : -100) : null
+
 
 
   const n = vis.length
@@ -676,7 +664,6 @@ export default function MarketPage() {
               // empty:hidden — with nothing held and nothing open, both render nothing, and the
               // padding and rule around them would be a stripe of nothing above the list
               <div className="flex flex-col gap-3 border-b p-3 empty:hidden">
-                <Holdings onOpen={(a) => { remember(a); setAsset(a.id) }} />
                 <ExchangePositions onOpen={setAsset} />
               </div>
             )}
@@ -1038,113 +1025,28 @@ export default function MarketPage() {
           {/* What you would do about it, beside the chart: the order, the money already on this
               asset and everywhere else, and the readings. Every one of these was a card stacked
               above the chart, pushing it down the page. */}
-          <aside className="flex flex-col gap-3 border-t p-3 text-sm lg:min-h-0 lg:overflow-hidden lg:border-t-0 lg:border-l">
-            {/* Two scrolls, not one. The order and the money on the table stay put at the top, and
-                the readings scroll under them: a dozen readings used to carry the Long and Short
-                buttons off the top of the column, on the one page whose point is those buttons. */}
-            <div className="flex flex-col gap-3 empty:hidden lg:max-h-[55%] lg:shrink-0 lg:overflow-y-auto">
-            {/* a Hyperliquid book's question — a wallet token has its "You hold" card below instead */}
-            {current.source !== 'dex' && <section className="grid gap-2">
-              <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">On the book</p>
-              {/* Stash watches; Fomo trades. Nothing here holds anything that could place or move an
-                  order — a wallet address is all it has — so this is what is already committed on
-                  this symbol, and where to go to change it. */}
-              {held ? (
-                <p className="text-muted-foreground text-xs">
-                  You are {held.side} {held.size} {coin} from {fmt(held.entry)}
-                  {heldMove != null && <> ({heldMove >= 0 ? '+' : ''}{heldMove.toFixed(2)}%)</>}.
-                </p>
-              ) : feed === null ? (
-                <p className="text-muted-foreground text-xs">
-                  Add your Fomo wallet in Settings and what you hold on Hyperliquid shows here.
-                </p>
-              ) : feed !== undefined ? (
-                <p className="text-muted-foreground text-xs">Nothing open on {coin}. Trades are placed in Fomo.</p>
-              ) : null}
-              {resting.filter((o) => o.opens).map((o) => (
-                <p key={o.id} className="text-muted-foreground text-xs">
-                  Your {o.side} for {o.size} {coin} is resting at {fmt(o.price)}, not filled.
-                </p>
-              ))}
-            </section>}
-            {/* the hand-entered position on this asset, if any, beside whatever the exchange reports */}
-            <Position asset={current.id} price={last ?? null} />
-            {/* what the exchange says you hold, account-wide — the one block here that is fact
-                rather than reading. Absent unless a venue reports something open. */}
+          {/* Beside the chart, three cards and room around them: for a perp your position, its
+              market and how the readings lean; for a token what you hold, its pool and its trade.
+              The readings behind the lean are the chart's business, not a list to read here. */}
+          <aside className="flex flex-col gap-3 border-t p-4 text-sm lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+            {/* on a narrow screen the left column is a strip, so what you hold rides here instead */}
             {!wide && <ExchangePositions onOpen={setAsset} />}
-            {/* and what the watched wallets hold as tokens — the memecoins, which no book carries */}
             {!wide && <Holdings onOpen={(a) => { remember(a); setAsset(a.id) }} />}
-            {/* and what the others with their desk on are in, the same tiles signed with a name */}
-            <FriendsOpen onPick={setAsset} />
-            </div>
-            {/* Every reading the chart makes, as a list beside it — the sweeps, the gaps, the
-                structure break, the higher timeframe, the VWAP, the averages. They were a grid of
-                prose in a card above the chart; here each is a line the eye can run down while the
-                chart is in view. */}
-            {/* A DEX token gets its pool's facts instead: the readings were measured on eight
-                major perps, and a coin a few weeks old has no 200-MA to read — a verdict there
-                would be noise wearing the same confident type. */}
-            {current.source === 'dex' && <DexFacts asset={current} p={poolFacts} />}
-            {current.source !== 'dex' && <PerpStats candles={candles} ctx={perpCtx} last={last} fmt={fmt} />}
-            {view && current.source !== 'dex' && (
-              <section className="flex flex-col gap-3 border-t pt-3 lg:min-h-0 lg:flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">What the chart says</span>
-                  <Hint label={`Measured on ${interval} bars with the ${cfg.fast}/${cfg.slow} MAs`}>
-                    <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[10px] tracking-wide uppercase">
-                      {interval}
-                    </span>
-                  </Hint>
-                </div>
-                {/* The verdict first, as the count it is: which way the readings lean and by how
-                    much, drawn as the split it is. A lean is not an instruction — the trade is
-                    yours, and it is placed in Fomo. */}
-                <div className={cn('grid gap-2 rounded-lg p-3', bias.cls)}>
-                  <span className="flex items-center gap-1.5 text-base font-medium"><bias.Icon className="size-4" />{bias.label}</span>
-                  {bulls + bears > 0 && (
-                    <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
-                      <span className="bg-emerald-500" style={{ flexGrow: bulls }} />
-                      <span className="bg-destructive" style={{ flexGrow: bears }} />
-                    </div>
-                  )}
-                  <span className="text-xs opacity-80">{bulls} for a long, {bears} for a short, on {interval}</span>
-                </div>
-                {last != null && (
-                  <KeyLevels last={last} fmt={fmt} rows={[
-                    { k: 'Range high', v: view.resistance, color: 'var(--muted-foreground)', hint: `Highest high over the last ${cfg.srWindow} bars` },
-                    { k: 'Session VWAP', v: vwap?.vwap ?? null, color: '#22b8cf', hint: 'Volume-weighted average price since the session opened' },
-                    { k: 'Range low', v: view.support, color: 'var(--muted-foreground)', hint: `Lowest low over the last ${cfg.srWindow} bars` },
-                    // a distance, not a level: its column is its size against price
-                    { k: `ATR (${interval})`, v: view.atr, color: '#fbbf24', hint: `Average true range over 14 ${interval} bars — how far one bar usually travels`,
-                      d: view.atr != null ? `${((view.atr / last) * 100).toFixed(2)}%` : undefined },
-                  ]} />
-                )}
-                {/* The four that decide it — the higher timeframe leads, then the rest in the order
-                    the tally weighs them — and the others one press away rather than a wall of
-                    fourteen that had to be read whole to count. */}
-                <div className="grid gap-3 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                  {(allReadings ? shownSignals : shownSignals.filter((x) => x.tone !== 'flat').slice(0, 4)).map((sig, i) => (
-                    <div key={i} className="flex min-w-0 items-start gap-2 text-sm">
-                      <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[sig.tone])} />
-                      <span className="min-w-0">
-                        {sig.label}
-                        <span className="text-muted-foreground block text-xs">{sig.detail}</span>
-                      </span>
-                    </div>
-                  ))}
-                  {!shownSignals.length && <p className="text-muted-foreground text-sm">Nothing standing out on these bars.</p>}
-                  {shownSignals.length > 4 && (
-                    <button type="button" onClick={() => setAllReadings((v) => !v)}
-                      className="text-muted-foreground hover:text-foreground w-fit text-xs underline-offset-2 hover:underline">
-                      {allReadings ? 'Fewer readings' : `All ${shownSignals.length} readings`}
-                    </button>
-                  )}
-                  {dir !== 'flat' && view.atr != null && last != null && (
-                    <TradeBox dir={dir} last={last} atrValue={view.atr} fee={s.dials.fee} fmt={fmt} interval={interval} />
-                  )}
-                </div>
-              </section>
+            {current.source === 'dex' ? <TokenCards asset={current} p={poolFacts} /> : (
+              <>
+                {held && <PositionCard p={held} last={last} fmt={fmt} />}
+                {resting.filter((o) => o.opens).map((o) => (
+                  <p key={o.id} className="text-muted-foreground px-1 text-xs">
+                    Your {o.side} for {o.size} {coin} is resting at {fmt(o.price)}.
+                  </p>
+                ))}
+                <MarketCard candles={candles} ctx={perpCtx} fmt={fmt} />
+                {view && <LeanCard label={bias.label} cls={bias.text} bulls={bulls} bears={bears} interval={interval} />}
+              </>
             )}
+            {/* the hand-entered position on this asset, and the friends in it — both nothing when empty */}
+            <Position asset={current.id} price={last ?? null} />
+            <FriendsOpen onPick={setAsset} />
           </aside>
 
           <RecordBar onOpen={() => setScreen('record')} />
@@ -1377,188 +1279,167 @@ function ageOf(ms: number) {
   return `${(d / 365).toFixed(1)} years`
 }
 
-/** Roughly how far selling `v` dollars moves a constant-product pool of `liquidity` dollars, both
- *  sides counted: half of it is the side the sale pushes against. */
-const impactOf = (v: number, liquidity: number) => (liquidity > 0 ? (v / (liquidity / 2 + v)) * 100 : null)
 
-/** The perp header's second row: the day's range off the bars, and what the book says about itself. */
-function PerpStats({ candles, ctx, last, fmt }: { candles: Candle[], ctx: PerpCtx | null, last: number | undefined, fmt: (v: number) => string }) {
+
+/** One of the side panel's cards: a label, then whatever it holds, with room around it. */
+function PanelCard({ label, aside, children, className }: { label: string, aside?: React.ReactNode, children: React.ReactNode, className?: string }) {
+  return (
+    <section className={cn('bg-muted/40 grid gap-3.5 rounded-2xl p-5', className)}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-muted-foreground text-xs">{label}</span>
+        {aside}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+/** Four numbers in two columns — the market card and the pool card are both this. */
+function Facts({ rows }: { rows: [string, string, string?, string?][] }) {
+  return (
+    <dl className="grid grid-cols-2 gap-x-3 gap-y-4">
+      {rows.map(([k, v, cls, hint]) => (
+        <div key={k} className="grid gap-1" title={hint}>
+          <dt className="text-muted-foreground text-xs">{k}</dt>
+          <dd className={cn('text-base tabular-nums', cls)}>{v}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/** A perp's market: what holding it costs, how much is in it, and the day it has had. */
+function MarketCard({ candles, ctx, fmt }: { candles: Candle[], ctx: PerpCtx | null, fmt: (v: number) => string }) {
   const end = candles.at(-1)?.t ?? 0
   // a day's range needs bars smaller than a day: on 1d and 1w the last bar is a calendar day or week
   const step = candles.length > 1 ? end - candles.at(-2)!.t : Infinity
   const day = step <= 3_600_000 ? candles.filter((c) => c.t > end - 86_400_000) : []
-  const hi = day.length ? Math.max(...day.map((c) => c.h)) : null
-  const lo = day.length ? Math.min(...day.map((c) => c.l)) : null
-  const ch = ctx?.prevDayPx && last ? ((last - ctx.prevDayPx) / ctx.prevDayPx) * 100 : null
+  // short numbers past ten thousand, so the two ends fit the card's half on one line
+  const short = (v: number) => (v >= 10_000 ? Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v) : fmt(v))
+  const range = day.length ? `${short(Math.min(...day.map((c) => c.l)))} – ${short(Math.max(...day.map((c) => c.h)))}` : '—'
   // the venue quotes funding per hour; eight hours is the unit every other venue quotes it in
   const f8 = ctx?.funding != null ? ctx.funding * 8 * 100 : null
   const oi = ctx?.openInterest != null && ctx.mark ? ctx.openInterest * ctx.mark : null
-  const stats: [string, string, string, string][] = [
-    ['24h', ch == null ? '—' : signedPct(ch), tone(ch), 'Against the price 24 hours ago'],
-    ['24h high', hi == null ? '—' : fmt(hi), '', hi == null ? 'On bars of an hour or less' : 'Highest of the bars in the last 24h'],
-    ['24h low', lo == null ? '—' : fmt(lo), '', lo == null ? 'On bars of an hour or less' : 'Lowest of the bars in the last 24h'],
-    ['Funding / 8h', f8 == null ? '—' : signedPct(f8, 4), f8 == null ? '' : f8 >= 0 ? 'text-amber-600 dark:text-amber-400' : UP,
-      'Positive: longs pay shorts. Paid hourly, shown per 8h'],
-    ['Open interest', compact(oi), '', 'Every open position on this perp, in dollars'],
-    ['24h volume', compact(ctx?.dayVolume ?? null), '', 'Traded on Hyperliquid over the last day'],
-  ]
   return (
-    <div className="flex flex-wrap gap-x-5 gap-y-1">
-      {stats.map(([k, v, cls, hint]) => (
-        <Hint key={k} label={hint}>
-          <div className="flex flex-col">
-            <span className="text-muted-foreground text-[10px] tracking-wider uppercase">{k}</span>
-            <span className={cn('text-sm tabular-nums', cls)}>{v}</span>
-          </div>
-        </Hint>
-      ))}
-    </div>
+    <PanelCard label="Market">
+      <Facts rows={[
+        ['Funding / 8h', f8 == null ? '—' : signedPct(f8, 4), f8 == null ? '' : f8 >= 0 ? 'text-amber-600 dark:text-amber-400' : UP,
+          'Positive: longs pay shorts. Paid hourly, shown per 8h'],
+        ['Open interest', compact(oi), '', 'Every open position on this perp, in dollars'],
+        ['24h volume', compact(ctx?.dayVolume ?? null), '', 'Traded on Hyperliquid over the last day'],
+        ['24h range', range, '', day.length ? 'Low to high over the last 24h' : 'On bars of an hour or less'],
+      ]} />
+    </PanelCard>
   )
 }
 
-/** A token header's moves: four windows as chips, each tinted the way it went. */
-function PoolMoves({ p }: { p: PoolFacts | null }) {
-  const moves = ([['m5', '5m'], ['h1', '1h'], ['h6', '6h'], ['h24', '24h']] as const)
-    .map(([k, label]) => [label, p?.changes?.[k] ?? (k === 'h24' ? p?.change : null) ?? null] as const)
+/** Your position on this perp, from the venue: what it is making, which way and how hard, and where
+ *  price sits between its stop, its entry and its target. */
+function PositionCard({ p, last, fmt }: { p: ExchangePosition, last: number | undefined, fmt: (v: number) => string }) {
+  const long = p.side === 'long'
+  const now = last ?? p.mark ?? p.entry
+  const ends = [p.stop, p.entry, p.target, now].filter((v): v is number => v != null && isFinite(v))
+  const lo = Math.min(...ends), hi = Math.max(...ends)
+  const at = (v: number) => (hi > lo ? ((v - lo) / (hi - lo)) * 100 : 50)
+  const good = long ? now >= p.entry : now <= p.entry
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {moves.map(([k, v]) => (
-        <div key={k} className={cn('flex min-w-14 flex-col items-center rounded-lg px-2.5 py-1',
-          v == null ? 'bg-muted/50' : v >= 0 ? 'bg-emerald-500/10' : 'bg-destructive/10')}>
-          <span className="text-muted-foreground text-[10px]">{k}</span>
-          <span className={cn('text-xs tabular-nums', tone(v))}>{v == null ? '—' : signedPct(v, 1)}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-/** Where price sits against the levels the chart draws, each with how far it is from here. */
-function KeyLevels({ rows, last, fmt }: {
-  rows: { k: string, v: number | null, color: string, hint: string, d?: string }[], last: number, fmt: (v: number) => string
-}) {
-  return (
-    <section className="grid gap-1.5">
-      <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Key levels</span>
-      {rows.filter((r) => r.v != null).map((r) => {
-        const d = r.d ?? signedPct(((r.v! - last) / last) * 100)
-        return (
-          <Hint key={r.k} label={r.hint}>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="h-0.5 w-3 shrink-0" style={{ background: r.color }} />
-              <span className="text-muted-foreground flex-1">{r.k}</span>
-              <span className="tabular-nums">{fmt(r.v!)}</span>
-              <span className="text-muted-foreground w-16 text-right text-xs tabular-nums">{d}</span>
-            </div>
-          </Hint>
-        )
-      })}
-    </section>
-  )
-}
-
-/** The arithmetic of a trade the lean points at, if one were taken in Fomo: a stop one ATR away,
- *  a target two, and what that pays after the fee at both ends. Geometry, not a call. */
-function TradeBox({ dir, last, atrValue, fee, fmt, interval }: {
-  dir: 'long' | 'short', last: number, atrValue: number, fee: number, fmt: (v: number) => string, interval: string
-}) {
-  const long = dir === 'long'
-  const plan = priced(long, last, long ? last - atrValue : last + atrValue, long ? last + 2 * atrValue : last - 2 * atrValue, fee)
-  if (!plan) return null
-  return (
-    <section className="grid gap-2 rounded-lg border p-3">
-      <span className="text-muted-foreground text-xs">A {dir} here, if you take one in Fomo</span>
-      <div className="grid grid-cols-3 gap-2 tabular-nums">
-        <div><span className="text-muted-foreground block text-[10px] uppercase">Stop</span><span className="text-destructive">{fmt(plan.stop)}</span></div>
-        <div><span className="text-muted-foreground block text-[10px] uppercase">Entry</span>{fmt(plan.entry)}</div>
-        <div><span className="text-muted-foreground block text-[10px] uppercase">Target</span><span className={UP}>{fmt(plan.target)}</span></div>
-      </div>
-      <span className="text-muted-foreground text-xs">
-        1 ATR ({interval}) out, 2 ATR on · after {fee}% a side: {plan.net.toFixed(1)}R
+    <PanelCard label="Your position" aside={
+      <span className={cn('rounded-full px-2.5 py-0.5 text-xs', long ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive')}>
+        {long ? 'Long' : 'Short'}{p.lev ? ` ${p.lev}×` : ''}
       </span>
-    </section>
+    }>
+      <span className={cn('text-3xl font-medium tracking-tight tabular-nums', p.pnl == null ? '' : tone(p.pnl))}>
+        {p.pnl == null ? `${p.size}` : signedUsdt(p.pnl)}
+      </span>
+      {(p.stop != null || p.target != null) && (
+        <div className="grid gap-2">
+          <div className="bg-muted relative h-1 rounded-full" aria-hidden>
+            <span className={cn('absolute inset-y-0 rounded-full', good ? 'bg-emerald-500' : 'bg-destructive')}
+              style={{ left: `${Math.min(at(p.entry), at(now))}%`, width: `${Math.abs(at(now) - at(p.entry))}%` }} />
+            <span className="bg-foreground absolute -top-1 h-3 w-0.5" style={{ left: `${at(p.entry)}%` }} />
+          </div>
+          <div className="text-muted-foreground flex justify-between text-xs tabular-nums">
+            <span>{p.stop != null ? `stop ${fmt(p.stop)}` : ''}</span>
+            <span>entry {fmt(p.entry)}</span>
+            <span>{p.target != null ? `tp ${fmt(p.target)}` : ''}</span>
+          </div>
+        </div>
+      )}
+      {p.stop == null && p.target == null && (
+        <span className="text-muted-foreground text-xs tabular-nums">{p.size} from {fmt(p.entry)}</span>
+      )}
+    </PanelCard>
+  )
+}
+
+/** How the readings lean, as the count it is — which way, the split, and on which bars. */
+function LeanCard({ label, cls, bulls, bears, interval }: { label: string, cls: string, bulls: number, bears: number, interval: string }) {
+  return (
+    <PanelCard label="The chart" aside={<span className="text-muted-foreground text-xs">on {interval}</span>}>
+      <span className={cn('text-base font-medium', cls)}>{label}</span>
+      {bulls + bears > 0 && (
+        <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
+          <span className="rounded-full bg-emerald-500" style={{ flexGrow: bulls }} />
+          <span className="bg-destructive rounded-full" style={{ flexGrow: bears }} />
+        </div>
+      )}
+      <span className="text-muted-foreground text-xs">{bulls} readings for a long, {bears} for a short</span>
+    </PanelCard>
   )
 }
 
 /**
- * A DEX token's pool, where a listed asset has its readings: what you hold of it, its depth, size
- * and the day's trade, and whether it could be sold — the numbers that decide whether a memecoin
- * can be sold at the price on the chart at all.
+ * A DEX token's side of the panel: what you hold of it, its pool, and who is trading it — three
+ * cards and nothing else. A thin pool still says so, because it is the one thing about a memecoin
+ * the chart cannot show.
  */
-function DexFacts({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
+function TokenCards({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
   const held = useHolding(asset.mint, asset.pool)
-  const rows: [string, string][] = p ? [
-    ['Liquidity', compact(p.liquidity)],
-    ['Market cap', compact(p.marketCap)],
-    ['Volume 24h', compact(p.volume)],
-    ['Pool age', p.createdAt ? ageOf(p.createdAt) : '—'],
-  ] : []
-  const trades = p && p.buys != null && p.sells != null && p.buys + p.sells > 0 ? { b: p.buys, s: p.sells } : null
   const today = held && held.h.change != null ? held.h.value - held.h.value / (1 + held.h.change / 100) : null
   const share = held && held.total > 0 ? (held.h.value / held.total) * 100 : null
-  const sellAll = held && p ? impactOf(held.h.value, p.liquidity) : null
-  const thousand = p ? impactOf(1000, p.liquidity) : null
-  const pctTxt = (v: number) => (v < 0.01 ? '<0.01%' : `~${v < 1 ? v.toFixed(2) : v.toFixed(1)}%`)
+  const trades = p && p.buys != null && p.sells != null && p.buys + p.sells > 0 ? { b: p.buys, s: p.sells } : null
   return (
-    // ruled off only from whatever sits above it — on a wide window, often nothing
-    <section className="flex flex-col gap-3 [div:not(:empty)+&]:border-t [div:not(:empty)+&]:pt-3">
+    <>
       {held && (
-        <div className="bg-muted/40 grid gap-1.5 rounded-lg p-3">
-          <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">You hold</span>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-xl font-medium tabular-nums">{dollars(held.h.value)}</span>
-            {today != null && <span className={cn('text-sm tabular-nums', tone(today))}>{today >= 0 ? '+' : '−'}{dollars(Math.abs(today))} 24h</span>}
-          </div>
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {amountOf(held.h.amount)} {held.h.symbol}{share != null && <> · {share.toFixed(0)}% of your tokens</>}
-          </span>
+        <PanelCard label="You hold" aside={today != null &&
+          <span className={cn('text-sm tabular-nums', tone(today))}>{today >= 0 ? '+' : '−'}{dollars(Math.abs(today))} 24h</span>}>
+          <span className="text-3xl font-medium tracking-tight tabular-nums">{dollars(held.h.value)}</span>
           {share != null && (
-            <div className="bg-muted h-1.5 overflow-hidden rounded-full"><span className="block h-full bg-amber-500" style={{ width: `${Math.min(100, share)}%` }} /></div>
-          )}
-        </div>
-      )}
-      <PoolMoves p={p} />
-      <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">The pool</span>
-      {!p ? <Skeleton className="h-20" /> : (
-        <>
-          {p.name && <p className="text-sm">{p.name}</p>}
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 tabular-nums">
-            {rows.map(([k, v]) => (
-              <div key={k}>
-                <dt className="text-muted-foreground text-[10px] tracking-wider uppercase">{k}</dt>
-                <dd className="text-sm">{v}</dd>
-              </div>
-            ))}
-          </dl>
-          {trades && (
-            <div className="grid gap-1">
-              <div className="text-muted-foreground flex justify-between text-xs tabular-nums">
-                <span>Buys {trades.b.toLocaleString('en-US')}</span><span>Sells {trades.s.toLocaleString('en-US')}</span>
-              </div>
-              <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
-                <span className="bg-emerald-500" style={{ flexGrow: trades.b }} />
-                <span className="bg-destructive" style={{ flexGrow: trades.s }} />
-              </div>
-              <span className="text-muted-foreground text-[11px]">trades in the last 24 hours</span>
+            <div className="bg-muted h-1 overflow-hidden rounded-full" aria-hidden>
+              <span className="bg-foreground block h-full rounded-full" style={{ width: `${Math.min(100, share)}%` }} />
             </div>
           )}
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {amountOf(held.h.amount)} {held.h.symbol}{share != null && <> · {share.toFixed(0)}% of your wallet</>}
+          </span>
+        </PanelCard>
+      )}
+      {!p ? <Skeleton className="h-36 rounded-2xl" /> : (
+        <PanelCard label="Pool">
+          <Facts rows={[
+            ['Liquidity', compact(p.liquidity)],
+            ['Market cap', compact(p.marketCap)],
+            ['Volume 24h', compact(p.volume)],
+            ['Pool age', p.createdAt ? ageOf(p.createdAt) : '—'],
+          ]} />
           {p.liquidity < 50_000 && (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
-              A thin pool: selling a few hundred dollars moves this price.
-            </p>
+            <span className="text-xs text-amber-600 dark:text-amber-500">A thin pool: a few hundred dollars moves this price.</span>
           )}
-          {thousand != null && (
-            <div className="grid gap-1.5 text-sm">
-              <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Could you sell it?</span>
-              {sellAll != null && (
-                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Selling all of it moves price</span><span className="tabular-nums">{pctTxt(sellAll)}</span></div>
-              )}
-              <div className="flex justify-between gap-2"><span className="text-muted-foreground">$1,000 would move it</span><span className="tabular-nums">{pctTxt(thousand)}</span></div>
-            </div>
-          )}
-        </>
+        </PanelCard>
       )}
-    </section>
+      {trades && (
+        <PanelCard label="Last 24h">
+          <div className="text-muted-foreground flex justify-between text-xs tabular-nums">
+            <span>Buys <span className="text-foreground">{trades.b.toLocaleString('en-US')}</span></span>
+            <span>Sells <span className="text-foreground">{trades.s.toLocaleString('en-US')}</span></span>
+          </div>
+          <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
+            <span className="rounded-full bg-emerald-500" style={{ flexGrow: trades.b }} />
+            <span className="bg-destructive rounded-full" style={{ flexGrow: trades.s }} />
+          </div>
+        </PanelCard>
+      )}
+    </>
   )
 }
 
@@ -1581,6 +1462,19 @@ function useSearch(q: string) {
     return () => { on = false; clearTimeout(h) }
   }, [q])
   return out
+}
+
+/** One watchlist row's shape: mark, name, price, move — the same grid for every section. */
+const ROW = 'hover:bg-accent grid h-10 w-full grid-cols-[20px_minmax(0,1fr)_auto_3.75rem] items-center gap-2 rounded-lg px-2.5 text-left disabled:opacity-60'
+
+/** A day's move, right-aligned in the row's last column and tinted the way it went. */
+function Change({ v, className }: { v: number | null, className?: string }) {
+  if (v == null) return <span />
+  return (
+    <span className={cn('justify-self-end text-xs tabular-nums', v >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive', className)}>
+      {v >= 0 ? '+' : '−'}{Math.abs(v).toFixed(2)}%
+    </span>
+  )
 }
 
 /** The four the watchlist always carries; everything else is there because it was pinned. */
@@ -1686,7 +1580,8 @@ function Watchlist({ current, onPick, inputRef }: {
     return [r.a.id, px == null ? r
       : { ...r, price: px, change: ((px - r.open) / r.open) * 100, closes: [...r.closes.slice(0, -1), px] }]
   }))
-  const groups: [string, Asset[]][] = [['Main · perps', core], ['Pinned', pins]]
+  const groups: [string, Asset[]][] = [['Main', core], ['Pinned', pins]]
+  const wallet = useWalletRows()
   return (
     <div className="flex min-h-0 flex-col">
       {/* the icon is centred on the box directly around the field, not on the padded wrapper: that
@@ -1714,70 +1609,79 @@ function Watchlist({ current, onPick, inputRef }: {
             <p>Prices are not loading — the exchange feed didn't answer.</p>
             <Button size="sm" variant="outline" onClick={() => setNonce((n) => n + 1)}>Try again</Button>
           </div>
-        ) : groups.map(([group, list]) => {
-          const shown = list.filter(hit)
-          if (!shown.length) return null
-          return (
-            <div key={group} className="contents lg:block">
-              <p className="text-muted-foreground font-heading hidden px-2 pt-2 pb-1 text-[10px] tracking-wider uppercase first:pt-0 lg:block">{group}</p>
-              {shown.map((a) => {
-                const r = priced.get(a.id)
-                const dex = a.source === 'dex'
-                /* Two lines, not one: the name and the day's move on the first, the day's shape
-                   and the price on the second. On one line the four of them did not fit a rail
-                   and the name was the column that gave. */
-                return (
-                  <div key={a.id} className="group/row relative shrink-0">
-                    <button
-                      type="button" onClick={() => onPick(a.id)}
-                      aria-label={`Open ${a.label} chart`} aria-current={a.id === current}
-                      className={cn('hover:bg-accent grid w-40 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 rounded-md px-2 py-1.5 text-left lg:w-full',
-                        a.id === current && 'bg-muted', pinned.has(a.id) && 'lg:pr-8')}
-                    >
-                      <AssetLogo src={a.logo} letter={a.label} />
-                      <span className="flex min-w-0 items-baseline gap-1.5">
-                        <span className="truncate text-sm">{a.label}</span>
-                        {/* what kind of market it is, where the list mixes them */}
-                        {group === 'Pinned' && <span className="text-muted-foreground shrink-0 text-[10px]">{dex ? a.network : 'perp'}</span>}
-                      </span>
-                      {state === 'loading' && !r ? (
-                        <>
-                          <Skeleton className="h-3 w-10" />
-                          <span />
-                          <Skeleton className="h-3 w-full" />
-                          <Skeleton className="h-3 w-14" />
-                        </>
-                      ) : !r ? (
-                        // the feed answered and had nothing for this one — say so, rather than pulse forever
-                        <><span /><span /><span className="text-muted-foreground col-span-2 text-xs">no price</span></>
-                      ) : (
-                        <>
-                          <span className={cn('text-xs tabular-nums',
-                            r.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                            {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}%
+        ) : (
+          <>
+            {/* what you hold first: the tokens in the watched wallets, by what they are worth — the
+                wallet's total beside the label, so there is no separate card saying it again */}
+            {wallet && !q.trim() && (
+              <div className="hidden lg:block">
+                <p className="text-muted-foreground flex justify-between px-2.5 pt-1 pb-1.5 text-xs">
+                  <span>Wallet</span><span className="tabular-nums">{dollars(wallet.total)}</span>
+                </p>
+                {wallet.rows.map((h) => (
+                  <button key={h.mint} type="button" disabled={!h.pool}
+                    onClick={() => h.pool && pick(dexAsset({ network: 'solana', pool: h.pool, symbol: h.symbol, mint: h.mint }))}
+                    aria-label={`Open ${h.symbol} chart`}
+                    className={cn(ROW, current === `dex:solana:${h.pool}` && 'bg-muted')}>
+                    <TokenIcon mint={h.mint} symbol={h.symbol} className="size-5" />
+                    <span className="truncate text-sm">{h.symbol}</span>
+                    <span className="text-muted-foreground text-xs tabular-nums">{dollars(h.value)}</span>
+                    <Change v={h.change} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {groups.map(([group, list]) => {
+              const shown = list.filter(hit)
+              if (!shown.length) return null
+              return (
+                <div key={group} className="contents lg:block">
+                  <p className="text-muted-foreground hidden px-2.5 pt-4 pb-1.5 text-xs first:pt-1 lg:block">{group}</p>
+                  {shown.map((a) => {
+                    const r = priced.get(a.id)
+                    const dex = a.source === 'dex'
+                    /* One line: the mark, the name, the price and the day's move — the four things a
+                       list is scanned for. The day's shape is the chart's to draw. */
+                    return (
+                      <div key={a.id} className="group/row relative w-44 shrink-0 lg:w-auto">
+                        <button type="button" onClick={() => onPick(a.id)}
+                          aria-label={`Open ${a.label} chart`} aria-current={a.id === current}
+                          className={cn(ROW, a.id === current && 'bg-muted')}>
+                          <AssetLogo src={a.logo} letter={a.label} className="size-5" />
+                          <span className="flex min-w-0 items-baseline gap-1.5">
+                            <span className="truncate text-sm">{a.label}</span>
+                            {/* what kind of market it is, where the list mixes them */}
+                            {group === 'Pinned' && <span className="text-muted-foreground shrink-0 text-[10px]">{dex ? a.network : 'perp'}</span>}
                           </span>
-                          <span />
-                          {/* the shape behind the percentage — the same bars both numbers on this row are read off */}
-                          <Sparkline data={r.closes} up={r.change >= 0} id={`row-${a.id.replace(/[^A-Za-z0-9]/g, '')}`} className="h-4 w-full" />
-                          <span className="text-muted-foreground text-xs tabular-nums">{fmtPrice(r.price)}</span>
-                        </>
-                      )}
-                    </button>
-                    {pinned.has(a.id) && (
-                      <PinStar a={a} pinned className="absolute top-1/2 right-1 hidden -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 lg:grid" />
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )
-        })}
+                          {state === 'loading' && !r ? (
+                            <><Skeleton className="h-3 w-12" /><Skeleton className="h-3 w-10 justify-self-end" /></>
+                          ) : !r ? (
+                            // the feed answered and had nothing for this one — say so, rather than pulse forever
+                            <span className="text-muted-foreground col-span-2 text-right text-xs">no price</span>
+                          ) : (
+                            <>
+                              <span className="text-muted-foreground text-xs tabular-nums">{fmtPrice(r.price)}</span>
+                              <Change v={r.change} className={cn(pinned.has(a.id) && 'lg:group-hover/row:invisible')} />
+                            </>
+                          )}
+                        </button>
+                        {pinned.has(a.id) && (
+                          <PinStar a={a} pinned className="absolute top-1/2 right-1.5 hidden -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 lg:grid" />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </>
+        )}
       </div>
       {/* Beyond the list: every perp on the book and the DEXes, while searching — each one opens,
           and each one can be pinned to stay. */}
       {(morePerps.length > 0 || moreTokens.length > 0) && (
         <div className="hidden min-h-0 flex-col gap-0.5 overflow-y-auto border-t p-2 lg:flex">
-          {morePerps.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-1 text-[10px] tracking-wider uppercase">Perps on Hyperliquid</p>}
+          {morePerps.length > 0 && <p className="text-muted-foreground px-2.5 pt-1 pb-1 text-xs">Perps on Hyperliquid</p>}
           {morePerps.map((c) => {
             const a = perpOf(c)
             return (
@@ -1791,7 +1695,7 @@ function Watchlist({ current, onPick, inputRef }: {
               </div>
             )
           })}
-          {moreTokens.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-2 text-[10px] tracking-wider uppercase">Tokens on DEXes</p>}
+          {moreTokens.length > 0 && <p className="text-muted-foreground px-2.5 pt-3 pb-1 text-xs">Tokens on DEXes</p>}
           {moreTokens.map((t) => {
             const a = dexAsset(t)
             return (
