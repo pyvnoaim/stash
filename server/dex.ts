@@ -78,8 +78,22 @@ export function search(q: string): Promise<Found[]> {
   return rows
 }
 
-/** The one pool's facts the chart's side panel shows in place of the readings. */
-export async function pool(network: string, address: string): Promise<Found | null> {
+const pools = new Map<string, { at: number; facts: Promise<Found | null> }>()
+
+/** The one pool's facts the chart's side panel shows in place of the readings — a minute fresh, since
+ *  every open of a token's chart asks, and the numbers are a day's volume and a pool's depth. */
+export function pool(network: string, address: string): Promise<Found | null> {
+  const k = `${network}:${address}`
+  const hit = pools.get(k)
+  if (hit && Date.now() - hit.at < 60_000) return hit.facts
+  const facts = poolNow(network, address)
+  facts.catch(() => { if (pools.get(k)?.facts === facts) pools.delete(k) })
+  if (pools.size >= 300) pools.clear()
+  pools.set(k, { at: Date.now(), facts })
+  return facts
+}
+
+async function poolNow(network: string, address: string): Promise<Found | null> {
   const chain = Object.entries(NETWORKS).find(([, v]) => v === network)?.[0]
   if (!chain || !POOL.test(address)) return null
   const j = await fetch(`https://api.dexscreener.com/latest/dex/pairs/${chain}/${address}`, { signal: AbortSignal.timeout(10_000) })

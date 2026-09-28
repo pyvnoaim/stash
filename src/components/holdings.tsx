@@ -43,6 +43,18 @@ function TokenIcon({ mint, symbol }: { mint: string, symbol: string }) {
   )
 }
 
+type HoldingsAnswer = { holdings?: Holding[], total?: number } | null
+let shared: { at: number, answer: Promise<HoldingsAnswer> } | null = null
+/** One look at /api/holdings for everything on the page that wants it — the Wallet card, the
+ *  Markets totals and the sidebar's tile each asking on their own minute was three calls for one
+ *  answer. Twenty seconds, which is inside the server's own half minute. */
+function lookHoldings(): Promise<HoldingsAnswer> {
+  if (shared && Date.now() - shared.at < 20_000) return shared.answer
+  const answer = fetch('/api/holdings').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  shared = { at: Date.now(), answer }
+  return answer
+}
+
 /** What the watched Solana wallets hold, in dollars — null for an account watching none. A minute
  *  fresh, while the tab is visible; the server caches it for half that. */
 export function useHoldingsTotal(): number | null {
@@ -53,9 +65,7 @@ export function useHoldingsTotal(): number | null {
     let on = true
     const look = () => {
       if (document.visibilityState !== 'visible') return
-      fetch('/api/holdings').then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (on && j) setTotal(j.holdings?.length ? Number(j.total) || 0 : null) })
-        .catch(() => {})
+      void lookHoldings().then((j) => { if (on && j) setTotal(j.holdings?.length ? Number(j.total) || 0 : null) })
     }
     look()
     const h = setInterval(look, EVERY)
@@ -75,7 +85,7 @@ export function useWalletTotal(): number | null {
     const look = () => {
       if (document.visibilityState !== 'visible') return
       Promise.all([
-        fetch('/api/holdings').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        lookHoldings(),
         fetch('/api/positions').then((r) => (r.ok ? r.json() : null)).catch(() => null),
       ]).then(([h, p]) => {
         if (!on) return
@@ -105,10 +115,9 @@ export function Holdings({ onOpen }: { onOpen?: (a: Asset) => void }) {
     let on = true
     const look = () => {
       if (document.visibilityState !== 'visible') return
-      fetch('/api/holdings')
-        .then((r) => (r.ok ? r.json() : null))
-        // a failed look keeps what the last one said rather than emptying the card
-        .then((j: { holdings?: Holding[], total?: number } | null) => {
+      // a failed look keeps what the last one said rather than emptying the card
+      void lookHoldings()
+        .then((j) => {
           if (!on || !j?.holdings) return
           setRows(j.holdings)
           setTotal(j.total ?? 0)
