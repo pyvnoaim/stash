@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck, ClipboardCopy, Coins,
+  ArrowRight, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
   Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
@@ -301,7 +301,7 @@ export function CommandPalette({
                 {market.tokens.map((t) => (
                   <CommandItem key={`${t.network}:${t.pool}`} value={`market token ${t.symbol} ${t.name} ${t.network} ${q}`}
                     onSelect={run(() => chart(dexAsset(t)))}>
-                    <Coins />
+                    <TokenIcon mint={t.mint} symbol={t.symbol} className="size-5" />
                     <span>{t.symbol}</span>
                     <span className="text-muted-foreground truncate text-xs">{t.name}</span>
                     <CommandShortcut className="tabular-nums">{fmtPrice(t.price)} · {t.network}</CommandShortcut>

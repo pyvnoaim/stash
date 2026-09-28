@@ -12,6 +12,8 @@
  * number.
  */
 
+import { noteLogo } from './solana.ts'
+
 /** DexScreener's chain names to GeckoTerminal's — the chains a found pool can also be charted on. */
 export const NETWORKS: Record<string, string> = { solana: 'solana', base: 'base', ethereum: 'eth', bsc: 'bsc' }
 /** What a pool address may look like before it goes into a URL: base58 on Solana, 0x elsewhere. */
@@ -61,6 +63,7 @@ export function shapeSearch(j: unknown, floors = true): Found[] {
     if ((best.get(key)?.liquidity ?? 0) >= liquidity) continue
     const mc = Number(p?.marketCap ?? p?.fdv)
     const ch = Number(p?.priceChange?.h24)
+    if (network === 'solana') noteLogo(mint, p?.info?.imageUrl)
     best.set(key, {
       network, pool, mint, price, liquidity,
       symbol: String(p?.baseToken?.symbol ?? '').slice(0, 20),

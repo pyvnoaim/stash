@@ -954,6 +954,10 @@ assert.deepEqual(await (await get('/api/wallets', kUser)).json(), { wallets: [] 
 assert.equal((await get('/api/positions', kUser)).status, 501)
 assert.deepEqual(await (await get('/api/holdings', kUser)).json(), { holdings: [], total: 0, dust: { count: 0, value: 0 } })
 assert.equal((await get('/api/holdings')).status, 401)
+// your buys and sells of a token: signed in, a mint-shaped address, and only your own wallets
+assert.equal((await get('/api/dex/fills?mint=So11111111111111111111111111111111111111112')).status, 401)
+assert.equal((await get('/api/dex/fills?mint=../etc', kUser)).status, 400)
+assert.deepEqual(await (await get('/api/dex/fills?mint=So11111111111111111111111111111111111111112', kUser)).json(), { fills: [] })
 assert.equal((await get('/api/closed')).status, 401)
 
 /* The market relay: public, since the charts work signed out, and nothing reaches the venue that

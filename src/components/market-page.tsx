@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Minus, RefreshCw, Rows3, Search, Share2, Sparkles, Star,
-  TrendingDown, TrendingUp, Waypoints,
+  TrendingDown, TrendingUp,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -15,7 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
 import { amountOf, dollars, Holdings, useHolding, useHoldingsTotal } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
-import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
+import { cashAt, euro, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
 import { CardDialog, type Template } from '@/components/card-dialog'
 import { cardSvg, recapOf, recapSvg, ticketSvg, type CardPosition, type CardWho, type Unit } from '@/lib/card'
@@ -29,9 +29,9 @@ import {
 import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sync'
 import {
   ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
-  deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
+  deskSignals, sessionVwap, signals, sparkPath, tally, trendFilter,
   venueName, priceDigits, priced, hlCoin, assetById, remember, perpAsset, dexAsset,
-  type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
+  type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal,
 } from '@/lib/market'
 
 
@@ -49,11 +49,6 @@ import {
  * ones belonging to someone who opens this tab.
  */
 const READ: Horizon = 'short'
-
-/** One session open on the chart: where it sits, whose it is, and when — in the reader's own clock. */
-type SessionMark = { x: number; color: string; label: string; t: number; future: boolean }
-/** One shape whether or not there is anything to draw, so neither caller has to check first. */
-const NO_MARKS: { marks: SessionMark[]; overlaps: { x0: number; x1: number }[] } = { marks: [], overlaps: [] }
 
 const VISIBLE = 60 // bars drawn by default; MAs/signals still use every fetched bar
 const MIN_BARS = 20, MAX_BARS = 400 // how far the wheel can zoom in and out
@@ -212,7 +207,7 @@ function Totals({ equity }: { equity: number | null }) {
 export default function MarketPage() {
   const s = useStash()
   const {
-    chart, watches, results, marketAsset: asset, marketInterval: chosenInterval,
+    chart, results, marketAsset: asset, marketInterval: chosenInterval,
   } = s
   // the one pair everything that means up or down on this chart is painted in
   const hue = candlePair(s)
@@ -234,19 +229,9 @@ export default function MarketPage() {
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
-  /* The unbroken swings, the range they span, and the gaps price has not come back for. On by
-     default — they are the levels every other reading on this page is measured against, and they
-     are most of what the readings below are actually about. A toggle rather than always-on because
-     this chart already carries MAs, sessions and a live position, and there are days you want the
-     candles back. */
-  const [structure, setStructure] = useState(true)
   // the readings past the four that decide the verdict — see the panel beside the chart
   const [allReadings, setAllReadings] = useState(false)
   const wide = useWide()
-  /* The second panel under the price. Every one of these was already computed and read out as text
-     while being impossible to see — the chart handed you "RSI 47" and nothing else.
-     Off by default — the price chart is the subject, and a panel steals a third of its height. */
-  const [panel, setPanel] = useState<'none' | 'volume' | 'rsi' | 'macd'>('none')
   const online = useOnline()
   /* navigator.onLine only knows whether there is *a* network — a captive wifi or a dead uplink
      still reads as online, and the service worker would answer those from cache without a word.
@@ -500,82 +485,6 @@ export default function MarketPage() {
   const lastTap = useRef(0) // for the double-tap that resets the view on a phone
   const resetView = () => { stopGlide(); carry.current = 0; setWin(VISIBLE); setScroll(0) }
 
-  // session-open x-positions, memoised off the candles so hovering doesn't re-run the Intl work.
-  // Mark the first bar that reaches the open each local day — works whether bars run continuously
-  // (which every book here is) or resume after a gap.
-  const sessionMarks = useMemo(() => {
-    if (interval === '1d' || interval === '1w') return NO_MARKS
-    // a candle must actually START at the session open (within one bar) to count — so a session that
-    // falls inside a gap in the bars is skipped, not stamped on the first bar after it. A
-    // continuous 24/7 book still catches every session.
-    const barMin = BAR_MS[interval] / 60_000
-    const v = vis
-    const m = v.length
-    if (m < 2) return NO_MARKS
-    // the same scan runs over the drawn bars and the projected ones, so an open that hasn't happened
-    // yet gets marked in the empty right-hand room. ponytail: projected bars just repeat the last
-    // bar's spacing — right for the 24/7 feeds; on a gapped stock feed the mark still counts real
-    // time to the open, it only ignores that no bars print while a book is quiet.
-    const step = v.at(-1)!.t - v.at(-2)!.t
-    const ts = [...v.map((c) => c.t), ...Array.from({ length: future }, (_, k) => v.at(-1)!.t + (k + 1) * step)]
-    const at = (i: number) => (i / (m - 1 + future)) * 100
-    const marks: SessionMark[] = []
-    for (const s of SESSIONS) {
-      let prev = localClock(ts[0], s.tz)
-      for (let i = 1; i < ts.length; i++) {
-        const cur = localClock(ts[i], s.tz)
-        // …and only on a day that desk actually opens. Bitcoin prints a bar at 09:30 in NY on a
-        // Saturday and nobody whatsoever opened for business — openDesks owns the weekend rule, so
-        // the line and the overlap band below it can't disagree about whether anyone is there.
-        if (cur.min >= s.min && cur.min < s.min + barMin && (cur.day !== prev.day || prev.min < s.min)
-          && openDesks(ts[i]).some((d) => d.label === s.label))
-          marks.push({ x: at(i), color: s.color, label: s.label, t: ts[i], future: i >= m })
-        prev = cur
-      }
-    }
-    /* And the stretches where two desks are at work at once — London and NY overlap for two
-       hours a day, and that is when most of gold's range gets made. Drawn as a band rather than said
-       in a sentence: the point of it is which candles happened inside it. */
-    const overlaps: { x0: number; x1: number }[] = []
-    for (let i = 0; i < ts.length; i++) {
-      if (openDesks(ts[i]).length < 2) continue
-      const last = overlaps.at(-1)
-      if (last && last.x1 === at(i - 1)) last.x1 = at(i)
-      else overlaps.push({ x0: at(i), x1: at(i) })
-    }
-    // built session by session, so left-to-right is the order nothing has yet been in — and the
-    // label thinning below only makes sense against the neighbour a reader's eye would collide with
-    marks.sort((a, b) => a.x - b.x)
-    return { marks, overlaps }
-  }, [vis, interval, future])
-  /* Only the last day of opens, plus any still ahead. Zoomed out to a fortnight this drew three
-     dotted verticals a day — seventeen of them standing behind the candles, each with a name on
-     top — and nobody trades an open from six days ago. Cut to a day it stays scale-aware on its
-     own: on 5m bars a window is a few hours and nothing is dropped. */
-  const dayAgo = (vis.at(-1)?.t ?? 0) - 864e5
-  const marks = sessionMarks.marks.filter((mk) => mk.future || mk.t >= dayAgo)
-  /* Every mark gets its name and the time it happened on your own clock — an unlabelled dotted line
-     is a line you have to go and decode in the legend, and the whole question it answers is "which
-     desk, and when". Scrolled back off the live edge, the ones still ahead are history rather than
-     news, so they lose the brightness and read like the rest. */
-  const sessionLabel = (t: number) =>
-    new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  /* Zoomed out to a fortnight there are three opens a day and the names overlap into a smear that
-     reads as damage. Every line still gets drawn — the lines are the information — but a name only
-     goes on one with room for it, and the legend below names every session that landed a line
-     anyway. Where two are too close, an open still ahead takes the slot off one already passed:
-     that one is the part you would act on, and it is also the one crowded hardest, since every
-     future mark lands inside the narrow strip of room left on the right.
-     A name is a fixed number of pixels wide and the gap here is a percentage of the box, so the
-     room one needs is width-dependent: on a phone the same 9% is thirty pixels and "London 09:00"
-     is seventy, which is the smear again on the narrowest screen there is. */
-  const labelled: SessionMark[] = []
-  for (const mk of marks) {
-    const last = labelled.at(-1)
-    if (!last || mk.x - last.x > (phone ? 24 : 9)) labelled.push(mk)
-    else if (mk.future && atEdge && !last.future) labelled[labelled.length - 1] = mk
-  }
-
   /* Where price sits against the average paid since the session opened — the intraday reference
      whatever you are looking at. It returns null on its own for a daily bar or a feed with no
      volume, which is every case it would be a lie in. */
@@ -583,32 +492,8 @@ export default function MarketPage() {
   // the header's second row: a perp's funding and open interest, or a token's pool
   const poolFacts = usePool(current)
   const perpCtx = usePerpCtx(current)
+  const dexFills = useDexFills(current.source === 'dex' ? current.mint ?? poolFacts?.mint : undefined)
 
-  /* Closed bars only, which is the same cut signals() makes before its own structure read (see the
-     note on `closed` there). The last candle is repriced on every tick by the socket above,
-     so scanning it would let a tick that pokes a level count as a close through it: the unbroken-
-     level line would vanish mid-bar and come back when the tick retraced, while the card below —
-     which never sees that bar — went on saying the level holds. Two readings of one thing, which
-     is the exact drift sharing the pivot definition was meant to rule out.
-     Indices survive the slice, so they stay absolute into `candles` for the window maths below. */
-  const closed = useMemo(() => candles.slice(0, -1), [candles])
-  /* The two swings nobody has closed through yet, which are the only ones worth drawing: a break of
-     one is news, and the rest is a scatter of dots about levels that have already been settled.
-     Off every closed bar rather than the drawn window — a pivot is a fact about the bars either side
-     of it, and rescanning the visible slice would invent one at each edge and make them shuffle as
-     you pan. Filtered to the window at draw time instead. */
-  const standing = useMemo(
-    () => (structure && closed.length ? standingSwings(closed) : { high: null, low: null }),
-    [structure, closed],
-  )
-  /* Only the gaps still open. A thousand bars hold a couple of hundred, and nearly all of them get
-     traded back within a few bars — drawing those would be a wall of boxes about business already
-     finished. Measured on the live feeds: 178–360 gaps per 1000 bars collapse to under twenty
-     unfilled, and a handful inside the drawn window, which is what makes this readable at all. */
-  const gaps = useMemo(
-    () => (structure && closed.length ? fvg(closed).filter((g) => !g.filled) : []),
-    [structure, closed],
-  )
   // the higher-timeframe lean leads: it's the filter the others get read through
   const shownSignals = deskSignals(higher, null, vwap, view?.signals ?? [])
 
@@ -638,67 +523,12 @@ export default function MarketPage() {
   const heldMove = held && last != null && held.entry > 0
     ? (last / held.entry - 1) * (held.side === 'long' ? 100 : -100) : null
 
-  // The whole position wears fuchsia — the one hue nothing else on the chart uses (candles are
-  // emerald/red, MAs sky/amber, VWAP cyan, sessions rose/indigo/teal), and the one that stays apart
-  // from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by weight and dash, and
-  // the legend below shows exactly those dashes.
-  /* The hand-entered position on this asset is the one that knows its leverage, so it is the one
-     with a liquidation price where the feed says none.
-     With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
-     the feed's entry/stop/target are the trade's real ones. */
-  const mine = watches.find((w) => w.asset === current.id && isPosition(w))
-  // the exchange's own liquidation price where the feed carries one — that is the number that
-  // actually fires — and the entry ± entry/lev estimate off the hand-entered position otherwise
-  const liq = held?.liq ?? (mine ? liqOf(mine) : null)
-  /* Same fuchsia as the position it would become, at half weight and its own dash: a resting order
-     is not a level the trade is being measured against, it is the level the trade starts at if
-     price comes. */
-  const at = (which: 'stop' | 'target') => held?.[which] ?? null
-  const posLines = [
-    // the price is in the label so two orders on the same book are two chips, not one drawn twice
-    ...resting.map((o) => ({
-      label: `${o.side} resting ${fmt(o.price)}`, lvl: o.price, w: 1, dash: '4 4', op: 0.75,
-    })),
-    ...(held ? [
-      { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
-      ...(at('stop') != null ? [{ label: 'stop', lvl: at('stop')!, w: 1, dash: '2 3', op: 0.6 }] : []),
-      ...(at('target') != null ? [{ label: 'target', lvl: at('target')!, w: 1, dash: '8 4', op: 0.6 }] : []),
-    ] : mine ? [
-      { label: 'entry', lvl: mine.entry, w: 1.5, dash: '6 3', op: 1 },
-      { label: 'stop', lvl: mine.stop, w: 1, dash: '2 3', op: 0.6 },
-      { label: 'target', lvl: mine.target, w: 1, dash: '8 4', op: 0.6 },
-    ] : []),
-    ...(liq != null ? [{ label: 'liq', lvl: liq, w: 1, dash: '1 3', op: 0.8 }] : []),
-  ]
 
-  /* The range price is working inside: the near swing band — what "support / resistance" has always
-     meant here, and where a stop belongs.
-     The wider band three windows back used to be drawn with it, at a 40%-opacity 1-4 dash. Two more
-     hairlines nobody could name were two more of the dozen this chart draws. */
-  const rangeLines = view && structure
-    ? [{ label: 'range high', lvl: view.resistance }, { label: 'range low', lvl: view.support }]
-    : []
-
-  // only the drawn window is plotted, so candles stay fat — but the MAs and signals above were
-  // computed off every fetched bar, so the 200-MA is real from the first visible bar
-  const smaFast = view ? view.smaFast.slice(start, stop) : []
-  const smaSlow = view ? view.smaSlow.slice(start, stop) : []
   const n = vis.length
-  // Autoscale on price first. The MAs get to widen the frame, but only by a quarter of the price
-  // range — a 200-MA sitting 12% above a quiet market used to own the top half of the box and squash
-  // every candle into the bottom. Past that it just leaves the frame, and is clipped rather than
-  // being allowed to decide the scale for the thing you actually came to look at.
-  const finite = (a: (number | null)[]) => a.filter((x): x is number => x != null)
-  const lows = n ? vis.map((c) => c.l) : [0]
-  const highs = n ? vis.map((c) => c.h) : [1]
-  const pLo = Math.min(...lows), pHi = Math.max(...highs)
-  const room = (pHi - pLo) * 0.25 || 1
-  const near = [...finite(smaFast), ...finite(smaSlow)].filter((v) => v >= pLo - room && v <= pHi + room)
-  // the entry sits on a MA (already in scope); the stop/target can be far, so they stay out of the
-  // autoscale — the chart stays framed on price and off-frame levels live in the card
-  const ys = [pLo, pHi, ...near]
-  // pad the range so the lines breathe instead of hugging the top and bottom edges
-  const rawLo = Math.min(...ys), rawHi = Math.max(...ys)
+  // framed on the candles and nothing else — the chart draws nothing else
+  const rawLo = n ? Math.min(...vis.map((c) => c.l)) : 0
+  const rawHi = n ? Math.max(...vis.map((c) => c.h)) : 1
+  // pad the range so the candles breathe instead of hugging the top and bottom edges
   const pad = (rawHi - rawLo) * 0.08 || 1
   const lo = rawLo - pad, hi = rawHi + pad
   const y = (p: number) => ((hi - p) / (hi - lo)) * 100
@@ -722,12 +552,21 @@ export default function MarketPage() {
    * the same gate the Log and the calendar hold to.
    */
   const barMs = n > 1 ? vis[1].t - vis[0].t : 0
-  const fills = useMemo(() => {
+  const fills = useMemo((): Fill[] => {
     if (!n || !barMs) return []
     const at0 = vis[0].t
+    // the bar a moment falls inside — floor, not round: a buy at 14:59 is in the 14:00 hour
     const bar = (t: number) => {
-      const i = Math.round((t - at0) / barMs)
+      const i = Math.floor((t - at0) / barMs)
       return i >= 0 && i <= n - 1 ? i : null
+    }
+    /* A token's are its swaps off the wallet: no entry price is claimed, only which bar and how
+       much — the bar's own close stands in as where the mark reads. */
+    if (current.source === 'dex') {
+      return dexFills.flatMap((f) => {
+        const i = bar(f.t)
+        return i == null ? [] : [{ i, price: vis[i].c, buy: f.side === 'buy', open: f.side === 'buy', row: null, amount: f.amount }]
+      })
     }
     const rows = results.filter((r) => r.asset === current.id && isReal(r))
     return [
@@ -740,7 +579,7 @@ export default function MarketPage() {
         ? [{ i: bar(Date.parse(held.openedAt)), price: held.entry, buy: held.side === 'long', open: true, row: null }]
         : []),
     ].filter((m): m is typeof m & { i: number } => m.i != null && m.price > 0)
-  }, [results, current.id, held, vis, n, barMs])
+  }, [results, current.id, current.source, held, vis, n, barMs, dexFills])
   /* There was a second gate here, dropping any fill whose price sat outside the frame — it was
      what kept a mark from being clamped to an edge and reading as a fill at a price it was not
      made at. The mark hangs off its bar now rather than off the price, so the frame's vertical
@@ -752,7 +591,9 @@ export default function MarketPage() {
    *  its own tooltip on hover. One line, so the two cannot drift apart. */
   const note = (m: (typeof fills)[number]) => (
     <>
-      <span>{m.buy ? 'Buy' : 'Sell'} {m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>
+      {m.amount != null
+        ? <span>{m.buy ? 'Bought' : 'Sold'} <span className="tabular-nums">{amountOf(m.amount)}</span> {coin}</span>
+        : <span>{m.buy ? 'Buy' : 'Sell'} {m.open ? 'in' : 'out'} <span className="tabular-nums">{fmt(m.price)}</span></span>}
       {m.row && !m.open && (
         <span className={cn('tabular-nums', m.row.r >= 0 ? 'text-emerald-500' : 'text-destructive')}>
           {m.row.r >= 0 ? '+' : ''}{m.row.r.toFixed(2)}R
@@ -761,35 +602,9 @@ export default function MarketPage() {
           {m.row.cash != null && ` · ${signedUsdt(m.row.cash)}`}
         </span>
       )}
-      {!m.row && <span className="text-muted-foreground">open</span>}
+      {!m.row && m.amount == null && <span className="text-muted-foreground">open</span>}
     </>
   )
-  /* The standing swings that are actually drawable: inside the frame, and made by a bar the window
-     has reached. A pivot to the right of where you have scrolled has no x to be drawn from, and a
-     line starting off the edge of the view says the level came from somewhere it didn't. */
-  const standingLines = [standing.high, standing.low]
-    .filter((s): s is Swing => !!s && s.i < stop && s.price >= lo && s.price <= hi)
-  /* The gaps worth a box here: made by a bar the window has reached, and overlapping the frame at
-     all — a gap entirely above or below what is drawn would clamp to a hairline at the edge and
-     read as a level rather than as the hole it is. Clamped rather than dropped when it only partly
-     fits, so a gap price is sitting at the edge of still shows the part you can see. */
-  /* The level the structure card names out loud — and by construction the one level standingSwings
-     can never draw, since a swing that has been closed through is no longer standing. So the chart
-     was silently missing the exact number the sentence under it was about. Drawn spent: it is
-     history that explains where the last break happened, not a level to act on. */
-  const broke = useMemo(() => (structure && closed.length ? structureBreak(closed) : null), [structure, closed])
-  const brokeAt = broke ? closed.length - 1 - broke.ago : -1
-  const visGaps = gaps
-    .filter((g) => g.i < stop && g.top >= lo && g.bottom <= hi)
-    .map((g) => ({
-      ...g,
-      x: Math.min(100, Math.max(0, xAt(g.i - start))),
-      y0: Math.max(0, y(g.top)),
-      y1: Math.min(100, y(g.bottom)),
-    }))
-  // the range wash, cut to the frame — see the note where it is drawn
-  const bandTop = view ? Math.max(0, y(view.resistance)) : 0
-  const bandBottom = view ? Math.min(100, y(view.support)) : 0
   const price = vis.at(-1)?.c
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
@@ -933,28 +748,6 @@ export default function MarketPage() {
                     </Hint>
                   ))}
                 </div>
-                {/* the panel under the price — the readings that were voting while invisible. No
-                    "None" button: the one that is on turns itself off. */}
-                {([
-                  ['volume', 'Vol', 'Volume per bar'],
-                  ['rsi', 'RSI', 'RSI 14, with the 30 and 70 lines'],
-                  ['macd', 'MACD', 'MACD 12/26/9'],
-                ] as const).map(([id, label, hint]) => (
-                  <Hint key={id} label={panel === id ? `${hint} · click to hide` : hint}>
-                    <Button size="sm" variant={panel === id ? 'secondary' : 'ghost'}
-                      className={cn('h-6 px-2 text-xs', panel !== id && 'text-muted-foreground')}
-                      onClick={() => setPanel(panel === id ? 'none' : id)}>
-                      {label}
-                    </Button>
-                  </Hint>
-                ))}
-                <Hint label={`Swing levels, range and open gaps${structure ? ' · click to hide' : ''}`}>
-                  <Button size="icon" variant={structure ? 'secondary' : 'ghost'} aria-label="Structure overlay"
-                    aria-pressed={structure} className={cn('size-6', !structure && 'text-muted-foreground')}
-                    onClick={() => setStructure((v) => !v)}>
-                    <Waypoints className="size-3.5" />
-                  </Button>
-                </Hint>
                 <span className="bg-border mx-1 h-4 w-px" />
                 <Hint label={!online ? 'Offline' : notLive ? 'Feed not answering'
                   : !live ? 'Live off' : polling ? `Stream quiet — polling every ${LIVE / 1000}s` : 'Live, streaming'}>
@@ -975,8 +768,6 @@ export default function MarketPage() {
             {current.source === 'dex'
               ? <PoolMoves p={poolFacts} />
               : <PerpStats candles={candles} ctx={perpCtx} last={last} fmt={fmt} />}
-            {/* who is at their desks, which is context for the candles it sits on top of */}
-            <OpenNow at={candles.at(-1)?.t} />
           {/* The plot fills whatever the pane leaves it on a wide window — the chart is the page now, not
               a card on it — and keeps a fixed height where the page scrolls instead. */}
           <div ref={plot} className="relative h-75 lg:h-auto lg:min-h-0 lg:flex-1">
@@ -1104,83 +895,10 @@ export default function MarketPage() {
                       <stop offset="0%" style={{ stopColor: up ? hue.up : hue.down }} stopOpacity={0.22} />
                       <stop offset="100%" style={{ stopColor: up ? hue.up : hue.down }} stopOpacity={0} />
                     </linearGradient>
-                    {/* an MA too far from price to be worth framing runs out of the box, not off the card */}
-                    <clipPath id="mkt-clip"><rect x="0" y="0" width="100" height="100" /></clipPath>
                   </defs>
                   {/* faint baseline grid */}
                   {[25, 50, 75].map((gy) => (
                     <line key={gy} x1="0" x2="100" y1={gy} y2={gy} className="stroke-border/60" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-                  ))}
-                  {/* The hours two desks are open at once — the overlap that makes most of the day's
-                      range. A wash behind everything, no border: it is the background the candles
-                      happened against, not a level. */}
-                  {sessionMarks.overlaps.map((ov, i) => (
-                    <rect key={`ov-${i}`} x={ov.x0} y="0" width={Math.max(ov.x1 - ov.x0, 0.3)} height="100"
-                      className="fill-amber-400/8 dark:fill-amber-300/8" stroke="none" />
-                  ))}
-                  {/* Session opens — Asia / Europe / US. The ones already passed sit back so they read
-                      as texture behind the candles rather than dotted verticals competing with them;
-                      the ones still ahead, which are the part you'd act on, stay bright. */}
-                  {marks.map((mk, i) => (
-                    <line key={`s-${i}`} x1={mk.x} x2={mk.x} y1="0" y2="100"
-                      stroke={mk.color} strokeWidth={1} strokeOpacity={mk.future && atEdge ? 0.8 : 0.3}
-                      strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
-                  ))}
-                  {/* The range price is working inside: the near band the stop leans on, and the
-                      wider one the target aims at. Both already came out of signals() — they were
-                      just never drawn, so the card could name a target at a level the chart never
-                      showed. The near band gets a wash so "where in the range am I" is one look. */}
-                  {structure ? (
-                    <>
-                      {/* Clamped to the frame, not just positioned in it. The band is measured off
-                          the newest bars while the frame follows wherever you have scrolled to, so
-                          panning back into history puts it off the top or bottom — and this svg is
-                          overflow-visible, which would paint the wash straight across the card. */}
-                      {bandTop < bandBottom && (
-                        <rect x="0" y={bandTop} width="100" height={bandBottom - bandTop}
-                          className="fill-muted-foreground/6" stroke="none" />
-                      )}
-                      {rangeLines.filter((l) => l.lvl >= lo && l.lvl <= hi).map((l) => (
-                        <line key={l.label} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
-                          className="stroke-muted-foreground/70"
-                          strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
-                      ))}
-                    </>
-                  ) : (
-                    // same frame check the position lines have always had: without it a level from
-                    // off-screen draws its line outside the box, over the card
-                    [view.support, view.resistance].filter((lvl) => lvl >= lo && lvl <= hi).map((lvl, i) => (
-                      <line key={i} x1="0" x2="100" y1={y(lvl)} y2={y(lvl)}
-                        className="stroke-muted-foreground/50" strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
-                    ))
-                  )}
-                  {/* Fair value gaps still open: the stretches price jumped over without trading.
-                      Drawn from the bar that made the gap to the right edge, because that is how
-                      long the business stays unfinished — a box that stopped at its own three bars
-                      would say the level expired when it didn't. Tinted the way the bar that made
-                      it was travelling, at a wash rather than a fill: these sit behind the candles,
-                      which is where a thing price has yet to return to belongs. */}
-                  {visGaps.map((g) => (
-                    <rect key={`g-${g.i}`} x={g.x} y={g.y0} width={Math.max(100 - g.x, 0)}
-                      height={Math.max(g.y1 - g.y0, 0.3)} stroke="none"
-                      style={{ fill: g.dir === 'up' ? hue.up : hue.down }} fillOpacity={0.12} />
-                  ))}
-                  {/* The swing levels nobody has closed through yet — the ones a break would be news
-                      about, and the exact levels the structure reading under the chart is talking
-                      about. Drawn from the pivot that made them rather than edge to edge: a level
-                      did not exist before the bar that set it, and a full-width line says it did. */}
-                  {structure && standingLines.map((s) => (
-                    <line key={s.kind} x1={Math.min(100, Math.max(0, xAt(s.i - start)))} x2="100"
-                      y1={y(s.price)} y2={y(s.price)}
-                      className="stroke-foreground/55" strokeWidth={1} strokeDasharray="3 2" vectorEffect="non-scaling-stroke" />
-                  ))}
-                  {/* Money actually on this chart: the exchange position's own levels — these are
-                      the trade, not a reading about it. All three in the position's own fuchsia;
-                      the legend names each dash, and off-frame ones say so in the card. */}
-                  {posLines.filter((l) => l.lvl >= lo && l.lvl <= hi).map((l) => (
-                    <line key={`k-${l.label}`} x1="0" x2="100" y1={y(l.lvl)} y2={y(l.lvl)}
-                      className="stroke-fuchsia-600" strokeWidth={l.w} strokeOpacity={l.op}
-                      strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
                   ))}
                   {/* highlight the hovered candle's column, behind the candles so it sits lit on top */}
                   {hc && n > 1 && (
@@ -1191,12 +909,6 @@ export default function MarketPage() {
                   {chart === 'line' && (
                     <path d={`${pathOf(vis.map((c) => c.c), lo, hi, xSpan)} L${xAt(n - 1).toFixed(2)} 100 L0 100 Z`} fill="url(#mkt-fill)" stroke="none" />
                   )}
-                  <g clipPath="url(#mkt-clip)">
-                    <path d={pathOf(smaSlow, lo, hi, xSpan)}
-                      className="stroke-amber-500 fill-none" strokeWidth={1.25} strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
-                    <path d={pathOf(smaFast, lo, hi, xSpan)}
-                      className="stroke-sky-500 fill-none" strokeWidth={1.25} strokeOpacity={0.9} vectorEffect="non-scaling-stroke" />
-                  </g>
                   {chart === 'candles'
                     // rect width is in viewBox units so it stretches with the x-axis (what we want);
                     // the wick keeps its 1px via non-scaling-stroke. Doji get a floor height to stay visible.
@@ -1214,44 +926,12 @@ export default function MarketPage() {
                       <path d={pathOf(vis.map((c) => c.c), lo, hi, xSpan)}
                         className="stroke-foreground fill-none" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
                     )}
-                  {/* The swing the last break went through, at the price the card names. Faint and
-                      finely dashed — it is the level that stopped mattering, drawn so the sentence
-                      under the chart has something to point at. */}
-                  {broke && broke.level >= lo && broke.level <= hi && brokeAt < stop && (
-                    <line x1={Math.min(100, Math.max(0, xAt(brokeAt - start)))} x2="100"
-                      y1={y(broke.level)} y2={y(broke.level)}
-                      className="stroke-foreground/30" strokeWidth={1} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
-                  )}
-                  {/* The session's volume-weighted average price. It has been voting on the verdict
-                      since the day it was added and was never once drawn — the one line on this
-                      chart that large size actually leans against. */}
-                  {vwap && vwap.vwap >= lo && vwap.vwap <= hi && (
-                    <line x1="0" x2="100" y1={y(vwap.vwap)} y2={y(vwap.vwap)}
-                      className="stroke-cyan-500" strokeWidth={1.25} strokeOpacity={0.75}
-                      strokeDasharray="7 3" vectorEffect="non-scaling-stroke" />
-                  )}
                   {/* where the last drawn bar closed, so the tag on the axis has something to sit on */}
                   {price != null && (
                     <line x1="0" x2="100" y1={y(price)} y2={y(price)} style={{ stroke: up ? hue.up : hue.down }}
                       strokeWidth={1} strokeOpacity={0.45} strokeDasharray="1 3" vectorEffect="non-scaling-stroke" />
                   )}
                 </svg>
-
-                {/* A dot on every confirmed pivot used to sit here. Forty of them across a window is
-                    texture, not information — the pivots that are worth acting on are the two nobody
-                    has closed through, and those get a line across the chart at the price. The rest
-                    were a count in the legend of marks the eye could already see. */}
-
-                {/* which session each upcoming line is, named where it sits — the reason for the gap */}
-                {/* the name of the desk and the time on your clock, at the head of its own line —
-                    the two things the line was silently standing for */}
-                {labelled.map((mk, i) => (
-                  <span key={`n-${i}`}
-                    className="pointer-events-none absolute top-1 -translate-x-1/2 text-[10px] whitespace-nowrap tabular-nums"
-                    style={{ left: `${mk.x}%`, color: mk.color, opacity: mk.future && atEdge ? 1 : 0.55 }}>
-                    {mk.label} {sessionLabel(mk.t)}
-                  </span>
-                ))}
 
                 {/* The price scale. This chart draws a dozen levels — an entry, a stop, a liquidation
                     price, the range, the swings — and had a time axis but no price one, so every one
@@ -1339,61 +1019,6 @@ export default function MarketPage() {
               </>
             )}
           </div>
-          {/* The second panel. Same x domain as the price above — the same xSpan, so a bar here sits
-              directly under its own candle — and its own y scale, since none of these three share
-              units with a price. Its own SVG rather than a squeezed corner of the one above: RSI
-              lives in 0..100 and MACD straddles zero, and neither survives being drawn on a price
-              axis. */}
-          {view && panel !== 'none' && n > 1 && (() => {
-            const vol = vis.map((c) => c.v ?? 0)
-            const rsiV = view.rsiSeries.slice(start, stop)
-            const mLine = view.macd.line.slice(start, stop)
-            const mSig = view.macd.signal.slice(start, stop)
-            const finiteOf = (a: (number | null)[]) => a.filter((x): x is number => x != null)
-            // MACD is symmetric around zero or it lies about which side momentum is on
-            const mAll = [...finiteOf(mLine), ...finiteOf(mSig)]
-            const mMax = Math.max(...mAll.map(Math.abs), 1e-9)
-            const pLo = panel === 'rsi' ? 0 : panel === 'macd' ? -mMax : 0
-            const pHi = panel === 'rsi' ? 100 : panel === 'macd' ? mMax : Math.max(...vol, 1)
-            const py = (v: number) => ((pHi - v) / (pHi - pLo || 1)) * 100
-            return (
-              <div className="relative mt-1 h-20 border-t pt-1">
-                <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-hidden">
-                  {/* the lines each reading is actually read against: overbought/oversold, or zero */}
-                  {panel === 'rsi' && [30, 70].map((lvl) => (
-                    <line key={lvl} x1="0" x2="100" y1={py(lvl)} y2={py(lvl)}
-                      className="stroke-muted-foreground/40" strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
-                  ))}
-                  {panel === 'macd' && (
-                    <line x1="0" x2="100" y1={py(0)} y2={py(0)} className="stroke-muted-foreground/40" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-                  )}
-                  {panel === 'volume' && vis.map((c, i) => (
-                    <rect key={i} x={xAt(i) - barW / 2} y={py(c.v ?? 0)} width={barW}
-                      height={Math.max(100 - py(c.v ?? 0), 0)} stroke="none"
-                      style={{ fill: c.c >= c.o ? hue.up : hue.down }} fillOpacity={0.55} />
-                  ))}
-                  {panel === 'rsi' && (
-                    <path d={pathOf(rsiV, pLo, pHi, xSpan)} className="stroke-violet-500 fill-none"
-                      strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
-                  )}
-                  {panel === 'macd' && (
-                    <>
-                      <path d={pathOf(mLine, pLo, pHi, xSpan)} className="stroke-sky-500 fill-none"
-                        strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
-                      <path d={pathOf(mSig, pLo, pHi, xSpan)} className="stroke-amber-500 fill-none"
-                        strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
-                    </>
-                  )}
-                </svg>
-                {/* what the panel is and where it stands now, so the box is not an unlabelled squiggle */}
-                <span className="text-muted-foreground pointer-events-none absolute top-0 left-0 text-[10px] tabular-nums">
-                  {panel === 'rsi' && `RSI ${rsiV.at(-1)?.toFixed(0) ?? '—'}`}
-                  {panel === 'macd' && 'MACD 12/26/9'}
-                  {panel === 'volume' && `volume · ${vol.at(-1) ? fmtPrice(vol.at(-1)!, 1) : '—'}`}
-                </span>
-              </div>
-            )
-          })()}
           {/* time axis — evenly spaced over the whole x domain, so the last stamps land in the future
               strip and read as dates still to come (projected off the last bar's spacing) */}
           {view && n > 1 && (
@@ -1403,71 +1028,6 @@ export default function MarketPage() {
                   {stamp(i <= n - 1 ? vis[i].t : vis.at(-1)!.t + (i - (n - 1)) * (vis.at(-1)!.t - vis.at(-2)!.t))}
                 </span>
               ))}
-            </div>
-          )}
-          {view && (
-            <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-              {/* an MA the frame clipped says so rather than sitting in the legend as a line you
-                  can't find — "off frame ↑" is the answer to "where is my 200-MA" */}
-              {([[cfg.fast, smaFast, 'bg-sky-500'], [cfg.slow, smaSlow, 'bg-amber-500']] as const).map(([p, series, bg]) => {
-                const vals = finite(series)
-                const seen = vals.some((v) => v >= lo && v <= hi)
-                return (
-                  <span key={p} className={cn(!seen && 'opacity-60')}>
-                    <span className={cn('inline-block h-0.5 w-3 -translate-y-0.75 align-middle', bg)} /> {p}-MA
-                    {!seen && vals.length > 0 && <span className="ml-1">off frame {vals.at(-1)! > hi ? '↑' : '↓'}</span>}
-                  </span>
-                )
-              })}
-              {/* the session average, drawn since the day the readings stopped being the only place
-                  it appeared */}
-              {vwap && (
-                <span className={cn(!(vwap.vwap >= lo && vwap.vwap <= hi) && 'opacity-60')}>
-                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-cyan-500" strokeWidth={1.5} strokeDasharray="7 3" />
-                  </svg> VWAP <span className="tabular-nums">{fmt(vwap.vwap)}</span>
-                  {!(vwap.vwap >= lo && vwap.vwap <= hi) && <span className="ml-1">off frame {vwap.vwap > hi ? '↑' : '↓'}</span>}
-                </span>
-              )}
-              {/* One chip for the structure overlay instead of three. The session opens name
-                  themselves on the chart, in their own colour, with the time on them; the swing
-                  count, the gap count and the overlap wash were the legend counting marks the eye
-                  can already see. What is left is the one thing the marks do not say themselves:
-                  where the range actually is, in numbers. */}
-              {structure && (
-                <span className="opacity-80">
-                  <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                    <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-muted-foreground/70" strokeWidth={1} strokeDasharray="4 3" />
-                  </svg> range · <span className="tabular-nums">{fmt(view.support)}–{fmt(view.resistance)}</span>
-                  {!!visGaps.length && <span className="ml-1.5">· {visGaps.length} unfilled {visGaps.length === 1 ? 'gap' : 'gaps'}</span>}
-                </span>
-              )}
-              {/* the position's levels, chip drawn with the very dash the chart uses — and the
-                  same off-frame arrow as the MAs, so a target above the frame says where it went */}
-              {posLines.map((l) => {
-                const seen = l.lvl >= lo && l.lvl <= hi
-                return (
-                  <span key={l.label} className={cn(!seen && 'opacity-60')}>
-                    <svg width="16" height="3" className="mr-0.5 inline-block -translate-y-0.5 align-middle">
-                      <line x1="0" x2="16" y1="1.5" y2="1.5" className="stroke-fuchsia-600"
-                        strokeWidth={l.w} strokeOpacity={l.op} strokeDasharray={l.dash} />
-                    </svg> {l.label}
-                    {!seen && <span className="ml-1">off frame {l.lvl > hi ? '↑' : '↓'}</span>}
-                  </span>
-                )
-              })}
-              {/* the same two numbers the range chip above carries, so they are only spelled out
-                  here when the overlay that draws them is off */}
-              <span className="ml-auto tabular-nums">
-                {/* the verbs the device actually has: a phone has no wheel to scroll and no pointer
-                    to hover, and being told to use one is how a chart reads as broken */}
-                <span className={cn('opacity-70', !structure && 'mr-4')}>
-                  {phone ? 'drag to pan · pinch to zoom · double-tap to reset' : 'drag or swipe to pan · scroll or pinch to zoom · double-click to reset'} · {n} bars
-                  {/* the one thing nobody would try unprompted: two of the lines on this chart are
-                      the live order, and they can be taken hold of */}
-                </span>
-                {!structure && <>support {fmt(view.support)} · resistance {fmt(view.resistance)}</>}
-              </span>
             </div>
           )}
           </div>
@@ -1725,7 +1285,7 @@ const compact = (n: number | null) => (n == null ? '—'
   : `$${Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n)}`)
 
 type PoolFacts = {
-  symbol: string, name: string, price: number, liquidity: number, marketCap: number | null, volume: number | null, change: number | null
+  mint?: string, symbol: string, name: string, price: number, liquidity: number, marketCap: number | null, volume: number | null, change: number | null
   changes?: Partial<Record<'m5' | 'h1' | 'h6' | 'h24', number>>, createdAt?: number | null, buys?: number | null, sells?: number | null
 }
 
@@ -1749,6 +1309,31 @@ function usePool(asset: Asset): PoolFacts | null {
     return () => { on = false }
   }, [asset.id]) // eslint-disable-line react-hooks/exhaustive-deps
   return p
+}
+
+/** A mark on the chart: which bar, at what price it reads, which way — and, for a token, how much. */
+type Fill = { i: number, price: number, buy: boolean, open: boolean, row: Result | null, amount?: number }
+
+/** Your buys and sells of a token, off the watched Solana wallets — refreshed each couple of
+ *  minutes while the chart is looked at, since a buy made in Fomo should appear without a reload. */
+function useDexFills(mint: string | undefined): { t: number, side: 'buy' | 'sell', amount: number }[] {
+  const [f, setF] = useState<{ t: number, side: 'buy' | 'sell', amount: number }[]>([])
+  useEffect(() => {
+    setF([])
+    if (!mint) return
+    let on = true
+    const look = () => {
+      if (document.visibilityState !== 'visible') return
+      fetch(`/api/dex/fills?mint=${encodeURIComponent(mint)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (on && Array.isArray(j?.fills)) setF(j.fills) })
+        .catch(() => {})
+    }
+    look()
+    const t = setInterval(look, 120_000)
+    return () => { on = false; clearInterval(t) }
+  }, [mint])
+  return f
 }
 
 type PerpCtx = { funding: number | null, openInterest: number | null, dayVolume: number | null, prevDayPx: number | null, mark: number | null }
@@ -2221,10 +1806,11 @@ function Watchlist({ current, onPick, inputRef }: {
             return (
               <div key={`${t.network}:${t.pool}`} className="flex items-center gap-1">
                 <button type="button" onClick={() => pick(a)}
-                  className="hover:bg-accent grid flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left">
+                  className="hover:bg-accent grid flex-1 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left">
+                  <AssetLogo src={a.logo} letter={t.symbol} className="row-span-2 size-6" />
                   <span className="truncate text-sm">{t.symbol} <span className="text-muted-foreground text-xs">{t.name}</span></span>
                   <span className="text-xs tabular-nums">{fmtPrice(t.price)}</span>
-                  <span className="text-muted-foreground text-xs">{t.network} · {compact(t.volume ?? null)} traded 24h</span>
+                  <span className="text-muted-foreground truncate text-xs">{t.network} · {compact(t.volume ?? null)} traded 24h</span>
                   {t.change != null && (
                     <span className={cn('text-xs tabular-nums', t.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                       {t.change >= 0 ? '+' : ''}{t.change.toFixed(2)}%
@@ -2243,44 +1829,6 @@ function Watchlist({ current, onPick, inputRef }: {
       </p>
     </div>
   )
-}
-
-/**
- * Who is at their desks, right now, on your own clock. The chart marks the opens and says nothing
- * about the closes, which is half a day's information: gold's range is mostly made in the two hours
- * London and NY are both working, and the stretch when neither is is the one where a break
- * has nobody behind it.
- *
- * Read off the last bar rather than the wall clock, so it never claims a session the drawn chart
- * has no data from — the "as of" note beside the price is the one that says how old that is.
- */
-function OpenNow({ at }: { at?: number }) {
-  if (at == null) return null
-  const desks = openDesks(at)
-  const both = desks.length > 1
-  return (
-    <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-      {desks.map((s) => (
-        <span key={s.label} className="inline-flex items-center gap-1.5">
-          <span className="size-1.5 rounded-full" style={{ background: s.color }} />
-          {s.where} open
-          <span className="opacity-70 tabular-nums">till {closeAt(s, at)}</span>
-        </span>
-      ))}
-      {/* Both lines used to run to a dozen words each, on a strip that is otherwise times and
-          labels. The reason is worth one clause, not a sentence. */}
-      {both && <span className="text-amber-600 dark:text-amber-500">both open — the day's widest hours</span>}
-      {!desks.length && <span>nobody open — thin hours, and breaks made in them get given back</span>}
-    </div>
-  )
-}
-
-/** That desk's closing bell as a time on your clock: its local close, carried back through the day
- *  the bar happened on. */
-function closeAt(s: (typeof SESSIONS)[number], at: number) {
-  const { min } = localClock(at, s.tz)
-  return new Date(at + (s.end - min) * 60_000)
-    .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
 /** How far a level stands from where price is now, signed as the move itself would be. The plan's

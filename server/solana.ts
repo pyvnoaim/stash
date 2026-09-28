@@ -162,11 +162,91 @@ export function holdings(address: string): Promise<Holding[]> {
   return rows
 }
 
+/* ---------- buys and sells of one token ---------- */
+
+export type Swap = { t: number, side: 'buy' | 'sell', amount: number, sig: string }
+
+/**
+ * One transaction, read for what it did to `owner`'s balance of `mint`: more of it is a buy, less is
+ * a sell, no change is nothing (a transfer of something else, a failed attempt). Off the token
+ * balances the chain itself reports before and after — no DEX's instruction format is parsed, so a
+ * swap through any router reads the same.
+ */
+export function shapeSwap(tx: any, owner: string, mint: string, sig: string): Swap | null {
+  if (!tx?.meta || tx.meta.err || !tx.blockTime) return null
+  const held = (list: any[] | undefined) => (list ?? [])
+    .filter((b) => b?.mint === mint && b?.owner === owner)
+    .reduce((n, b) => n + (Number(b?.uiTokenAmount?.uiAmountString ?? b?.uiTokenAmount?.uiAmount) || 0), 0)
+  const delta = held(tx.meta.postTokenBalances) - held(tx.meta.preTokenBalances)
+  if (!isFinite(delta) || Math.abs(delta) < 1e-9) return null
+  return { t: tx.blockTime * 1000, side: delta > 0 ? 'buy' : 'sell', amount: Math.abs(delta), sig }
+}
+
+/* A transaction never changes once it is final, so what it did is kept for good — bounded, since
+   every token anybody opens adds to it. The first look at a token pays for its history; after that
+   only new signatures cost a call. */
+const readTx = new Map<string, Promise<any>>()
+const txOf = (sig: string) => {
+  const hit = readTx.get(sig)
+  if (hit) return hit
+  const got = rpc('getTransaction', [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }])
+  got.catch(() => { if (readTx.get(sig) === got) readTx.delete(sig) })
+  readTx.set(sig, got)
+  if (readTx.size > 20_000) readTx.delete(readTx.keys().next().value!)
+  return got
+}
+/** How many transactions one look reads: the public RPC allows a few a second, and a first look at
+ *  a busy wallet should be a few seconds, not a minute. */
+const MAX_TXS = 60
+
+const swapCache = new Map<string, { at: number, swaps: Promise<Swap[]> }>()
+
+/** `owner`'s buys and sells of `mint`, oldest first — two minutes fresh. */
+export function swaps(owner: string, mint: string): Promise<Swap[]> {
+  if (!MINT.test(owner) || !MINT.test(mint)) return Promise.resolve([])
+  const k = `${owner}:${mint}`
+  const hit = swapCache.get(k)
+  if (hit && Date.now() - hit.at < 120_000) return hit.swaps
+  const got = (async () => {
+    /* The token's own accounts first — their history is this token's trades and nothing else. A
+       token sold down to nothing may have had its account closed, and then the wallet's own recent
+       history is where they are. */
+    const accounts = await rpc('getTokenAccountsByOwner', [owner, { mint }, { encoding: 'jsonParsed', commitment: 'confirmed' }])
+      .then((r) => ((r?.value ?? []) as any[]).map((a) => String(a?.pubkey ?? '')).filter((a) => MINT.test(a)))
+      .catch(() => [] as string[])
+    const from = accounts.length ? accounts.slice(0, 3) : [owner]
+    const sigs = (await Promise.all(from.map((a) => rpc('getSignaturesForAddress', [a, { limit: MAX_TXS, commitment: 'confirmed' }])
+      .catch(() => [])))).flat() as { signature?: string, err?: unknown }[]
+    const want = [...new Set(sigs.filter((x) => !x?.err && typeof x?.signature === 'string').map((x) => x.signature!))].slice(0, MAX_TXS)
+    const out: Swap[] = []
+    // four at a time: fast enough, and well inside what the public endpoint takes from one server
+    for (let i = 0; i < want.length; i += 4) {
+      const txs = await Promise.all(want.slice(i, i + 4).map((sig) => txOf(sig).catch(() => null)))
+      txs.forEach((tx, j) => { const s = shapeSwap(tx, owner, mint, want[i + j]); if (s) out.push(s) })
+    }
+    return out.sort((a, b) => a.t - b.t)
+  })()
+  got.catch(() => { if (swapCache.get(k)?.swaps === got) swapCache.delete(k) })
+  if (swapCache.size > 500) swapCache.clear()
+  swapCache.set(k, { at: Date.now(), swaps: got })
+  return got
+}
+
 /* ---------- logos, through this server ---------- */
 
 /** The logo URL DexScreener gave each mint a wallet here holds. Only these are ever fetched, so the
  *  logo route below serves the tokens people actually hold rather than whatever it is asked for. */
 const logoUrls = new Map<string, string>()
+const LOGO_URL = /^https:\/\/[a-z0-9-]+\.dexscreener\.com\//
+/** DexScreener's own answer to a search or a pool, naming a token's logo — so a token found or
+ *  pinned wears its icon too. Solana mints only (the route's shape), DexScreener's hosts only (the
+ *  same test the fetch makes), and a bounded list: every search adds to it, so the oldest go. */
+export function noteLogo(mint: string, url: unknown) {
+  if (typeof url !== 'string' || !LOGO_URL.test(url) || !MINT.test(mint)) return
+  logoUrls.delete(mint)
+  logoUrls.set(mint, url)
+  if (logoUrls.size > 5000) logoUrls.delete(logoUrls.keys().next().value!)
+}
 const logos = new Map<string, Promise<{ type: string, bytes: Buffer } | null>>()
 /** An icon is a few kilobytes; anything past this is not one. */
 const MAX_LOGO = 256 * 1024
@@ -181,7 +261,7 @@ const MAX_LOGO = 256 * 1024
  */
 export function logo(mint: string): Promise<{ type: string, bytes: Buffer } | null> {
   const url = logoUrls.get(mint)
-  if (!url || !/^https:\/\/[a-z0-9-]+\.dexscreener\.com\//.test(url)) return Promise.resolve(null)
+  if (!url || !LOGO_URL.test(url)) return Promise.resolve(null)
   const hit = logos.get(mint)
   if (hit) return hit
   const got = fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10_000) })
