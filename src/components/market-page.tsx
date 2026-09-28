@@ -824,7 +824,8 @@ export default function MarketPage() {
                   {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
                 </span>
               )}
-              {view && (
+              {/* no lean on a DEX token — the same reason the panel beside the chart has none */}
+              {view && current.source !== 'dex' && (
                 <Hint label={`${bulls} readings lean up, ${bears} down. A count, not advice.`}>
                   <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
                     <bias.Icon className="size-3.5" />
@@ -2630,7 +2631,7 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
     // the desk's own is that nothing is open and this is what is in the account
     return (
       <p className="text-muted-foreground text-xs">
-        Nothing open · <span className="text-foreground tabular-nums">{usdt(equity)}</span> in the account
+        Nothing open · <span className="text-foreground tabular-nums">${equity.toFixed(2)}</span> on Hyperliquid
       </p>
     )
   }
