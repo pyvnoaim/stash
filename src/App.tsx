@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
+import { MobileTabs } from '@/components/mobile-tabs'
 import { NotificationBell } from '@/components/notification-bell'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
@@ -448,6 +449,7 @@ export default function App() {
         tag={/^#[\w-]+$/.test(query.trim()) ? query.trim().slice(1) : ''}
         onTag={(t) => addTerm('#' + t)}
         onNavigate={goTo}
+        onSearch={() => setPalette(true)}
       />
 
       <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden">
@@ -676,6 +678,8 @@ export default function App() {
             </div>
           </div>
           )}
+          {/* a phone's tab bar, under whatever page is up — see MobileTabs */}
+          <MobileTabs onNavigate={goTo} onSearch={() => setPalette(true)} />
         </div>
 
         {/* one row gets its details, several get what they have in common. Always mounted and

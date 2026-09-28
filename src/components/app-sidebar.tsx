@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, CalendarClock, CalendarDays, CalendarRange,
   CandlestickChart, ChartColumn, CheckCheck, ClockArrowDown, ClockArrowUp, FileText, Flag, GripVertical, Inbox, Wallet,
-  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Trash2, UserMinus, Users,
+  ChevronRight, Eye, Layers, Link2, PencilLine, Plus, Search, Trash2, UserMinus, Users,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -26,6 +26,8 @@ import {
   SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, useSidebar,
 } from '@/components/ui/sidebar'
 import { Hint } from '@/components/ui/tooltip'
+import { Kbd } from '@/components/ui/kbd'
+import { useWalletTotal } from '@/components/holdings'
 import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
@@ -80,15 +82,33 @@ const VIEW_ICONS: Record<ViewId, React.ElementType> = {
   trash: Trash2,
 }
 
-export function AppSidebar({ tag, onTag, onNavigate }: {
+export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
   /** the tag being searched for, so the one you clicked stays lit */
   tag: string
   onTag: (tag: string) => void
   /** select, plus dropping whatever search is up — App owns the search box, so it has to do it */
   onNavigate: (id: string) => void
+  /** open the ⌘K palette — the one search over everything */
+  onSearch: () => void
 }) {
   const s = useStash()
-  const { setOpenMobile } = useSidebar()
+  const { setOpenMobile, setOpen, open, isMobile, state } = useSidebar()
+  const rail = state === 'collapsed' && !isMobile
+  const wallet = useWalletTotal()
+  /* Markets wants the width: a chart beside two columns of its own. Entering it folds the sidebar
+     to its icons, and leaving puts it back — but only if it was this that folded it, so a sidebar
+     you shut yourself stays shut. */
+  const folded = useRef(false)
+  useEffect(() => {
+    if (isMobile) return
+    if (s.sel === MARKET) {
+      folded.current = open
+      setOpen(false)
+    } else if (folded.current) {
+      folded.current = false
+      setOpen(true)
+    }
+  }, [s.sel, isMobile]) // eslint-disable-line react-hooks/exhaustive-deps
   // sharing is the server's half of the app: signed out there is nothing to share with, and the
   // menu says so by not offering it
   const { user } = useSyncExternalStore(subscribeSync, getSync)
@@ -362,22 +382,39 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
   )
 
   return (
-    <Sidebar collapsible="offcanvas">
+    /* Folds to its icons rather than off the screen: the way back to every list is still one
+       click, and on Markets — which folds it itself — the chart gets the width. */
+    <Sidebar collapsible="icon">
       {/* h-14 + border-b to match the main content header, so STASH and the page title share a baseline */}
-      <SidebarHeader className="h-14 justify-center border-b px-3 py-0">
+      <SidebarHeader className="h-14 justify-center border-b px-3 py-0 group-data-[collapsible=icon]:px-2">
         <div className="flex items-center gap-2">
-          <div className="bg-foreground h-4 w-[3px] rounded-full" />
-          <span className="font-heading text-[13px] tracking-[0.18em] uppercase">Stash</span>
+          <span className="bg-foreground text-background grid size-6 shrink-0 place-items-center rounded-md text-[12px] font-bold">S</span>
+          <span className="font-heading text-[13px] tracking-[0.18em] uppercase group-data-[collapsible=icon]:hidden">Stash</span>
         </div>
       </SidebarHeader>
 
       <SidebarContent>
+        {/* The one search over everything — items, projects, the wallet, any market. It opens the
+            palette rather than being a field of its own: a second search box that finds less than
+            ⌘K would be two answers to one question. */}
+        <SidebarGroup className="pb-0">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Search · ⌘K" onClick={() => { onSearch(); setOpenMobile(false) }}
+                className="border-sidebar-border text-muted-foreground border group-data-[collapsible=icon]:border-0">
+                <Search />
+                <span>Search or jump to…</span>
+                <Kbd className="ml-auto rounded-sm group-data-[collapsible=icon]:hidden">⌘K</Kbd>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
         {/* Overview is the home dashboard, so it sits on top on its own, above the task views */}
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
+                <SidebarMenuButton tooltip="Overview" isActive={s.sel === OVERVIEW} onClick={() => go(OVERVIEW)}>
                   <ChartColumn />
                   <span>Overview</span>
                 </SidebarMenuButton>
@@ -396,7 +433,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                 const n = id === 'done' || id === TRASH ? 0 : s.items.filter(v.filter).length
                 return (
                   <SidebarMenuItem key={id} {...dropOn(id)}>
-                    <SidebarMenuButton isActive={s.sel === id} onClick={() => go(id)}>
+                    <SidebarMenuButton tooltip={n ? `${v.name} · ${n}` : v.name} isActive={s.sel === id} onClick={() => go(id)}>
                       <Icon />
                       <span>{v.name}</span>
                     </SidebarMenuButton>
@@ -408,7 +445,9 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup className="group/projects">
+        {/* folded to icons, the projects and tags step aside: a column of coloured squares with
+            no names is not a way to find anything, and ⌘K is right above */}
+        <SidebarGroup className="group/projects group-data-[collapsible=icon]:hidden">
           <SidebarGroupLabel className={GROUP}>Projects</SidebarGroupLabel>
           <Hint label="New project">
             <SidebarGroupAction aria-label="New project" onClick={() => setDialog({})}>
@@ -493,7 +532,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
 
         {/* no group at all until something is tagged — an empty heading is just furniture */}
         {tags.length > 0 && (
-          <SidebarGroup>
+          <SidebarGroup className="group-data-[collapsible=icon]:hidden">
             {/* the heading folds the list, and the fold rides in `collapsed` beside the project
                 folds — the sentinel can never collide with a project id, and the synced document
                 is what makes the choice hold across reloads and devices alike */}
@@ -503,9 +542,8 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                 <ChevronRight className={cn('ml-auto size-3.5 transition-transform duration-200 ease-out', tagsOpen && 'rotate-90')} />
               </button>
             </SidebarGroupLabel>
-            {/* It slides rather than blinking out: the same 0fr→1fr grid the sub-projects fold
-                with, which measures nothing and needs no height. Kept mounted so there is
-                something to animate, `inert` so a folded tag is off the tab order all the same. */}
+            {/* Chips rather than rows: a tag is a filter you toggle, not a place you go, and a row
+                each took a screen of sidebar for a dozen words. The count rides inside the chip. */}
             <div
               className={cn('grid transition-[grid-template-rows] duration-200 ease-out',
                 tagsOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}
@@ -513,22 +551,18 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             <div inert={!tagsOpen} className={cn('min-h-0 overflow-hidden transition-opacity duration-200 ease-out',
               tagsOpen ? 'opacity-100' : 'opacity-0')}
             >
-            <SidebarGroupContent>
-              <SidebarMenu>
+              <div className="flex flex-wrap gap-1.5 px-2 pt-1 pb-1">
                 {tags.map(([t, n]) => (
                   <ContextMenu key={t}>
                     <ContextMenuTrigger asChild>
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          isActive={tag === t}
-                          onClick={() => { onTag(t); setOpenMobile(false) }}
-                        >
-                          <span className="text-muted-foreground ml-0.5 font-mono">#</span>
-                          <span className="truncate">{t}</span>
-                        </SidebarMenuButton>
-                        {/* nothing open under it any more, but the tag and its finished work remain */}
-                        <SidebarMenuBadge className={cn(COUNT, !n && 'opacity-40')}>{n}</SidebarMenuBadge>
-                      </SidebarMenuItem>
+                      <button type="button" aria-pressed={tag === t}
+                        onClick={() => { onTag(t); setOpenMobile(false) }}
+                        className={cn('hover:bg-sidebar-accent inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs',
+                          tag === t ? 'bg-sidebar-accent text-sidebar-accent-foreground' : 'text-sidebar-foreground/80',
+                          !n && 'opacity-50')}>
+                        <span className="text-muted-foreground font-mono">#</span>{t}
+                        <span className="text-muted-foreground font-mono text-[10px] tabular-nums">{n}</span>
+                      </button>
                     </ContextMenuTrigger>
                     <ContextMenuContent>
                       <ContextMenuItem onSelect={() => setTagEdit({ from: t, to: t })}>
@@ -537,8 +571,7 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
                     </ContextMenuContent>
                   </ContextMenu>
                 ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
+              </div>
             </div>
             </div>
           </SidebarGroup>
@@ -552,17 +585,35 @@ export function AppSidebar({ tag, onTag, onNavigate }: {
             <SidebarGroupLabel className={GROUP}>Tools</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {TOOLS.filter((t) => toolOn(s, t.id)).map(({ id, name }) => {
+                {/* folded, the plain icons; open, tiles two to a row, each saying what is in it —
+                    Markets its total, so the money is one glance away from any page */}
+                {rail ? TOOLS.filter((t) => toolOn(s, t.id)).map(({ id, name }) => {
                   const Icon = TOOL_ICONS[id]
                   return (
                     <SidebarMenuItem key={id}>
-                      <SidebarMenuButton isActive={s.sel === id} onClick={() => go(id)}>
+                      <SidebarMenuButton tooltip={name} isActive={s.sel === id} onClick={() => go(id)}>
                         <Icon />
                         <span>{name}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   )
-                })}
+                }) : (
+                  <div className="grid grid-cols-2 gap-1.5 px-0.5">
+                    {TOOLS.filter((t) => toolOn(s, t.id)).map(({ id, name }) => {
+                      const Icon = TOOL_ICONS[id]
+                      const meta = id === MARKET && wallet != null ? `$${wallet.toFixed(2)}` : null
+                      return (
+                        <button key={id} type="button" onClick={() => go(id)} aria-current={s.sel === id ? 'page' : undefined}
+                          className={cn('hover:bg-sidebar-accent flex min-h-14 flex-col items-start justify-between gap-1 rounded-lg border px-2.5 py-2 text-left',
+                            s.sel === id && 'bg-sidebar-accent text-sidebar-accent-foreground')}>
+                          <Icon className="text-muted-foreground size-4" />
+                          <span className="w-full truncate text-xs font-medium">{name}</span>
+                          {meta && <span className="text-muted-foreground font-mono text-[11px] tabular-nums">{meta}</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

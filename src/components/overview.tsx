@@ -5,12 +5,13 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
 import { cn, MONEY_IN } from '@/lib/utils'
-import { ASSETS, assetOf, fetchHours, fmtPrice, venueName } from '@/lib/market'
+import { ASSETS, assetOf, fetchHours, fmtPrice, remember, venueName } from '@/lib/market'
 import { addDays, dayLabel, today } from '@/lib/parse'
 import {
   MARKET, monthlyCost, nextCharge, setMarketAsset, SUBS, toggleDone, useStash, type Item, type Project,
 } from '@/lib/store'
 import { Sparkline, useExchangePositions } from '@/components/market-page'
+import { Holdings } from '@/components/holdings'
 import { treemap } from '@/lib/treemap'
 
 const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
@@ -558,6 +559,8 @@ export default function Overview({ onNavigate, onOpen }: {
 
         <Panel title="Markets" className={cn('lg:col-start-2', s.subs.length ? 'lg:row-start-3' : 'lg:row-start-1 lg:row-span-3')}
           action={{ label: 'Desk', onClick: () => onNavigate(MARKET) }}>
+          {/* what the wallet holds leads — it is money, and the movers below are only news */}
+          <Holdings onOpen={(a) => { remember(a); toDesk(a.id) }} />
           <div className="-mx-2">
             <Markets movers={movers} onOpen={toDesk} />
           </div>
