@@ -28,7 +28,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { allowed, icsText, parseIcs } from './cal.ts'
+import { allowed, chargeAt, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import {
@@ -39,7 +39,6 @@ import { createStash } from './mcp.ts'
 import { holdings as solHoldings, logo as solLogo, swaps as solSwaps } from './solana.ts'
 import { candles as dexCandles, NETWORKS, pool as dexPool, POOL, search as dexSearch, TIMEFRAME } from './dex.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
-import { chargeAt, createPush } from './push.ts'
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -216,25 +215,6 @@ function icsOf(json: string, who: string): string {
 
   out.push('END:VCALENDAR')
   return out.map(fold).join('\r\n') + '\r\n'
-}
-
-/* ---------- push endpoints ---------- */
-
-const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
-const LOCAL = /(^|\.)(localhost|local|internal|home|lan)$/i
-
-/**
- * Whether an endpoint is one this process is willing to post to. It is a string an account hands
- * in and the push loop then makes requests at, which is a request forgery waiting to happen: an
- * https URL aimed at whatever else answers on this network would be sent an authenticated POST
- * every minute. A real push service is always a public name — never an address, never a
- * single-label or local one — so that is the whole test, and it costs nothing legitimate.
- */
-const pushable = (raw: string) => {
-  const u = URL.parse(raw)
-  if (!u || u.protocol !== 'https:') return false
-  const h = u.hostname
-  return h.includes('.') && !h.startsWith('[') && !IPV4.test(h) && !LOCAL.test(h)
 }
 
 function readBody(req: IncomingMessage): Promise<any> {
@@ -450,6 +430,9 @@ export function start({
   for (const col of ['mexc', 'bitget', 'apex']) {
     try { db.exec(`alter table users drop column ${col}`) } catch { /* already gone */ }
   }
+  /* Notifications came out: the phones subscribed to them, and the key the server signed them
+     with, go with the feature rather than sitting in the file unread. */
+  db.exec('drop table if exists pushes; drop table if exists meta')
   /* The wallets an account watches. Addresses, not keys: public by nature, which is why nothing
      that reads them can move a cent — and why they live here rather than in the synced document,
      since an address beside a name says everything that name holds. */
@@ -675,10 +658,6 @@ export function start({
   const own = (user: number, v: number, from: string) => {
     for (const l of live) if (l.user === user && l.device !== from) wire(l.res, 'state', { v })
   }
-
-  /* The notifications that reach a closed app: its own module, its own table, and the minute
-     timer that decides when anything is worth a knock. See server/push.ts. */
-  const push = createPush(db)
 
   /* ponytail: in-memory, per-process — a restart forgives everyone, which at ten users is fine.
      Keyed by address *and* name so one flooded account never locks the rest out. */
@@ -1179,42 +1158,6 @@ export function start({
         'x-content-type-options': 'nosniff',
       })
       return res.end(req.method === 'HEAD' ? undefined : body)
-    }
-
-    /* ---------- push: the bell with the app closed ---------- */
-
-    if (path === '/api/push') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      // the key a browser has to subscribe with. Public by definition — it is what identifies
-      // this server to the push service, and it is useless without the private half
-      if (req.method === 'GET') return send(res, 200, { key: push.publicKey })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const endpoint = String(b?.endpoint ?? '')
-      if (endpoint.length > 1024 || !pushable(endpoint)) {
-        return send(res, 400, { error: 'bad endpoint' })
-      }
-      if (req.method === 'POST') {
-        push.subscribe(user.id, endpoint, Math.trunc(Number(b?.tz)) || 0)
-        return send(res, 200, {})
-      }
-      if (req.method === 'DELETE') {
-        push.unsubscribe(user.id, endpoint)
-        return send(res, 200, {})
-      }
-      return send(res, 405, { error: 'method not allowed' })
-    }
-
-    /* What the service worker asks the moment a knock arrives. The notification is written from
-       this rather than from the push itself, so what the phone shows is what is true when it is
-       shown — the push carries no payload at all. */
-    if (path === '/api/alerts' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const raw = new URL(req.url ?? '/', 'http://x').searchParams.get('tz')
-      const tz = raw !== null && isFinite(Number(raw)) ? Number(raw) : undefined
-      return send(res, 200, { alerts: push.alerts(user.id, tz) })
     }
 
     /* The wallets this account watches. Paste an address and the chain is read off its shape — a
@@ -2277,8 +2220,7 @@ export function start({
   })
 
   server.listen(port)
-  server.on('close', () => { push.stop() })
-  return Object.assign(server, { invite, push })
+  return Object.assign(server, { invite })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

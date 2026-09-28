@@ -799,48 +799,6 @@ the desk on that asset, and so does clicking a Markets notification: the bell's 
 entry" lands on Bitcoin rather than on whatever the desk was last left showing. The selected asset
 lives in the store, so it also survives a reload.
 
-## Notifications
-
-The bell in the header counts what wants attention, derived from state rather than stored, so it is
-never stale: tasks overdue or due today, subscriptions charging within three days, any of the four
-watched assets that moved more than 3% in twenty-four hours, and any saved Markets setup whose entry,
-stop or target the live price has reached. A setup that finished stays in the bell for half a day
-with what it did — *+2.40R — +€480.00 had you taken it* — and after that it is only in the record.
-Clicking one goes where it lives.
-
-A row has two ways to stop: the clock puts it off for three hours, or until eight tomorrow morning
-if the day is already gone, and the cross silences it for a day. Neither is *never* — an alert
-whose reason is still true when the time runs out is worth saying again. The decision rides in the
-document, so it holds on the phone too.
-
-That bell needs the app to be open. **Settings → Account → Notifications** is the other half: the
-server keeps the subscription, does the watching, and knocks. A saved Markets setup reaching its
-entry, its stop or its target goes out whenever it happens, since a level is exactly the thing that
-cannot wait for office hours; an item that named an hour goes out at that hour, quiet hours and all,
-because an alarm set for six is meant to go off at six; and everything else — what is due, what is
-overdue, what is about to be charged — is one line once a day, in the morning where the phone is
-rather than where the server is. Nothing is knocked about twice: each alert is a key, and the daily
-one carries its date, so tomorrow's is a new one.
-
-**Before a market opens** is off until you set it. *When the bell rings* has the minutes: that much
-before Frankfurt or New York opens, one knock, keyed to that exchange's own day. They trade none of
-the assets on the desk — they mark where the volume that moves gold and crypto arrives. Tokyo opens
-in the middle of the European night and is held back by the quiet hours like anything else, which
-is the honest way of saying it will rarely reach you. Weekends are skipped; public holidays are
-not, because the world's holiday calendars are a table that goes stale in a way nobody notices.
-
-The push carries nothing at all. Encrypting a payload for each subscription is the bulk of the Web
-Push specification, and it delivers a sentence that was true a minute ago — so the server knocks
-empty and the service worker asks `/api/alerts` what the matter is, with the session cookie it
-already has. What the phone shows is what is true when it is shown, no payload of anyone's is ever
-handed to Apple or Google to carry, and the whole of the crypto here is the VAPID keypair that
-identifies this server, out of `node:crypto`, still no dependencies. `npm test` signs one and
-verifies it against a push service that is really a socket, because a malformed header is a
-notification that silently never arrives.
-
-Push needs HTTPS, which the container already assumes, and on an iPhone it needs Stash on the home
-screen — Safari offers it to installed apps only. The switch asks for nothing until it is pressed.
-
 ## PDF
 
 **PDF** in the sidebar, under **Tools**. Open a PDF, add and delete pages, merge another file in,
@@ -890,13 +848,10 @@ is still in the file and still copies out.
 - `src/lib/markdown.ts` — the note renderer's DOM-free helpers, so `npm test` covers link safety and what a `[[link]]` resolves to
 - `src/lib/market.ts` — the price feeds and every signal the Markets desk shows, free of React
 - `src/lib/treemap.ts` — squarified treemap, pure geometry, for Overview's spend panel
-- `src/lib/notify.ts` — the alerts the bell shows, derived from state
+- `src/lib/notify.ts` — the money arithmetic: euros and USDT, R, open risk, net after fees
 - `src/lib/sync.ts` — the sync engine: push on edit, pull on focus, never a dropped local edit
-- `src/lib/push.ts` — the browser's half of notifications: permission, the endpoint, and letting go
-- `public/push-sw.js` — the two service-worker handlers a notification needs, imported into the generated worker
 - `server/index.ts` — accounts, sessions and one versioned document per user, plus the calendar feed; Node + SQLite, no dependencies
-- `server/push.ts` — VAPID, the minute loop, and the rule that decides whether a phone is worth waking
-- `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
+- `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, the .ics reader behind it, and the subscription cycle maths the calendar feed prints
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
 - `server/hyperliquid.ts` — Hyperliquid, read-only by address: the rate budget, the candle cache, positions, orders, and closed trades rebuilt from fills
 - `server/solana.ts` — what a Solana wallet holds, priced off DexScreener, dust and scam coins left out
@@ -1151,10 +1106,7 @@ docker compose exec stash node -e "require('fs').rmSync('/data/backup.db',{force
 docker compose cp stash:/data/backup.db .
 ```
 
-The push keypair is a row
-in it, so restoring that file keeps every phone subscribed — a new keypair would quietly
-unsubscribe all of them. `STASH_PUSH_SUB` sets the address a push service would complain to;
-nothing is ever sent there, and the default is fine.
+
 
 Local dev runs the same server beside Vite — `STASH_DB=~/stash-dev.db npm run server`, and the dev
 proxy in `vite.config.ts` does the rest. The script is `node server/index.ts` plus the flag that

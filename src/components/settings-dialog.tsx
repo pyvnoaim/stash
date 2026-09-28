@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  Bell, BellOff, CalendarDays, CandlestickChart, ChartLine, Copy, Database, Download, Eraser,
+  CalendarDays, CandlestickChart, ChartLine, Copy, Database, Download, Eraser,
   History, Info, Keyboard, Link2, Lock, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen,
   Users, Wrench,
 } from 'lucide-react'
@@ -25,17 +25,15 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  addItem, CALENDAR, CANDLE_PAIRS, candlePair, clearDone, hotkey, MARKET, readOnly, resetDials,
-  resetHotkeys, setCandles, setChart, setDesk, setDial, setHotkey, setTool, TOOLS, toolOn, useStash,
+  addItem, CALENDAR, CANDLE_PAIRS, candlePair, clearDone, hotkey, MARKET, readOnly,
+  resetHotkeys, setCandles, setChart, setDesk, setHotkey, setTool, TOOLS, toolOn, useStash,
   type ChartStyle,
 } from '@/lib/store'
-import { type Dials as DialSet } from '@/lib/market'
 import {
   calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
   links, linkUrl, logout, lost, newFeed, restore, setCalendar, subscribeSync, updateAccount,
   versions, type Device, type Link, type Version,
 } from '@/lib/sync'
-import { disablePush, enablePush, pushState, type PushState } from '@/lib/push'
 
 const CHARTS: { id: ChartStyle; label: string; icon: React.ElementType }[] = [
   { id: 'line', label: 'Line', icon: ChartLine },
@@ -77,11 +75,9 @@ export function SettingsDialog({ open, onOpenChange }: {
 
   /* signed out — offline, most likely — there is no account to show and no server to ask about
      one, so those sections are simply not there rather than there and broken.
-     Alerts and Data stay: the thresholds and the backup are this machine's, and work with nobody
-     signed in at all. */
+     Data stays: the backup is this machine's, and works with nobody signed in at all. */
   const SECTIONS = [
     ...(user ? [{ id: 'account', label: 'Account', icon: UserPen }] : []),
-    { id: 'alerts', label: 'Alerts', icon: Bell },
     { id: 'tools', label: 'Tools', icon: Wrench },
     ...(user
       ? [
@@ -145,9 +141,6 @@ export function SettingsDialog({ open, onOpenChange }: {
             <div className="grid w-full max-w-lg gap-4">
               <h2 className="font-heading text-lg tracking-wide">{title}</h2>
               {here === 'account' && user && <AccountPanel name={user.name} avatar={user.avatar} />}
-              {/* the bell and the numbers behind it, which used to sit a page apart: the push
-                  switch under Account, the thresholds it fires on at the foot of Markets */}
-              {here === 'alerts' && <>{user && <NotificationsPanel />}{toolOn(s, MARKET) && <Dials />}</>}
               {/* the MCP line belongs beside the tool switches: both answer "what can reach this
                   stash", and it sat under Links only because Links was where the other copyable
                   URL lived */}
@@ -203,7 +196,7 @@ function DataPanel({ onDone }: { onDone: () => void }) {
     <>
       <Section
         title="Backup"
-        hint="One JSON file: items, projects, subscriptions, alerts. No keys. Importing
+        hint="One JSON file: items, projects, subscriptions. No keys. Importing
           replaces what is here rather than merging."
       >
         <div className="flex flex-wrap gap-2">
@@ -535,63 +528,6 @@ function WalletSection() {
   )
 }
 
-/** One dial: a number, what it is, and the unit it is in. */
-const DIAL_FIELDS: { k: keyof DialSet, label: string, unit: string, hint: string, scale?: number }[] = [
-  { k: 'fee', label: 'Taker fee', unit: '% a side',
-    hint: 'Charged getting in and getting out, so every ratio here is quoted after it. 0.05 is the standard perp tier; zero shows the gross one.' },
-  { k: 'funding', label: 'Perp funding', unit: '%/8h',
-    hint: 'Comes off every open position\'s read-out. 0.01 is the calm-market baseline; zero turns the estimate off.' },
-]
-
-/**
- * What your venue charges you, and nothing else.
- *
- * This was ten fields under "When the bell rings" — how big an hour has to be, how much money a
- * pool needs, how many timeframes have to agree, how long before an open to knock. Every one of
- * them was a threshold for something you could not see the effect of, so getting them right was a
- * guess made once and never revisited, and the screen of them read as work to do before the app
- * would behave. They are constants in the source now (MOVER_BITE, SETUP_AGREE, OPEN_IN); the bell
- * behaves as it always did and there is one line to change if it turns out loud.
- *
- * These two are here because nobody else can know them. A fee and a funding rate are what your
- * account is charged, they differ per venue and per tier, and they are inside every money figure
- * the desk prints — the R:R on a setup, the euros on a position, the total under the record. That
- * is the whole test of whether a number belongs in Settings.
- */
-function Dials() {
-  const { dials } = useStash()
-  return (
-    <Section
-      title="What your venue charges"
-      hint="The two costs only you know. They are inside every money figure on the desk."
-      action={<Button variant="outline" size="sm" onClick={resetDials}><RotateCcw /> Defaults</Button>}
-    >
-      {DIAL_FIELDS.map(({ k, label, unit, hint, scale = 1 }) => (
-        <div key={k} className="grid gap-1">
-          <div className="flex items-center gap-2">
-            <Label htmlFor={`dial-${k}`} className="flex-1">{label}</Label>
-            <span className="text-muted-foreground text-xs">{unit}</span>
-            <Input
-              id={`dial-${k}`}
-              inputMode="decimal"
-              className="w-28"
-              // uncontrolled and keyed on the value, so Defaults repaints the fields but typing
-              // into one does not fight the store's own round trip
-              key={`${k}-${dials[k]}`}
-              defaultValue={+(dials[k] * scale).toFixed(4)}
-              onChange={(e) => {
-                const n = parseFloat(e.target.value.replace(',', '.'))
-                if (isFinite(n)) setDial(k, n / scale)
-              }}
-            />
-          </div>
-          <p className="text-muted-foreground text-xs">{hint}</p>
-        </div>
-      ))}
-    </Section>
-  )
-}
-
 /**
  * The bindings, and the way to change one: press the row, then press the keys. Recording rather
  * than a field to type a name into — the keyboard already knows what it is called, and nobody
@@ -780,59 +716,6 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
 
       <DeleteAccount />
     </>
-  )
-}
-
-/**
- * The bell with the app closed. Nothing runs on this device to make it happen — the server keeps
- * the subscription and does the watching, so what is on offer here is the one thing a phone has
- * to agree to. Off is the default and stays the default: this asks for nothing until pressed.
- */
-function NotificationsPanel() {
-  const [state, setState] = useState<PushState | null>(null)
-  const [busy, setBusy] = useState(false)
-  useEffect(() => { void pushState().then(setState) }, [])
-
-  const hint = state === 'unsupported'
-    ? 'This browser has no push. On an iPhone, add Stash to the home screen first.'
-    : state === 'blocked'
-      ? 'Notifications are blocked for this site. The browser’s own site settings are the way back.'
-      : `A saved setup reaching its entry, stop or target, and one morning summary. Nothing
-         while the app is open — the bell in the header has that.`
-
-  const go = async (on: boolean) => {
-    setBusy(true)
-    let err: string | null = null
-    if (on) err = await enablePush()
-    else await disablePush()
-    setState(await pushState())
-    setBusy(false)
-    toast(err ?? (on ? 'Notifications on' : 'Notifications off'))
-  }
-
-  return (
-    <Section
-      title="Notifications"
-      hint={hint}
-      action={state === 'unsupported' || state === 'blocked'
-        ? undefined
-        : (
-            <Button
-              variant={state === 'on' ? 'outline' : 'default'}
-              size="sm"
-              disabled={!state || busy}
-              onClick={() => go(state !== 'on')}
-            >
-              {state === 'on' ? <><BellOff /> Turn off</> : <><Bell /> Turn on</>}
-            </Button>
-          )}
-    >
-      <p className="text-sm">
-        {state === null ? <span className="text-muted-foreground">Asking the browser…</span>
-          : state === 'on' ? 'This device is on the list.'
-            : <span className="text-muted-foreground">This device is not on the list.</span>}
-      </p>
-    </Section>
   )
 }
 
