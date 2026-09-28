@@ -21,7 +21,6 @@ import MarketPage from '@/components/market-page'
 import { ProjectDialog } from '@/components/project-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -476,10 +475,13 @@ export default function App() {
             <ThemeToggle />
             {/* a phone has no room for a permanent field: the icon opens it, and it takes the
                 whole row while it is open, which is also where the results are read */}
+            {/* The header's field filters the rows — so only where there are rows. On a tool page
+                it was a second search box beside the sidebar's ⌘K, finding less than it does. */}
+            {(query || !isPage(s.sel)) && (<>
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Search"
+              aria-label="Filter items"
               className="size-8 sm:hidden"
               onClick={() => { setPhoneSearch(true); requestAnimationFrame(() => searchRef.current?.focus()) }}
             >
@@ -499,22 +501,11 @@ export default function App() {
                 onChange={(e) => setQuery(e.target.value)}
                 onFocus={() => setSearching(true)}
                 onBlur={() => { setSearching(false); if (!query) setPhoneSearch(false) }}
-                placeholder="Search"
-                aria-label="Search all items"
+                placeholder="Filter items"
+                aria-label="Filter items"
                 onKeyDown={(e) => { if (e.key === 'Escape') setPhoneSearch(false) }}
                 className="h-8 w-full pl-8 sm:w-44"
               />
-              {/* hidden once you type, so it never sits under the search field's own clear button */}
-              {!query && (
-                <button
-                  type="button"
-                  onClick={() => setPalette(true)}
-                  title="Commands and item search"
-                  className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2"
-                >
-                  <Kbd className="rounded-sm">⌘K</Kbd>
-                </button>
-              )}
               {searching && hints.length > 0 && (
                 <div className="bg-popover absolute top-full right-0 z-20 mt-1 w-52 rounded-md border p-1 shadow-md">
                   {hints.map(([v, n]) => (
@@ -534,6 +525,7 @@ export default function App() {
                 </div>
               )}
             </div>
+            </>)}
           </header>
           )}
 
