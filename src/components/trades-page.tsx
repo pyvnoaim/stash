@@ -215,18 +215,18 @@ export function TradesScreen({ onPick, onBack }: { onPick: (asset: string) => vo
         <Button size="icon" variant="ghost" aria-label="Back to the chart" className="text-muted-foreground size-8" onClick={onBack}>
           <ArrowLeft />
         </Button>
-        <div role="tablist" className="bg-muted/50 flex gap-0.5 rounded-xl p-1">
+        <div role="tablist" className="flex gap-0.5 rounded-xl border p-[3px]">
           {([['mine', 'Your trades'], ['people', 'Friends']] as const).map(([id, label]) => (
             <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
-              className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === id ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
+              className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground')}>
               {label}
             </button>
           ))}
         </div>
-        <div role="radiogroup" aria-label="Period" className="ml-auto flex gap-px rounded-lg border p-px">
+        <div role="radiogroup" aria-label="Period" className="ml-auto flex gap-0.5 rounded-lg border p-[3px]">
           {PERIODS.map(([k]) => (
             <button key={k} type="button" role="radio" aria-checked={period === k} onClick={() => setPeriod(k)}
-              className={cn('h-7 rounded-md px-2.5 text-xs tabular-nums', period === k ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}>
+              className={cn('h-7 rounded-md px-2.5 text-xs tabular-nums', period === k ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground')}>
               {k}
             </button>
           ))}
@@ -301,7 +301,7 @@ function YourTrades({ rows, period, loadingTokens, total, onPick }: {
           {([['all', 'All'], ['perp', 'Perps'], ['token', 'Tokens']] as const).map(([id, label]) => (
             <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}
               className={cn('h-7 rounded-full border px-3 text-xs transition-colors',
-                filter === id ? 'bg-foreground text-background border-foreground' : 'text-muted-foreground hover:text-foreground')}>
+                filter === id ? 'bg-muted text-foreground border-transparent' : 'text-muted-foreground hover:text-foreground')}>
               {label}
             </button>
           ))}
