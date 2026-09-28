@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
+import { dexAsset, type Asset } from '@/lib/market'
 import { getSync, subscribeSync } from '@/lib/sync'
 import { cn } from '@/lib/utils'
 
@@ -12,6 +13,8 @@ type Holding = {
   value: number
   change: number | null
   url: string | null
+  /** The pool its price came off — what the in-app chart reads candles from. */
+  pool: string | null
 }
 
 /** A minute, and only while the tab is looked at — memecoin prices move, but a wallet does not
@@ -46,7 +49,7 @@ function TokenIcon({ mint, symbol }: { mint: string, symbol: string }) {
  * real pool behind them are left out on the server, so the total is money that could be sold.
  * Renders nothing for an account with no Solana wallet, or one that holds nothing worth showing.
  */
-export function Holdings() {
+export function Holdings({ onOpen }: { onOpen?: (a: Asset) => void }) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
   const [rows, setRows] = useState<Holding[] | null>(null)
   const [total, setTotal] = useState(0)
@@ -80,8 +83,14 @@ export function Holdings() {
         </div>
         <div className="grid gap-1">
           {rows.map((r) => (
+            /* Into the desk's own chart where the pool is known; out to DexScreener where it is not. */
             <a key={r.mint} href={r.url ?? undefined} target="_blank" rel="noreferrer noopener"
-              title={r.name ? `${r.name} — chart on DexScreener` : 'Chart on DexScreener'}
+              title={r.pool && onOpen ? `Open ${r.symbol} on the chart` : `${r.name || r.symbol} — chart on DexScreener`}
+              onClick={(e) => {
+                if (!r.pool || !onOpen) return
+                e.preventDefault()
+                onOpen(dexAsset({ network: 'solana', pool: r.pool, symbol: r.symbol, mint: r.mint }))
+              }}
               className="hover:bg-muted/50 -mx-1.5 flex items-center gap-2 rounded px-1.5 py-1">
               <TokenIcon mint={r.mint} symbol={r.symbol} />
               <span className="min-w-0">

@@ -15,6 +15,7 @@ setBudget(1e9)
 /* Hyperliquid, answered here rather than over the network, for the whole file: an address with one
    ETH short on it, two bars for anything asking candles, and nothing for everything else. Every
    other request goes through. The rate budget is lifted — nothing here is a real venue to spare. */
+const DEXPOOL = 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD'
 const realFetch = globalThis.fetch
 const hlAsked: any[] = []
 globalThis.fetch = ((u: any, o?: any) => {
@@ -26,10 +27,20 @@ globalThis.fetch = ((u: any, o?: any) => {
       : { value: [{ account: { data: { parsed: { info: { mint: 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD', tokenAmount: { uiAmountString: '553' } } } } } }] }
     return Promise.resolve(new Response(JSON.stringify({ result })))
   }
-  if (String(u).startsWith('https://api.dexscreener.com/')) {
+  if (String(u).startsWith('https://api.dexscreener.com/tokens/')) {
     return Promise.resolve(new Response(JSON.stringify([
       { baseToken: { address: 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD', symbol: 'SI' }, priceUsd: '0.0231', liquidity: { usd: 900000 } },
     ])))
+  }
+  if (String(u).startsWith('https://api.dexscreener.com/latest/dex/search')) {
+    return Promise.resolve(new Response(JSON.stringify({ pairs: [
+      { chainId: 'solana', pairAddress: DEXPOOL, baseToken: { address: 'HDmint', symbol: 'HYPEDOG' }, priceUsd: '0.01', liquidity: { usd: 50000 } },
+    ] })))
+  }
+  if (String(u).startsWith('https://api.geckoterminal.com/')) {
+    return Promise.resolve(new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
+      [1759190400, '2', '3', '1.5', '2.5', '100'], [1759186800, '1', '2', '0.5', '1.5', '50'],
+    ] } } })))
   }
   if (!String(u).startsWith('https://api.hyperliquid.xyz')) return realFetch(u, o)
   const body = JSON.parse(o?.body ?? '{}')
@@ -38,6 +49,7 @@ globalThis.fetch = ((u: any, o?: any) => {
     ? { marginSummary: { accountValue: '1240.5' }, assetPositions: [{ position: { coin: 'ETH', szi: '-2', entryPx: '2000', positionValue: '3900', unrealizedPnl: '100', liquidationPx: '2450', leverage: { value: 10 } } }] }
     : body.type === 'candleSnapshot' ? [{ t: 1, o: '1', h: '2', l: '0.5', c: '1.5', v: '3' }, { t: 2, o: '1.5', h: '2', l: '1', c: '1.8', v: '4' }]
     : body.type === 'allMids' ? { BTC: '100000', PAXG: '2400' }
+    : body.type === 'meta' ? { universe: [{ name: 'BTC' }, { name: 'HYPE' }, { name: 'OLD', isDelisted: true }] }
     : []
   return Promise.resolve(new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } }))
 }) as typeof fetch
@@ -950,6 +962,20 @@ assert.equal((await get('/api/hl/candles?coin=BTC%26x%3D1&interval=1d')).status,
 assert.equal((await get('/api/hl/candles?coin=FAKECOIN&interval=1d')).status, 400)
 assert.equal((await get('/api/hl/candles?coin=PAXG&interval=1d')).status, 200)
 assert.deepEqual(await (await get('/api/hl/mids')).json(), { BTC: 100000, PAXG: 2400 })
+// a perp off the desk's list charts too, once the venue's own listing says it exists
+assert.equal((await get('/api/hl/candles?coin=HYPE&interval=1h')).status, 200)
+assert.equal((await get('/api/hl/candles?coin=NOTLISTED&interval=1h')).status, 400)
+
+/* Search: the book's perps and DexScreener's tokens, signed in only. */
+assert.equal((await get('/api/search?q=hy')).status, 401)
+const sr = await (await get('/api/search?q=hy', kUser)).json()
+assert.deepEqual(sr.perps, ['HYPE'])
+assert.deepEqual(sr.tokens.map((t: any) => t.symbol), ['HYPEDOG'])
+// a DEX pool's bars: well-formed pools on chartable networks only, weeks built from days
+assert.equal((await get('/api/dex/candles?network=solana&pool=../x&interval=1h', kUser)).status, 400)
+assert.equal((await get('/api/dex/candles?network=tron&pool=' + DEXPOOL + '&interval=1h', kUser)).status, 400)
+const dbars = await (await get('/api/dex/candles?network=solana&pool=' + DEXPOOL + '&interval=1h', kUser)).json()
+assert.deepEqual(dbars.map((b: any) => b.c), [1.5, 2.5])
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 
 /* kUser's session, rather than one more account: the signup limiter is deliberately tight and this

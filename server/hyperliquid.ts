@@ -189,6 +189,21 @@ export function candles(coin: string, interval: string, bars = WINDOW): Promise<
   return got.then((c) => c.slice(-Math.max(1, Math.min(bars, WINDOW))))
 }
 
+/* ---------- what is listed ---------- */
+
+let universeCache: { at: number; coins: Promise<string[]> } | null = null
+
+/** Every perp the main book lists, by the venue's name — what search offers and the relay will
+ *  chart. An hour fresh: listings change by the week, and this is a heavy-ish call. */
+export function universe(): Promise<string[]> {
+  if (universeCache && Date.now() - universeCache.at < 3_600_000) return universeCache.coins
+  const coins = info<{ universe?: { name?: string, isDelisted?: boolean }[] }>({ type: 'meta' }, 20)
+    .then((m) => (m?.universe ?? []).filter((u) => u?.name && !u.isDelisted && COIN.test(u.name)).map((u) => u.name!))
+  coins.catch(() => { if (universeCache?.coins === coins) universeCache = null })
+  universeCache = { at: Date.now(), coins }
+  return coins
+}
+
 /* ---------- prices ---------- */
 
 let midsCache: { at: number; mids: Promise<Record<string, number>> } | null = null

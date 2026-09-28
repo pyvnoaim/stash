@@ -575,7 +575,15 @@ its amount, value and 24-hour move, and the total: balances off a Solana RPC (bo
 since pump.fun mints on Token-2022), priced off each token's deepest DexScreener pool. Dust under
 fifty cents and coins whose pool holds under $1,000 are left out — that is what an airdropped scam
 coin looks like, and a total that counted one at its make-believe price would be a lie about money.
-A row opens the token's chart on DexScreener until the desk draws its own.
+A row opens the token in the desk's own chart.
+
+**Search** reaches past the list: every perp Hyperliquid lists (HYPE, kPEPE, …) charts and reprices
+like the eleven on it, and DexScreener's tokens on Solana, Base, Ethereum and BNB — pools under
+$10,000 deep left out, one row per token at its deepest pool — chart off GeckoTerminal's bars for
+that pool. GeckoTerminal allows about thirty calls a minute, so the server keeps under twenty-five,
+caches each pool's bars for about a bar, and says it is busy rather than queueing past forty. A DEX
+token gets its pool's facts beside the chart — liquidity, market cap, the day's volume and move —
+instead of the readings, which were measured on major perps and mean nothing on a coin this young.
 
 **Watch-only.** An address is public and signs nothing, so there is no key here at all and nothing
 this server holds could place, move or cancel an order — trading happens in Fomo. The worst a copied
@@ -892,6 +900,7 @@ is still in the file and still copies out.
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
 - `server/hyperliquid.ts` — Hyperliquid, read-only by address: the rate budget, the candle cache, positions, orders, and closed trades rebuilt from fills
 - `server/solana.ts` — what a Solana wallet holds, priced off DexScreener, dust and scam coins left out
+- `server/dex.ts` — search across DexScreener, and a pool's bars off GeckoTerminal through its own budget
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page

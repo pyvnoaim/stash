@@ -44,8 +44,10 @@ export type Holding = {
   value: number
   /** Percent over the last day, where the pair says. */
   change: number | null
-  /** Where the chart lives, until the app draws its own. */
+  /** Where the chart lives on DexScreener. */
   url: string | null
+  /** The pool the price came off — what the app's own chart reads its candles from. */
+  pool: string | null
 }
 
 const rpc = (method: string, params: unknown[]) => fetch(RPC, {
@@ -75,6 +77,7 @@ export function balancesOf(results: unknown[]): Map<string, number> {
 }
 
 type Pair = {
+  pairAddress?: string
   baseToken?: { address?: string; symbol?: string; name?: string }
   priceUsd?: string
   priceChange?: { h24?: number }
@@ -114,6 +117,7 @@ export function shapeHoldings(balances: Map<string, number>, pairs: Map<string, 
       change: isFinite(change) ? change : null,
       /* The row is a link, so only DexScreener's own https pages become one — a feed that sent a
          javascript: URL would otherwise be a script on a click. Anything else, the page is built. */
+      pool: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(p.pairAddress ?? '') ? p.pairAddress! : null,
       url: /^https:\/\/dexscreener\.com\//.test(p.url ?? '') ? p.url! : `https://dexscreener.com/solana/${mint}`,
     })
   }

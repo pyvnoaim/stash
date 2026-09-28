@@ -30,7 +30,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
-  venueName, priceDigits, hlCoin,
+  venueName, priceDigits, hlCoin, assetById, remember, perpAsset, dexAsset,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
 
@@ -96,7 +96,7 @@ const useOnline = () => useSyncExternalStore(
 function AssetLogo({ src, className }: { src: string; className?: string }) {
   const [ok, setOk] = useState(true)
   useEffect(() => { setOk(true) }, [src])
-  if (!ok) return null
+  if (!ok || !src) return null
   return <img src={src} alt="" loading="lazy" onError={() => setOk(false)}
     className={cn('size-4 shrink-0 rounded-full object-contain', className)} />
 }
@@ -230,7 +230,8 @@ export default function MarketPage() {
      for it rather than loading Binance's bars and replacing them a beat later. */
   const feed = useVenue()
 
-  const current = ASSETS.find((a) => a.id === asset) ?? ASSETS[1]
+  // the list first, then anything met beyond it — a perp found by search, a token in the wallet
+  const current = assetById(asset) ?? ASSETS[1]
   // one precision for every figure on the page, taken from the asset's own price: 2 decimals for
   // Bitcoin, 4 for a coin at 0.17 — where two printed entry, stop and target as the same number
   const fmt = (v: number) => fmtPrice(v, candles.at(-1)?.c ?? 1)
@@ -324,6 +325,14 @@ export default function MarketPage() {
       setPolling(quiet)
       if (!quiet || Date.now() - polled < LIVE) return
       polled = Date.now()
+      /* A DEX token has no mid on the venue to probe: its bars are the price, cached on the server
+         for about a bar, so asking for them again is the whole of keeping it live. */
+      if (current.source === 'dex') {
+        fetchCandles(current, interval, feed)
+          .then((fresh) => { if (!on) return; setNotLive(!fresh.length); if (fresh.length) setCandles(fresh) })
+          .catch(() => { if (on) setNotLive(true) })
+        return
+      }
       fetchPrices([current.id], feed).then((pr) => {
         const px = pr[current.id]
         if (!on) return
@@ -517,7 +526,7 @@ export default function MarketPage() {
       : { label: 'No lean', cls: 'bg-muted text-muted-foreground', Icon: Minus }
 
   const last = candles.at(-1)?.c
-  const coin = current.id.replace(/USDT$/, '')
+  const coin = current.source === 'dex' ? current.label : current.id.replace(/USDT$/, '')
   // the exchange position on this very chart, if there is one — the strip above already knew about
   // it, and from here down so does the card
   const held = exch.rows.find((p) => assetOf(p.symbol) === current.id)
@@ -1330,7 +1339,7 @@ export default function MarketPage() {
                 rather than reading. Absent unless a venue reports something open. */}
             <ExchangePositions onOpen={setAsset} />
             {/* and what the watched wallets hold as tokens — the memecoins, which no book carries */}
-            <Holdings />
+            <Holdings onOpen={(a) => { remember(a); setAsset(a.id) }} />
             {/* and what the others with their desk on are in, the same tiles signed with a name */}
             <FriendsOpen onPick={setAsset} />
             </div>
@@ -1338,7 +1347,11 @@ export default function MarketPage() {
                 structure break, the higher timeframe, the VWAP, the averages. They were a grid of
                 prose in a card above the chart; here each is a line the eye can run down while the
                 chart is in view. */}
-            {view && (
+            {/* A DEX token gets its pool's facts instead: the readings were measured on eight
+                major perps, and a coin a few weeks old has no 200-MA to read — a verdict there
+                would be noise wearing the same confident type. */}
+            {current.source === 'dex' && <DexFacts asset={current} />}
+            {view && current.source !== 'dex' && (
               <section className="flex flex-col gap-2 border-t pt-3 lg:min-h-0 lg:flex-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">What the chart says</span>
@@ -1483,6 +1496,90 @@ const PRICES_LIVE = 60_000
  * off the same twenty-five hourly bars the Overview tiles use — the last close is the price, the
  * first bar's open is where the day started — so it is one fetch for both columns.
  */
+/** Big numbers the way a token page says them: $23M, $4.8K. */
+const compact = (n: number | null) => (n == null ? '—'
+  : `$${Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n)}`)
+
+type PoolFacts = { symbol: string, name: string, price: number, liquidity: number, marketCap: number | null, volume: number | null, change: number | null }
+
+/**
+ * A DEX token's pool, where a listed asset has its readings: price, depth, size and the day's
+ * trade — the numbers that decide whether a memecoin can be sold at the price on the chart at all.
+ * Liquidity leads, because a thin pool is the one thing on a memecoin chart that is not visible.
+ */
+function DexFacts({ asset }: { asset: Asset }) {
+  const [p, setP] = useState<PoolFacts | null>(null)
+  useEffect(() => {
+    let on = true
+    setP(null)
+    fetch(`/api/dex/pool?network=${asset.network}&pool=${asset.pool}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { pool?: PoolFacts | null } | null) => {
+        if (!on || !j?.pool) return
+        setP(j.pool)
+        // the real symbol, for a token opened from a bare id after a reload
+        if (j.pool.symbol && j.pool.symbol !== asset.label) remember({ ...asset, label: j.pool.symbol })
+      })
+      .catch(() => {})
+    return () => { on = false }
+  }, [asset.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  const rows: [string, string][] = p ? [
+    ['Liquidity', compact(p.liquidity)],
+    ['Market cap', compact(p.marketCap)],
+    ['Volume 24h', compact(p.volume)],
+    ['Move 24h', p.change == null ? '—' : `${p.change >= 0 ? '+' : ''}${p.change.toFixed(2)}%`],
+  ] : []
+  return (
+    <section className="flex flex-col gap-2 border-t pt-3">
+      <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">The pool</span>
+      {!p ? <Skeleton className="h-20" /> : (
+        <>
+          {p.name && <p className="text-sm">{p.name}</p>}
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 tabular-nums">
+            {rows.map(([k, v]) => (
+              <div key={k}>
+                <dt className="text-muted-foreground text-[10px] tracking-wider uppercase">{k}</dt>
+                <dd className="text-sm">{v}</dd>
+              </div>
+            ))}
+          </dl>
+          {p.liquidity < 50_000 && (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              A thin pool: selling a few hundred dollars moves this price.
+            </p>
+          )}
+          <p className="text-muted-foreground text-xs">
+            No readings for DEX tokens — the rules were measured on major perps, not coins this young.{' '}
+            <a className="underline underline-offset-2" href={`https://dexscreener.com/${asset.network === 'eth' ? 'ethereum' : asset.network}/${asset.pool}`}
+              target="_blank" rel="noreferrer noopener">DexScreener</a>
+          </p>
+        </>
+      )}
+    </section>
+  )
+}
+
+type Found = { network: string, pool: string, mint: string, symbol: string, name: string, price: number, liquidity: number, change: number | null }
+
+/** What the field finds beyond the list, as you type: every perp Hyperliquid lists and tokens on
+ *  DexScreener. A quarter second after the last key, and only for two letters or more. */
+function useSearch(q: string) {
+  const [out, setOut] = useState<{ perps: string[], tokens: Found[] }>({ perps: [], tokens: [] })
+  useEffect(() => {
+    const k = q.trim()
+    if (k.length < 2) { setOut({ perps: [], tokens: [] }); return }
+    let on = true
+    const h = setTimeout(() => {
+      fetch(`/api/search?q=${encodeURIComponent(k)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (on && j) setOut({ perps: j.perps ?? [], tokens: j.tokens ?? [] }) })
+        .catch(() => {})
+    }, 250)
+    return () => { on = false; clearTimeout(h) }
+  }, [q])
+  return out
+}
+
 function Watchlist({ current, onPick, inputRef }: {
   current: string
   onPick: (id: string) => void
@@ -1494,6 +1591,10 @@ function Watchlist({ current, onPick, inputRef }: {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [nonce, setNonce] = useState(0)
   const [q, setQ] = useState('')
+  const found = useSearch(q)
+  // the perps the list already carries are not offered twice
+  const morePerps = found.perps.filter((c) => !ASSETS.some((a) => hlCoin(a.id) === c))
+  const pick = (a: Asset) => { remember(a); onPick(a.id); setQ('') }
   useEffect(() => {
     if (feed === undefined) return // which venue is still being asked — see useVenue
     let on = true
@@ -1546,7 +1647,12 @@ function Watchlist({ current, onPick, inputRef }: {
             aria-label="Find an asset" className="h-8 pl-7 text-xs"
             onKeyDown={(e) => {
               // Enter takes the first match, Escape gives the keys back to the chart
-              if (e.key === 'Enter') { const f = ASSETS.find(hit); if (f) { onPick(f.id); setQ('') } }
+              if (e.key === 'Enter') {
+                const f = ASSETS.find(hit)
+                if (f) { onPick(f.id); setQ('') }
+                else if (morePerps[0]) pick(perpAsset(morePerps[0]))
+                else if (found.tokens[0]) pick(dexAsset(found.tokens[0]))
+              }
               if (e.key === 'Escape' || e.key === 'Enter') e.currentTarget.blur()
             }} />
         </div>
@@ -1608,6 +1714,33 @@ function Watchlist({ current, onPick, inputRef }: {
           )
         })}
       </div>
+      {/* Beyond the list: the rest of the book, and the DEXes. Only while searching — the list is
+          what the desk is about, and these are the way to anything else. */}
+      {(morePerps.length > 0 || found.tokens.length > 0) && (
+        <div className="hidden flex-col gap-0.5 border-t p-2 lg:flex">
+          {morePerps.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-1 text-[10px] tracking-wider uppercase">Perps on Hyperliquid</p>}
+          {morePerps.map((c) => (
+            <button key={c} type="button" onClick={() => pick(perpAsset(c))}
+              className="hover:bg-accent flex items-center justify-between rounded-md px-2 py-1.5 text-left text-sm">
+              <span>{c}</span><span className="text-muted-foreground text-xs">perp</span>
+            </button>
+          ))}
+          {found.tokens.length > 0 && <p className="text-muted-foreground font-heading px-2 pt-2 text-[10px] tracking-wider uppercase">Tokens on DEXes</p>}
+          {found.tokens.map((t) => (
+            <button key={`${t.network}:${t.pool}`} type="button" onClick={() => pick(dexAsset(t))}
+              className="hover:bg-accent grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 rounded-md px-2 py-1.5 text-left">
+              <span className="truncate text-sm">{t.symbol} <span className="text-muted-foreground text-xs">{t.name}</span></span>
+              <span className="text-xs tabular-nums">{fmtPrice(t.price)}</span>
+              <span className="text-muted-foreground text-xs">{t.network} · {compact(t.liquidity)} liquidity</span>
+              {t.change != null && (
+                <span className={cn('text-xs tabular-nums', t.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {t.change >= 0 ? '+' : ''}{t.change.toFixed(2)}%
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
       {/* the venue only once it is known */}
       <p className="text-muted-foreground hidden px-4 pb-2 text-[10px] lg:block">
         Last price and the 24h move{feed !== undefined && <>, on Hyperliquid</>}
