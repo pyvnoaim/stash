@@ -36,7 +36,7 @@ import {
   positions as hlPositions, universe as hlUniverse, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
-import { holdings as solHoldings, logo as solLogo } from './solana.ts'
+import { holdings as solHoldings, logo as solLogo, swaps as solSwaps } from './solana.ts'
 import { candles as dexCandles, NETWORKS, pool as dexPool, POOL, search as dexSearch, TIMEFRAME } from './dex.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -1288,6 +1288,24 @@ export function start({
           total: cents(all.reduce((n, r) => n + r.value, 0)),
           dust: { count: small.length, value: cents(small.reduce((n, r) => n + r.value, 0)) },
         })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
+    }
+
+    /* Your buys and sells of one token, off your own watched Solana wallets' history — what the
+       token chart marks on its bars. Signed in only, and only your own wallets: the mint is the
+       one thing asked for, and it is checked as an address before anything goes upstream. */
+    if (path === '/api/dex/fills' && req.method === 'GET') {
+      const user = auth(req)
+      if (!user) return send(res, 401, { error: 'unauthorized' })
+      const mint = new URL(req.url ?? '/', 'http://x').searchParams.get('mint') ?? ''
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return send(res, 400, { error: 'not a mint' })
+      const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
+        .filter((w) => w.chain === 'solana').map((w) => w.address)
+      try {
+        const all = (await Promise.all(sol.map((a) => solSwaps(a, mint)))).flat().sort((a, b) => a.t - b.t)
+        return send(res, 200, { fills: all.map(({ t, side, amount }) => ({ t, side, amount })) }, { 'cache-control': 'private, max-age=60' })
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
