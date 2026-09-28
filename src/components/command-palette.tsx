@@ -15,7 +15,7 @@ import {
   CALENDAR, clearDone, getState, isPage, MARKET, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
   setMarketAsset, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
-import { ASSETS, dexAsset, fmtPrice, hlCoin, perpAsset, remember, type Asset } from '@/lib/market'
+import { ASSETS, assetById, dexAsset, fmtPrice, hlCoin, perpAsset, remember, type Asset } from '@/lib/market'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
    VIEWS, so a view added there and forgotten here rendered `<undefined />` — which is not a missing
@@ -115,10 +115,13 @@ export function CommandPalette({
   type Held = { mint: string, symbol: string, name: string, amount: number, value: number, change: number | null, pool: string | null }
   type Tok = { network: string, pool: string, mint: string, symbol: string, name: string, price: number, liquidity: number }
   const [held, setHeld] = useState<Held[]>([])
+  type Pos = { symbol: string, side: 'long' | 'short', lev: number | null, pnl: number | null, value: number | null, entry: number, mark: number | null }
+  const [pos, setPos] = useState<Pos[]>([])
   const [market, setMarket] = useState<{ perps: string[], tokens: Tok[] }>({ perps: [], tokens: [] })
   useEffect(() => {
     if (!open) return
     fetch('/api/holdings').then((r) => (r.ok ? r.json() : null)).then((j) => setHeld(j?.holdings ?? [])).catch(() => {})
+    fetch('/api/positions').then((r) => (r.ok ? r.json() : null)).then((j) => setPos(j?.positions ?? [])).catch(() => {})
   }, [open])
   useEffect(() => {
     const k = q.trim()
@@ -133,7 +136,11 @@ export function CommandPalette({
     return () => { on = false; clearTimeout(h) }
   }, [q, open])
   const needle = q.trim().toLowerCase()
-  const heldHits = needle.length >= 1 ? held.filter((h) => `${h.symbol} ${h.name}`.toLowerCase().includes(needle)) : []
+  // with nothing typed, the whole wallet — the palette opens on your money, then the places to go
+  const heldHits = needle ? held.filter((h) => `${h.symbol} ${h.name}`.toLowerCase().includes(needle)) : held
+  const posHits = needle ? pos.filter((p) => p.symbol.toLowerCase().includes(needle)) : pos
+  const signedUsd = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
+  const tone = (n: number | null | undefined) => (n == null ? 'text-muted-foreground' : n >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')
   const listedHits = needle.length >= 2 ? ASSETS.filter((a) => `${a.label} ${a.id}`.toLowerCase().includes(needle)) : []
   const perpHits = market.perps.filter((c) => !ASSETS.some((a) => hlCoin(a.id) === c))
   /** Onto the Markets desk, showing this. */
@@ -170,12 +177,55 @@ export function CommandPalette({
       onOpenChange={onOpenChange}
       title="Search"
       description="Find an item, a project, a market or a token; run a command"
+      // room for a row's two lines and the numbers beside them
+      className="sm:max-w-xl"
     >
       {/* CommandDialog drops children straight into DialogContent, so the cmdk root is ours to add */}
       <Command>
         <CommandInput value={q} onValueChange={setQ} placeholder="Search notes, projects, markets, tokens…" />
         <CommandList className="max-h-[60vh]">
           <CommandEmpty>Nothing matches that.</CommandEmpty>
+
+          {/* Your money first: what is open on the venue and what the wallet holds, each with the
+              number that says how it is doing. cmdk scores on the value, and a server's answer need
+              not contain the typed letters — so the query rides in each value. */}
+          {(posHits.length > 0 || heldHits.length > 0) && (
+            <>
+              <CommandGroup heading="Your money">
+                {posHits.map((p) => (
+                  <CommandItem key={`pos-${p.symbol}`} value={`position ${p.symbol} ${p.side} ${q}`}
+                    onSelect={run(() => { const a = assetById(p.symbol); if (a) chart(a); else select(MARKET) })}>
+                    <CandlestickChart />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{p.symbol.replace(/USDT$/, '')} <span className={cn('text-xs uppercase', p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>{p.side}{p.lev ? ` ${p.lev}×` : ''}</span></span>
+                      <span className="text-muted-foreground text-xs tabular-nums">from {fmtPrice(p.entry)}{p.mark != null && ` · now ${fmtPrice(p.mark)}`}</span>
+                    </span>
+                    <span className="ml-auto flex flex-col items-end text-xs tabular-nums">
+                      {p.value != null && <span>${p.value.toFixed(2)}</span>}
+                      {p.pnl != null && <span className={tone(p.pnl)}>{signedUsd(p.pnl)}</span>}
+                    </span>
+                  </CommandItem>
+                ))}
+                {heldHits.map((h) => (
+                  <CommandItem key={h.mint} value={`wallet ${h.symbol} ${h.name} ${q}`}
+                    onSelect={run(() => (h.pool
+                      ? chart(dexAsset({ network: 'solana', pool: h.pool, symbol: h.symbol, mint: h.mint }))
+                      : select(MARKET)))}>
+                    <Coins />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{h.symbol}</span>
+                      <span className="text-muted-foreground truncate text-xs tabular-nums">{h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} {h.symbol} · in your wallet</span>
+                    </span>
+                    <span className="ml-auto flex flex-col items-end text-xs tabular-nums">
+                      <span>${h.value.toFixed(2)}</span>
+                      {h.change != null && <span className={tone(h.change)}>{h.change >= 0 ? '+' : ''}{h.change.toFixed(2)}% 24h</span>}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+              <CommandSeparator />
+            </>
+          )}
 
           {/* a tool switched off is not offered here either — hiding it in one list and leaving it
               findable in the other is the same as not hiding it */}
@@ -226,27 +276,6 @@ export function CommandPalette({
               <span>New project</span>
             </CommandItem>
           </CommandGroup>
-
-          {/* cmdk scores on the value, and a server's answer need not contain the typed letters —
-              so the query rides in each value, and what the server found is never filtered out */}
-          {heldHits.length > 0 && (
-            <>
-              <CommandSeparator />
-              <CommandGroup heading="In your wallet">
-                {heldHits.map((h) => (
-                  <CommandItem key={h.mint} value={`wallet ${h.symbol} ${h.name} ${q}`}
-                    onSelect={run(() => (h.pool
-                      ? chart(dexAsset({ network: 'solana', pool: h.pool, symbol: h.symbol, mint: h.mint }))
-                      : select(MARKET)))}>
-                    <Coins />
-                    <span>{h.symbol}</span>
-                    <span className="text-muted-foreground truncate text-xs">{h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} {h.symbol}</span>
-                    <CommandShortcut className="tabular-nums">${h.value.toFixed(2)}</CommandShortcut>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </>
-          )}
 
           {(listedHits.length > 0 || perpHits.length > 0 || market.tokens.length > 0) && (
             <>
