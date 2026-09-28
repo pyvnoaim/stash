@@ -270,9 +270,11 @@ export function shapeTx(tx: any, owner: string, sig: string): Priced | null {
   const at = keys.findIndex((k) => (typeof k === 'string' ? k : k?.pubkey) === owner)
   const lamports = at >= 0 ? (Number(tx.meta.postBalances?.[at]) || 0) - (Number(tx.meta.preBalances?.[at]) || 0) : 0
   let sol = lamports / 1e9 + delta(SOL)
-  // a buy that opened the account paid its rent, a sell that closed it got the rent back
-  if (amount > 0 && !pre.has(mint)) sol += RENT
-  if (amount < 0 && !post.has(mint)) sol -= RENT
+  /* A buy that opened the account paid its rent, a sell that closed it got the rent back — but only
+     where this wallet's own SOL moved by that much: a wallet whose rent is paid by someone else
+     (an app that sponsors it) would otherwise have a rent it never paid taken off as a price. */
+  if (amount > 0 && !pre.has(mint) && sol <= -RENT) sol += RENT
+  if (amount < 0 && !post.has(mint) && sol >= RENT) sol -= RENT
   const usdc = delta(USDC)
   // money has to have gone the other way, or this was a transfer, not a trade
   const counter = amount > 0 ? -(Math.min(sol, 0) + Math.min(usdc, 0)) : Math.max(sol, 0) + Math.max(usdc, 0)
@@ -319,22 +321,31 @@ export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null): Om
 
 /** How far back a wallet's history is read for its token trades. */
 const HISTORY = 100
-const tradeCache = new Map<string, { at: number, trades: Promise<TokenTrade[]> }>()
+const tradeCache = new Map<string, { at: number, trades: Promise<TokenTrade[]>, ttl: number }>()
+/** Whether the last read of each wallet missed a transaction — see tokenTrades. */
+const partial = new Set<string>()
+export const tradesPartial = (owner: string) => partial.has(owner)
 
 /** `owner`'s finished token trades, priced — `solUsd` gives SOL's dollar price at a moment. Two
  *  minutes fresh; every transaction read is kept for good, so a second look costs one call. */
 export function tokenTrades(owner: string, solUsd: (t: number) => Promise<number | null>): Promise<TokenTrade[]> {
   if (!MINT.test(owner)) return Promise.resolve([])
   const hit = tradeCache.get(owner)
-  if (hit && Date.now() - hit.at < 120_000) return hit.trades
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.trades
+  const entry = { at: Date.now(), ttl: 120_000, trades: null as unknown as Promise<TokenTrade[]> }
   const got = (async () => {
     const sigs = ((await rpc('getSignaturesForAddress', [owner, { limit: HISTORY, commitment: 'confirmed' }]).catch(() => [])) ?? []) as { signature?: string, err?: unknown }[]
     const want = sigs.filter((x) => !x?.err && typeof x?.signature === 'string').map((x) => x.signature!)
     const swaps: Priced[] = []
+    let missed = 0
     for (let i = 0; i < want.length; i += 4) {
-      const txs = await Promise.all(want.slice(i, i + 4).map((sig) => txOf(sig).catch(() => null)))
+      const txs = await Promise.all(want.slice(i, i + 4).map((sig) => txOf(sig).catch(() => { missed++; return null })))
       txs.forEach((tx, j) => { const s = shapeTx(tx, owner, want[i + j]); if (s) swaps.push(s) })
     }
+    /* A transaction the endpoint would not give is a swap missing from the sums — a buy left out
+       overstates the trade it belonged to. Said, and kept only briefly: the next look asks for the
+       missing ones again (the ones that came are kept for good), and the page asks again soon. */
+    if (missed) { partial.add(owner); entry.ttl = 15_000 } else partial.delete(owner)
     // SOL's price at each swap's moment, asked once per swap
     const px = new Map<string, number | null>()
     await Promise.all(swaps.filter((s) => s.sol > 0).map(async (s) => { px.set(s.sig, await solUsd(s.t).catch(() => null)) }))
@@ -357,7 +368,8 @@ export function tokenTrades(owner: string, solUsd: (t: number) => Promise<number
   })()
   got.catch(() => { if (tradeCache.get(owner)?.trades === got) tradeCache.delete(owner) })
   if (tradeCache.size > 200) tradeCache.clear()
-  tradeCache.set(owner, { at: Date.now(), trades: got })
+  entry.trades = got
+  tradeCache.set(owner, entry)
   return got
 }
 

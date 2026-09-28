@@ -1,7 +1,7 @@
 // npm test — a Solana wallet into holdings: both token programs summed per mint, each mint priced
 // off its deepest pool, and dust and scam coins left out of what the wallet is worth
 import assert from 'node:assert/strict'
-import { balancesOf, bestPairs, shapeHoldings, shapeSwap, shapeTx, tradesOf } from './solana.ts'
+import { balancesOf, bestPairs, shapeHoldings, shapeSwap, shapeTx, tokenTrades, tradesOf, tradesPartial } from './solana.ts'
 
 const acc = (mint: string, ui: string) => ({ account: { data: { parsed: { info: { mint, tokenAmount: { uiAmountString: ui } } } } } })
 const balances = balancesOf([
@@ -89,5 +89,37 @@ assert.deepEqual(trades.map((t) => [t.mint, t.cost, t.proceeds, t.pnl, t.buys, t
 assert.equal(trades[1].pct, 60)
 // a swap that could not be priced leaves its trade out rather than half-summed
 assert.deepEqual(tradesOf([sw(1, 'buy', 10, 2), sw(2, 'sell', 10, 3)], (s) => (s.side === 'buy' ? null : 3)), [])
+
+/* A read the endpoint only half answers is said to be partial and kept briefly; the next read asks
+   only for the transaction it missed, and comes back whole. */
+{
+  const real = globalThis.fetch
+  const W = '5ZWj7a1f8tWkjBESHKgrLmXshuXxqeY9SYcfbshpAqPG'
+  let failOnce = true, asked: string[] = []
+  const txBuy = { blockTime: 1759000000, transaction: { message: { accountKeys: [{ pubkey: W }] } },
+    meta: { err: null, preBalances: [0], postBalances: [0], preTokenBalances: [bal(W, USDC, '10')], postTokenBalances: [bal(W, SIM, '100'), bal(W, USDC, '5')] } }
+  const txSell = { blockTime: 1759100000, transaction: { message: { accountKeys: [{ pubkey: W }] } },
+    meta: { err: null, preBalances: [0], postBalances: [0], preTokenBalances: [bal(W, SIM, '100'), bal(W, USDC, '5')], postTokenBalances: [bal(W, USDC, '13')] } }
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (!String(url).includes('dexscreener')) {
+      const b = JSON.parse(String(init?.body))
+      if (b.method === 'getSignaturesForAddress') return new Response(JSON.stringify({ result: [{ signature: 'tb' }, { signature: 'ts' }] }))
+      asked.push(b.params[0])
+      if (b.params[0] === 'tb' && failOnce) { failOnce = false; return new Response('busy', { status: 429 }) }
+      return new Response(JSON.stringify({ result: b.params[0] === 'tb' ? txBuy : txSell }))
+    }
+    return new Response('[]')
+  }) as typeof fetch
+  const first = await tokenTrades(W, async () => 100)
+  assert.equal(tradesPartial(W), true, 'a missed transaction went unsaid')
+  assert.deepEqual(first, [], 'a sell with its buy missing made a trade anyway')
+  await new Promise((r) => setTimeout(r, 15_100))
+  asked = []
+  const second = await tokenTrades(W, async () => 100)
+  assert.deepEqual(asked, ['tb'], 'the transaction already read was asked for again')
+  assert.equal(tradesPartial(W), false)
+  assert.deepEqual(second.map((t) => [t.cost, t.proceeds, t.pnl]), [[5, 8, 3]])
+  globalThis.fetch = real
+}
 
 console.log('solana ok')
