@@ -36,7 +36,7 @@ import {
   positions as hlPositions, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
-import { holdings as solHoldings } from './solana.ts'
+import { holdings as solHoldings, logo as solLogo } from './solana.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -1283,6 +1283,24 @@ export function start({
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
+    }
+
+    /* A held token's logo, from this origin — see logo() in solana.ts. Only mints somebody's
+       wallet was read holding are served, so this is not a way to have the server fetch anything. */
+    const mintLogo = /^\/api\/logo\/([1-9A-HJ-NP-Za-km-z]{32,44})$/.exec(path)?.[1]
+    if (mintLogo && req.method === 'GET') {
+      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
+      const img = await solLogo(mintLogo)
+      if (!img) return send(res, 404, { error: 'no logo' })
+      res.writeHead(200, {
+        'content-type': img.type,
+        'content-length': img.bytes.byteLength,
+        'cache-control': 'private, max-age=86400',
+        'x-content-type-options': 'nosniff',
+        'cross-origin-resource-policy': 'same-origin',
+        'content-disposition': 'inline',
+      })
+      return res.end(img.bytes)
     }
 
     /* The market feed, relayed. Hyperliquid's info endpoint is a POST, which no service worker can

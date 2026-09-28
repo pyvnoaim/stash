@@ -34,4 +34,9 @@ const bad = shapeHoldings(new Map([['CATE', 50]]), bestPairs([
 ]))
 assert.equal(bad[0].url, 'https://dexscreener.com/solana/CATE')
 
+/* Logos: only a mint some wallet was read holding is ever fetched, and only from DexScreener's own
+   hosts — so the route that serves them cannot be pointed at anything else. */
+const { logo } = await import('./solana.ts')
+assert.equal(await logo('NEVERHELD11111111111111111111111111'), null)
+
 console.log('solana ok')

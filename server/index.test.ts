@@ -920,6 +920,10 @@ assert.match(w.found, /found on Solana: 1 token, \$12\.77/)
 const held = await (await get('/api/holdings', kUser)).json()
 assert.deepEqual(held.holdings.map((h: any) => [h.symbol, h.value]), [['SI', 12.77]])
 assert.equal(held.total, 12.77)
+// a logo is served only for a mint a wallet was read holding, and only once it sniffs as an image
+assert.equal((await get('/api/logo/So11111111111111111111111111111111111111112')).status, 401)
+assert.equal((await get('/api/logo/So11111111111111111111111111111111111111112', kUser)).status, 404)
+assert.equal((await get('/api/logo/not-a-mint', kUser)).status, 404)
 assert.deepEqual(w.wallets.map((x: any) => x.chain), ['evm', 'solana'])
 // the wallet is what positions read now: the short, off the address, never anything to sign with
 const book = await (await get('/api/positions', kUser)).json()
