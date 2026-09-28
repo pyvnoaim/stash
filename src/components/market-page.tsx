@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Loader2, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
-  TrendingDown, TrendingUp, Waypoints, X,
+  TrendingDown, TrendingUp, Waypoints,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -12,8 +12,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TradeDialog } from '@/components/trade-dialog'
-import { cancel as cancelOrder, desk as deskOf, setLevels, suggest } from '@/lib/trade'
 import { Avatar } from '@/components/settings-dialog'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
@@ -31,7 +29,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
-  venueName, priceDigits,
+  venueName, priceDigits, hlCoin,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
 
@@ -205,30 +203,6 @@ export default function MarketPage() {
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
   const [scroll, setScroll] = useState(0) // bars scrolled back from the newest — drag moves it
-  /* The order dialog, holding the price and the levels as they stood when the button was pressed.
-     Not a boolean: everything here is recomputed off every tick, and passing live numbers straight
-     in re-ran the dialog's own set-up on each one — the margin you had typed thrown away twice a
-     second, and a confirm button that meant a different price than the one under it. What is
-     placed is what was shown. */
-  const [trading, setTrading] = useState<
-    { side: 'long' | 'short', entry: number, stop: number | null, target: number | null } | null
-  >(null)
-  /* A level being moved by hand: which one, where it has been dragged to, and whether the exchange
-     has been told yet. It outlives the drag on purpose — a release does not send anything. A drag
-     is not a deliberate gesture, and on a phone a stop that moved because a thumb landed on it is
-     found out about at the fill; so the release leaves the line where it was let go and a chip
-     asks for the press that means it. `sent` is what keeps the moved line drawn while the position
-     feed, which is a minute slow, still reports where the stop used to be. */
-  const [drag, setDrag] = useState<
-    { which: 'stop' | 'target', price: number, sent?: boolean } | null
-  >(null)
-  /** Which level the pointer currently has hold of — a ref, since the pan handlers read it on every
-   *  move and a re-render per pixel is what `last` above exists to avoid. */
-  const dragging = useRef<'stop' | 'target' | null>(null)
-  const [moving, setMoving] = useState(false)
-  /** Whether the cursor is over a level it could pick up — the only thing that says these two lines
-   *  are different from the ten others on this chart. Set on crossing, not on every move. */
-  const [onLevel, setOnLevel] = useState<'stop' | 'target' | null>(null)
   /* The unbroken swings, the range they span, and the gaps price has not come back for. On by
      default — they are the levels every other reading on this page is measured against, and they
      are most of what the readings below are actually about. A toggle rather than always-on because
@@ -310,7 +284,7 @@ export default function MarketPage() {
   const nextRoll = useRef(0) // earliest the tick may refetch the whole window again
   useEffect(() => { lastAt.current = candles.at(-1)?.t ?? 0 }, [candles])
   const tickPx = useLiveMarks(live && feed !== undefined && screen === 'desk'
-    ? [{ venue: 'bitget', symbol: current.id }] : [], true)[`bitget:${current.id}`]
+    ? [{ venue: 'hyperliquid', symbol: current.id }] : [], true)[`hyperliquid:${current.id}`]
   const liveAt = useRef(0) // when the socket last moved the bar
   useEffect(() => {
     const t = lastAt.current
@@ -349,7 +323,7 @@ export default function MarketPage() {
       setPolling(quiet)
       if (!quiet || Date.now() - polled < LIVE) return
       polled = Date.now()
-      fetchPrices([current.id], 'bitget').then((pr) => {
+      fetchPrices([current.id], feed).then((pr) => {
         const px = pr[current.id]
         if (!on) return
         // fetchPrices resolves either way and simply omits what it could not get, so an absent
@@ -555,27 +529,12 @@ export default function MarketPage() {
   const heldMove = held && last != null && held.entry > 0
     ? (last / held.entry - 1) * (held.side === 'long' ? 100 : -100) : null
 
-  /* What rides the order when you press Long or Short. One ATR out and two ATR up: a normal bar's
-     travel, so ordinary noise doesn't clip it, and the same distance the position strip suggests
-     for a stopless position (see useSuggested). Not a recommendation and not a setup — it is the
-     stop the exchange needs to have one, and the dialog prints what it costs before anything is
-     placed. No ATR yet means no stop: a guessed one is worse than none. */
-  const bracket = (s: 'long' | 'short') => {
-    const a = view?.atr ?? null
-    if (last == null) return null
-    const k = s === 'long' ? 1 : -1
-    return {
-      side: s, entry: last,
-      stop: a ? last - k * a : null,
-      target: a ? last + k * a * 2 : null,
-    }
-  }
   // The whole position wears fuchsia — the one hue nothing else on the chart uses (candles are
   // emerald/red, MAs sky/amber, VWAP cyan, sessions rose/indigo/teal), and the one that stays apart
   // from sky for colorblind eyes where fuchsia-500 didn't. Role is carried by weight and dash, and
   // the legend below shows exactly those dashes.
   /* The hand-entered position on this asset is the one that knows its leverage, so it is the one
-     with a liquidation price — the exchange feed's rows deliberately carry no lev (see bitget.ts).
+     with a liquidation price where the feed says none.
      With no exchange row its own levels are drawn too; beside one, only the liq line joins, since
      the feed's entry/stop/target are the trade's real ones. */
   const mine = watches.find((w) => w.asset === current.id && isPosition(w))
@@ -585,10 +544,7 @@ export default function MarketPage() {
   /* Same fuchsia as the position it would become, at half weight and its own dash: a resting order
      is not a level the trade is being measured against, it is the level the trade starts at if
      price comes. */
-  /* Where a level is drawn while it is being moved: the dragged price until the exchange has been
-     told and the feed has caught up with it, and the venue's own the rest of the time. */
-  const at = (which: 'stop' | 'target') =>
-    (drag?.which === which ? drag.price : null) ?? held?.[which] ?? null
+  const at = (which: 'stop' | 'target') => held?.[which] ?? null
   const posLines = [
     // the price is in the label so two orders on the same book are two chips, not one drawn twice
     ...resting.map((o) => ({
@@ -596,8 +552,8 @@ export default function MarketPage() {
     })),
     ...(held ? [
       { label: 'entry', lvl: held.entry, w: 1.5, dash: '6 3', op: 1 },
-      ...(at('stop') != null ? [{ label: 'stop', lvl: at('stop')!, w: 1, dash: '2 3', op: drag?.which === 'stop' ? 1 : 0.6 }] : []),
-      ...(at('target') != null ? [{ label: 'target', lvl: at('target')!, w: 1, dash: '8 4', op: drag?.which === 'target' ? 1 : 0.6 }] : []),
+      ...(at('stop') != null ? [{ label: 'stop', lvl: at('stop')!, w: 1, dash: '2 3', op: 0.6 }] : []),
+      ...(at('target') != null ? [{ label: 'target', lvl: at('target')!, w: 1, dash: '8 4', op: 0.6 }] : []),
     ] : mine ? [
       { label: 'entry', lvl: mine.entry, w: 1.5, dash: '6 3', op: 1 },
       { label: 'stop', lvl: mine.stop, w: 1, dash: '2 3', op: 0.6 },
@@ -641,61 +597,8 @@ export default function MarketPage() {
   const xAt = (i: number) => (n > 1 ? (i / xSpan) * 100 : 0)
   const barW = (100 / xSpan) * 0.6
 
-  /* ---------- the two levels you can take hold of ---------- */
-
-  /** `y` the other way round: where in the frame a pointer is, as a price. */
-  const priceAt = (yPct: number) => hi - (yPct / 100) * (hi - lo)
-  /* The levels a drag may move: the exchange's own, on a venue whose key can write. A hand-entered
-     position's levels are a note about a trade, not the trade — there is nothing at a venue to
-     move. Those are drawn exactly as before; they just cannot be picked up. */
-  const draggable: ('stop' | 'target')[] = held?.venue === 'bitget'
-    ? (['stop', 'target'] as const).filter((k) => at(k) != null)
-    : []
-  /** Which level, if any, a pointer at this height has hold of. A finger is given twice the reach
-   *  of a cursor: the same few pixels that are a comfortable grab with a mouse are a miss on a
-   *  phone, and every miss here is a pan the chart did instead. */
-  const levelAt = (clientY: number, box: DOMRect, touch: boolean) => {
-    const yPct = ((clientY - box.top) / box.height) * 100
-    return draggable.find((k) => Math.abs(y(at(k)!) - yPct) <= (touch ? 5 : 2.5)) ?? null
-  }
-  /* A stop belongs beyond the price and a target short of it — dragged through, each becomes an
-     order the exchange fires the moment it arrives, which is not a level anybody meant to set. So
-     the line stops at the price rather than following the finger past it: what it can't do is
-     visible, which beats a refusal read off a toast after the fact. */
-  const clamp = (which: 'stop' | 'target', p: number) => {
-    if (!held || last == null) return p
-    const below = (held.side === 'long') === (which === 'stop')
-    return below ? Math.min(p, last) : Math.max(p, last)
-  }
-  /* Let go, and the feed still says the old price for up to a minute. The moved line stays drawn
-     until the venue's own row agrees with it — near enough, since the exchange rounds to the
-     contract's own step — and drops the moment it does. */
-  useEffect(() => {
-    if (!drag) return
-    /* The position went — stopped out, taken, closed on the phone. Whatever the chip was offering
-       to move no longer exists, and a "move" button over a book with nothing on it is a press that
-       can only fail. Sent or not, it goes with the trade. */
-    if (!held) { setDrag(null); return }
-    if (!drag.sent) return
-    const now = held[drag.which]
-    if (now != null && Math.abs(now - drag.price) / drag.price < 0.001) setDrag(null)
-  }, [held, drag])
-  // a level belongs to the trade it was dragged on: another asset is another position, or none
-  useEffect(() => { setDrag(null) }, [current.id])
-  const moveLevel = async () => {
-    if (!drag || !held) return
-    setMoving(true)
-    try {
-      await setLevels(held.symbol, held.side, { [drag.which]: drag.price })
-      toast(`${drag.which === 'stop' ? 'Stop' : 'Target'} moved to ${fmt(drag.price)}`)
-      setDrag({ ...drag, sent: true })
-    } catch (e) {
-      // kept where it was dragged to, so the press can be tried again rather than done again
-      toast((e as Error).message)
-    } finally {
-      setMoving(false)
-    }
-  }
+  /* The levels are drawn, never picked up: Stash watches a wallet and holds nothing that could move
+     an order, so a stop or target is changed in Fomo and shows here on the next look. */
 
   /* ---------- what you actually did on this chart ---------- */
 
@@ -786,20 +689,6 @@ export default function MarketPage() {
   const [book, setBook] = useState<(typeof RECORDS)[number]['id']>('mine')
   const goChart = (id: string) => { setAsset(id); setScreen('desk') }
 
-  /* What is free to trade with, so the button can say what the order would cost before the
-     dialog opens with the same number. One small request per asset, Bitget desks only — the same
-     call the dialog makes, made early. Fails quietly: the hint is a courtesy, not the order. */
-  const [avail, setAvail] = useState<number | null>(null)
-  useEffect(() => {
-    setAvail(null)
-    if (feed !== 'bitget') return
-    let on = true
-    deskOf(current.id).then((d) => { if (on) setAvail(d.available) }).catch(() => {})
-    return () => { on = false }
-  }, [asset, feed]) // eslint-disable-line react-hooks/exhaustive-deps
-  const sized = view?.atr && last != null && avail != null ? suggest(last, last - view.atr, avail) : null
-  // the margin times the leverage is the notional, and the stop is one ATR off the entry
-  const risking = sized && view?.atr && last ? (sized.margin * sized.leverage * view.atr) / last : null
 
   /* The desk from the keyboard. Arrows pan, plus and minus zoom, a digit picks a bar size and the
      slash goes to the watchlist's search — the verbs the footer names for the mouse, given keys.
@@ -960,24 +849,10 @@ export default function MarketPage() {
                     page and hands the horizontal one to the pan; a mostly-vertical drag arrives
                     as pointercancel, which just lets go. */}
                 <div
-                  className={cn('absolute inset-0 touch-pan-y',
-                    onLevel ? 'cursor-ns-resize' : 'cursor-crosshair active:cursor-grabbing')}
+                  className="absolute inset-0 cursor-crosshair touch-pan-y active:cursor-grabbing"
                   onPointerDown={(e) => {
                     // capture, so a drag that leaves the box keeps panning instead of stalling
                     e.currentTarget.setPointerCapture(e.pointerId)
-                    /* A level under the pointer takes the drag before the pan does — the whole
-                       gesture, so the chart does not walk sideways while a stop is being placed.
-                       One finger only: a second one is a pinch, and a zoom that also moved a stop
-                       is not a thing anybody meant. */
-                    if (dragging.current) return
-                    const level = pts.current.size ? null
-                      : levelAt(e.clientY, e.currentTarget.getBoundingClientRect(), e.pointerType !== 'mouse')
-                    if (level) {
-                      dragging.current = level
-                      setDrag({ which: level, price: at(level)! })
-                      setHover(null)
-                      return
-                    }
                     pts.current.set(e.pointerId, e.clientX)
                     const span = spanOf()
                     if (span) {
@@ -990,9 +865,6 @@ export default function MarketPage() {
                     if (e.pointerType === 'mouse') setHover(null)
                   }}
                   onPointerUp={(e) => {
-                    /* A released level is not a sent one: `drag` stays exactly where it was let go
-                       and the chip beside it asks for the press that means it. */
-                    if (dragging.current) { dragging.current = null; return }
                     // a finger has no hover, so the crosshair rides on the tap: a press that never
                     // travelled reads the bar under it rather than having panned nowhere. A second
                     // tap on the bar it is already on puts it away — a read-out with no pointer to
@@ -1010,11 +882,6 @@ export default function MarketPage() {
                   onPointerMove={(e) => {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
-                    if (dragging.current) {
-                      const which = dragging.current
-                      setDrag({ which, price: clamp(which, priceAt(((e.clientY - r.top) / r.height) * 100)) })
-                      return
-                    }
                     if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, e.clientX)
                     const span = spanOf()
                     if (pinch.current && span) {
@@ -1032,26 +899,20 @@ export default function MarketPage() {
                       return
                     }
                     if (e.pointerType !== 'mouse') return // touch never hovers; its crosshair is the tap above
-                    const over = levelAt(e.clientY, r, false)
-                    if (over !== onLevel) setOnLevel(over)
                     const f = (e.clientX - r.left) / r.width
                     // clamps in the future strip, so hovering it reads the last bar rather than nothing
                     setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
                   }}
                   onPointerCancel={(e) => {
-                    // a cancelled drag keeps the level where it reached: the chip is still the
-                    // only thing that sends it, so nothing is lost by not throwing the move away
-                    dragging.current = null
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
                     grab.current = null
                   }}
                   onPointerLeave={(e) => {
-                    dragging.current = null
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
                     grab.current = null
-                    if (e.pointerType === 'mouse') { setHover(null); setOnLevel(null) }
+                    if (e.pointerType === 'mouse') setHover(null)
                   }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
@@ -1294,30 +1155,6 @@ export default function MarketPage() {
                   </div>
                 )}
 
-                {/* The level under the drag, and the press that sends it. Beside the line rather
-                    than in a dialog: the number and the chart it means something on have to be
-                    readable at the same time, which is the whole reason for dragging it there. */}
-                {drag && (
-                  <div className="bg-popover text-popover-foreground absolute right-0 z-30 flex -translate-y-1/2 items-center gap-1.5 rounded-md border py-1 pr-1 pl-2 text-[11px] shadow-md"
-                    style={{ top: `${Math.min(94, Math.max(6, y(drag.price)))}%` }}>
-                    <span className="tabular-nums">
-                      {drag.which} <span className="text-muted-foreground">→</span> {fmt(drag.price)}
-                    </span>
-                    {drag.sent ? <span className="text-muted-foreground pr-1">sent</span> : (
-                      <>
-                        <Button size="sm" className="h-5 px-2 text-[11px]" disabled={moving}
-                          onClick={() => void moveLevel()}>
-                          {moving ? <Loader2 className="size-3 animate-spin" /> : 'move'}
-                        </Button>
-                        <Button size="sm" variant="ghost" aria-label="Leave it"
-                          className="text-muted-foreground size-5 px-0" disabled={moving}
-                          onClick={() => setDrag(null)}>
-                          <X className="size-3" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                )}
                 </div>
               </>
             )}
@@ -1448,7 +1285,6 @@ export default function MarketPage() {
                   {phone ? 'drag to pan · pinch to zoom · tap a bar' : 'drag to pan · scroll to zoom'} · {n} bars
                   {/* the one thing nobody would try unprompted: two of the lines on this chart are
                       the live order, and they can be taken hold of */}
-                  {!!draggable.length && ' · drag the stop or target'}
                 </span>
                 {!structure && <>support {fmt(view.support)} · resistance {fmt(view.resistance)}</>}
               </span>
@@ -1465,93 +1301,28 @@ export default function MarketPage() {
                 buttons off the top of the column, on the one page whose point is those buttons. */}
             <div className="flex flex-col gap-3 lg:max-h-[55%] lg:shrink-0 lg:overflow-y-auto">
             <section className="grid gap-2">
-              <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Trade</p>
-              {/* The two buttons this page exists for. Bitget only, and the dialog does the arithmetic and asks
-                  twice before anything reaches a book. Neither is a recommendation.
-                  No ATR, no buttons: with no stop to size against, the dialog's own suggestion
-                  falls back to a fifth of the whole free balance at 1× (see suggest in trade.ts). */}
-              {feed === 'bitget' && last != null ? (view?.atr ? (
-                <>
-                  {/* A pair, tinted the way up and down are everywhere else on this page: a solid
-                      white Long beside a dark red Short read as one button and one warning. */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {/* In the candle pair's own colours, not a fixed green and red: whoever picked Ice
-                        or Mono did so because green and red are two colours their eyes do not tell
-                        apart, and a Long button they cannot tell from Short is the worst place to
-                        forget that. The tone rides in a variable so the hover can deepen it in CSS.
-                        Every state spelled out, because the outline variant brings its own dark fill
-                        and its own hover ink, and either one wins over a tint that only says half. */}
-                    {([['long', 'Long', TrendingUp, hue.up], ['short', 'Short', TrendingDown, hue.down]] as const)
-                      .map(([sd, label, Icon, tone]) => (
-                        <Button key={sd} size="sm" variant="outline"
-                          style={{ '--tone': tone } as React.CSSProperties}
-                          className="h-9 border-[color-mix(in_oklab,var(--tone)_35%,transparent)] bg-[color-mix(in_oklab,var(--tone)_12%,transparent)] text-(--tone) hover:bg-[color-mix(in_oklab,var(--tone)_22%,transparent)] hover:text-(--tone) dark:bg-[color-mix(in_oklab,var(--tone)_12%,transparent)] dark:hover:bg-[color-mix(in_oklab,var(--tone)_22%,transparent)] dark:hover:text-(--tone)"
-                          onClick={() => setTrading(bracket(sd))}>
-                          <Icon /> {label} {coin}
-                        </Button>
-                      ))}
-                  </div>
-                  {/* The four numbers the order rides on. They were four equal grey cells, which is
-                      the shape of a list and not of a trade: the two that describe the bracket wear
-                      the same pair as the buttons over them — losing side, winning side — and the
-                      one that says what it costs you is the only one at full weight. Their names
-                      shrink to the label size the rest of this column uses, so the figures lead. */}
-                  <Hint label="Stop one ATR out, target two ATR up. Nothing is placed until the dialog's second press.">
-                    <dl className="bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2 rounded-md px-3 py-2 tabular-nums sm:grid-cols-4 lg:grid-cols-2">
-                      {([
-                        ['Stop', <>{fmt(view.atr)} <span className="text-muted-foreground text-xs">away</span></>, hue.down],
-                        ['Target', <>{fmt(view.atr * 2)} <span className="text-muted-foreground text-xs">away</span></>, hue.up],
-                        ...(sized && sized.margin > 0 && risking != null ? [
-                          ['Opens at', <>{usdt(sized.margin)} <span className="text-muted-foreground text-xs">· {sized.leverage}×</span></>, null],
-                          /* What the stop costs, and — the question a bare 0.13 USDT never answers —
-                             how much of the desk that is. The share is the number position sizing
-                             is actually about, and it was one division away the whole time. */
-                          ['Risking', <>{usdt(risking)}{avail ? <span className="text-muted-foreground text-xs"> · {((risking / avail) * 100).toFixed(1)}% of free</span> : null}</>, null],
-                        ] as const : []),
-                      ] as const).map(([name, value, tone]) => (
-                        <div key={name}>
-                          <dt className="text-muted-foreground text-[10px] tracking-wider uppercase">{name}</dt>
-                          <dd className="text-sm" style={tone ? { color: tone } : undefined}>{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </Hint>
-                </>
-              ) : (
+              <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">On the book</p>
+              {/* Stash watches; Fomo trades. Nothing here holds anything that could place or move an
+                  order — a wallet address is all it has — so this is what is already committed on
+                  this symbol, and where to go to change it. */}
+              {held ? (
                 <p className="text-muted-foreground text-xs">
-                  No ATR off these bars yet, so there is no stop to size a trade against. Try a bigger
-                  bar size, or an asset with more history on this feed.
+                  You are {held.side} {held.size} {coin} from {fmt(held.entry)}
+                  {heldMove != null && <> ({heldMove >= 0 ? '+' : ''}{heldMove.toFixed(2)}%)</>}.
                 </p>
-              )) : feed !== undefined ? (
-                /* why there are no buttons, rather than a section that quietly ends */
+              ) : feed === null ? (
                 <p className="text-muted-foreground text-xs">
-                  Nothing here places an order. {feed === 'apex'
-                    ? 'ApeX Omni orders are signed by your wallet, not an API key — the readings are the same, the buttons are only on a Bitget desk.'
-                    : 'Add a Bitget key in Settings and the Long and Short buttons appear here.'}
+                  Add your Fomo wallet in Settings and what you hold on Hyperliquid shows here.
                 </p>
+              ) : feed !== undefined ? (
+                <p className="text-muted-foreground text-xs">Nothing open on {coin}. Trades are placed in Fomo.</p>
               ) : null}
-              {/* What is already committed on this symbol, so neither button is pressed twice for one
-                  trade. Both states, because an order resting is not a position on. */}
-              {held && (
-                <p className="text-muted-foreground text-xs">
-                  You are already {held.side} {held.size} {coin} from {fmt(held.entry)}
-                  {heldMove != null && <> ({heldMove >= 0 ? '+' : ''}{heldMove.toFixed(2)}%)</>}
-                  {' '}— {held.side === 'long' ? 'Long' : 'Short'} adds to that, and{' '}
-                  {held.side === 'long' ? 'Short' : 'Long'} is the other way.
-                </p>
-              )}
               {resting.filter((o) => o.opens).map((o) => (
                 <p key={o.id} className="text-muted-foreground text-xs">
                   Your {o.side} for {o.size} {coin} is resting at {fmt(o.price)}, not filled.
                 </p>
               ))}
             </section>
-            {trading && (
-              <TradeDialog
-                open onOpenChange={(v) => { if (!v) setTrading(null) }}
-                symbol={current.id} coin={coin} {...trading}
-              />
-            )}
             {/* the hand-entered position on this asset, if any, beside whatever the exchange reports */}
             <Position asset={current.id} price={last ?? null} />
             {/* what the exchange says you hold, account-wide — the one block here that is fact
@@ -1751,10 +1522,10 @@ function Watchlist({ current, onPick, inputRef }: {
   const hit = (a: Asset) => !q.trim() || `${a.label} ${a.id}`.toLowerCase().includes(q.trim().toLowerCase())
   /* The minute's poll brings the day's bars; the socket moves the price, the move and the
      sparkline's last point with every trade in between. */
-  const live = useLiveMarks(feed === undefined ? [] : ASSETS.map((a) => ({ venue: 'bitget', symbol: a.id })), true)
+  const live = useLiveMarks(feed === undefined ? [] : ASSETS.map((a) => ({ venue: 'hyperliquid', symbol: a.id })), true)
   // the rows in the picker's own order and groups, with the prices hung on them where they arrived
   const priced = new Map(rows.map((r) => {
-    const px = live[`bitget:${r.a.id}`]
+    const px = live[`hyperliquid:${r.a.id}`]
     return [r.a.id, px == null ? r
       : { ...r, price: px, change: ((px - r.open) / r.open) * 100, closes: [...r.closes.slice(0, -1), px] }]
   }))
@@ -1836,7 +1607,7 @@ function Watchlist({ current, onPick, inputRef }: {
       </div>
       {/* the venue only once it is known */}
       <p className="text-muted-foreground hidden px-4 pb-2 text-[10px] lg:block">
-        Last price and the 24h move{feed !== undefined && <>, on Bitget</>}
+        Last price and the 24h move{feed !== undefined && <>, on Hyperliquid</>}
       </p>
     </div>
   )
@@ -2110,15 +1881,6 @@ function fileClosed(next: ExchangePosition[], history: ClosedRow[] = []) {
 
 /** What the server's sweeper did to a setup, as the app reads it back. */
 
-const oid = (o: RestingOrder) => `${o.venue ?? ''}-${o.id}`
-/* Orders cancelled from this session, held until the poll stops sending them — the venue has taken
-   them off the book and the feed is up to a minute behind. Module-wide rather than a card's own
-   state because the card and the chart poll separately, and one of them cancelling must not leave
-   the other drawing a line at a price nothing rests at any more. Keyed with the venue, like the
-   rows are: two exchanges number their own orders and nothing says they cannot collide.
-   ponytail: never pruned. It holds a short string per cancel anyone makes in one page load. */
-const cancelled = new Set<string>()
-
 /** A public socket that stays up: subscribes on every (re)connect, pings to stay alive, and backs
  *  off to 30s between retries. Returns the way to close it for good. */
 function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on: (d: any) => void) {
@@ -2130,7 +1892,7 @@ function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on:
     let s: WebSocket
     try { s = ws = new WebSocket(url) } catch { return }
     s.onopen = () => { wait = 1000; subscribe(s); beat = window.setInterval(() => s.send(ping), 20_000) }
-    // bitget answers its ping with a bare "pong", which is not JSON and not news
+    // a pong is not news, and anything that will not parse is not either
     s.onmessage = (e) => { try { on(JSON.parse(String(e.data))) } catch { /* pong */ } }
     s.onclose = () => {
       window.clearInterval(beat)
@@ -2142,21 +1904,24 @@ function sock(url: string, subscribe: (ws: WebSocket) => void, ping: string, on:
 }
 
 /**
- * The mark price of each held symbol, straight off the venue's public socket — the same price each
- * venue figures its P&L from (Bitget's markPrice), so a repriced row agrees with the exchange
- * rather than drifting by the spread. Keyed `venue:SYMBOL`.
- * `last` asks for the last trade instead, which is what a candle closes on.
- * ponytail: one socket per venue per hook instance, and the desk mounts several (positions, chart,
- * watchlist); share one store if a venue ever complains about connections.
+ * The price of each symbol asked for, straight off Hyperliquid's public socket: every mid on the
+ * book in one subscription, kept to the symbols asked for. Keyed `venue:SYMBOL`.
+ * `last` is kept for the callers that ask for it; the venue's mid is what both read now — between
+ * the bid and the ask, which is where the mark and the last trade both sit within a tick.
+ * ponytail: one socket per hook instance, and the desk mounts several (positions, chart,
+ * watchlist); share one store if the venue ever complains about connections.
  */
 function useLiveMarks(rows: { venue?: string, symbol: string }[], last = false) {
   const [marks, setMarks] = useState<Record<string, number>>({})
   const key = [...new Set(rows.map((r) => `${r.venue}:${r.symbol}`))].sort().join(',')
   useEffect(() => {
     const on = (k: string) => key.split(',').filter((x) => x.startsWith(`${k}:`)).map((x) => x.slice(k.length + 1))
-    const bg = on('bitget')
-    /* Bitget pushes several times a second and each render here is the whole market page, chart
-       and all — so ticks gather and land twice a second, which no eye reading a P&L can outrun. */
+    const hl = on('hyperliquid')
+    // the venue's coin for each symbol asked for, so a push of every mid is read for these only
+    const want = new Map(hl.map((s) => [hlCoin(s), s]))
+    /* The venue pushes every mid several times a second and each render here is the whole market
+       page, chart and all — so ticks gather and land twice a second, which no eye reading a P&L can
+       outrun. */
     let due: Record<string, number> = {}
     const put = (k: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) due[k] = n }
     const flush = window.setInterval(() => {
@@ -2166,11 +1931,16 @@ function useLiveMarks(rows: { venue?: string, symbol: string }[], last = false) 
       setMarks((m) => ({ ...m, ...d }))
     }, 500)
     const close = [
-      bg.length && sock('wss://ws.bitget.com/v2/ws/public',
-        (ws) => ws.send(JSON.stringify({ op: 'subscribe',
-          args: bg.map((s) => ({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s })) })),
-        'ping',
-        (d) => d.arg?.channel === 'ticker' && d.data?.forEach((t: any) => put(`bitget:${t.instId}`, last ? t.lastPr : t.markPrice))),
+      hl.length && sock('wss://api.hyperliquid.xyz/ws',
+        (ws) => ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'allMids' } })),
+        JSON.stringify({ method: 'ping' }),
+        (d) => {
+          if (d?.channel !== 'allMids') return
+          for (const [coin, px] of Object.entries(d.data?.mids ?? {})) {
+            const s = want.get(coin)
+            if (s) put(`hyperliquid:${s}`, px)
+          }
+        }),
     ]
     return () => { window.clearInterval(flush); close.forEach((c) => c && c()) }
   }, [key, last])
@@ -2232,7 +2002,7 @@ export function useExchangePositions() {
       pnl: p.pnl != null && qty != null && p.mark ? round(p.pnl + (l - p.mark) * qty * sign) : p.pnl,
       value: qty != null ? round(qty * l) : p.value }
   }), [feed.rows, live])
-  return { ...feed, rows, orders: feed.orders.filter((o) => !cancelled.has(oid(o))), loading }
+  return { ...feed, rows, loading }
 }
 
 /** How many tiles the last look held — what to keep room for while this one is still being asked.
@@ -2407,7 +2177,7 @@ function LevelBar({ bar, up }: { bar: NonNullable<ReturnType<typeof levelBar>>; 
  * the number itself. Everything a row has no answer for is simply left out.
  *
  * ponytail: pct is computed here rather than taken from the venue — same formula as the exchange
- * adapter (`bitget.ts`) rounds, and one copy of it is one too many.
+ * adapter (`hyperliquid.ts`) rounds, and one copy of it is one too many.
  */
 function PositionTile({ side, symbol, onPick, venue, lev, from, now, size, pnl, value,
   stop, target, liq, funding, fee, openedAt, meta = [] }: {
@@ -2610,40 +2380,6 @@ function PositionsPlaceholder() {
 }
 
 /**
- * Take a resting order back off the book from the card it is printed on. Two presses rather than a
- * dialog — the same arming the trade dialog uses, for the same reason: it is one click beside a
- * number somebody is reading, and money is committed either way it goes.
- *
- * Bitget only: a row from anywhere else reads out and nothing here can touch it.
- */
-function CancelOrder({ order, onGone }: { order: RestingOrder, onGone: () => void }) {
-  const [armed, setArmed] = useState(false)
-  const [busy, setBusy] = useState(false)
-  if (order.venue !== 'bitget') return null
-  const go = async () => {
-    if (!armed) return setArmed(true)
-    setBusy(true)
-    try {
-      await cancelOrder(order.symbol, order.id)
-      cancelled.add(oid(order))
-      toast(`${order.side === 'buy' ? 'Buy' : 'Sell'} ${order.size} ${order.symbol} cancelled`)
-      onGone()
-    } catch (e) {
-      setArmed(false)
-      toast((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <Button variant="ghost" size="sm" disabled={busy} onClick={go} onBlur={() => setArmed(false)}
-      className="text-muted-foreground hover:text-destructive ml-auto h-5 px-1.5 text-[11px]">
-      {busy ? <Loader2 className="size-3 animate-spin" /> : armed ? 'sure?' : 'cancel'}
-    </Button>
-  )
-}
-
-/**
  * What the exchanges say is actually open — every venue with a key saved (Settings → Markets),
  * proxied through the server so the keys stay there. Renders nothing at all unless an exchange
  * reports an open position or an order still waiting on one: for everyone else this component is
@@ -2656,9 +2392,6 @@ function CancelOrder({ order, onGone }: { order: RestingOrder, onGone: () => voi
  */
 export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void }) {
   const { rows, orders, equity, loading } = useExchangePositions()
-  // a cancel writes to `cancelled` above, which nothing subscribes to — this is the nudge that
-  // takes the row off the card now rather than on the next poll
-  const [, redraw] = useState(0)
   // levels for the rows that have none — the card's answer to "I opened it and set nothing"
   const atrs = useSuggested(rows)
   // the hand-entered positions join the sum below — they are money on the table too, and the desk
@@ -2795,7 +2528,6 @@ export function ExchangePositions({ onOpen }: { onOpen?: (asset: string) => void
                   {!o.opens && ' · closing'}
                   {!o.live && ' · part-filled'}
                 </span>
-                <CancelOrder order={o} onGone={() => redraw((n) => n + 1)} />
               </p>
             ))}
           </div>

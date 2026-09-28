@@ -1,33 +1,23 @@
-// Live candles from Binance's public API (no key, no signup) + the handful of signals every TA
+// Live candles from Hyperliquid's public feed (no key, no signup) + the handful of signals every TA
 // guide repeats: moving-average crosses, RSI extremes, horizontal support/resistance, and which
 // way the trend leans. No chart-shape recognition (head-and-shoulders and friends) — that's
 // guesswork dressed as maths.
 //
-// Gold is Bitget's XAUUSDT perpetual, keyless off the same public feed the positions route signs
-// against. It used to be Binance's XAUT (Tether Gold), which is a fine proxy for spot and the wrong
-// chart to trade off: the perp is the contract the orders are actually placed on, and it prints its
-// own price — a few dollars either side of the token, which is a quarter of a stop. A chart you
-// cannot put an order on is a chart that flatters every backtest on it.
-//
-// It costs history: the contract listed in May 2026, so the daily has about 90 bars and the weekly
-// thirteen — the 200-MA on those two timeframes has nothing to be computed from and simply doesn't
-// draw. The intraday timeframes, which is where the trading rule works, are full.
-//
-// Binance lists no liquid silver token, so silver sits this one out.
+// Gold is PAXG on Hyperliquid, a token that is one ounce: the main book lists no XAU contract, and
+// this is the gold its perps trade.
 
 /** `v` is volume — optional, since not every feed sends it and every signal that uses it can sit out. */
 export type Candle = { t: number; o: number; h: number; l: number; c: number; v?: number }
 
-/* No Binance and no spot. Every desk here trades perpetuals on Bitget, so that is the one book
-   the app reads — a level is only worth what it is on the book the order rests on, and Binance's
-   spot price was not it.
+/* No spot. Every desk here trades perpetuals on Hyperliquid — Fomo's perps rest there — so that is
+   the one book the app reads: a level is only worth what it is on the book the order rests on.
    `twelvedata` used to stay in the union with no asset on it, its fetcher parked so that putting
    the stocks back would be a list again rather than a feed again. What it actually parked was a
    whole second feed nothing could reach: a key in the synced document, a key prompt, an
    is-the-US-open clock, two slower poll rates, a filter the sweep applied to nothing, and a stock
    bell that could never fire. Every asset here is a USDT perpetual. Putting stocks back is a feed
    again, and that is the honest price of it. */
-export type Source = 'bitget'
+export type Source = 'hyperliquid'
 export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
 
 /* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
@@ -37,152 +27,82 @@ export type Asset = { id: string; label: string; source: Source; group: string; 
    nowhere to be found. */
 const logo = (name: string) => `/logos/${name}.png`
 
-/* Bitget's USDT-margined perpetuals, all of them, because that feed is keyless, CORS-open and the
-   book the desks here actually trade. Every row is a USDT perpetual, gold included: one kind of
-   instrument, one quote currency.
+/* Hyperliquid's perpetuals, because that feed is keyless and the book the desks here actually
+   trade. The ids stay the USDT symbols every stored watch and record row already names; hlCoin
+   turns one into what the venue calls it.
    Stocks and ETFs are out for now: this desk is a futures desk, the stock feed needed a key, a
    market calendar and half the special cases in this file, and nobody was trading them. */
 export const ASSETS: Asset[] = [
-  // the perpetual, not the token: the id is the symbol Bitget's own order book and position feed
-  // use, so a trade on it lands on this chart with no mapping in between
-  { id: 'XAUUSDT', label: 'Gold', source: 'bitget', group: 'Metals', logo: logo('xaut') },
-  { id: 'BTCUSDT', label: 'Bitcoin', source: 'bitget', group: 'Crypto', logo: logo('btc') },
-  { id: 'ETHUSDT', label: 'Ethereum', source: 'bitget', group: 'Crypto', logo: logo('eth') },
-  { id: 'SOLUSDT', label: 'Solana', source: 'bitget', group: 'Crypto', logo: logo('sol') },
-  { id: 'XRPUSDT', label: 'XRP', source: 'bitget', group: 'Crypto', logo: logo('xrp') },
-  { id: 'DOGEUSDT', label: 'Dogecoin', source: 'bitget', group: 'Crypto', logo: logo('doge') },
-  { id: 'ADAUSDT', label: 'Cardano', source: 'bitget', group: 'Crypto', logo: logo('ada') },
-  { id: 'AVAXUSDT', label: 'Avalanche', source: 'bitget', group: 'Crypto', logo: logo('avax') },
-  { id: 'LINKUSDT', label: 'Chainlink', source: 'bitget', group: 'Crypto', logo: logo('link') },
-  { id: 'ALGOUSDT', label: 'Algorand', source: 'bitget', group: 'Crypto', logo: logo('algo') },
-  { id: 'HBARUSDT', label: 'HBAR', source: 'bitget', group: 'Crypto', logo: logo('hbar') },
+  { id: 'XAUUSDT', label: 'Gold', source: 'hyperliquid', group: 'Metals', logo: logo('xaut') },
+  { id: 'BTCUSDT', label: 'Bitcoin', source: 'hyperliquid', group: 'Crypto', logo: logo('btc') },
+  { id: 'ETHUSDT', label: 'Ethereum', source: 'hyperliquid', group: 'Crypto', logo: logo('eth') },
+  { id: 'SOLUSDT', label: 'Solana', source: 'hyperliquid', group: 'Crypto', logo: logo('sol') },
+  { id: 'XRPUSDT', label: 'XRP', source: 'hyperliquid', group: 'Crypto', logo: logo('xrp') },
+  { id: 'DOGEUSDT', label: 'Dogecoin', source: 'hyperliquid', group: 'Crypto', logo: logo('doge') },
+  { id: 'ADAUSDT', label: 'Cardano', source: 'hyperliquid', group: 'Crypto', logo: logo('ada') },
+  { id: 'AVAXUSDT', label: 'Avalanche', source: 'hyperliquid', group: 'Crypto', logo: logo('avax') },
+  { id: 'LINKUSDT', label: 'Chainlink', source: 'hyperliquid', group: 'Crypto', logo: logo('link') },
+  { id: 'ALGOUSDT', label: 'Algorand', source: 'hyperliquid', group: 'Crypto', logo: logo('algo') },
+  { id: 'HBARUSDT', label: 'HBAR', source: 'hyperliquid', group: 'Crypto', logo: logo('hbar') },
 ]
 
 export const INTERVALS = ['5m', '15m', '1h', '4h', '1d', '1w'] as const
 export type Interval = (typeof INTERVALS)[number]
 
-// and Bitget capitalises everything from the hour up
-const BG_INTERVAL: Record<Interval, string> = { '5m': '5m', '15m': '15m', '1h': '1H', '4h': '4H', '1d': '1D', '1w': '1W' }
+/** The venue's name for an asset: BTCUSDT is BTC. Gold is the one that is not a rename — the main
+ *  book lists no XAU, and PAXG, a token that is one ounce, is the gold it trades. */
+export const hlCoin = (id: string) => (id === 'XAUUSDT' ? 'PAXG' : id.replace(/USDT$/, ''))
 
-/** The exchange whose key the reader has set, where the app knows of one. Not a preference and not
- *  a setting: it is where their orders actually rest, which is the only reason a feed should move. */
-export type Venue = 'bitget' | 'apex' | null
+/** Whether the reader watches a wallet the venue answers for. Not a preference and not a setting:
+ *  it is where their orders actually rest. */
+export type Venue = 'hyperliquid' | null
 
-/** Routes to the feed. Returns candles oldest → newest.
- *  `bars` is how many are wanted: a chart takes the venue's ceiling, the movers sweep takes a day
- *  of them — asking for a thousand and keeping the last twenty-five is fifty times the bytes, once
- *  a minute, per asset. `_venue` is the reader's key, kept in the signature for the day a second
- *  book comes back. */
+/** Where bars and prices come from. The browser asks this app's own relay (/api/hl/…), which is a
+ *  GET the service worker can keep for offline and one cached upstream call however many tabs ask;
+ *  the server installs the venue itself, through its rate budget — see server/hyperliquid.ts. */
+export type Feed = {
+  candles: (id: string, interval: Interval, bars: number) => Promise<Candle[]>
+  prices: (ids: string[]) => Promise<Record<string, number>>
+}
+let feed: Feed = {
+  candles: async (id, interval, bars) => {
+    const r = await fetch(`/api/hl/candles?coin=${encodeURIComponent(hlCoin(id))}&interval=${interval}&bars=${bars}`)
+    const j = await r.json()
+    if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || 'No data for this symbol')
+    return j as Candle[]
+  },
+  prices: async (ids) => {
+    const m = await fetch('/api/hl/mids').then((r) => r.json()) as Record<string, number>
+    const out: Record<string, number> = {}
+    for (const id of ids) { const v = Number(m?.[hlCoin(id)]); if (isFinite(v) && v > 0) out[id] = v }
+    return out
+  },
+}
+export const setFeed = (f: Feed) => { feed = f }
+
+/** Candles, oldest → newest. `bars` is how many are wanted: a chart takes the window, the movers
+ *  sweep takes a day of them. `_venue` stays in the signature for the day a second book comes back. */
 export function fetchCandles(
   asset: Asset, interval: Interval, _venue: Venue = null, bars = BARS,
 ): Promise<Candle[]> {
-  return fetchBitget(asset.id, interval, bars)
+  return feed.candles(asset.id, interval, bars)
 }
 
-/** What Bitget's recent-candles endpoint tops out at for days, measured against it rather than
- *  documented by it: ask for a thousand and ninety come back. fetchBitget pages history-candles
- *  for the rest — see DEEP. */
-export const BG_DAILY_MAX = 90
-
-/** The window a chart reads, and every venue's own ceiling for one call. */
+/** The window a chart reads — three years of days, which is room for a 200-MA and its crosses. */
 export const BARS = 1000
 
 /**
- * Last price only, for the ids given — what the alert watcher polls, so it has to stay cheap beside
- * fetchCandles (one ticker call for all the Binance ids, one for all the stocks). A feed that fails
- * or an id that isn't listed is simply absent from the result: a missing price fires no alert, and
- * that is the right way round for something that would otherwise nag you about a number it guessed.
+ * Last price only, for the ids given — what the alert watcher polls, one call for all of them. A
+ * feed that fails or an id that isn't listed is simply absent from the result: a missing price
+ * fires no alert, and that is the right way round for something that would otherwise nag you about
+ * a number it guessed.
  */
 export async function fetchPrices(
   ids: string[], _venue: Venue = null,
 ): Promise<Record<string, number>> {
-  const bg = ids.filter((id) => ASSETS.some((a) => a.id === id))
-  const out: Record<string, number> = {}
-  const put = (id: string, v: unknown) => { const n = Number(v); if (isFinite(n) && n > 0) out[id] = n }
-
-  const jobs: Promise<void>[] = []
-  /* One call per symbol here rather than one for the lot: Bitget's batch ticker is every contract
-     it lists, a couple of hundred KB to be told about gold. The desk has one symbol on this feed. */
-  for (const id of bg) jobs.push(
-    fetch(`https://api.bitget.com/api/v2/mix/market/ticker?symbol=${id}&productType=USDT-FUTURES`)
-      .then((r) => r.json())
-      .then((j: { data?: { lastPr?: string }[] }) => put(id, j?.data?.[0]?.lastPr)),
-  )
-  await Promise.all(jobs.map((p) => p.catch(() => {})))
-  return out
-}
-
-/* The stocks' last hour lived here — Twelve Data's hourly bars parsed into the same Hour reading
-   the crypto sweep produces, gated on a US-session clock so a poll against a shut market did not
-   spend the free tier's 800 daily credits being told a closing price. It fed a bell for assets the
-   list no longer holds. */
-
-/** How deep the slow intervals are paged back through Bitget's history endpoint. The recent one
- *  answers ninety days of anything — 90 daily bars, 13 weekly — which a 200-MA on days and a MACD
- *  on weeks cannot warm up on. Enough to warm them with room for the crosses behind, and no more:
- *  each page is a call, the server's scan asks for every mover at once, and the market endpoints
- *  are rate-limited by IP. */
-const DEEP: Partial<Record<Interval, number>> = { '1d': 300, '1w': 60 }
-/** A ceiling on the pages, so an endpoint answering the same page forever cannot spin. */
-const MAX_PAGES = 8
-
-/** Bitget's USDT-margined futures, keyless and CORS-open like Binance's. A thousand bars is the
- *  endpoint's ceiling and the contract's history may be shorter than that — a symbol listed this
- *  year simply has fewer, which the callers already handle: an MA with no window returns null.
- *  The daily and weekly reads are topped up off history-candles, walked backwards from the oldest
- *  bar in hand — see DEEP. A page that fails or comes back empty ends the walk with whatever is
- *  already there: fewer bars is a `warmup`, which is what the read said before any of this. */
-async function fetchBitget(symbol: string, interval: Interval, bars = BARS): Promise<Candle[]> {
-  const q = `symbol=${symbol}&productType=USDT-FUTURES&granularity=${BG_INTERVAL[interval]}`
-  let out = await bitgetPage(`https://api.bitget.com/api/v2/mix/market/candles?${q}&limit=${bars}`)
-  const want = Math.min(bars, DEEP[interval] ?? 0)
-  for (let n = 0; n < MAX_PAGES && out.length && out.length < want; n++) {
-    const oldest = out[0].t
-    const older = await historyPage(
-      `https://api.bitget.com/api/v2/mix/market/history-candles?${q}&endTime=${oldest - 1}&limit=200`,
-    ).then((c) => c.filter((k) => k.t < oldest)).catch(() => [] as Candle[])
-    if (!older.length) break
-    out = [...older, ...out]
-  }
-  return out.slice(-bars)
-}
-
-/* A history page is bars that have closed, so the same page is the same answer until the window
-   in front of it moves — once a day on daily bars, once a week on weekly. Kept, then, rather than
-   asked again on every chart load and every pass of the Scan, which reads every asset at once. And
-   no more than a few in flight: the Scan fanning out eleven assets' pages together is exactly the
-   burst Bitget's per-IP limit answers with a 429, which here reads as `warmup`. */
-const HISTORY_TTL = 6 * 3600_000
-const HISTORY_KEEP = 200
-const HISTORY_AT_ONCE = 4
-const history = new Map<string, { at: number; bars: Promise<Candle[]> }>()
-let inFlight = 0
-const waiting: (() => void)[] = []
-
-function historyPage(url: string): Promise<Candle[]> {
-  const hit = history.get(url)
-  if (hit && Date.now() - hit.at < HISTORY_TTL) return hit.bars
-  const bars = (async () => {
-    if (inFlight >= HISTORY_AT_ONCE) await new Promise<void>((go) => waiting.push(go))
-    inFlight++
-    try { return await bitgetPage(url) } finally { inFlight--; waiting.shift()?.() }
-  })()
-  // only an answer is kept: a failed page is asked again next time rather than remembered as none
-  bars.catch(() => history.delete(url))
-  if (history.size >= HISTORY_KEEP) history.clear()
-  history.set(url, { at: Date.now(), bars })
-  return bars
-}
-
-/** One call to either candle endpoint. Both answer in the same rows. */
-async function bitgetPage(url: string): Promise<Candle[]> {
-  const j = await fetch(url).then((r) => r.json())
-  // the venue reports its own errors in the body, with its success code on the good ones
-  if (j?.code !== '00000' || !Array.isArray(j.data)) throw new Error(j?.msg || 'No data for this symbol')
-  // [openTime, open, high, low, close, baseVolume, quoteVolume] — sorted here rather than trusted,
-  // since two pages are stitched end to end
-  return j.data.map((k: string[]) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }))
-    .sort((a: Candle, b: Candle) => a.t - b.t)
+  const listed = ids.filter((id) => ASSETS.some((a) => a.id === id))
+  if (!listed.length) return {}
+  return feed.prices(listed).catch(() => ({}))
 }
 
 /** One asset's last day of hourly bars — what both movers sweeps and the Overview tiles are built
@@ -398,15 +318,15 @@ export const priceDigits = (ref: number) => {
 }
 
 /** Locale-formatted price at the precision `ref` deserves. `ref` defaults to the value itself. */
-/** An exchange row's symbol into the id the rest of the app charts in. Bitget rows arrive
- *  already speaking BTCUSDT; only a coin-margined BTCUSD needs the quote spelled out. */
+/** An exchange row's symbol into the id the rest of the app charts in. The venue module already
+ *  hands rows over as BTCUSDT; only a coin-margined BTCUSD needs the quote spelled out. */
 export const assetOf = (symbol: string) => symbol.replace(/USD$/, 'USDT')
 
 /** The venue a position row came from, as a person spells it. An id the desk has never heard of
  *  reads back as itself rather than as some venue it isn't — which is what a default did when
  *  Kraken was one, and what made a stale row silently claim the wrong exchange. */
 // MEXC is off the desk, but trades already filed under it still carry its name
-export const venueName = (v?: string) => ({ bitget: 'Bitget', apex: 'ApeX', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
+export const venueName = (v?: string) => ({ hyperliquid: 'Hyperliquid', bitget: 'Bitget', apex: 'ApeX', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 
 export const fmtPrice = (n: number, ref = n) => {
   const d = priceDigits(ref)
@@ -1598,7 +1518,7 @@ export function strategyPlan(h: Horizon, i: {
     /* Both averages, not just the entry one. The slow MA is what the trend card votes on and what
        the MA cross is measured against, so a read taken before it has warmed up is not a cautious
        version of this rule — it is a different one, decided by whichever cards happened to have
-       enough bars. That is not hypothetical: Bitget returns 13 weekly candles, so every 1w read ran
+       enough bars. That is not hypothetical: Bitget used to return 13 weekly candles, so every 1w read ran
        with no 21-MA, no MACD (it wants 35), no higher timeframe above it and — since sessionVwap
        has no session inside a weekly bar — no VWAP gate either. Four of the rule's five inputs
        missing, and it still filed shorts, because `dir` only ever needed a majority of whatever
@@ -2063,7 +1983,7 @@ export const HORIZONS = {
        entry-day stop, which is the rule they were filed under. Two rules, two names, one record. */
     strategy: 'Regime hold',
     rule: 'Long only. Own it at market while price is above the 200-MA, out on a daily close back under. No pull-back to wait for, no target, and nothing takes you out intraday. The wide high is a trim if you want one.',
-    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget answers only 90 daily bars at a time, so the daily read pages back through its history to warm the 200-MA; where that history runs short, it reads warmup.',
+    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. The daily read is Hyperliquid’s own bars, a thousand deep; a contract with less history than the 200-MA needs reads warmup.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
@@ -2150,10 +2070,8 @@ export const FILES: Record<Horizon, boolean> = { long: true, short: false }
  * different rule wearing its name, and it is where the desk's one −1.39R accumulation trade
  * came from.
  *
- * Worth knowing what this refuses: Bitget's recent endpoint answers 90 daily bars, and a 200-MA
- * cannot exist on those. fetchBitget pages history-candles back for more (see DEEP). An earlier
- * note here said paging found nothing more; if that turns out to hold, the card says so through
- * `warmup` instead of quietly reading a faster chart.
+ * Worth knowing what this refuses: a contract with fewer than two hundred days of history has no
+ * 200-MA, and the card says so through `warmup` instead of quietly reading a faster chart.
  */
 export const readInterval = (h: Horizon, chosen: Interval): Interval =>
   h === 'long' ? HORIZONS.long.interval : chosen
@@ -2294,7 +2212,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      +0.143R vs +0.122R on 600 bars of 1h, +0.111R vs +0.071R on 900, +0.064R vs +0.048R on 500 bars
      of 4h — and −0.091R vs −0.069R on 300 bars of 4h, the shortest window and the one that
      disagrees. Per asset the voting version wins 5 to 7 of the 9 on the three that agree. Daily is
-     missing from the run: the daily feed is paged 300 bars deep, which cannot fill the window.
+     missing from the run.
      That is a weak positive, and it is written down as one — three windows out of four, deltas of
      two to four hundredths of an R, in-sample and gross, which is the same standing every other
      number in this file has. It is a better showing than the plain gap card managed (it flipped

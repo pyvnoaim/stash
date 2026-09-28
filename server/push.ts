@@ -35,9 +35,8 @@ import {
   SESSIONS, type Candle, type Interval,
 } from '../src/lib/market.ts'
 /* The one venue with a book this process can read. Everything else here is a public feed served
-   the same to everyone; this is one account's own orders, off the key it stored. */
-import { pending as bitgetPending, positions as bitgetPositions, type Order } from './bitget.ts'
-import { pending as apexPending, positions as apexPositions } from './apex.ts'
+   the same to everyone; this is one account's own orders, off the wallets it watches. */
+import { pending as hlPending, positions as hlPositions, type Order } from './hyperliquid.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -311,7 +310,7 @@ export const tag = (venue: string, orders: Order[]): Order[] =>
  * say which. The position behind it is what says: an order gone while the side it would open grew
  * is a fill; gone with nothing behind it is a cancel, which is nearly always one you made yourself
  * and not worth a phone going off. That size test is also what carries the one-way-mode accounts,
- * where the venue calls every order an opening one (see shapeOrders in bitget.ts) — a close that
+ * where the venue calls every order an opening one (one-way mode leaves `opens` a guess) — a close that
  * fills shrinks the side rather than growing it, and says nothing here.
  *
  * The order's own price, not the position's entry: a resting limit fills at its price or better,
@@ -368,7 +367,7 @@ export function createPush(db: DatabaseSync) {
     seen: db.prepare('update pushes set seen = ? where endpoint = ?'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
     tzOf: db.prepare('select tz from pushes where user = ? limit 1'),
-    keys: db.prepare('select bitget, apex from users where id = ?'),
+    keys: db.prepare("select address from wallets where user = ? and chain = 'evm'"),
   }
 
   /* One keypair for this server, kept because the browsers tie a subscription to the key that
@@ -505,6 +504,7 @@ export function createPush(db: DatabaseSync) {
      that change the answer, and emptied whenever the bars underneath it move. */
   let scanned = new Map<string, Alert[]>()
 
+  let scanning: Promise<void> | null = null
   async function refreshScan(at = Date.now()) {
     if (scan && at - scan.at < SCAN_EVERY) return
     // scanBars swallows a failed interval into an empty array, so a bad pass degrades rather than
@@ -602,34 +602,14 @@ export function createPush(db: DatabaseSync) {
    *  woken slowly still finds it, short enough that it isn't news at lunchtime. */
   const FILL_FOR = 30 * 60_000
 
-  /** Whichever venues this account stored a key for, each as the two calls a look takes — the same
-   *  stored blobs and the same pair of readers /api/positions goes through. */
-  const venuesOf = (user: number) => {
-    const row = q.keys.get(user) as { bitget: string | null, apex: string | null } | undefined
-    const of = (raw: string | null | undefined, need: string[], look: (c: any) => Promise<Book>) => {
-      if (!raw) return null
-      try {
-        const c = JSON.parse(raw)
-        return need.every((k) => c?.[k]) ? () => look(c) : null
-      } catch { return null }
-    }
-    return [
-      of(row?.bitget, ['key', 'secret', 'passphrase'], async (c) => {
-        const [orders, feed] = await Promise.all([
-          bitgetPending(c.key, c.secret, c.passphrase),
-          bitgetPositions(c.key, c.secret, c.passphrase),
-        ])
-        return { orders: tag('bitget', orders), positions: feed.positions }
-      }),
-      of(row?.apex, ['key', 'secret', 'passphrase'], async (c) => {
-        const [orders, feed] = await Promise.all([
-          apexPending(c.key, c.secret, c.passphrase),
-          apexPositions(c.key, c.secret, c.passphrase),
-        ])
-        return { orders: tag('apex', orders), positions: feed.positions }
-      }),
-    ].filter((v) => v !== null)
-  }
+  /** Each EVM wallet this account watches, as the two reads a look takes — the same readers
+   *  /api/positions goes through, off the same half-minute cache. */
+  const venuesOf = (user: number) =>
+    (q.keys.all(user) as { address: string }[]).map(({ address }) => async (): Promise<Book> => {
+      const [orders, feed] = await Promise.all([hlPending(address), hlPositions(address)])
+      // the address in the tag: two wallets each counting order ids are two namespaces
+      return { orders: tag(`hl:${address}`, orders), positions: feed.positions }
+    })
 
   /** Look at every subscribed account's book and keep whatever filled since the last look. Two
    *  signed calls per venue per account with a key — nobody subscribed to a push has none asked for.
@@ -640,7 +620,7 @@ export function createPush(db: DatabaseSync) {
       if (!look.length) { books.delete(u); continue }
       let now: Book
       try {
-        // the books uncached and the positions on their own 30-second one (see bitget.ts): an order
+        // the books uncached and the positions on their own 30-second one (see hyperliquid.ts): an order
         // is read to decide whether it is still there, which a stale answer cannot say
         const seen = await Promise.all(look.map((go) => go()))
         now = { orders: seen.flatMap((s) => s.orders), positions: seen.flatMap((s) => s.positions) }
@@ -722,10 +702,13 @@ export function createPush(db: DatabaseSync) {
        than letting it reject keeps a bad klines pass from taking the prices and the movers with
        it — Promise.all rejects on the first, and these are three separate calls to one feed. */
     const users = [...new Set(rows.map((r) => r.user))]
+    /* The scan is not waited on. It is sixty-odd candle reads against a budget measured by the
+       minute, so on a cold start it can take a couple of minutes to fill — and the prices, movers
+       and fills behind it are the news that cannot wait. It reads whatever the last pass left. */
+    scanning ??= refreshScan().catch(() => {}).finally(() => { scanning = null })
     await Promise.all([
       refreshPrices(users),
       refreshMovers(),
-      refreshScan().catch(() => {}),
       refreshBooks(users),
     ])
 
