@@ -23,7 +23,7 @@ const tomorrow = new Date(Date.parse(t) + 864e5).toLocaleDateString('sv')
 // store gains later shows up here as a type error rather than a silently half-built fixture
 const base: State = { v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', candles: 'classic', hotkeys: {}, subSort: 'recent',
-  subView: 'expense', calView: 'month', watches: [], results: [], desk: false, marketAsset: 'BTCUSDT',
+  subView: 'expense', calView: 'month', watches: [], results: [], desk: false, marketAsset: 'BTCUSDT', marketPins: [],
   marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', dials: DIALS, dismissed: {} }
 
 // only the fields alerts reads are worth spelling out; the rest are whatever an untouched item has

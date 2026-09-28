@@ -28,18 +28,18 @@ export const amountOf = (n: number) => n.toLocaleString('en-US', { maximumFracti
 /** The token's logo, through this app's own server (/api/logo) — the page loads images from its own
  *  origin only, and no reader's address goes to DexScreener for the sake of an icon. A token with
  *  no logo, or one that will not load, wears its first letter. */
-function TokenIcon({ mint, symbol }: { mint: string, symbol: string }) {
+export function TokenIcon({ mint, symbol, className }: { mint: string, symbol: string, className?: string }) {
   const [failed, setFailed] = useState(false)
   if (failed) {
     return (
-      <span className="bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium">
+      <span className={cn('bg-muted text-muted-foreground grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium', className)}>
         {symbol.slice(0, 1).toUpperCase()}
       </span>
     )
   }
   return (
     <img src={`/api/logo/${mint}`} alt="" loading="lazy" onError={() => setFailed(true)}
-      className="bg-muted size-6 shrink-0 rounded-full object-cover" />
+      className={cn('bg-muted size-6 shrink-0 rounded-full object-cover', className)} />
   )
 }
 
