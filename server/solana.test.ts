@@ -1,7 +1,7 @@
 // npm test — a Solana wallet into holdings: both token programs summed per mint, each mint priced
 // off its deepest pool, and dust and scam coins left out of what the wallet is worth
 import assert from 'node:assert/strict'
-import { balancesOf, bestPairs, shapeHoldings, shapeSwap, shapeTx, tokenTrades, tradesOf, tradesPartial } from './solana.ts'
+import { balancesOf, bestPairs, shapeHoldings, shapeSwap, shapeTx, tokenTrades, tradesOf, tradesPartial, type OpenLot } from './solana.ts'
 
 const acc = (mint: string, ui: string) => ({ account: { data: { parsed: { info: { mint, tokenAmount: { uiAmountString: ui } } } } } })
 const balances = balancesOf([
@@ -80,11 +80,14 @@ assert.equal(shapeTx({ ...buyTx, meta: { ...buyTx.meta, postTokenBalances: [bal(
 
 // round trips: bought in two, sold in two back to dust, and a trade still held is not finished
 const sw = (t: number, side: 'buy' | 'sell', amount: number, usdc: number, mint = SIM) => ({ t, sig: String(t), mint, side, amount, sol: 0, usdc })
+const open: OpenLot[] = []
 const trades = tradesOf([
   sw(1, 'buy', 100, 5), sw(2, 'buy', 100, 5), sw(3, 'sell', 150, 12), sw(4, 'sell', 49.5, 4),
-  sw(5, 'buy', 10, 1), // held, not finished
+  sw(5, 'buy', 10, 1), sw(8, 'buy', 30, 3), sw(9, 'sell', 20, 5), // held, not finished
   sw(6, 'buy', 10, 2, 'CATE'), sw(7, 'sell', 10, 1, 'CATE'),
-], (s) => s.usdc)
+], (s) => s.usdc, open)
+// what is still held, since its first buy, net of what part-selling it took back
+assert.deepEqual(open, [{ mint: SIM, openedAt: 5, held: 20, basis: -1 }])
 assert.deepEqual(trades.map((t) => [t.mint, t.cost, t.proceeds, t.pnl, t.buys, t.sells]), [['CATE', 2, 1, -1, 1, 1], [SIM, 10, 16, 6, 2, 2]])
 assert.equal(trades[1].pct, 60)
 // a swap that could not be priced leaves its trade out rather than half-summed

@@ -390,6 +390,75 @@ function extremesOf(row: Row, bars: Candle[]) {
   return { peak: (best - row.entry) * sign * qty, worst: (worst - row.entry) * sign * qty }
 }
 
+/**
+ * The range a position ran through, in money: the worst it was, the best, a tick where it started
+ * (nothing made or lost) and a dot where it is now or closed. Both ends take in zero, so the tick is
+ * always on the bar, and a position never up reads "best $0.00" rather than a loss in green.
+ */
+function RangeBar({ worst: w, peak: p, at: v }: { worst: number, peak: number, at: number }) {
+  const worst = Math.min(w, v, 0), peak = Math.max(p, v, 0)
+  const at = (x: number) => (peak > worst ? Math.min(100, Math.max(0, ((x - worst) / (peak - worst)) * 100)) : 50)
+  return (
+    <>
+      <div className="relative mx-1 my-1.5 h-1.5 rounded-full" aria-hidden>
+        <span className="bg-destructive/35 absolute inset-y-0 left-0 rounded-l-full" style={{ width: `${at(0)}%` }} />
+        <span className="absolute inset-y-0 rounded-r-full bg-emerald-500/35" style={{ left: `${at(0)}%`, right: 0 }} />
+        <span className="bg-foreground/80 absolute -top-1.5 h-4.5 w-px" style={{ left: `${at(0)}%` }} />
+        <span className={cn('ring-card absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2', v >= 0 ? 'bg-emerald-500' : 'bg-destructive')}
+          style={{ left: `${at(v)}%` }} />
+      </div>
+      <div className="flex justify-between font-mono text-xs tabular-nums">
+        <span className="text-destructive">{worst < 0 ? money(worst) : '$0.00'} <span className="text-muted-foreground font-sans">worst</span></span>
+        <span className={UP}><span className="text-muted-foreground font-sans">best</span> {peak > 0 ? money(peak) : '$0.00'}</span>
+      </div>
+    </>
+  )
+}
+
+type OpenLot = { mint: string, openedAt: number, held: number, basis: number }
+
+/** The swaps' account of a token still held — when it was bought and for how much. */
+function useOpenLot(mint: string) {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const [lot, setLot] = useState<OpenLot | null>(null)
+  useEffect(() => {
+    setLot(null)
+    if (!user) return
+    let on = true
+    const look = () => fetch('/api/token-trades').then((r) => (r.ok ? r.json() : null)).then((j) => {
+      const all: OpenLot[] = Array.isArray(j?.open) ? j.open : []
+      // two wallets holding the same token are two lots — the one opened first stands for both
+      if (on) setLot(all.filter((x) => x.mint === mint).sort((a, b) => a.openedAt - b.openedAt)[0] ?? null)
+    }).catch(() => {})
+    void look()
+    const h = setInterval(() => { if (document.visibilityState === 'visible') void look() }, 300_000)
+    return () => { on = false; clearInterval(h) }
+  }, [user, mint])
+  return lot
+}
+
+/**
+ * The best and the worst a token still held has been, in money, since it was bought — for the
+ * chart's "You hold" card. Only where the swaps account for what the wallet holds: a token that
+ * came in by transfer, or was bought before the history this reads, has no cost to measure from.
+ */
+export function HeldRange({ asset, mint, amount, value }: { asset: Asset, mint: string, amount: number, value: number }) {
+  const lot = useOpenLot(mint)
+  const price = amount > 0 ? value / amount : null
+  const ext = useExtremes(asset, lot?.openedAt, price)
+  if (!lot || !ext || price == null || Math.abs(lot.held - amount) > amount * 0.05) return null
+  const pnl = (p: number) => p * lot.held - lot.basis
+  return (
+    <div className="grid gap-2 border-t pt-3">
+      <span className="text-muted-foreground flex justify-between text-xs">
+        <span>Since you bought · {held(Date.now() - lot.openedAt)}</span>
+        <span className={cn('font-mono tabular-nums', tone(pnl(price)))}>{money(pnl(price))}</span>
+      </span>
+      <RangeBar worst={pnl(ext.lo)} peak={pnl(ext.hi)} at={pnl(price)} />
+    </div>
+  )
+}
+
 function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => void }) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
   const bars = useWindowBars(row.chart, row.openedAt, row.closedAt)
@@ -399,7 +468,6 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
   const peak = ext && out != null ? Math.max(ext.peak, out, 0) : null
   const worst = ext && out != null ? Math.min(ext.worst, out, 0) : null
   const gave = peak != null && out != null && peak > 0 && peak - out > 0.005 ? peak - out : null
-  const at = (v: number) => (peak != null && worst != null && peak > worst ? Math.min(100, Math.max(0, ((v - worst) / (peak - worst)) * 100)) : 50)
   // the chart: closes over the window, and where it went in and came out
   const chart = useMemo(() => {
     if (!bars || bars.length < 2) return null
@@ -468,17 +536,7 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
            sentence fits the trade: a loss that was never up does not "give back a peak". */
         <section className="bg-muted/40 grid gap-2.5 rounded-2xl p-4">
           <span className="text-muted-foreground text-xs">While it was open</span>
-          <div className="relative mx-1 my-1.5 h-1.5 rounded-full" aria-hidden>
-            <span className="bg-destructive/35 absolute inset-y-0 left-0 rounded-l-full" style={{ width: `${at(0)}%` }} />
-            <span className="absolute inset-y-0 rounded-r-full bg-emerald-500/35" style={{ left: `${at(0)}%`, right: 0 }} />
-            <span className="bg-foreground/80 absolute -top-1.5 h-4.5 w-px" style={{ left: `${at(0)}%` }} />
-            <span className={cn('ring-card absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2', out >= 0 ? 'bg-emerald-500' : 'bg-destructive')}
-              style={{ left: `${at(out)}%` }} />
-          </div>
-          <div className="flex justify-between font-mono text-xs tabular-nums">
-            <span className="text-destructive">{worst < 0 ? money(worst) : '$0.00'} <span className="text-muted-foreground font-sans">worst</span></span>
-            <span className={UP}><span className="text-muted-foreground font-sans">best</span> {peak > 0 ? money(peak) : '$0.00'}</span>
-          </div>
+          <RangeBar worst={worst} peak={peak} at={out} />
           <span className="text-muted-foreground text-xs">
             {out >= 0
               ? `Closed at ${money(out)}${gave != null && gave >= Math.max(0.01, peak * 0.2) ? ` — gave back $${gave.toFixed(2)} of its best` : ''}`

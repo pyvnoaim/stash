@@ -838,7 +838,7 @@ assert.equal((await get('/api/holdings')).status, 401)
 assert.equal((await get('/api/dex/fills?mint=So11111111111111111111111111111111111111112')).status, 401)
 assert.equal((await get('/api/dex/fills?mint=../etc', kUser)).status, 400)
 assert.equal((await get('/api/token-trades')).status, 401)
-assert.deepEqual(await (await get('/api/token-trades', kUser)).json(), { trades: [], complete: true })
+assert.deepEqual(await (await get('/api/token-trades', kUser)).json(), { trades: [], open: [], complete: true })
 assert.deepEqual(await (await get('/api/dex/fills?mint=So11111111111111111111111111111111111111112', kUser)).json(), { fills: [] })
 assert.equal((await get('/api/closed')).status, 401)
 

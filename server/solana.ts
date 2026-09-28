@@ -296,7 +296,7 @@ export type TokenTrade = {
  * held is not in the list: it is in the wallet. `usd` prices a swap in dollars; one it cannot price
  * leaves that trade out rather than printing half a sum.
  */
-export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null): Omit<TokenTrade, 'symbol' | 'name' | 'listed' | 'pool'>[] {
+export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null, open?: OpenLot[]): Omit<TokenTrade, 'symbol' | 'name' | 'listed' | 'pool'>[] {
   const out: Omit<TokenTrade, 'symbol' | 'name' | 'listed' | 'pool'>[] = []
   const by = new Map<string, Priced[]>()
   for (const s of [...swaps].sort((a, b) => a.t - b.t)) by.set(s.mint, [...(by.get(s.mint) ?? []), s])
@@ -317,9 +317,15 @@ export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null): Om
         }
       }
     }
+    // still held at the end of the history: what it cost, net of what was sold, and since when
+    if (open && held > peak / 100 && priced && cost > 0) open.push({ mint, openedAt, held, basis: cost - proceeds })
   }
   return out.sort((a, b) => b.closedAt - a.closedAt)
 }
+
+/** A token still held, by the swaps: `held` of it for `basis` dollars in (cost less what part-sells
+ *  took back out), since `openedAt`. Its best and worst are the page's to work out off the chart. */
+export type OpenLot = { mint: string, openedAt: number, held: number, basis: number }
 
 /** How far back a wallet's history is read for its token trades. */
 const HISTORY = 100
@@ -327,6 +333,9 @@ const tradeCache = new Map<string, { at: number, trades: Promise<TokenTrade[]>, 
 /** Whether the last read of each wallet missed a transaction — see tokenTrades. */
 const partial = new Set<string>()
 export const tradesPartial = (owner: string) => partial.has(owner)
+/** Each wallet's positions still open, as of its last read by tokenTrades. */
+const opens = new Map<string, OpenLot[]>()
+export const openLots = (owner: string) => opens.get(owner) ?? []
 
 /** `owner`'s finished token trades, priced — `solUsd` gives SOL's dollar price at a moment. Two
  *  minutes fresh; every transaction read is kept for good, so a second look costs one call. */
@@ -351,7 +360,10 @@ export function tokenTrades(owner: string, solUsd: (t: number) => Promise<number
     // SOL's price at each swap's moment, asked once per swap
     const px = new Map<string, number | null>()
     await Promise.all(swaps.filter((s) => s.sol > 0).map(async (s) => { px.set(s.sig, await solUsd(s.t).catch(() => null)) }))
-    const rows = tradesOf(swaps, (s) => (s.sol > 0 ? (px.get(s.sig) == null ? null : s.sol * px.get(s.sig)! + s.usdc) : s.usdc))
+    const open: OpenLot[] = []
+    const rows = tradesOf(swaps, (s) => (s.sol > 0 ? (px.get(s.sig) == null ? null : s.sol * px.get(s.sig)! + s.usdc) : s.usdc), open)
+    opens.set(owner, open)
+    if (opens.size > 200) opens.delete(opens.keys().next().value!)
     // the names, logos and pools, off DexScreener, thirty mints a call
     const mints = [...new Set(rows.map((r) => r.mint))]
     const pages = await Promise.all(Array.from({ length: Math.ceil(mints.length / 30) }, (_, i) =>
