@@ -133,7 +133,7 @@ export function Capture({ inputRef, className, onDone, announce }: {
       <InputGroup className="h-9">
         {/* 12px of air either side of the divider: the addon's own gap-2 plus the toggle's px-2
             made the left side twice the input's pl-1.5, so both sides are set here instead */}
-        <InputGroupAddon align="inline-start" className="gap-1 pl-1.5">
+        <InputGroupAddon align="inline-start" className="gap-1 pl-[3px]">
           {/* grid-cols-3 under w-fit gives three columns as wide as the widest label, which is what
               lets the pill be a plain w-1/3 translated by column — no measuring, no layout effect */}
           <ToggleGroup

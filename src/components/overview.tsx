@@ -451,7 +451,7 @@ export default function Overview({ onNavigate, onOpen }: {
                 <button key={d.day} type="button" onClick={() => onNavigate(i ? 'upcoming' : 'today')}
                   aria-label={`${dayLabel(d.day)} — ${d.n} due${d.bills.length ? `, ${d.bills.length} charging` : ''}`}
                   className={cn('hover:bg-accent/60 flex min-h-24 min-w-0 flex-col gap-1.5 rounded-xl p-2 text-left transition-colors',
-                    i ? 'bg-muted/30' : 'bg-muted ring-foreground/15 ring-1')}>
+                    i ? 'bg-muted/30' : 'bg-muted ring-foreground/15 ring-1 ring-inset')}>
                   <span className="flex items-baseline justify-between gap-1">
                     <span className={cn('text-[11px] uppercase', i ? 'text-muted-foreground' : 'text-foreground')}>
                       {i ? at.toLocaleDateString(undefined, { weekday: 'short' }) : 'Today'}

@@ -727,11 +727,11 @@ export default function MarketPage() {
               <div className="ml-auto flex flex-wrap items-center gap-0.5">
                 {/* Six pills, not a dropdown: there is width for them here, and a bar size is a
                     thing you flick between, not a thing you pick from a list. */}
-                <div role="radiogroup" aria-label="Bar size" className="mr-1 flex gap-px rounded-md border p-px">
+                <div role="radiogroup" aria-label="Bar size" className="mr-1 flex gap-0.5 rounded-lg border p-[3px]">
                   {INTERVALS.map((iv, i) => (
                     <button key={iv} type="button" role="radio" aria-checked={interval === iv} title={`${iv} bars · key ${i + 1}`}
                       className={cn('h-6 rounded-[5px] px-2 text-xs tabular-nums transition-colors',
-                        interval === iv ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}
+                        interval === iv ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground')}
                       onClick={() => setInterval(iv)}>
                       {iv}
                     </button>
