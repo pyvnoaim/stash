@@ -28,5 +28,10 @@ assert.deepEqual(rows[0], {
 })
 assert.equal(rows[1].value, 3.81)
 assert.equal(rows[1].change, -22.89)
+// the row is a link: a URL that is not DexScreener's own page is replaced, never passed through
+const bad = shapeHoldings(new Map([['CATE', 50]]), bestPairs([
+  { baseToken: { address: 'CATE' }, priceUsd: '1', liquidity: { usd: 5000 }, url: 'javascript:alert(1)' },
+]))
+assert.equal(bad[0].url, 'https://dexscreener.com/solana/CATE')
 
 console.log('solana ok')

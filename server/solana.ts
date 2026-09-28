@@ -21,6 +21,11 @@ const PROGRAMS = [
 ]
 /** Wrapped SOL's mint — how the wallet's own SOL is priced, since it is not a token account. */
 const SOL = 'So11111111111111111111111111111111111111112'
+/** A mint is a base58 address; nothing else goes into a URL. */
+const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
+/** How many mints one wallet gets priced — five calls. A wallet sprayed with airdrops holds
+ *  hundreds, and the rest of them are the scam coins the liquidity floor would drop anyway. */
+const MAX_MINTS = 150
 /** Below this in value, a token is dust: shown by nobody, summed by nobody. */
 export const DUST = 0.5
 /** Below this in pool depth, a price is a number somebody typed into an empty pool. */
@@ -105,7 +110,9 @@ export function shapeHoldings(balances: Map<string, number>, pairs: Map<string, 
       name: String(p.baseToken?.name ?? ''),
       logo: p.info?.imageUrl ?? null,
       change: isFinite(change) ? change : null,
-      url: p.url ?? null,
+      /* The row is a link, so only DexScreener's own https pages become one — a feed that sent a
+         javascript: URL would otherwise be a script on a click. Anything else, the page is built. */
+      url: /^https:\/\/dexscreener\.com\//.test(p.url ?? '') ? p.url! : `https://dexscreener.com/solana/${mint}`,
     })
   }
   return out.sort((a, b) => b.value - a.value)
@@ -128,7 +135,7 @@ export function holdings(address: string): Promise<Holding[]> {
     // the wallet's own SOL, priced as wrapped SOL: lamports are billionths
     const lamports = Number((sol as { value?: unknown })?.value)
     if (isFinite(lamports) && lamports > 0) balances.set(SOL, (balances.get(SOL) ?? 0) + lamports / 1e9)
-    const mints = [...balances.keys()]
+    const mints = [...balances.keys()].filter((m) => MINT.test(m)).slice(0, MAX_MINTS)
     const pages = await Promise.all(Array.from({ length: Math.ceil(mints.length / 30) }, (_, i) =>
       fetch(`${DEX}/${mints.slice(i * 30, i * 30 + 30).join(',')}`, { signal: AbortSignal.timeout(15_000) })
         .then((r) => (r.ok ? r.json() : []))

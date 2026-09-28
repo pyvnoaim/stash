@@ -23,12 +23,12 @@ globalThis.fetch = ((u: any, o?: any) => {
     const { method, params } = JSON.parse(o?.body ?? '{}')
     // the classic token program holds it; Token-2022 has nothing for this wallet
     const result = method === 'getBalance' || params?.[1]?.programId !== 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ? { value: method === 'getBalance' ? 0 : [] }
-      : { value: [{ account: { data: { parsed: { info: { mint: 'SImint', tokenAmount: { uiAmountString: '553' } } } } } }] }
+      : { value: [{ account: { data: { parsed: { info: { mint: 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD', tokenAmount: { uiAmountString: '553' } } } } } }] }
     return Promise.resolve(new Response(JSON.stringify({ result })))
   }
   if (String(u).startsWith('https://api.dexscreener.com/')) {
     return Promise.resolve(new Response(JSON.stringify([
-      { baseToken: { address: 'SImint', symbol: 'SI' }, priceUsd: '0.0231', liquidity: { usd: 900000 } },
+      { baseToken: { address: 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD', symbol: 'SI' }, priceUsd: '0.0231', liquidity: { usd: 900000 } },
     ])))
   }
   if (!String(u).startsWith('https://api.hyperliquid.xyz')) return realFetch(u, o)
