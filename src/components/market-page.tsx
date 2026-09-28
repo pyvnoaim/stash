@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Loader2, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
+  ArrowLeft, ChevronRight, CloudOff, LayoutGrid, Minus, RefreshCw, Rows3, Search, Share2, Sparkles,
   TrendingDown, TrendingUp, Waypoints,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -911,12 +911,9 @@ export default function MarketPage() {
               a card on it — and keeps a fixed height where the page scrolls instead. */}
           <div ref={plot} className="relative h-75 lg:h-auto lg:min-h-0 lg:flex-1">
             {error && <p className="text-destructive absolute inset-0 flex items-center justify-center text-sm">{error}</p>}
-            {loading && (
-              <div className="text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm">
-                <Loader2 className="size-5 animate-spin" />
-                <span>Loading {current.label}…</span>
-              </div>
-            )}
+            {/* only when there is nothing to draw yet: over a chart already on screen, the refresh
+                button's own spin says it is fetching, and the candles stay readable meanwhile */}
+            {loading && !view && <ChartSkeleton label={current.label} />}
             {view && !error && (
               <>
                 {/* Pointer events rather than mouse: they are the same handlers on a phone, where
@@ -1515,6 +1512,38 @@ export default function MarketPage() {
  *  stroke is held via vector-effect. `id` keeps each card's gradient def unique. The price list
  *  draws the same line at row height, which is what `className` is for. The shape itself is
  *  `sparkPath`, which is where the feed's numbers are checked and where the test for it lives. */
+/* A made-up walk, fixed so the skeleton is the same shape every time: bodies and wicks as
+   percentages of the box. Forty-eight bars, drifting up and back like a real session. */
+const GHOST = Array.from({ length: 48 }, (_, i) => {
+  const mid = 50 - Math.sin(i / 7) * 16 - Math.sin(i / 2.3) * 5
+  const body = 4 + ((i * 37) % 11)
+  const wick = body + 4 + ((i * 53) % 7)
+  return { top: mid - body / 2, body, wickTop: mid - wick / 2, wick }
+})
+
+/** The chart's shape before its bars arrive: grid lines, candles and a price axis in the muted
+ *  tone, pulsing — so the page reads as a chart about to fill, not an empty box with a spinner. */
+function ChartSkeleton({ label }: { label: string }) {
+  return (
+    <div role="status" aria-label={`Loading ${label}`} className="absolute inset-0 flex animate-pulse gap-3 pb-6">
+      <div className="relative flex-1">
+        {[20, 40, 60, 80].map((y) => <div key={y} className="border-border/60 absolute inset-x-0 border-t border-dashed" style={{ top: `${y}%` }} />)}
+        <div className="absolute inset-0 flex items-stretch justify-between gap-[3px] px-1">
+          {GHOST.map((c, i) => (
+            <div key={i} className="relative flex-1">
+              <div className="bg-muted-foreground/25 absolute left-1/2 w-px -translate-x-1/2" style={{ top: `${c.wickTop}%`, height: `${c.wick}%` }} />
+              <div className="bg-muted-foreground/25 absolute inset-x-0 rounded-[1px]" style={{ top: `${c.top}%`, height: `${c.body}%` }} />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex w-14 flex-col justify-around">
+        {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-3 w-12" />)}
+      </div>
+    </div>
+  )
+}
+
 export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
   data: number[]; up: boolean; id: string; className?: string
 }) {
