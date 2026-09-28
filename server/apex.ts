@@ -77,8 +77,10 @@ const levOf = (rate: unknown) => {
 
 /**
  * The resting stop and take-profit, by symbol and side. Omni keeps them in the open-orders book as
- * reduce-only trigger orders rather than on the position row; the side a stop sells is the side
- * the position is not, so a sell trigger guards a long.
+ * reduce-only trigger orders rather than on the position row — their SDK sets a position's TP/SL as
+ * STOP_MARKET / TAKE_PROFIT_MARKET with isPositionTpsl and reduceOnly — and the side a stop sells
+ * is the side the position is not, so a sell trigger guards a long. A trigger order that is not
+ * reduce-only is a stop *entry* waiting to open something, not a level on anything held.
  */
 export function shapeLevels(rows: unknown[]): Map<string, { stop: number | null, target: number | null }> {
   const out = new Map<string, { stop: number | null, target: number | null }>()
@@ -86,6 +88,7 @@ export function shapeLevels(rows: unknown[]): Map<string, { stop: number | null,
     const type = String(o?.type ?? '').toUpperCase()
     const at = num(o?.triggerPrice)
     if (at == null || !(type.startsWith('STOP') || type.startsWith('TAKE_PROFIT'))) continue
+    if (o?.reduceOnly !== true && o?.isPositionTpsl !== true) continue
     const guards = String(o?.side ?? '').toUpperCase() === 'SELL' ? 'long' : 'short'
     const k = `${idOf(o?.symbol)}:${guards}`
     const lv = out.get(k) ?? { stop: null, target: null }

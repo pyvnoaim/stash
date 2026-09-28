@@ -18,6 +18,8 @@ const book = [
   { id: '2', symbol: 'BTC-USDT', side: 'SELL', type: 'STOP_MARKET', price: '0', size: '0.02', triggerPrice: '90000', reduceOnly: true },
   { id: '3', symbol: 'BTC-USDT', side: 'SELL', type: 'TAKE_PROFIT_MARKET', price: '0', size: '0.02', triggerPrice: '110000', reduceOnly: true },
   { id: '4', symbol: 'ETH-USDT', side: 'SELL', type: 'LIMIT', price: '4000', size: '1', reduceOnly: true, cumSuccessFillSize: '0.5' },
+  // a stop entry, not a level: it opens a position rather than guarding one
+  { id: '5', symbol: 'ETH-USDT', side: 'BUY', type: 'STOP_LIMIT', price: '2000', size: '0.01', triggerPrice: '1811', reduceOnly: false },
 ]
 assert.deepEqual(shapeOrders(book), [
   { id: '1', symbol: 'BTCUSDT', side: 'buy', price: 95000, size: 0.01, live: true, opens: true },
@@ -25,6 +27,7 @@ assert.deepEqual(shapeOrders(book), [
 ])
 const levels = shapeLevels(book)
 assert.deepEqual(levels.get('BTCUSDT:long'), { stop: 90000, target: 110000 })
+assert.equal(levels.get('ETHUSDT:short'), undefined, 'a stop entry is not a stop')
 
 const rows = shape([
   { symbol: 'BTC-USDT', side: 'LONG', size: '0.02', entryPrice: '100000', fundingFee: '-1.5', customInitialMarginRate: '0.1', updatedTime: 1754400000000 },
