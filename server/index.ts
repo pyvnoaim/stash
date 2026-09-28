@@ -1245,8 +1245,9 @@ export function start({
         let found = ''
         if (chain === 'solana') {
           try {
-            const h = await solHoldings(address)
-            const worth = h.reduce((n, r) => n + r.value, 0)
+            const all = await solHoldings(address)
+            const worth = all.reduce((n, r) => n + r.value, 0)
+            const h = all.filter((r) => !r.dust)
             found = h.length ? `found on Solana: ${h.length} token${h.length === 1 ? '' : 's'}, $${worth.toFixed(2)}` : 'nothing worth more than dust on this Solana address'
           } catch {
             found = 'saved, but Solana did not answer just now'
@@ -1276,11 +1277,17 @@ export function start({
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
         .filter((w) => w.chain === 'solana').map((w) => w.address)
-      if (!sol.length) return send(res, 200, { holdings: [], total: 0 })
+      if (!sol.length) return send(res, 200, { holdings: [], total: 0, dust: { count: 0, value: 0 } })
       try {
-        const rows = (await Promise.all(sol.map(solHoldings))).flat().sort((a, b) => b.value - a.value)
-        const total = Math.round(rows.reduce((n, r) => n + r.value, 0) * 100) / 100
-        return send(res, 200, { holdings: rows, total })
+        const all = (await Promise.all(sol.map(solHoldings))).flat().sort((a, b) => b.value - a.value)
+        const cents = (n: number) => Math.round(n * 100) / 100
+        // dust is summed, not listed: the total is what the wallet is worth, the list what is worth a row
+        const small = all.filter((r) => r.dust)
+        return send(res, 200, {
+          holdings: all.filter((r) => !r.dust),
+          total: cents(all.reduce((n, r) => n + r.value, 0)),
+          dust: { count: small.length, value: cents(small.reduce((n, r) => n + r.value, 0)) },
+        })
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }

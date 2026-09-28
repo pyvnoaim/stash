@@ -21,10 +21,10 @@ const pairs = bestPairs([
   { baseToken: { address: 'DUST', symbol: 'DUST' }, priceUsd: '0.01', liquidity: { usd: 50000 } },
 ])
 const rows = shapeHoldings(balances, pairs)
-assert.deepEqual(rows.map((r) => r.symbol), ['SI', 'CATE'], 'biggest first; scam and dust out')
+assert.deepEqual(rows.map((r) => [r.symbol, r.dust]), [['SI', false], ['CATE', false], ['DUST', true]], 'biggest first; scam out, dust flagged')
 assert.deepEqual(rows[0], {
   chain: 'solana', mint: 'SI', amount: 553, price: 0.0231, value: 12.77, symbol: 'SI', name: 'Super Inu',
-  logo: 'https://x/si.png', change: 31.9, url: 'https://dexscreener.com/solana/a', pool: null,
+  logo: 'https://x/si.png', change: 31.9, url: 'https://dexscreener.com/solana/a', pool: null, dust: false,
 })
 assert.equal(rows[1].value, 3.81)
 assert.equal(rows[1].change, -22.89)
