@@ -18,6 +18,10 @@ export const NETWORKS: Record<string, string> = { solana: 'solana', base: 'base'
 export const POOL = /^(?:[1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40})$/
 /** A pool shallower than this is a price anybody could set with pocket change. */
 const MIN_LIQUIDITY = 10_000
+/** And one that trades less than this a day is not a market. Liquidity alone is easy to fake —
+ *  a search for "solana" turned up copycat SOLs in pools claiming billions, priced 30% off, and
+ *  none of them trading. Volume is what those pools cannot show. */
+const MIN_VOLUME = 10_000
 
 export type Found = {
   network: string
@@ -41,7 +45,7 @@ export type Found = {
 
 /** DexScreener's search answer into rows: chartable chains, liquid pools, one per token — its
  *  deepest — and the deepest first. */
-export function shapeSearch(j: unknown): Found[] {
+export function shapeSearch(j: unknown, floors = true): Found[] {
   const pairs = ((j as { pairs?: unknown[] })?.pairs ?? []) as Record<string, any>[]
   const best = new Map<string, Found>()
   for (const p of pairs) {
@@ -50,11 +54,12 @@ export function shapeSearch(j: unknown): Found[] {
     const mint = String(p?.baseToken?.address ?? '')
     const price = Number(p?.priceUsd)
     const liquidity = Number(p?.liquidity?.usd)
-    if (!network || !POOL.test(pool) || !mint || !(price > 0) || !(liquidity >= MIN_LIQUIDITY)) continue
+    const vol = Number(p?.volume?.h24)
+    if (!network || !POOL.test(pool) || !mint || !(price > 0)) continue
+    if (floors && !(liquidity >= MIN_LIQUIDITY && vol >= MIN_VOLUME)) continue
     const key = `${network}:${mint}`
     if ((best.get(key)?.liquidity ?? 0) >= liquidity) continue
     const mc = Number(p?.marketCap ?? p?.fdv)
-    const vol = Number(p?.volume?.h24)
     const ch = Number(p?.priceChange?.h24)
     best.set(key, {
       network, pool, mint, price, liquidity,
@@ -71,7 +76,8 @@ export function shapeSearch(j: unknown): Found[] {
       sells: count(p?.txns?.h24?.sells),
     })
   }
-  return [...best.values()].sort((a, b) => b.liquidity - a.liquidity).slice(0, 8)
+  // the most traded first: the real token trades, and its copycats mostly do not
+  return [...best.values()].sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0)).slice(0, 8)
 }
 
 const count = (v: unknown) => { const n = Number(v); return v != null && Number.isInteger(n) && n >= 0 ? n : null }
@@ -113,10 +119,10 @@ async function poolNow(network: string, address: string): Promise<Found | null> 
   if (!chain || !POOL.test(address)) return null
   const j = await fetch(`https://api.dexscreener.com/latest/dex/pairs/${chain}/${address}`, { signal: AbortSignal.timeout(10_000) })
     .then((r) => (r.ok ? r.json() : null)).catch(() => null)
-  // the floor is for search; a pool somebody already holds is shown however shallow it is
+  // the floors are for search; a pool somebody already holds is shown however shallow or quiet
   const p = ((j as { pairs?: any[] })?.pairs ?? [])[0]
   if (!p) return null
-  const rows = shapeSearch({ pairs: [{ ...p, liquidity: { usd: Math.max(Number(p?.liquidity?.usd) || 0, MIN_LIQUIDITY) } }] })
+  const rows = shapeSearch({ pairs: [p] }, false)
   return rows[0] ? { ...rows[0], liquidity: Number(p?.liquidity?.usd) || 0 } : null
 }
 

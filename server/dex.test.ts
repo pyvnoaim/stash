@@ -12,7 +12,9 @@ const found = shapeSearch({ pairs: [
   { chainId: 'solana', pairAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', baseToken: { address: 'FAKE', symbol: 'SI' }, priceUsd: '1', liquidity: { usd: 40 } },
   { chainId: 'tron', pairAddress: '0x' + 'a'.repeat(40), baseToken: { address: 'T', symbol: 'SI' }, priceUsd: '1', liquidity: { usd: 1e6 } },
   // Base, charted as GeckoTerminal's "base"
-  { chainId: 'base', pairAddress: '0x' + 'b'.repeat(40), baseToken: { address: '0xtoken', symbol: 'SIB' }, priceUsd: '2', liquidity: { usd: 50000 } },
+  { chainId: 'base', pairAddress: '0x' + 'b'.repeat(40), baseToken: { address: '0xtoken', symbol: 'SIB' }, priceUsd: '2', liquidity: { usd: 50000 }, volume: { h24: 60000 } },
+  // a copycat claiming billions of liquidity that nobody trades: not a market
+  { chainId: 'solana', pairAddress: 'So11111111111111111111111111111111111111112', baseToken: { address: 'FAKESOL', symbol: 'SOL' }, priceUsd: '85', liquidity: { usd: 2.5e9 }, volume: { h24: 0 } },
 ] })
 assert.deepEqual(found.map((f) => [f.network, f.symbol, f.pool]), [['solana', 'SI', SOLPOOL], ['base', 'SIB', '0x' + 'b'.repeat(40)]])
 assert.deepEqual([found[0].marketCap, found[0].volume, found[0].change], [23000000, 4800000, 31.9])

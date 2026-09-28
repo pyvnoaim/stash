@@ -34,7 +34,9 @@ globalThis.fetch = ((u: any, o?: any) => {
   }
   if (String(u).startsWith('https://api.dexscreener.com/latest/dex/search')) {
     return Promise.resolve(new Response(JSON.stringify({ pairs: [
-      { chainId: 'solana', pairAddress: DEXPOOL, baseToken: { address: 'HDmint', symbol: 'HYPEDOG' }, priceUsd: '0.01', liquidity: { usd: 50000 } },
+      { chainId: 'solana', pairAddress: DEXPOOL, baseToken: { address: 'HDmint', symbol: 'HYPEDOG' }, priceUsd: '0.01', liquidity: { usd: 50000 }, volume: { h24: 20000 } },
+      // a DEX namesake of a listed perp: the perp is the chart, so this is not offered
+      { chainId: 'solana', pairAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', baseToken: { address: 'WHmint', symbol: 'HYPE' }, priceUsd: '30', liquidity: { usd: 1e6 }, volume: { h24: 1e6 } },
     ] })))
   }
   if (String(u).startsWith('https://api.geckoterminal.com/')) {
