@@ -332,10 +332,15 @@ export default function Overview({ onNavigate, onOpen }: {
       rows, overdue: overdue.length, due: due.length, flagged: flagged.length,
       open: open.length,
       doneWeek: s.items.filter((i) => i.done && (i.doneAt ?? 0) >= week).length,
-      // the seven days from today, each with how much is due on it
-      ahead: run(t, 0, 7, (d) => open.filter((i) => i.due === d).length),
+      // the seven days from today: what is due on each, in the order its hour puts it, and any
+      // subscription that charges that day — the two things that make a day of the week busy
+      ahead: run(t, 0, 7, (d) => open.filter((i) => i.due === d).length).map((d) => ({
+        ...d,
+        items: open.filter((i) => i.due === d.day).sort((a, b) => (a.at ?? '~').localeCompare(b.at ?? '~')),
+        bills: s.subs.filter((x) => nextCharge(x) === d.day),
+      })),
     }
-  }, [s.items, t])
+  }, [s.items, s.subs, t])
 
   const money = useMemo(() => {
     const sum = (kind: 'income' | 'expense') =>
@@ -432,25 +437,43 @@ export default function Overview({ onNavigate, onOpen }: {
         <Panel title="The week" className="lg:col-start-1 lg:row-start-2"
           sub={coming ? `${coming} due in the next 7 days` : 'Nothing due in the next 7 days'}
           action={{ label: 'Upcoming', onClick: () => onNavigate('upcoming') }}>
-          <div className="grid grid-cols-7 gap-1.5">
+          {/* A week strip: each day's date, and what is on it by name — the tasks due and anything
+              charging. It was a count and a bar per day, which on an empty week was seven dots
+              over seven empty bars. An empty day is just its date. */}
+          {/* on a phone seven columns are too narrow to name anything, so the strip scrolls instead */}
+          <div className="-mx-4 flex flex-1 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+          <div className="grid min-w-[600px] flex-1 grid-cols-7 gap-1.5 sm:min-w-0">
             {day.ahead.map((d, i) => {
-              const max = Math.max(...day.ahead.map((x) => x.n), 1)
+              const at = new Date(d.day + 'T00:00')
+              const shown = d.items.slice(0, 3)
+              const more = d.items.length - shown.length
               return (
-                <Hint key={d.day} label={`${dayLabel(d.day)} — ${d.n} due`}>
-                  <button type="button" onClick={() => onNavigate(i ? 'upcoming' : 'today')}
-                    className={cn('hover:bg-accent flex flex-col items-center gap-1 rounded-md border px-1 py-1.5', !i && 'bg-muted')}>
-                    <span className="text-muted-foreground text-[10px] uppercase">
-                      {new Date(d.day + 'T00:00').toLocaleDateString(undefined, { weekday: 'short' })}
+                <button key={d.day} type="button" onClick={() => onNavigate(i ? 'upcoming' : 'today')}
+                  aria-label={`${dayLabel(d.day)} — ${d.n} due${d.bills.length ? `, ${d.bills.length} charging` : ''}`}
+                  className={cn('hover:bg-accent/60 flex min-h-24 min-w-0 flex-col gap-1.5 rounded-xl p-2 text-left transition-colors',
+                    i ? 'bg-muted/30' : 'bg-muted ring-foreground/15 ring-1')}>
+                  <span className="flex items-baseline justify-between gap-1">
+                    <span className={cn('text-[11px] uppercase', i ? 'text-muted-foreground' : 'text-foreground')}>
+                      {i ? at.toLocaleDateString(undefined, { weekday: 'short' }) : 'Today'}
                     </span>
-                    <span className="text-base tabular-nums">{d.n || '·'}</span>
-                    <span className="flex h-5 w-full items-end justify-center">
-                      <span className={cn('w-3/5 rounded-t-[2px]', d.n ? 'bg-foreground' : 'bg-muted')}
-                        style={{ height: d.n ? `${Math.max((d.n / max) * 100, 15)}%` : '2px' }} />
+                    <span className={cn('text-lg leading-none tabular-nums', !d.n && !d.bills.length && 'text-muted-foreground/60')}>{at.getDate()}</span>
+                  </span>
+                  {shown.map((it) => (
+                    // two lines rather than one: a day is narrow, and "Water pl…" names nothing
+                    <span key={it.id} className="bg-background/60 line-clamp-2 block w-full rounded-md px-1.5 py-1 text-[11px] leading-snug break-words">
+                      {it.at && <span className="text-muted-foreground mr-1 tabular-nums">{it.at}</span>}{it.text || 'Untitled'}
                     </span>
-                  </button>
-                </Hint>
+                  ))}
+                  {more > 0 && <span className="text-muted-foreground px-1.5 text-[11px]">+{more} more</span>}
+                  {d.bills.map((b) => (
+                    <span key={b.id} className={cn('truncate px-1.5 text-[11px] tabular-nums', b.kind === 'income' ? MONEY_IN : 'text-muted-foreground')}>
+                      {b.name || 'Untitled'} {b.kind === 'income' ? '+' : ''}{euro(b.cost)}
+                    </span>
+                  ))}
+                </button>
               )
             })}
+          </div>
           </div>
         </Panel>
 
