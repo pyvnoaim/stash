@@ -13,7 +13,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
-import { amountOf, dollars, Holdings, useHolding, useHoldingsTotal } from '@/components/holdings'
+import { amountOf, dollars, Holdings, useHolding } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
@@ -188,21 +188,6 @@ function useWide() {
   return wide
 }
 
-/** The desk's header strip: perps account, wallet, and the two together. Absent for an account that
- *  watches nothing — a row of three zeroes is not news. */
-function Totals({ equity }: { equity: number | null }) {
-  const wallet = useHoldingsTotal()
-  if (equity == null && wallet == null) return null
-  const total = (equity ?? 0) + (wallet ?? 0)
-  const usd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  return (
-    <div className="flex shrink-0 items-baseline gap-5 border-b px-4 py-2 text-xs tabular-nums">
-      <span className="text-muted-foreground">Perps <span className="text-foreground font-mono">{usd(equity ?? 0)}</span></span>
-      <span className="text-muted-foreground">Wallet <span className="text-foreground font-mono">{usd(wallet ?? 0)}</span></span>
-      <span className="ml-auto font-mono text-base font-medium">{usd(total)}</span>
-    </div>
-  )
-}
 
 export default function MarketPage() {
   const s = useStash()
@@ -225,6 +210,7 @@ export default function MarketPage() {
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0) // bumped to force a refetch
   const [hover, setHover] = useState<number | null>(null) // candle under the crosshair
+  const [hoverY, setHoverY] = useState<number | null>(null) // and the pointer's height, % of the box — mouse only
   const phone = useIsMobile() // which verbs the chart's footer offers, and how much room a label has
   const [live, setLive] = useState(true) // reprice the forming candle on a timer
   const [win, setWin] = useState(VISIBLE) // bars in view — scroll wheel widens/narrows it
@@ -609,6 +595,22 @@ export default function MarketPage() {
   const first = vis[0]?.c
   const change = price != null && first ? ((price - first) / first) * 100 : 0
   const up = change >= 0
+  /* The price tag lights up for a moment when the price moves — up green, down red — so a tick
+     is seen rather than inferred from a number changing. */
+  const [flash, setFlash] = useState<0 | 1 | -1>(0)
+  const prevPrice = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const was = prevPrice.current
+    prevPrice.current = price
+    if (was == null || price == null || price === was) return
+    setFlash(price > was ? 1 : -1)
+    const t = setTimeout(() => setFlash(0), 120)
+    return () => clearTimeout(t)
+  }, [price])
+  // the venue's own day, for the header — see the note there
+  const day = current.source === 'dex'
+    ? poolFacts?.changes?.h24 ?? poolFacts?.change ?? null
+    : perpCtx?.prevDayPx && price != null ? (price / perpCtx.prevDayPx - 1) * 100 : null
   // which book the Record screen is showing — see RECORDS
   const [book, setBook] = useState<(typeof RECORDS)[number]['id']>('mine')
   const goChart = (id: string) => { setAsset(id); setScreen('desk') }
@@ -665,9 +667,6 @@ export default function MarketPage() {
            squeezed to fit the viewport instead of the page scrolling, cutting the price line off
            every tile. The column keeps its natural height and the page does the scrolling. */
         <>
-        {/* What you are worth, before anything else on the page: the perps account and the wallet,
-            and the two together. The one number the desk exists to move. */}
-        <Totals equity={exch.equity} />
         <div className="flex min-h-0 shrink-0 flex-col lg:grid lg:flex-1 lg:grid-cols-[272px_minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)_auto]">
           {/* Yours first, then the market: what the wallet holds and what is open, above the list
               to pick a chart from. On a narrow screen those two ride in the column beside the
@@ -685,34 +684,30 @@ export default function MarketPage() {
           </div>
 
           <div className="flex min-h-0 flex-col gap-2 p-3 lg:min-w-0">
-            {/* The chart's own header, on the chart: the price, how far it has come across the
-                drawn bars, how the readings lean — and every switch that changes what is drawn in
-                the box under it. This used to be a card above the chart card and a toolbar above
-                that; it is one row now, and the thing it is about is directly beneath. */}
+            {/* One line: what it is, what it costs, how the day has gone — and the bar sizes. The day's
+                move is the venue's own 24h (a perp's price a day ago, a pool's own change), never the
+                move across however many bars happen to be on screen, which read like a 24h number
+                and changed with the zoom. */}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <AssetLogo src={current.logo} className="size-7" />
-              <div className="flex flex-col">
-                {/* what this is, in words — a token's name and how young its pool is are the first
-                    two things worth knowing about it */}
+              <AssetLogo src={current.logo} letter={coin} className="size-6" />
+              <span className="flex items-baseline gap-1.5">
+                <span className="font-medium">{current.source === 'dex' ? poolFacts?.symbol ?? coin : current.label}</span>
                 <span className="text-muted-foreground text-xs">
                   {current.source === 'dex'
-                    ? [poolFacts?.name, coin, current.network === 'eth' ? 'Ethereum' : current.network && current.network[0].toUpperCase() + current.network.slice(1),
-                      poolFacts?.createdAt ? `pool ${ageOf(poolFacts.createdAt)} old` : null].filter(Boolean).join(' · ')
-                    : `${current.label} · ${hlCoin(current.id)} perp · Hyperliquid`}
-                  {/* the four the list always carries have nothing to pin */}
-                  {!CORE.includes(current.id) && (
-                    <PinStar a={current.source === 'dex' && poolFacts?.symbol ? { ...current, label: poolFacts.symbol } : current}
-                      pinned={s.marketPins.some((p) => p.id === current.id)} className="-my-1 ml-1 inline-grid size-5 align-middle" />
-                  )}
+                    ? current.network === 'eth' ? 'Ethereum' : current.network && current.network[0].toUpperCase() + current.network.slice(1)
+                    : `${hlCoin(current.id)} perp`}
                 </span>
-                <span className="text-2xl leading-tight tabular-nums">{price != null ? fmt(price) : '—'}</span>
-              </div>
-              {price != null && (
-                <Hint label={`Move over the ${n} bars on screen, not 24h`}>
-                  <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
-                    {change >= 0 ? '+' : ''}{change.toFixed(2)}% <span className="text-muted-foreground">over {n} bars</span>
-                  </span>
-                </Hint>
+              </span>
+              <span className="text-xl tabular-nums">{price != null ? fmt(price) : '—'}</span>
+              {day != null && (
+                <span className={cn('text-sm tabular-nums', day >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
+                  {day >= 0 ? '+' : '−'}{Math.abs(day).toFixed(2)}% <span className="text-muted-foreground">24h</span>
+                </span>
+              )}
+              {/* the four the list always carries have nothing to pin */}
+              {!CORE.includes(current.id) && (
+                <PinStar a={current.source === 'dex' && poolFacts?.symbol ? { ...current, label: poolFacts.symbol } : current}
+                  pinned={s.marketPins.some((p) => p.id === current.id)} className="-ml-1.5" />
               )}
               {/* the price above is the last bar the feed gave us, and off the network that bar is however
                   old the cache is — say which, rather than let a stale number pass for the current one */}
@@ -722,30 +717,17 @@ export default function MarketPage() {
                   {online ? 'Feed not answering' : 'Offline'} — as of {stamp(candles.at(-1)!.t)}
                 </span>
               )}
-              {/* no lean on a DEX token — the same reason the panel beside the chart has none */}
-              {view && current.source !== 'dex' && (
-                <Hint label={`${bulls} readings lean up, ${bears} down. A count, not advice.`}>
-                  <span className={cn('inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium', bias.cls)}>
-                    <bias.Icon className="size-3.5" />
-                    {bias.label}
-                    {/* Arrows, not "3/4" — a slash between two numbers reads as three out of four,
-                        and it was three up against four down. */}
-                    <span className="opacity-70 tabular-nums">{bulls}↑ {bears}↓</span>
-                  </span>
-                </Hint>
-              )}
               <div className="ml-auto flex flex-wrap items-center gap-0.5">
                 {/* Six pills, not a dropdown: there is width for them here, and a bar size is a
                     thing you flick between, not a thing you pick from a list. */}
-                <div className="bg-muted/50 mr-1 flex gap-0.5 rounded-lg p-0.5">
+                <div role="radiogroup" aria-label="Bar size" className="mr-1 flex gap-px rounded-md border p-px">
                   {INTERVALS.map((iv, i) => (
-                    <Hint key={iv} label={`${iv} bars · key ${i + 1}`}>
-                      <Button size="sm" variant={interval === iv ? 'secondary' : 'ghost'} aria-pressed={interval === iv}
-                        className={cn('h-6 px-2 text-xs tabular-nums', interval !== iv && 'text-muted-foreground')}
-                        onClick={() => setInterval(iv)}>
-                        {iv}
-                      </Button>
-                    </Hint>
+                    <button key={iv} type="button" role="radio" aria-checked={interval === iv} title={`${iv} bars · key ${i + 1}`}
+                      className={cn('h-6 rounded-[5px] px-2 text-xs tabular-nums transition-colors',
+                        interval === iv ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground')}
+                      onClick={() => setInterval(iv)}>
+                      {iv}
+                    </button>
                   ))}
                 </div>
                 <span className="bg-border mx-1 h-4 w-px" />
@@ -763,11 +745,14 @@ export default function MarketPage() {
                     <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
                   </Button>
                 </Hint>
+                {/* the record's way in while the strip along the bottom has nothing to show */}
+                {!results.some(isReal) && (
+                  <Button size="sm" variant="ghost" className="text-muted-foreground h-6 px-2 text-xs" onClick={() => setScreen('record')}>
+                    Trades
+                  </Button>
+                )}
               </div>
             </div>
-            {current.source === 'dex'
-              ? <PoolMoves p={poolFacts} />
-              : <PerpStats candles={candles} ctx={perpCtx} last={last} fmt={fmt} />}
           {/* The plot fills whatever the pane leaves it on a wide window — the chart is the page now, not
               a card on it — and keeps a fixed height where the page scrolls instead. */}
           <div ref={plot} className="relative h-75 lg:h-auto lg:min-h-0 lg:flex-1">
@@ -873,6 +858,7 @@ export default function MarketPage() {
                     const f = (e.clientX - r.left) / r.width
                     // clamps in the future strip, so hovering it reads the last bar rather than nothing
                     setHover(Math.max(0, Math.min(n - 1, Math.round(f * xSpan))))
+                    setHoverY(Math.max(0, Math.min(100, ((e.clientY - r.top) / r.height) * 100)))
                   }}
                   onPointerCancel={(e) => {
                     pts.current.delete(e.pointerId)
@@ -883,7 +869,7 @@ export default function MarketPage() {
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
                     grab.current = null
-                    if (e.pointerType === 'mouse') setHover(null)
+                    if (e.pointerType === 'mouse') { setHover(null); setHoverY(null) }
                   }}
                 >
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full overflow-visible">
@@ -896,14 +882,16 @@ export default function MarketPage() {
                       <stop offset="100%" style={{ stopColor: up ? hue.up : hue.down }} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  {/* faint baseline grid */}
-                  {[25, 50, 75].map((gy) => (
-                    <line key={gy} x1="0" x2="100" y1={gy} y2={gy} className="stroke-border/60" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-                  ))}
-                  {/* highlight the hovered candle's column, behind the candles so it sits lit on top */}
-                  {hc && n > 1 && (
-                    <rect x={xAt(hover!) - 50 / (n - 1)} y="0" width={100 / (n - 1)} height="100"
-                      className="fill-foreground/7" stroke="none" />
+                  {/* No grid: the price scale on the right says where things are, and lines behind the
+                      candles were texture. The crosshair is two hairlines — the bar, and where the
+                      pointer is; a finger has no height, so a tap draws the bar's line alone. */}
+                  {hc && (
+                    <line x1={xAt(hover!)} x2={xAt(hover!)} y1="0" y2="100" className="stroke-muted-foreground/60"
+                      strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+                  )}
+                  {hc && hoverY != null && (
+                    <line x1="0" x2="100" y1={hoverY} y2={hoverY} className="stroke-muted-foreground/60"
+                      strokeWidth={1} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
                   )}
                   {/* area fill only reads under a single price line, so it's line-mode only */}
                   {chart === 'line' && (
@@ -942,15 +930,16 @@ export default function MarketPage() {
                 {[25, 50, 75].map((gy) => (
                   price != null && Math.abs(gy - y(price)) < 6 ? null : (
                     <span key={gy}
-                      className="text-muted-foreground bg-card/75 pointer-events-none absolute right-0 -translate-y-1/2 rounded-sm px-1 text-[10px] tabular-nums"
+                      className="text-muted-foreground/70 pointer-events-none absolute right-0 -translate-y-1/2 px-1 text-[10px] tabular-nums"
                       style={{ top: `${gy}%` }}>
                       {fmt(hi - (gy / 100) * (hi - lo))}
                     </span>
                   )
                 ))}
                 {price != null && (
-                  <span className={cn('pointer-events-none absolute right-0 z-10 -translate-y-1/2 rounded-sm px-1 text-[10px] font-medium tabular-nums text-white',
-                    up ? 'bg-emerald-600' : 'bg-destructive')}
+                  <span className={cn('pointer-events-none absolute right-0 z-10 -translate-y-1/2 rounded-sm px-1 text-[10px] font-medium tabular-nums text-white transition-[background-color,box-shadow] duration-500',
+                    up ? 'bg-emerald-600' : 'bg-destructive',
+                    flash && 'duration-0 ring-2', flash === 1 && 'bg-emerald-400 ring-emerald-400/40', flash === -1 && 'bg-red-400 ring-red-400/40')}
                     style={{ top: `${Math.min(97, Math.max(3, y(price)))}%` }}>
                     {fmt(price)}
                   </span>
@@ -997,17 +986,31 @@ export default function MarketPage() {
                   )
                 })}
 
-                {/* dot + tooltip stay inside the plot box so their % positions match the SVG's.
-                    HTML overlay, not SVG shapes — preserveAspectRatio=none would squash those */}
+                {/* The crosshair's own read-outs, where every chart puts them: the price at the pointer
+                    on the price scale, the bar's time under the plot, and the bar's four prices in the
+                    corner. A box follows the pointer only when there is something of yours on the bar. */}
                 {hc && (
-                  <div className="bg-popover text-popover-foreground pointer-events-none absolute top-1 z-30 -translate-x-1/2 rounded-md border px-2 py-1 text-xs shadow-md"
+                  <>
+                    <span className="bg-foreground text-background pointer-events-none absolute right-0 z-20 -translate-y-1/2 rounded-sm px-1 text-[10px] tabular-nums"
+                      style={{ top: `${hoverY ?? y(hc.c)}%` }}>
+                      {fmt(hoverY != null ? hi - (hoverY / 100) * (hi - lo) : hc.c)}
+                    </span>
+                    <span className="bg-foreground text-background pointer-events-none absolute top-full z-20 mt-1.5 -translate-x-1/2 rounded-sm px-1.5 text-[10px] whitespace-nowrap tabular-nums"
+                      style={{ left: `${Math.min(94, Math.max(6, xAt(hover!)))}%` }}>
+                      {stamp(hc.t)}
+                    </span>
+                    <span className="text-muted-foreground pointer-events-none absolute top-0 left-0 z-20 flex gap-2.5 text-[11px] tabular-nums">
+                      {([['O', hc.o], ['H', hc.h], ['L', hc.l], ['C', hc.c]] as const).map(([k, v]) => (
+                        <span key={k}>{k} <span className={hc.c >= hc.o ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}>{fmt(v)}</span></span>
+                      ))}
+                    </span>
+                  </>
+                )}
+                {hc && hoverFills.length > 0 && (
+                  <div className="bg-popover text-popover-foreground pointer-events-none absolute top-6 z-30 -translate-x-1/2 rounded-md border px-2 py-1 text-xs shadow-md"
                     style={{ left: `${Math.min(85, Math.max(15, xAt(hover!)))}%` }}>
-                    <span className="tabular-nums">{fmt(hc.c)}</span>
-                    <span className="text-muted-foreground ml-2">{stamp(hc.t)}</span>
-                    {/* and what you did on this bar, if anything — the mark's own detail, read
-                        where the crosshair already is rather than on a hover a phone cannot do */}
                     {hoverFills.map((m, k) => (
-                      <span key={`h-${k}`} className="mt-0.5 flex items-center gap-1.5 border-t pt-0.5">
+                      <span key={`h-${k}`} className={cn('flex items-center gap-1.5', k > 0 && 'mt-0.5 border-t pt-0.5')}>
                         <FillMark buy={m.buy} open={m.open} />
                         {note(m)}
                       </span>
@@ -1082,6 +1085,7 @@ export default function MarketPage() {
                 major perps, and a coin a few weeks old has no 200-MA to read — a verdict there
                 would be noise wearing the same confident type. */}
             {current.source === 'dex' && <DexFacts asset={current} p={poolFacts} />}
+            {current.source !== 'dex' && <PerpStats candles={candles} ctx={perpCtx} last={last} fmt={fmt} />}
             {view && current.source !== 'dex' && (
               <section className="flex flex-col gap-3 border-t pt-3 lg:min-h-0 lg:flex-1">
                 <div className="flex items-baseline gap-2">
@@ -1513,6 +1517,7 @@ function DexFacts({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
           )}
         </div>
       )}
+      <PoolMoves p={p} />
       <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">The pool</span>
       {!p ? <Skeleton className="h-20" /> : (
         <>
@@ -1549,14 +1554,8 @@ function DexFacts({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
                 <div className="flex justify-between gap-2"><span className="text-muted-foreground">Selling all of it moves price</span><span className="tabular-nums">{pctTxt(sellAll)}</span></div>
               )}
               <div className="flex justify-between gap-2"><span className="text-muted-foreground">$1,000 would move it</span><span className="tabular-nums">{pctTxt(thousand)}</span></div>
-              <span className="text-muted-foreground text-[11px]">Read off the pool's depth — a rough guide, not a quote.</span>
             </div>
           )}
-          <p className="text-muted-foreground text-xs">
-            No readings for DEX tokens — the rules were measured on major perps, not coins this young.{' '}
-            <a className="underline underline-offset-2" href={`https://dexscreener.com/${asset.network === 'eth' ? 'ethereum' : asset.network}/${asset.pool}`}
-              target="_blank" rel="noreferrer noopener">DexScreener</a>
-          </p>
         </>
       )}
     </section>
@@ -1717,14 +1716,6 @@ function Watchlist({ current, onPick, inputRef }: {
           </div>
         ) : groups.map(([group, list]) => {
           const shown = list.filter(hit)
-          if (group === 'Pinned' && !shown.length) {
-            // the way to the pins, said once where they would be — not while a search has filtered them out
-            return !q.trim() && (
-              <p key={group} className="text-muted-foreground hidden px-2 pt-3 text-xs lg:block">
-                Pin any perp or token with its <Star className="inline size-3 -translate-y-px" /> — search for it above, or pin the one on the chart.
-              </p>
-            )
-          }
           if (!shown.length) return null
           return (
             <div key={group} className="contents lg:block">
@@ -1823,10 +1814,6 @@ function Watchlist({ current, onPick, inputRef }: {
           })}
         </div>
       )}
-      {/* the venue only once it is known */}
-      <p className="text-muted-foreground hidden px-4 pb-2 text-[10px] lg:block">
-        Last price and the 24h move{feed !== undefined && <> — perps on Hyperliquid, tokens off their pool</>}
-      </p>
     </div>
   )
 }
@@ -2924,10 +2911,12 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
   const { results, dials } = useStash()
   const t = recordTally(results.filter(isReal), dials)
   const tone = (v: number) => (v >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')
+  // nothing finished is nothing to say: the header's Trades button is the way in meanwhile
+  if (!t.n) return null
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-1.5 text-xs tabular-nums lg:col-span-3">
       <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Record</span>
-      {t.n ? (
+      {t.n > 0 && (
         <>
           <span>{t.n} finished</span>
           <span className="text-muted-foreground">{Math.round((t.won / t.n) * 100)}% hit target</span>
@@ -2935,8 +2924,6 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
           {t.usd !== null && <span className={cn('font-mono', tone(t.usd))}>{signedUsdt(t.usd)} settled</span>}
           {t.money !== null && <span className={cn('font-mono', tone(t.money))}>{signedEuro(t.money)} priced here</span>}
         </>
-      ) : (
-        <span className="text-muted-foreground">Nothing finished yet — a trade lands here once it is over</span>
       )}
       <Button size="sm" variant="secondary" className="ml-auto h-6 gap-1 px-2 text-xs" onClick={onOpen}>
         All trades <ChevronRight className="size-3" />
