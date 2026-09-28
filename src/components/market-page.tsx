@@ -13,7 +13,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
-import { Holdings } from '@/components/holdings'
+import { Holdings, useHoldingsTotal } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
@@ -140,7 +140,6 @@ const DOT = {
 
 /** The three answers a reading can give, and the order the panel groups them in — the sides that
  *  vote first, then the cards that only describe the tape. */
-const SIDES = [['bull', 'For a long'], ['bear', 'For a short'], ['flat', 'Context, neither way']] as const
 
 /** Map a price to the 0..100 SVG box, hi at the top. Nulls (a warming-up MA) break the path.
  *  `xSpan` is the x domain in bars — wider than the data, so the right end stays empty for the future. */
@@ -179,6 +178,35 @@ function CopyNum({ v, className, children }: { v: string; className?: string; ch
   )
 }
 
+/** Whether the desk has its three columns — the width where the wallet moves into the left one. */
+function useWide() {
+  const q = '(min-width: 1024px)'
+  const [wide, setWide] = useState(() => typeof matchMedia !== 'undefined' && matchMedia(q).matches)
+  useEffect(() => {
+    const m = matchMedia(q)
+    const on = () => setWide(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return wide
+}
+
+/** The desk's header strip: perps account, wallet, and the two together. Absent for an account that
+ *  watches nothing — a row of three zeroes is not news. */
+function Totals({ equity }: { equity: number | null }) {
+  const wallet = useHoldingsTotal()
+  if (equity == null && wallet == null) return null
+  const total = (equity ?? 0) + (wallet ?? 0)
+  const usd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return (
+    <div className="flex shrink-0 items-baseline gap-5 border-b px-4 py-2 text-xs tabular-nums">
+      <span className="text-muted-foreground">Perps <span className="text-foreground font-mono">{usd(equity ?? 0)}</span></span>
+      <span className="text-muted-foreground">Wallet <span className="text-foreground font-mono">{usd(wallet ?? 0)}</span></span>
+      <span className="ml-auto font-mono text-base font-medium">{usd(total)}</span>
+    </div>
+  )
+}
+
 export default function MarketPage() {
   const s = useStash()
   const {
@@ -210,6 +238,9 @@ export default function MarketPage() {
      this chart already carries MAs, sessions and a live position, and there are days you want the
      candles back. */
   const [structure, setStructure] = useState(true)
+  // the readings past the four that decide the verdict — see the panel beside the chart
+  const [allReadings, setAllReadings] = useState(false)
+  const wide = useWide()
   /* The second panel under the price. Every one of these was already computed and read out as text
      while being impossible to see — the chart handed you "RSI 47" and nothing else.
      Off by default — the price chart is the subject, and a panel steals a third of its height. */
@@ -750,8 +781,25 @@ export default function MarketPage() {
            watchlist inside it carries min-h-0 for its own desktop scroll — which let the strip be
            squeezed to fit the viewport instead of the page scrolling, cutting the price line off
            every tile. The column keeps its natural height and the page does the scrolling. */
-        <div className="flex min-h-0 shrink-0 flex-col lg:grid lg:flex-1 lg:grid-cols-[232px_minmax(0,1fr)_300px] lg:grid-rows-[minmax(0,1fr)_auto]">
-          <Watchlist current={asset} onPick={setAsset} inputRef={search} />
+        <>
+        {/* What you are worth, before anything else on the page: the perps account and the wallet,
+            and the two together. The one number the desk exists to move. */}
+        <Totals equity={exch.equity} />
+        <div className="flex min-h-0 shrink-0 flex-col lg:grid lg:flex-1 lg:grid-cols-[272px_minmax(0,1fr)_320px] lg:grid-rows-[minmax(0,1fr)_auto]">
+          {/* Yours first, then the market: what the wallet holds and what is open, above the list
+              to pick a chart from. On a narrow screen those two ride in the column beside the
+              chart instead — see `wide` — since there the list is a strip across the top. */}
+          <div className="flex min-h-0 flex-col border-b lg:overflow-y-auto lg:border-r lg:border-b-0">
+            {wide && (
+              // empty:hidden — with nothing held and nothing open, both render nothing, and the
+              // padding and rule around them would be a stripe of nothing above the list
+              <div className="flex flex-col gap-3 border-b p-3 empty:hidden">
+                <Holdings onOpen={(a) => { remember(a); setAsset(a.id) }} />
+                <ExchangePositions onOpen={setAsset} />
+              </div>
+            )}
+            <Watchlist current={asset} onPick={setAsset} inputRef={search} />
+          </div>
 
           <div className="flex min-h-0 flex-col gap-2 p-3 lg:min-w-0">
             {/* The chart's own header, on the chart: the price, how far it has come across the
@@ -1337,9 +1385,9 @@ export default function MarketPage() {
             <Position asset={current.id} price={last ?? null} />
             {/* what the exchange says you hold, account-wide — the one block here that is fact
                 rather than reading. Absent unless a venue reports something open. */}
-            <ExchangePositions onOpen={setAsset} />
+            {!wide && <ExchangePositions onOpen={setAsset} />}
             {/* and what the watched wallets hold as tokens — the memecoins, which no book carries */}
-            <Holdings onOpen={(a) => { remember(a); setAsset(a.id) }} />
+            {!wide && <Holdings onOpen={(a) => { remember(a); setAsset(a.id) }} />}
             {/* and what the others with their desk on are in, the same tiles signed with a name */}
             <FriendsOpen onPick={setAsset} />
             </div>
@@ -1352,7 +1400,7 @@ export default function MarketPage() {
                 would be noise wearing the same confident type. */}
             {current.source === 'dex' && <DexFacts asset={current} />}
             {view && current.source !== 'dex' && (
-              <section className="flex flex-col gap-2 border-t pt-3 lg:min-h-0 lg:flex-1">
+              <section className="flex flex-col gap-3 border-t pt-3 lg:min-h-0 lg:flex-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">What the chart says</span>
                   <Hint label={`Measured on ${interval} bars with the ${cfg.fast}/${cfg.slow} MAs`}>
@@ -1361,32 +1409,39 @@ export default function MarketPage() {
                     </span>
                   </Hint>
                 </div>
-                {/* Sorted into the three answers, not left in the order the scan happened to produce
-                    them. Fourteen rows of bull, flat, bear interleaved is a list you have to read
-                    all of to count, which is the one thing the pill above has already done — and it
-                    put "Bullish MA cross" three rows above "Downtrend" with nothing to say they were
-                    on opposite sides. The tally is unchanged: this is the same list, sorted. */}
+                {/* The verdict first, as the count it is: which way the readings lean and by how
+                    much, drawn as the split it is. A lean is not an instruction — the trade is
+                    yours, and it is placed in Fomo. */}
+                <div className={cn('grid gap-2 rounded-lg p-3', bias.cls)}>
+                  <span className="flex items-center gap-1.5 text-base font-medium"><bias.Icon className="size-4" />{bias.label}</span>
+                  {bulls + bears > 0 && (
+                    <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
+                      <span className="bg-emerald-500" style={{ flexGrow: bulls }} />
+                      <span className="bg-destructive" style={{ flexGrow: bears }} />
+                    </div>
+                  )}
+                  <span className="text-xs opacity-80">{bulls} for a long, {bears} for a short, on {interval}</span>
+                </div>
+                {/* The four that decide it — the higher timeframe leads, then the rest in the order
+                    the tally weighs them — and the others one press away rather than a wall of
+                    fourteen that had to be read whole to count. */}
                 <div className="grid gap-3 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                  {SIDES.map(([tone, head]) => {
-                    const rows = shownSignals.filter((s) => s.tone === tone)
-                    return rows.length ? (
-                      <div key={tone} className="grid gap-1.5">
-                        <span className="text-muted-foreground text-[10px] tracking-wider uppercase">
-                          {head} <span className="tabular-nums opacity-70">{rows.length}</span>
-                        </span>
-                        {rows.map((sig, i) => (
-                          <div key={i} className="flex min-w-0 items-start gap-2 text-sm">
-                            <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[sig.tone])} />
-                            <span className="min-w-0">
-                              {sig.label}
-                              <span className="text-muted-foreground block text-xs">{sig.detail}</span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null
-                  })}
+                  {(allReadings ? shownSignals : shownSignals.filter((x) => x.tone !== 'flat').slice(0, 4)).map((sig, i) => (
+                    <div key={i} className="flex min-w-0 items-start gap-2 text-sm">
+                      <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', DOT[sig.tone])} />
+                      <span className="min-w-0">
+                        {sig.label}
+                        <span className="text-muted-foreground block text-xs">{sig.detail}</span>
+                      </span>
+                    </div>
+                  ))}
                   {!shownSignals.length && <p className="text-muted-foreground text-sm">Nothing standing out on these bars.</p>}
+                  {shownSignals.length > 4 && (
+                    <button type="button" onClick={() => setAllReadings((v) => !v)}
+                      className="text-muted-foreground hover:text-foreground w-fit text-xs underline-offset-2 hover:underline">
+                      {allReadings ? 'Fewer readings' : `All ${shownSignals.length} readings`}
+                    </button>
+                  )}
                 </div>
               </section>
             )}
@@ -1394,6 +1449,7 @@ export default function MarketPage() {
 
           <RecordBar onOpen={() => setScreen('record')} />
         </div>
+        </>
       ) : (
         /* One screen, two books, one question — see the note on RECORDS. */
         <div className="flex flex-col gap-4 p-4">
@@ -1634,7 +1690,7 @@ function Watchlist({ current, onPick, inputRef }: {
       : { ...r, price: px, change: ((px - r.open) / r.open) * 100, closes: [...r.closes.slice(0, -1), px] }]
   }))
   return (
-    <div className="flex min-h-0 flex-col border-b lg:border-r lg:border-b-0">
+    <div className="flex min-h-0 flex-col">
       {/* the search only where there is a column to search down; a strip of eleven is scanned */}
       {/* the icon is centred on the box directly around the field, not on the padded wrapper: that
           one has more room above than below, and centring on it put it a couple of pixels high of

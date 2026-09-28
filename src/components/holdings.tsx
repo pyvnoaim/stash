@@ -43,6 +43,53 @@ function TokenIcon({ mint, symbol }: { mint: string, symbol: string }) {
   )
 }
 
+/** What the watched Solana wallets hold, in dollars — null for an account watching none. A minute
+ *  fresh, while the tab is visible; the server caches it for half that. */
+export function useHoldingsTotal(): number | null {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const [total, setTotal] = useState<number | null>(null)
+  useEffect(() => {
+    if (!user) { setTotal(null); return }
+    let on = true
+    const look = () => {
+      if (document.visibilityState !== 'visible') return
+      fetch('/api/holdings').then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (on && j) setTotal(j.holdings?.length ? Number(j.total) || 0 : null) })
+        .catch(() => {})
+    }
+    look()
+    const h = setInterval(look, EVERY)
+    return () => { on = false; clearInterval(h) }
+  }, [user])
+  return total
+}
+
+/** What the watched wallets are worth, for the sidebar's Markets tile — null until it is known, and
+ *  for an account watching nothing. One look a minute, while the tab is visible. */
+export function useWalletTotal(): number | null {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const [total, setTotal] = useState<number | null>(null)
+  useEffect(() => {
+    if (!user) { setTotal(null); return }
+    let on = true
+    const look = () => {
+      if (document.visibilityState !== 'visible') return
+      Promise.all([
+        fetch('/api/holdings').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        fetch('/api/positions').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]).then(([h, p]) => {
+        if (!on) return
+        const t = (h?.holdings?.length ? Number(h.total) || 0 : 0) + (Number(p?.equity) || 0)
+        setTotal(h?.holdings?.length || p?.equity != null ? t : null)
+      })
+    }
+    look()
+    const h = setInterval(look, EVERY)
+    return () => { on = false; clearInterval(h) }
+  }, [user])
+  return total
+}
+
 /**
  * What the watched Solana wallets hold — the memecoins Fomo buys, which are tokens in a wallet
  * rather than positions on a book. Priced off each token's deepest pool; dust and coins with no

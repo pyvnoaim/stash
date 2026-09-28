@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, CalendarRange, ChartColumn, CheckCheck, ClipboardCopy,
+  ArrowRight, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck, ClipboardCopy, Coins,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
   Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
@@ -12,9 +12,10 @@ import {
 import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
-  CALENDAR, clearDone, getState, isPage, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
-  SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
+  CALENDAR, clearDone, getState, isPage, MARKET, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
+  setMarketAsset, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
+import { ASSETS, dexAsset, fmtPrice, hlCoin, perpAsset, remember, type Asset } from '@/lib/market'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
    VIEWS, so a view added there and forgotten here rendered `<undefined />` — which is not a missing
@@ -32,6 +33,7 @@ const VIEW_ICONS: Record<ViewId, React.ElementType> = {
 
 const PAGES = [
   { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
+  { id: MARKET, name: 'Markets', icon: CandlestickChart },
   { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
   { id: PDF, name: 'PDF editor', icon: FileText },
   { id: SUBS, name: 'Subscriptions', icon: Wallet },
@@ -107,6 +109,36 @@ export function CommandPalette({
   const [q, setQ] = useState('')
   useEffect(() => { if (!open) setQ('') }, [open])
 
+  /* The money side of the search: what the wallet holds, fetched as the palette opens, and the
+     markets — the book's perps and DEX tokens — asked a quarter second after the last key. Both
+     are the server's; signed out they are simply absent and the palette is what it always was. */
+  type Held = { mint: string, symbol: string, name: string, amount: number, value: number, change: number | null, pool: string | null }
+  type Tok = { network: string, pool: string, mint: string, symbol: string, name: string, price: number, liquidity: number }
+  const [held, setHeld] = useState<Held[]>([])
+  const [market, setMarket] = useState<{ perps: string[], tokens: Tok[] }>({ perps: [], tokens: [] })
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/holdings').then((r) => (r.ok ? r.json() : null)).then((j) => setHeld(j?.holdings ?? [])).catch(() => {})
+  }, [open])
+  useEffect(() => {
+    const k = q.trim()
+    if (!open || k.length < 2) { setMarket({ perps: [], tokens: [] }); return }
+    let on = true
+    const h = setTimeout(() => {
+      fetch(`/api/search?q=${encodeURIComponent(k)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (on && j) setMarket({ perps: j.perps ?? [], tokens: j.tokens ?? [] }) })
+        .catch(() => {})
+    }, 250)
+    return () => { on = false; clearTimeout(h) }
+  }, [q, open])
+  const needle = q.trim().toLowerCase()
+  const heldHits = needle.length >= 1 ? held.filter((h) => `${h.symbol} ${h.name}`.toLowerCase().includes(needle)) : []
+  const listedHits = needle.length >= 2 ? ASSETS.filter((a) => `${a.label} ${a.id}`.toLowerCase().includes(needle)) : []
+  const perpHits = market.perps.filter((c) => !ASSETS.some((a) => hlCoin(a.id) === c))
+  /** Onto the Markets desk, showing this. */
+  const chart = (a: Asset) => { remember(a); setMarketAsset(a.id); select(MARKET) }
+
   // two letters in, because one letter matches half of everything and the list is not the point.
   // memoised so an unrelated re-render doesn't rescan every item building a hay string apiece.
   const found = useMemo(() => {
@@ -136,12 +168,12 @@ export function CommandPalette({
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Commands"
-      description="Jump to a project, run a command"
+      title="Search"
+      description="Find an item, a project, a market or a token; run a command"
     >
       {/* CommandDialog drops children straight into DialogContent, so the cmdk root is ours to add */}
       <Command>
-        <CommandInput value={q} onValueChange={setQ} placeholder="Find an item, run a command" />
+        <CommandInput value={q} onValueChange={setQ} placeholder="Search notes, projects, markets, tokens…" />
         <CommandList className="max-h-[60vh]">
           <CommandEmpty>Nothing matches that.</CommandEmpty>
 
@@ -194,6 +226,58 @@ export function CommandPalette({
               <span>New project</span>
             </CommandItem>
           </CommandGroup>
+
+          {/* cmdk scores on the value, and a server's answer need not contain the typed letters —
+              so the query rides in each value, and what the server found is never filtered out */}
+          {heldHits.length > 0 && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="In your wallet">
+                {heldHits.map((h) => (
+                  <CommandItem key={h.mint} value={`wallet ${h.symbol} ${h.name} ${q}`}
+                    onSelect={run(() => (h.pool
+                      ? chart(dexAsset({ network: 'solana', pool: h.pool, symbol: h.symbol, mint: h.mint }))
+                      : select(MARKET)))}>
+                    <Coins />
+                    <span>{h.symbol}</span>
+                    <span className="text-muted-foreground truncate text-xs">{h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} {h.symbol}</span>
+                    <CommandShortcut className="tabular-nums">${h.value.toFixed(2)}</CommandShortcut>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          )}
+
+          {(listedHits.length > 0 || perpHits.length > 0 || market.tokens.length > 0) && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Markets">
+                {listedHits.map((a) => (
+                  <CommandItem key={a.id} value={`market ${a.label} ${a.id} ${q}`} onSelect={run(() => chart(a))}>
+                    <CandlestickChart />
+                    <span>{a.label}</span>
+                    <CommandShortcut>perp</CommandShortcut>
+                  </CommandItem>
+                ))}
+                {perpHits.map((c) => (
+                  <CommandItem key={c} value={`market perp ${c} ${q}`} onSelect={run(() => chart(perpAsset(c)))}>
+                    <CandlestickChart />
+                    <span>{c}</span>
+                    <CommandShortcut>perp · Hyperliquid</CommandShortcut>
+                  </CommandItem>
+                ))}
+                {market.tokens.map((t) => (
+                  <CommandItem key={`${t.network}:${t.pool}`} value={`market token ${t.symbol} ${t.name} ${t.network} ${q}`}
+                    onSelect={run(() => chart(dexAsset(t)))}>
+                    <Coins />
+                    <span>{t.symbol}</span>
+                    <span className="text-muted-foreground truncate text-xs">{t.name}</span>
+                    <CommandShortcut className="tabular-nums">{fmtPrice(t.price)} · {t.network}</CommandShortcut>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          )}
 
           {found.items.length > 0 && (
             <>
