@@ -5,8 +5,7 @@
  * stays that way. This is deliberately not in there: one file holds every call that can open a
  * position, so the question "what can this server do to my account" has one place to be answered.
  *
- * Bitget only. MEXC has kept its futures place-order endpoint closed since 2022, so there is
- * nothing to call there and the app says so rather than offering a button that cannot work.
+ * Bitget only — the one venue on the desk.
  *
  * The key is the account's own, stored by the /api/bitget route and never seen by a browser. A
  * read-only key is the standing advice and still is: `desk()` asks the exchange which kind this

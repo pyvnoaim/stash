@@ -473,8 +473,6 @@ const VENUES = [
      a position, so this says what it is rather than leaving it to be discovered. */
   { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
     hint: 'From Bitget → API Management. Read is enough; add Trade only for auto-cancel, which is the same right that opens positions. Three parts — the passphrase is the one you chose.' },
-  { id: 'mexc', name: 'MEXC', route: '/api/mexc', passphrase: false,
-    hint: 'From MEXC → API Management, futures Read only. Trade rights buy nothing here: MEXC has kept those endpoints closed since 2022.' },
 ] as const
 
 /**
@@ -537,7 +535,8 @@ function ExchangeSection() {
         </Button>
       }
     >
-      <Select value={venue} onValueChange={(id) => pick(id as typeof venue)}>
+      {/* a picker with one venue in it is a label pretending to be a choice */}
+      {VENUES.length > 1 && <Select value={venue} onValueChange={(id) => pick(id as typeof venue)}>
         <SelectTrigger size="sm" aria-label="Exchange"><SelectValue /></SelectTrigger>
         <SelectContent>
           {VENUES.map((x) => (
@@ -547,7 +546,7 @@ function ExchangeSection() {
             </SelectItem>
           ))}
         </SelectContent>
-      </Select>
+      </Select>}
       {have[v.id] && (
         <div className="flex items-center justify-between gap-3">
           <p className="text-muted-foreground text-xs">A {v.name} key is on this account. Saving replaces it.</p>

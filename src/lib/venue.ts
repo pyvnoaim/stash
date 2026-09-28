@@ -16,7 +16,7 @@ import type { Venue } from './market'
 /** What `useVenue` hands back: `undefined` until the answer lands, then the venue or null. */
 export type VenueFeed = Venue | undefined
 
-const VENUES = ['bitget', 'mexc'] as const
+const VENUES = ['bitget'] as const
 
 let asked: Promise<Venue> | null = null
 

@@ -19,11 +19,9 @@ const sw = readFileSync('dist/sw.js', 'utf8')
    clientsClaim and skipWaiting in here and there is nothing left to offer, so the prompt would go
    quiet without a line of it changing. */
 assert(!sw.includes('clientsClaim'), 'worker claims clients — registerType is back to autoUpdate')
-// any regex literal, not only the ones starting ^https: the MEXC bars are relayed by this app's
-// own server (CORS), so one of the three candle routes is now a same-origin path
 const cachedBy = [...sw.matchAll(/registerRoute\((\/(?:[^/\\]|\\.)+\/),new e\.NetworkFirst/g)]
   .map((m) => new RegExp(m[1].slice(1, -1)))
-assert.equal(cachedBy.length, 3, 'expected the three candle routes in the built worker')
+assert.equal(cachedBy.length, 2, 'expected the two candle routes in the built worker')
 
 /* The pictures in notes are the one CacheFirst route, and the only thing here that may be: a blob
    id is random and its bytes never change, so a cached copy cannot be a stale answer to anything.
@@ -48,27 +46,19 @@ const cached = (url: string) => cachedBy.some((re) => re.test(url))
 const crypto = ASSETS.find((a) => a.id === 'BTCUSDT')!
 const gold = ASSETS.find((a) => a.id === 'XAUUSDT')!
 
-/* Bars are cached, so the chart and every signal over it survive with no network — on both books,
-   since which one a reader gets is their key's business and offline must not depend on it. The
-   MEXC one is this app's own route rather than the venue's: see fetchMexc. */
+/* Bars are cached, so the chart and every signal over it survive with no network. */
 for (const url of [
   ...(await asked(() => fetchCandles(crypto, '1d'))),
   ...(await asked(() => fetchCandles(gold, '1d'))),
-  ...(await asked(() => fetchCandles(crypto, '1d', 'mexc'))),
 ]) assert.ok(cached(url), `candles should be cached: ${url}`)
 
 // prices are not, on either feed, and must never quietly become so
 const priceUrls = [
   ...(await asked(() => fetchPrices([crypto.id]))),
   ...(await asked(() => fetchPrices([gold.id]))),
-  ...(await asked(() => fetchPrices([crypto.id], 'mexc'))),
 ]
-assert.ok(priceUrls.length >= 3, 'fetchPrices asked for nothing on one of the feeds')
+assert.ok(priceUrls.length >= 2, 'fetchPrices asked for nothing on one of the feeds')
 for (const url of priceUrls) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
-
-/* The MEXC price relay and its candle relay are two paths on this app's own origin, and only the
-   candles may be cached — the same line the venues' own endpoints are held to above. */
-assert.ok(priceUrls.some((u) => u.includes('/api/mexc/price')), 'the MEXC relay is not being asked for prices')
 
 /* Trending pools are on the same footing as the ticker. The bell that alerted off this list is
    gone and only the MCP tool reads it now, which does not go through a service worker at all — but

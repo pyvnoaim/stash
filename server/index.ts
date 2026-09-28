@@ -32,19 +32,9 @@ import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
-import { closed as mexcClosed, pending as mexcPending, positions as mexcPositions } from './mexc.ts'
 import { cancel, desk, place, setLevels, type Cred } from './trade.ts'
 import { createStash } from './mcp.ts'
-import { BARS, MX_INTERVAL } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
-
-/* What the MEXC relay below will accept, built off the same map the client asks with so the two
-   cannot drift into a 400 nobody can read. The seconds are what "a thousand bars back" means on
-   each one — that venue takes a start time where every other feed here takes a limit. */
-const MEXC_INTERVALS = new Set(Object.values(MX_INTERVAL))
-const MEXC_STEP: Record<string, number> = {
-  Min5: 300, Min15: 900, Min60: 3_600, Hour4: 14_400, Day1: 86_400, Week1: 604_800,
-}
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -445,8 +435,8 @@ export function start({
   // each account's own read-only exchange key — see the /api/bitget route. Bitget's key comes in
   // three parts: JSON {key, secret, passphrase}
   try { db.exec('alter table users add column bitget text') } catch { /* already there */ }
-  // and MEXC's in two: JSON {key, secret}
-  try { db.exec('alter table users add column mexc text') } catch { /* already there */ }
+  // MEXC came off the desk the same way Kraken did, and its column goes with it
+  try { db.exec('alter table users drop column mexc') } catch { /* already gone */ }
   // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
   // than sitting in the file forever unread
   try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
@@ -504,8 +494,6 @@ export function start({
     dropBlob: db.prepare('delete from blobs where id = ?'),
     bitget: db.prepare('select bitget from users where id = ?'),
     setBitget: db.prepare('update users set bitget = ? where id = ?'),
-    mexc: db.prepare('select mexc from users where id = ?'),
-    setMexc: db.prepare('update users set mexc = ? where id = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -1205,64 +1193,23 @@ export function start({
       return send(res, 200, { alerts: push.alerts(user.id, tz) })
     }
 
-    /* MEXC's public market data, relayed. Bitget's own feed is CORS-open and the browser reads it
-       straight; contract.mexc.com answers a cross-origin GET with no allow-origin header at all, so
-       a MEXC reader's charts would simply be empty without this. Nothing is signed here — it is the
-       same public candles anyone can curl — and it is behind a session anyway, because a MEXC feed
-       is only ever wanted by an account that has set a MEXC key.
-
-       The symbol and interval are matched, not forwarded: a proxy that passes a caller's string
-       into a URL is an open relay to whatever else that host serves, and this one has exactly two
-       shapes to accept. */
-    const mexcFeed = /^\/api\/mexc\/(candles|price)$/.exec(path)?.[1]
-    if (mexcFeed && req.method === 'GET') {
-      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
-      const q = new URL(req.url ?? '/', 'http://x').searchParams
-      const symbol = q.get('symbol') ?? ''
-      const interval = q.get('interval') ?? ''
-      if (!/^[A-Z0-9]{2,20}_USDT$/.test(symbol)) return send(res, 400, { error: 'not a contract symbol' })
-      if (mexcFeed === 'candles' && !MEXC_INTERVALS.has(interval)) return send(res, 400, { error: 'not an interval' })
-      /* How many bars back, asked for by time: this venue counts from a `start` where every other
-         feed here takes a limit. Clamped rather than trusted — the number goes into a URL, and a
-         caller's own arithmetic is not something to hand an upstream. */
-      const bars = Math.min(Math.max(Math.floor(Number(q.get('bars') ?? BARS)) || BARS, 1), BARS)
-      const url = mexcFeed === 'price'
-        ? `https://contract.mexc.com/api/v1/contract/ticker?symbol=${symbol}`
-        : `https://contract.mexc.com/api/v1/contract/kline/${symbol}?interval=${interval}`
-          + `&start=${Math.floor((Date.now() - bars * 1000 * MEXC_STEP[interval]) / 1000)}`
-      try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-        if (!r.ok) return send(res, 502, { error: `MEXC answered ${r.status}` })
-        // cached briefly: the desk polls a forming bar every few seconds and every reader of the
-        // same symbol would otherwise be one call each against a venue that rate-limits by IP
-        return send(res, 200, await r.json(), { 'cache-control': 'private, max-age=5' })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
     /* Each account's own exchange key, kept here because it signs requests — a browser holding it
        would be a browser that can be read. It never travels back out: GET answers only whether one
        is set. Stored as given rather than hashed, since signing needs it back — which is exactly
        why the key is made read-only at the exchange: a copied database leaks a viewer, not a wallet. */
-    /* One route per venue, one rule for all of them: the credential never travels back out —
-       GET answers only whether one is set. Bitget cuts its key in three parts and MEXC in two,
-       and every part arrives together or not at all: a fraction of a credential is a config that
-       fails at three in the morning. */
-    const venue = /^\/api\/(bitget|mexc)$/.exec(path)?.[1] as 'bitget' | 'mexc' | undefined
-    if (venue) {
+    /* Bitget cuts its key in three parts, and every part arrives together or not at all: a
+       fraction of a credential is a config that fails at three in the morning. */
+    if (path === '/api/bitget') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const get = { bitget: q.bitget, mexc: q.mexc }[venue]
-      const set = { bitget: q.setBitget, mexc: q.setMexc }[venue]
       if (req.method === 'GET') {
-        return send(res, 200, { set: !!(get.get(user.id) as Record<string, string | null> | undefined)?.[venue] })
+        return send(res, 200, { set: !!(q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget })
       }
       if (req.method === 'POST') {
         let b: any
         try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
         const key = String(b?.key ?? '').trim(), secret = String(b?.secret ?? '').trim(), passphrase = String(b?.passphrase ?? '').trim()
-        const parts = venue === 'bitget' ? [key, secret, passphrase] : [key, secret]
+        const parts = [key, secret, passphrase]
         const given = parts.filter(Boolean).length
         if (given !== 0 && given !== parts.length) return send(res, 400, { error: 'every part of the credential arrives together' })
         /* Every one of these ends up as an HTTP header value on a signed call to the exchange, so
@@ -1272,8 +1219,8 @@ export function start({
         if (parts.some((p) => p.length > 256 || /[^\x20-\x7e]/.test(p))) {
           return send(res, 400, { error: 'a key, secret or passphrase is plain text — check what was pasted' })
         }
-        set.run(key ? JSON.stringify(venue === 'bitget' ? { key, secret, passphrase } : { key, secret }) : null, user.id)
-        log(venue, user.name, via(req))
+        q.setBitget.run(key ? JSON.stringify({ key, secret, passphrase }) : null, user.id)
+        log('bitget', user.name, via(req))
         return send(res, 200, { set: !!key })
       }
       return send(res, 405, { error: 'method not allowed' })
@@ -1405,7 +1352,6 @@ export function start({
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const stored = [
         { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase), book: (c: any) => bitgetPending(c.key, c.secret, c.passphrase) },
-        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret), book: (c: any) => mexcPending(c.key, c.secret) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       try {
@@ -1431,9 +1377,8 @@ export function start({
     /* The desk, and the one thing on this server that can move money.
        GET says what the account has and whether its key may trade at all; POST places one order,
        with its stop and target riding it; PATCH moves the stop or the target resting against a
-       position that is already open; DELETE takes a resting one back off the book. Bitget
-       only — MEXC's futures order endpoints have been shut since 2022, so there is nothing to
-       call and the app offers no button for it.
+       position that is already open; DELETE takes a resting one back off the book. Bitget, the
+       one venue on the desk.
        All of them refuse without a stored key, the same 501 the positions route answers with. */
     if (path === '/api/trade') {
       const user = auth(req)
@@ -1551,7 +1496,6 @@ export function start({
       const since = Date.now() - 7 * 86400_000
       const stored = [
         { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetClosed(c.key, c.secret, c.passphrase, since) },
-        { venue: 'mexc', raw: (q.mexc.get(user.id) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcClosed(c.key, c.secret, since) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       /* A venue that will not answer says so in the answer, not only in the log. An empty list is
@@ -1763,7 +1707,6 @@ export function start({
         try {
         const keys = [
           { venue: 'Bitget', raw: (q.bitget.get(who[i]) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
-          { venue: 'MEXC', raw: (q.mexc.get(who[i]) as { mexc: string | null } | undefined)?.mexc, go: (c: any) => mexcPositions(c.key, c.secret) },
         ].filter((v) => v.raw && !((refused.get(`${v.venue}:${who[i]}`) ?? 0) > Date.now() - REFUSED_FOR))
         if (!keys.length) return
         const feeds = await Promise.all(keys.map((v) => v.go(JSON.parse(v.raw!)).catch(() => {
@@ -2228,13 +2171,11 @@ export function start({
             // own device, played back to them and recorded. Nothing here fetches media over the
             // network, so no host is named.
             + "media-src 'self' blob:; "
-            // MEXC's REST is absent on purpose: its contract API sends no allow-origin header, so
-            // those bars come through this server's own relay and ride 'self'. Its socket and
-            // Bitget's are the live prices, and a socket carries no CORS to be refused by.
+            // Bitget's REST and socket are the market feed and the live prices.
             // GeckoTerminal came off with the Trending panel: no browser code reaches it any more
             // (the MCP tool asks from this process), so the grant was permission for nothing —
             // and a connect-src host nothing uses is a host anything injected could use.
-            + "connect-src 'self' https://api.bitget.com wss://ws.bitget.com wss://contract.mexc.com; "
+            + "connect-src 'self' https://api.bitget.com wss://ws.bitget.com; "
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),
