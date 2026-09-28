@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils'
 
 /** A finished token trade, as /api/token-trades sends it: bought and sold back out of the wallet. */
 type TokenTrade = {
-  mint: string, symbol: string, pool: string | null, openedAt: number, closedAt: number,
+  mint: string, symbol: string, name?: string, listed?: boolean, pool: string | null, openedAt: number, closedAt: number,
   amount: number, cost: number, proceeds: number, pnl: number, pct: number, buys: number, sells: number,
 }
 
@@ -40,6 +40,8 @@ type Row = {
   entry: number, exit: number
   usd: number | null, pct: number | null, r: number | null
   amount?: number, cost?: number
+  /** A token's full name, and whether DexScreener still lists it at all. */
+  name?: string, listed?: boolean
   result?: Result
 }
 
@@ -92,7 +94,10 @@ function perpRow(r: Result): Row {
 
 function tokenRow(t: TokenTrade): Row {
   return {
-    id: `tok-${t.mint}-${t.closedAt}`, kind: 'token', label: t.symbol, logo: `/api/logo/${t.mint}`, mint: t.mint,
+    // a token nobody lists any more has no ticker — its address, shortened, rather than the first
+    // letters of it passed off as one
+    id: `tok-${t.mint}-${t.closedAt}`, kind: 'token', label: t.listed === false || !t.symbol ? `${t.mint.slice(0, 4)}…${t.mint.slice(-4)}` : t.symbol,
+    name: t.name, listed: t.listed !== false, logo: `/api/logo/${t.mint}`, mint: t.mint,
     chart: t.pool ? dexAsset({ network: 'solana', pool: t.pool, symbol: t.symbol, mint: t.mint }) : null,
     side: 'token', lev: null, openedAt: t.openedAt, closedAt: t.closedAt,
     entry: t.cost / t.amount, exit: t.proceeds / t.amount,
@@ -248,13 +253,6 @@ function YourTrades({ rows, period, loadingTokens, total, onPick }: {
   const sel = shown.find((x) => x.id === picked) ?? (wide ? shown[0] : undefined)
   const best = shown.reduce<Row | null>((b, x) => (x.usd != null && (b?.usd == null || x.usd > b.usd) ? x : b), null)
   const worst = shown.reduce<Row | null>((b, x) => (x.usd != null && (b?.usd == null || x.usd < b.usd) ? x : b), null)
-  // grouped by the day each closed on, newest first
-  const days: [string, Row[]][] = []
-  for (const x of shown) {
-    const d = dayOf(x.closedAt)
-    if (days.at(-1)?.[0] === d) days.at(-1)![1].push(x)
-    else days.push([d, [x]])
-  }
   const periodWords = period === 'All' ? 'all time' : `last ${period.replace('D', ' days')}`
 
   if (!total && !loadingTokens) {
@@ -314,32 +312,30 @@ function YourTrades({ rows, period, loadingTokens, total, onPick }: {
           {!shown.length && (
             <p className="text-muted-foreground px-3 py-8 text-sm">Nothing closed in this window{filter !== 'all' ? ' for this filter' : ''}.</p>
           )}
-          {days.map(([day, list]) => (
-            <div key={day} className="flex flex-col">
-              <span className="text-muted-foreground px-3 pt-3 pb-1.5 text-xs">{day}</span>
-              {list.map((x) => (
-                <div key={x.id}>
-                  <button type="button" onClick={() => setPicked(sel?.id === x.id && !wide ? null : x.id)} aria-current={sel?.id === x.id}
-                    className={cn('hover:bg-accent/60 grid min-h-14 w-full grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left lg:grid-cols-[28px_minmax(0,1.3fr)_80px_minmax(0,1.4fr)_110px] lg:gap-3.5',
-                      sel?.id === x.id && 'bg-muted')}>
-                    <Mark row={x} />
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="flex min-w-0 items-center gap-2"><span className="truncate font-medium">{x.label}</span><SidePill side={x.side} lev={x.lev} /></span>
-                      <span className="text-muted-foreground text-xs lg:hidden">held {held(x.closedAt - x.openedAt)}</span>
-                    </span>
-                    <span className="text-muted-foreground hidden text-xs lg:block">{held(x.closedAt - x.openedAt)}</span>
-                    <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums lg:block">
-                      {x.kind === 'token' ? `$${(x.cost ?? 0).toFixed(2)} → $${((x.cost ?? 0) + (x.usd ?? 0)).toFixed(2)}` : `${fmtPrice(x.entry)} → ${fmtPrice(x.exit)}`}
-                    </span>
-                    <span className="flex flex-col items-end gap-0.5 tabular-nums">
-                      <span className={cn('font-mono text-sm', tone(x.usd ?? x.r))}>{x.usd != null ? money(x.usd) : x.r != null ? rText(x.r) : '—'}</span>
-                      {x.pct != null && <span className={cn('font-mono text-[11px] opacity-75', tone(x.pct))}>{pctText(x.pct)}</span>}
-                    </span>
-                  </button>
-                  {/* on a phone the detail opens under its own row rather than in a panel beside the list */}
-                  {!wide && sel?.id === x.id && <div className="px-1 pb-3"><TradeDetail row={x} onPick={onPick} /></div>}
-                </div>
-              ))}
+          {/* One row a trade, the date in its own column: a heading per day was a heading over nearly
+              every row, since most days close one trade — and the list read as air. */}
+          {shown.map((x) => (
+            <div key={x.id}>
+              <button type="button" onClick={() => setPicked(sel?.id === x.id && !wide ? null : x.id)} aria-current={sel?.id === x.id}
+                className={cn('hover:bg-accent/60 grid h-12 w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-2.5 text-left lg:grid-cols-[24px_minmax(0,1.3fr)_64px_64px_minmax(0,1.3fr)_128px]',
+                  sel?.id === x.id && 'bg-muted')}>
+                <Mark row={x} className="size-6" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="flex min-w-0 items-center gap-2"><span className="truncate font-medium">{x.label}</span><SidePill side={x.side} lev={x.lev} /></span>
+                  <span className="text-muted-foreground text-[11px] lg:hidden">{dayOf(x.closedAt)} · held {held(x.closedAt - x.openedAt)}</span>
+                </span>
+                <span className="text-muted-foreground hidden text-xs lg:block">{dayOf(x.closedAt)}</span>
+                <span className="text-muted-foreground hidden text-xs lg:block">{held(x.closedAt - x.openedAt)}</span>
+                <span className="text-muted-foreground hidden truncate font-mono text-xs tabular-nums lg:block">
+                  {x.kind === 'token' ? `$${(x.cost ?? 0).toFixed(2)} → $${((x.cost ?? 0) + (x.usd ?? 0)).toFixed(2)}` : `${fmtPrice(x.entry)} → ${fmtPrice(x.exit)}`}
+                </span>
+                <span className="flex items-baseline justify-end gap-2 tabular-nums">
+                  {x.pct != null && <span className={cn('hidden font-mono text-[11px] opacity-70 sm:inline', tone(x.pct))}>{pctText(x.pct)}</span>}
+                  <span className={cn('w-16 text-right font-mono text-sm', tone(x.usd ?? x.r))}>{x.usd != null ? money(x.usd) : x.r != null ? rText(x.r) : '—'}</span>
+                </span>
+              </button>
+              {/* on a phone the detail opens under its own row rather than in a panel beside the list */}
+              {!wide && sel?.id === x.id && <div className="px-1 pt-2 pb-4"><TradeDetail row={x} onPick={onPick} /></div>}
             </div>
           ))}
         </section>
@@ -368,7 +364,8 @@ function useWindowBars(asset: Asset | null, from: number, to: number) {
     const [iv, ms] = steps.find(([, m]) => back / m < 980 && span / m < 400) ?? steps.at(-1)!
     let on = true
     fetchCandles(asset, iv, feed, Math.min(1000, Math.ceil(back / ms) + 5))
-      .then((c) => { if (on) setBars(c.filter((b) => b.t + ms > from - span * 0.15 && b.t < to + span * 0.15)) })
+      // at least twenty bars either side, so a twenty-minute trade is not a flat stub of four bars
+      .then((c) => { const pad = Math.max(span * 0.15, ms * 20); if (on) setBars(c.filter((b) => b.t + ms > from - pad && b.t < to + pad)) })
       .catch(() => { if (on) setBars([]) })
     return () => { on = false }
   }, [asset?.id, from, to, feed]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -398,10 +395,11 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
   const bars = useWindowBars(row.chart, row.openedAt, row.closedAt)
   const ext = bars && bars.length ? extremesOf(row, bars) : null
   const out = row.usd
-  const peak = ext && out != null ? Math.max(ext.peak, out) : null
+  // both ends take in zero: the bar draws a tick at "nothing made or lost", so it has to be on it
+  const peak = ext && out != null ? Math.max(ext.peak, out, 0) : null
   const worst = ext && out != null ? Math.min(ext.worst, out, 0) : null
   const gave = peak != null && out != null && peak > 0 && peak - out > 0.005 ? peak - out : null
-  const at = (v: number) => (peak != null && worst != null && peak > worst ? ((v - worst) / (peak - worst)) * 100 : 50)
+  const at = (v: number) => (peak != null && worst != null && peak > worst ? Math.min(100, Math.max(0, ((v - worst) / (peak - worst)) * 100)) : 50)
   // the chart: closes over the window, and where it went in and came out
   const chart = useMemo(() => {
     if (!bars || bars.length < 2) return null
@@ -409,10 +407,16 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
     const lo = Math.min(...bars.map((b) => b.l)), hi = Math.max(...bars.map((b) => b.h))
     const X = (t: number) => ((t - t0) / (t1 - t0 || 1)) * 100
     const Y = (p: number) => 6 + ((hi - p) / (hi - lo || 1)) * 88
+    /* Each mark sits on the line, at the close of the bar it happened in. Placed at the trade's own
+       price it floated off the line: a token's "price" here is its cost over its amount, fees and
+       the SOL it was paid in included, which is no price the chart ever printed. */
+    const on = (t: number) => bars.reduce((b, x) => (x.t <= t ? x : b), bars[0]).c
     return {
       d: bars.map((b, i) => `${i ? 'L' : 'M'}${X(b.t).toFixed(2)} ${Y(b.c).toFixed(2)}`).join(' '),
-      inX: Math.max(2, Math.min(98, X(row.openedAt))), inY: Y(row.entry),
-      outX: Math.max(2, Math.min(98, X(row.closedAt))), outY: Y(row.exit),
+      inX: Math.max(2, Math.min(98, X(row.openedAt))), inY: Y(on(row.openedAt)),
+      outX: Math.max(2, Math.min(98, X(row.closedAt))), outY: Y(on(row.closedAt)),
+      // the stretch it was held, shaded behind the line
+      holdL: Math.max(0, X(row.openedAt)), holdR: Math.min(100, X(row.closedAt)),
     }
   }, [bars, row])
   const facts: [string, string][] = row.kind === 'token'
@@ -427,7 +431,12 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
         <span className="grid gap-0.5">
           <span className="font-medium">{row.label}</span>
           <span className="text-muted-foreground text-xs">
-            {row.kind === 'token' ? 'Token · Solana · bought and sold from your wallet' : `${row.side === 'long' ? 'Long' : 'Short'}${row.lev ? ` ${row.lev}×` : ''} · Hyperliquid perp`}
+            {row.kind === 'token'
+              ? row.listed ? [row.name, 'Solana token'].filter(Boolean).join(' · ') : 'No longer listed on DexScreener'
+              : `${row.side === 'long' ? 'Long' : 'Short'}${row.lev ? ` ${row.lev}×` : ''} · Hyperliquid perp`}
+            {row.mint && (
+              <> · <a className="underline underline-offset-2" href={`https://solscan.io/token/${row.mint}`} target="_blank" rel="noreferrer noopener">Solscan</a></>
+            )}
           </span>
         </span>
       </div>
@@ -445,6 +454,7 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
         {!bars ? <Skeleton className="absolute inset-0" /> : chart ? (
           <>
             <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full" aria-hidden>
+              <rect x={chart.holdL} y="0" width={Math.max(0.5, chart.holdR - chart.holdL)} height="100" className={tone(out ?? row.r) === UP ? 'fill-emerald-500/8' : 'fill-destructive/8'} />
               <path d={chart.d} fill="none" className="stroke-foreground/80" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
             </svg>
             <FillMark buy={row.side !== 'short'} className="absolute size-4 -translate-x-1/2 -translate-y-1/2" style={{ left: `${chart.inX}%`, top: `${chart.inY}%` }} />
@@ -453,20 +463,26 @@ function TradeDetail({ row, onPick }: { row: Row, onPick: (asset: string) => voi
         ) : <p className="text-muted-foreground absolute inset-0 grid place-items-center text-xs">No chart for this one</p>}
       </div>
       {peak != null && worst != null && out != null && (
+        /* The range it ran through while open: the worst it was, the best, a tick where it started
+           (nothing made or lost) and a dot where it closed. Said in a sentence under it, and the
+           sentence fits the trade: a loss that was never up does not "give back a peak". */
         <section className="bg-muted/40 grid gap-2.5 rounded-2xl p-4">
-          <div className="text-muted-foreground flex justify-between text-xs">
-            <span>Worst <span className="text-destructive font-mono tabular-nums">{money(worst)}</span></span>
-            <span>Peak <span className={cn('font-mono tabular-nums', UP)}>{money(peak)}</span></span>
+          <span className="text-muted-foreground text-xs">While it was open</span>
+          <div className="relative mx-1 my-1.5 h-1.5 rounded-full" aria-hidden>
+            <span className="bg-destructive/35 absolute inset-y-0 left-0 rounded-l-full" style={{ width: `${at(0)}%` }} />
+            <span className="absolute inset-y-0 rounded-r-full bg-emerald-500/35" style={{ left: `${at(0)}%`, right: 0 }} />
+            <span className="bg-foreground/80 absolute -top-1.5 h-4.5 w-px" style={{ left: `${at(0)}%` }} />
+            <span className={cn('ring-card absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2', out >= 0 ? 'bg-emerald-500' : 'bg-destructive')}
+              style={{ left: `${at(out)}%` }} />
           </div>
-          <div className="bg-muted relative h-1.5 rounded-full" aria-hidden>
-            <span className="bg-destructive/30 absolute inset-y-0 left-0 rounded-l-full" style={{ width: `${at(0)}%` }} />
-            <span className="absolute inset-y-0 rounded-r-full bg-emerald-500/25" style={{ left: `${at(0)}%`, right: 0 }} />
-            <span className={cn('absolute inset-y-0', out >= 0 ? 'bg-emerald-500' : 'bg-destructive')}
-              style={{ left: `${Math.min(at(0), at(out))}%`, width: `${Math.abs(at(out) - at(0))}%` }} />
-            <span className="bg-foreground absolute -top-1 h-3.5 w-0.5" style={{ left: `${at(0)}%` }} />
+          <div className="flex justify-between font-mono text-xs tabular-nums">
+            <span className="text-destructive">{worst < 0 ? money(worst) : '$0.00'} <span className="text-muted-foreground font-sans">worst</span></span>
+            <span className={UP}><span className="text-muted-foreground font-sans">best</span> {peak > 0 ? money(peak) : '$0.00'}</span>
           </div>
           <span className="text-muted-foreground text-xs">
-            Closed at {money(out)}{gave != null ? ` — gave back $${gave.toFixed(2)} of the peak` : ''}
+            {out >= 0
+              ? `Closed at ${money(out)}${gave != null && gave >= Math.max(0.01, peak * 0.2) ? ` — gave back $${gave.toFixed(2)} of its best` : ''}`
+              : peak > 0.005 ? `Closed at ${money(out)} — the best it did was ${money(peak)}` : `Closed at ${money(out)} — never in profit`}
           </span>
         </section>
       )}
