@@ -33,10 +33,11 @@ import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import {
   ADDRESS, candles as hlCandles, closed as hlClosed, INTERVAL, mids as hlMids, pending as hlPending,
-  positions as hlPositions, type Closed,
+  positions as hlPositions, universe as hlUniverse, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
 import { holdings as solHoldings, logo as solLogo } from './solana.ts'
+import { candles as dexCandles, NETWORKS, pool as dexPool, POOL, search as dexSearch, TIMEFRAME } from './dex.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -1303,6 +1304,43 @@ export function start({
       return res.end(img.bytes)
     }
 
+    /* Search beyond the desk's list: every perp Hyperliquid lists, and tokens on DexScreener that
+       GeckoTerminal can chart. Signed in only — each query is a call to somebody else's API. */
+    if (path === '/api/search' && req.method === 'GET') {
+      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
+      const q = (new URL(req.url ?? '/', 'http://x').searchParams.get('q') ?? '').trim()
+      if (q.length < 2) return send(res, 200, { perps: [], tokens: [] })
+      const needle = q.toLowerCase()
+      const [coins, tokens] = await Promise.all([
+        hlUniverse().catch(() => [] as string[]),
+        dexSearch(q).catch(() => []),
+      ])
+      const perps = coins.filter((c) => c.toLowerCase().includes(needle))
+        .sort((a, b) => Number(!a.toLowerCase().startsWith(needle)) - Number(!b.toLowerCase().startsWith(needle)) || a.length - b.length)
+        .slice(0, 8)
+      return send(res, 200, { perps, tokens })
+    }
+
+    /* A DEX pool's bars, off GeckoTerminal through its own budget — see dex.ts — and the pool's
+       facts for the panel beside the chart. Signed in only, and only a well-formed pool on a
+       network that can be charted: GeckoTerminal allows thirty calls a minute for everybody. */
+    const dexRoute = /^\/api\/dex\/(candles|pool)$/.exec(path)?.[1]
+    if (dexRoute && req.method === 'GET') {
+      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
+      const u = new URL(req.url ?? '/', 'http://x').searchParams
+      const network = u.get('network') ?? '', address = u.get('pool') ?? ''
+      if (!Object.values(NETWORKS).includes(network) || !POOL.test(address)) return send(res, 400, { error: 'not a pool' })
+      try {
+        if (dexRoute === 'pool') return send(res, 200, { pool: await dexPool(network, address) })
+        const interval = u.get('interval') ?? ''
+        if (!TIMEFRAME[interval]) return send(res, 400, { error: 'not an interval' })
+        const want = Math.floor(Number(u.get('bars') ?? '1000')) || 1000
+        return send(res, 200, await dexCandles(network, address, interval, want), { 'cache-control': 'private, max-age=15' })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
+    }
+
     /* The market feed, relayed. Hyperliquid's info endpoint is a POST, which no service worker can
        cache and every browser would spend from the same small per-IP budget; through here it is a
        GET the worker keeps for offline, and one cached upstream call per coin and interval however
@@ -1316,10 +1354,14 @@ export function start({
       }
       const u = new URL(req.url ?? '/', 'http://x').searchParams
       const coin = u.get('coin') ?? '', interval = u.get('interval') ?? ''
-      /* The listed assets and nothing else. The pattern alone would let anyone ask for made-up
+      /* Coins the venue lists and nothing else. The pattern alone would let anyone ask for made-up
          coins, and every new name is a cache entry and an upstream call out of the one budget the
-         whole server shares — a signed-out stranger could stall everyone's charts that way. */
-      if (!LISTED.has(coin) || !INTERVAL[interval]) return send(res, 400, { error: 'not a market' })
+         whole server shares — a signed-out stranger could stall everyone's charts that way. The
+         desk's own list answers without asking; anything else is checked against the book's. */
+      if (!INTERVAL[interval]) return send(res, 400, { error: 'not a market' })
+      if (!LISTED.has(coin) && !(await hlUniverse().catch(() => [] as string[])).includes(coin)) {
+        return send(res, 400, { error: 'not a market' })
+      }
       const bars = Math.floor(Number(u.get('bars') ?? '1000')) || 1000
       try {
         return send(res, 200, await hlCandles(coin, interval, bars), { 'cache-control': 'private, max-age=5' })

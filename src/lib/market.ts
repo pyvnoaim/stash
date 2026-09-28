@@ -17,8 +17,13 @@ export type Candle = { t: number; o: number; h: number; l: number; c: number; v?
    is-the-US-open clock, two slower poll rates, a filter the sweep applied to nothing, and a stock
    bell that could never fire. Every asset here is a USDT perpetual. Putting stocks back is a feed
    again, and that is the honest price of it. */
-export type Source = 'hyperliquid'
-export type Asset = { id: string; label: string; source: Source; group: string; logo: string }
+export type Source = 'hyperliquid' | 'dex'
+/** `pool` and `network` only on a DEX token: the pool its candles come off, on GeckoTerminal's
+ *  network name. `mint` is the token itself, for its logo. */
+export type Asset = {
+  id: string; label: string; source: Source; group: string; logo: string
+  pool?: string; network?: string; mint?: string
+}
 
 /* Logos ship with the build rather than hotlinked: three third-party hosts seeing every reader's
    address is a lot to pay for 150KB of icons, and a CDN that moves a file breaks them silently.
@@ -85,7 +90,52 @@ export const setFeed = (f: Feed) => { feed = f }
 export function fetchCandles(
   asset: Asset, interval: Interval, _venue: Venue = null, bars = BARS,
 ): Promise<Candle[]> {
+  if (asset.source === 'dex') {
+    return fetch(`/api/dex/candles?network=${asset.network}&pool=${asset.pool}&interval=${interval}&bars=${bars}`)
+      .then(async (r) => {
+        const j = await r.json()
+        if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || 'No bars for this pool')
+        return j as Candle[]
+      })
+  }
   return feed.candles(asset.id, interval, bars)
+}
+
+/* ---------- assets beyond the list ---------- */
+
+/** Any perp the venue lists, as an asset: its id is the USDT symbol the rest of the app speaks, so
+ *  a HYPE found by search charts, reprices and files exactly like the eleven on the list. */
+export const perpAsset = (coin: string): Asset =>
+  ({ id: `${coin}USDT`, label: coin, source: 'hyperliquid', group: 'Perps', logo: '' })
+
+/** A DEX token, as an asset. Its id names the pool — the thing its bars are read off — so it
+ *  survives a reload in the stored document; the label rides in the registry below. */
+export const dexAsset = (t: { network: string, pool: string, symbol: string, mint?: string }): Asset => ({
+  id: `dex:${t.network}:${t.pool}`, label: t.symbol || 'Token', source: 'dex', group: 'Tokens',
+  logo: t.mint ? `/api/logo/${t.mint}` : '', pool: t.pool, network: t.network, mint: t.mint,
+})
+
+/* The assets met off the list — searched for, or held — so an id alone can be turned back into
+   one. Kept in localStorage for the label; a DEX id alone still charts without it. */
+const MET_KEY = 'stash-met-assets'
+const met = new Map<string, Asset>()
+try {
+  for (const a of JSON.parse(globalThis.localStorage?.getItem(MET_KEY) ?? '[]') as Asset[]) if (a?.id) met.set(a.id, a)
+} catch { /* a private window, or nothing kept yet */ }
+export function remember(a: Asset) {
+  if (ASSETS.some((x) => x.id === a.id)) return
+  met.set(a.id, a)
+  try { globalThis.localStorage?.setItem(MET_KEY, JSON.stringify([...met.values()].slice(-50))) } catch { /* full or blocked */ }
+}
+
+/** Any id back into an asset: the list, then what was met, then what the id itself says. */
+export function assetById(id: string): Asset | null {
+  const listed = ASSETS.find((a) => a.id === id) ?? met.get(id)
+  if (listed) return listed
+  const dex = /^dex:([a-z]+):([1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40})$/.exec(id)
+  if (dex) return dexAsset({ network: dex[1], pool: dex[2], symbol: `${dex[2].slice(0, 4)}…` })
+  const perp = /^((?:[a-z]{1,10}:)?[A-Za-z0-9]{1,20})USDT$/.exec(id)
+  return perp ? perpAsset(perp[1]) : null
 }
 
 /** The window a chart reads — three years of days, which is room for a 200-MA and its crosses. */
@@ -100,7 +150,8 @@ export const BARS = 1000
 export async function fetchPrices(
   ids: string[], _venue: Venue = null,
 ): Promise<Record<string, number>> {
-  const listed = ids.filter((id) => ASSETS.some((a) => a.id === id))
+  // anything the venue could price: the list, and any perp met beyond it — never a DEX token
+  const listed = ids.filter((id) => !id.startsWith('dex:') && /USDT$/.test(id))
   if (!listed.length) return {}
   return feed.prices(listed).catch(() => ({}))
 }
