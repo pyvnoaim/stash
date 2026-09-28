@@ -874,7 +874,14 @@ assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: true })
 // empty both takes it off again
 assert.deepEqual(await (await post('/api/bitget', {}, kUser)).json(), { set: false })
 assert.equal((await get('/api/positions', kUser)).status, 501)
-// the closed book asks the same key, so with none on the account it answers the same way
+// ApeX takes the same three parts on its own route, and never hands them back either
+assert.equal((await get('/api/apex')).status, 401)
+assert.equal((await post('/api/apex', { key: 'k', secret: 's' }, kUser)).status, 400)
+assert.deepEqual(await (await post('/api/apex', { key: 'k', secret: 's', passphrase: 'p' }, kUser)).json(), { set: true })
+assert.deepEqual(await (await get('/api/apex', kUser)).json(), { set: true })
+assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: false }, 'one venue\'s key is not the other\'s')
+assert.deepEqual(await (await post('/api/apex', {}, kUser)).json(), { set: false })
+// the closed book asks the same keys, so with none on the account it answers the same way
 assert.equal((await get('/api/closed')).status, 401)
 assert.equal((await get('/api/closed', kUser)).status, 501)
 

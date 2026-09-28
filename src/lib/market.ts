@@ -66,7 +66,7 @@ const BG_INTERVAL: Record<Interval, string> = { '5m': '5m', '15m': '15m', '1h': 
 
 /** The exchange whose key the reader has set, where the app knows of one. Not a preference and not
  *  a setting: it is where their orders actually rest, which is the only reason a feed should move. */
-export type Venue = 'bitget' | null
+export type Venue = 'bitget' | 'apex' | null
 
 /** Routes to the feed. Returns candles oldest → newest.
  *  `bars` is how many are wanted: a chart takes the venue's ceiling, the movers sweep takes a day
@@ -379,7 +379,7 @@ export const assetOf = (symbol: string) => symbol.replace(/USD$/, 'USDT')
  *  reads back as itself rather than as some venue it isn't — which is what a default did when
  *  Kraken was one, and what made a stale row silently claim the wrong exchange. */
 // MEXC is off the desk, but trades already filed under it still carry its name
-export const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
+export const venueName = (v?: string) => ({ bitget: 'Bitget', apex: 'ApeX', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 
 export const fmtPrice = (n: number, ref = n) => {
   const d = priceDigits(ref)

@@ -1525,7 +1525,9 @@ export default function MarketPage() {
               )) : feed !== undefined ? (
                 /* why there are no buttons, rather than a section that quietly ends */
                 <p className="text-muted-foreground text-xs">
-                  Nothing here places an order. Add a Bitget key in Settings and the Long and Short buttons appear here.
+                  Nothing here places an order. {feed === 'apex'
+                    ? 'ApeX Omni orders are signed by your wallet, not an API key — the readings are the same, the buttons are only on a Bitget desk.'
+                    : 'Add a Bitget key in Settings and the Long and Short buttons appear here.'}
                 </p>
               ) : null}
               {/* What is already committed on this symbol, so neither button is pressed twice for one
@@ -1834,7 +1836,7 @@ function Watchlist({ current, onPick, inputRef }: {
       </div>
       {/* the venue only once it is known */}
       <p className="text-muted-foreground hidden px-4 pb-2 text-[10px] lg:block">
-        Last price and the 24h move{feed !== undefined && <>, on {venueName(feed ?? 'bitget')}</>}
+        Last price and the 24h move{feed !== undefined && <>, on Bitget</>}
       </p>
     </div>
   )

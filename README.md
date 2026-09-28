@@ -563,9 +563,12 @@ what the exchange actually has open: symbol, side, size, entry against the curre
 from entry signed by the side, and the stop and target resting against it where the venue's feed
 carries them.
 
-One venue, **Bitget**. It cuts its credential in three parts (the passphrase is the one you chose
-making it), and every part arrives together or not at all, since a fraction of a credential is a
-config that fails at three in the morning. Kraken Futures and then MEXC were venues here and are
+Two venues, **Bitget** and **ApeX Omni**, picked one at a time from the top of that section — `· set`
+marks the ones already carrying a key, and a key on each means one list with the venue named on
+every row. Both cut the credential in three parts (key, secret, passphrase), and every part arrives
+together or not at all, since a fraction of a credential is a config that fails at three in the
+morning. ApeX is read-only whatever the key allows: an Omni order is signed by the wallet's L2 key,
+so the Long and Short buttons stay a Bitget thing, and the charts stay on Bitget's feed either way. Kraken Futures and then MEXC were venues here and are
 gone: their columns are dropped on the next start, so the credentials they held leave the database
 rather than sitting in the file unread.
 
@@ -887,6 +890,7 @@ is still in the file and still copies out.
 - `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
 - `server/bitget.ts` — Bitget Futures read-only: the signing, the shape every venue answers in, and the thirty-second cache
+- `server/apex.ts` — ApeX Omni read-only: positions, resting orders and closed trades, held to that same shape
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
