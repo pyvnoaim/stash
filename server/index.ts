@@ -32,7 +32,7 @@ import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import {
-  ADDRESS, candles as hlCandles, closed as hlClosed, INTERVAL, mids as hlMids, pending as hlPending,
+  ADDRESS, candles as hlCandles, contexts as hlContexts, closed as hlClosed, INTERVAL, mids as hlMids, pending as hlPending,
   positions as hlPositions, universe as hlUniverse, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
@@ -1346,8 +1346,16 @@ export function start({
        GET the worker keeps for offline, and one cached upstream call per coin and interval however
        many tabs ask. Public data and no session asked for — the charts work signed out — and the
        coin and interval are matched against a pattern and a list before anything goes upstream. */
-    const feed = /^\/api\/hl\/(candles|mids)$/.exec(path)?.[1]
+    const feed = /^\/api\/hl\/(candles|mids|ctx)$/.exec(path)?.[1]
     if (feed && req.method === 'GET') {
+      if (feed === 'ctx') {
+        // one coin's, not the whole book's few hundred: the coin is only a key into a cached answer
+        const coin = new URL(req.url ?? '/', 'http://x').searchParams.get('coin') ?? ''
+        try {
+          const c = (await hlContexts())[coin]
+          return c ? send(res, 200, c, { 'cache-control': 'private, max-age=30' }) : send(res, 404, { error: 'not a market' })
+        } catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
+      }
       if (feed === 'mids') {
         try { return send(res, 200, await hlMids(), { 'cache-control': 'no-store' }) }
         catch (e) { return send(res, 502, { error: String((e as Error).message) }) }

@@ -13,7 +13,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
-import { Holdings, useHoldingsTotal } from '@/components/holdings'
+import { amountOf, dollars, Holdings, useHolding, useHoldingsTotal } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
@@ -30,7 +30,7 @@ import { desk as deskRows, getSync, subscribeSync, type DeskRow } from '@/lib/sy
 import {
   ASSETS, assetOf, atr, BARS, fetchCandles, fetchHours, fetchPrices, fmtPrice, HIGHER, HORIZONS, INTERVALS,
   deskSignals, fvg, localClock, openDesks, SESSIONS, sessionVwap, signals, sparkPath, standingSwings, structureBreak, tally, trendFilter,
-  venueName, priceDigits, hlCoin, assetById, remember, perpAsset, dexAsset,
+  venueName, priceDigits, priced, hlCoin, assetById, remember, perpAsset, dexAsset,
   type Asset, type Candle, type Dials, type Horizon, type Interval, type Signal, type Swing,
 } from '@/lib/market'
 
@@ -515,6 +515,9 @@ export default function MarketPage() {
      whatever you are looking at. It returns null on its own for a daily bar or a feed with no
      volume, which is every case it would be a lie in. */
   const vwap = useMemo(() => (candles.length ? sessionVwap(candles) : null), [candles])
+  // the header's second row: a perp's funding and open interest, or a token's pool
+  const poolFacts = usePool(current)
+  const perpCtx = usePerpCtx(current)
 
   /* Closed bars only, which is the same cut signals() makes before its own structure read (see the
      note on `closed` there). The last candle is repriced on every tick by the socket above,
@@ -808,7 +811,17 @@ export default function MarketPage() {
                 that; it is one row now, and the thing it is about is directly beneath. */}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <AssetLogo src={current.logo} className="size-7" />
-              <span className="text-2xl tabular-nums">{price != null ? fmt(price) : '—'}</span>
+              <div className="flex flex-col">
+                {/* what this is, in words — a token's name and how young its pool is are the first
+                    two things worth knowing about it */}
+                <span className="text-muted-foreground text-xs">
+                  {current.source === 'dex'
+                    ? [poolFacts?.name, coin, current.network === 'eth' ? 'Ethereum' : current.network && current.network[0].toUpperCase() + current.network.slice(1),
+                      poolFacts?.createdAt ? `pool ${ageOf(poolFacts.createdAt)} old` : null].filter(Boolean).join(' · ')
+                    : `${current.label} · ${hlCoin(current.id)} perp · Hyperliquid`}
+                </span>
+                <span className="text-2xl leading-tight tabular-nums">{price != null ? fmt(price) : '—'}</span>
+              </div>
               {price != null && (
                 <Hint label={`Move over the ${n} bars on screen, not 24h`}>
                   <span className={cn('text-sm tabular-nums', change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
@@ -889,6 +902,9 @@ export default function MarketPage() {
                 </Hint>
               </div>
             </div>
+            {current.source === 'dex'
+              ? <PoolMoves p={poolFacts} />
+              : <PerpStats candles={candles} ctx={perpCtx} last={last} fmt={fmt} />}
             {/* who is at their desks, which is context for the candles it sits on top of */}
             <OpenNow at={candles.at(-1)?.t} />
           {/* The plot fills whatever the pane leaves it on a wide window — the chart is the page now, not
@@ -1358,8 +1374,9 @@ export default function MarketPage() {
             {/* Two scrolls, not one. The order and the money on the table stay put at the top, and
                 the readings scroll under them: a dozen readings used to carry the Long and Short
                 buttons off the top of the column, on the one page whose point is those buttons. */}
-            <div className="flex flex-col gap-3 lg:max-h-[55%] lg:shrink-0 lg:overflow-y-auto">
-            <section className="grid gap-2">
+            <div className="flex flex-col gap-3 empty:hidden lg:max-h-[55%] lg:shrink-0 lg:overflow-y-auto">
+            {/* a Hyperliquid book's question — a wallet token has its "You hold" card below instead */}
+            {current.source !== 'dex' && <section className="grid gap-2">
               <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">On the book</p>
               {/* Stash watches; Fomo trades. Nothing here holds anything that could place or move an
                   order — a wallet address is all it has — so this is what is already committed on
@@ -1381,7 +1398,7 @@ export default function MarketPage() {
                   Your {o.side} for {o.size} {coin} is resting at {fmt(o.price)}, not filled.
                 </p>
               ))}
-            </section>
+            </section>}
             {/* the hand-entered position on this asset, if any, beside whatever the exchange reports */}
             <Position asset={current.id} price={last ?? null} />
             {/* what the exchange says you hold, account-wide — the one block here that is fact
@@ -1399,7 +1416,7 @@ export default function MarketPage() {
             {/* A DEX token gets its pool's facts instead: the readings were measured on eight
                 major perps, and a coin a few weeks old has no 200-MA to read — a verdict there
                 would be noise wearing the same confident type. */}
-            {current.source === 'dex' && <DexFacts asset={current} />}
+            {current.source === 'dex' && <DexFacts asset={current} p={poolFacts} />}
             {view && current.source !== 'dex' && (
               <section className="flex flex-col gap-3 border-t pt-3 lg:min-h-0 lg:flex-1">
                 <div className="flex items-baseline gap-2">
@@ -1423,6 +1440,16 @@ export default function MarketPage() {
                   )}
                   <span className="text-xs opacity-80">{bulls} for a long, {bears} for a short, on {interval}</span>
                 </div>
+                {last != null && (
+                  <KeyLevels last={last} fmt={fmt} rows={[
+                    { k: 'Range high', v: view.resistance, color: 'var(--muted-foreground)', hint: `Highest high over the last ${cfg.srWindow} bars` },
+                    { k: 'Session VWAP', v: vwap?.vwap ?? null, color: '#22b8cf', hint: 'Volume-weighted average price since the session opened' },
+                    { k: 'Range low', v: view.support, color: 'var(--muted-foreground)', hint: `Lowest low over the last ${cfg.srWindow} bars` },
+                    // a distance, not a level: its column is its size against price
+                    { k: `ATR (${interval})`, v: view.atr, color: '#fbbf24', hint: `Average true range over 14 ${interval} bars — how far one bar usually travels`,
+                      d: view.atr != null ? `${((view.atr / last) * 100).toFixed(2)}%` : undefined },
+                  ]} />
+                )}
                 {/* The four that decide it — the higher timeframe leads, then the rest in the order
                     the tally weighs them — and the others one press away rather than a wall of
                     fourteen that had to be read whole to count. */}
@@ -1442,6 +1469,9 @@ export default function MarketPage() {
                       className="text-muted-foreground hover:text-foreground w-fit text-xs underline-offset-2 hover:underline">
                       {allReadings ? 'Fewer readings' : `All ${shownSignals.length} readings`}
                     </button>
+                  )}
+                  {dir !== 'flat' && view.atr != null && last != null && (
+                    <TradeBox dir={dir} last={last} atrValue={view.atr} fee={s.dials.fee} fmt={fmt} interval={interval} />
                   )}
                 </div>
               </section>
@@ -1557,18 +1587,19 @@ const PRICES_LIVE = 60_000
 const compact = (n: number | null) => (n == null ? '—'
   : `$${Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n)}`)
 
-type PoolFacts = { symbol: string, name: string, price: number, liquidity: number, marketCap: number | null, volume: number | null, change: number | null }
+type PoolFacts = {
+  symbol: string, name: string, price: number, liquidity: number, marketCap: number | null, volume: number | null, change: number | null
+  changes?: Partial<Record<'m5' | 'h1' | 'h6' | 'h24', number>>, createdAt?: number | null, buys?: number | null, sells?: number | null
+}
 
-/**
- * A DEX token's pool, where a listed asset has its readings: price, depth, size and the day's
- * trade — the numbers that decide whether a memecoin can be sold at the price on the chart at all.
- * Liquidity leads, because a thin pool is the one thing on a memecoin chart that is not visible.
- */
-function DexFacts({ asset }: { asset: Asset }) {
+/** A DEX token's pool facts, a minute fresh on the server — the header's moves and the side panel
+ *  both read them, so it is asked for once, here. */
+function usePool(asset: Asset): PoolFacts | null {
   const [p, setP] = useState<PoolFacts | null>(null)
   useEffect(() => {
-    let on = true
     setP(null)
+    if (asset.source !== 'dex' || !asset.pool) return
+    let on = true
     fetch(`/api/dex/pool?network=${asset.network}&pool=${asset.pool}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j: { pool?: PoolFacts | null } | null) => {
@@ -1580,14 +1611,186 @@ function DexFacts({ asset }: { asset: Asset }) {
       .catch(() => {})
     return () => { on = false }
   }, [asset.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  return p
+}
+
+type PerpCtx = { funding: number | null, openInterest: number | null, dayVolume: number | null, prevDayPx: number | null, mark: number | null }
+
+/** A perp's funding, open interest and day — half a minute fresh, while the tab is looked at. */
+function usePerpCtx(asset: Asset): PerpCtx | null {
+  const [c, setC] = useState<PerpCtx | null>(null)
+  useEffect(() => {
+    setC(null)
+    if (asset.source === 'dex') return
+    let on = true
+    const look = () => {
+      if (document.visibilityState !== 'visible') return
+      fetch(`/api/hl/ctx?coin=${encodeURIComponent(hlCoin(asset.id))}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: PerpCtx | null) => { if (on && j) setC(j) })
+        .catch(() => {})
+    }
+    look()
+    const t = setInterval(look, 30_000)
+    return () => { on = false; clearInterval(t) }
+  }, [asset.id, asset.source])
+  return c
+}
+
+const signedPct = (v: number, d = 2) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d)}%`
+const UP = 'text-emerald-600 dark:text-emerald-400'
+const tone = (v: number | null | undefined) => (v == null ? '' : v >= 0 ? UP : 'text-destructive')
+
+/** How long a pool has existed, in the one unit that reads. */
+function ageOf(ms: number) {
+  const d = (Date.now() - ms) / 86_400_000
+  if (d < 1 / 24) return `${Math.max(1, Math.round(d * 1440))} min`
+  if (d < 1) return `${Math.round(d * 24)} h`
+  if (d < 60) return `${Math.round(d)} day${Math.round(d) === 1 ? '' : 's'}`
+  if (d < 730) return `${Math.round(d / 30.4)} months`
+  return `${(d / 365).toFixed(1)} years`
+}
+
+/** Roughly how far selling `v` dollars moves a constant-product pool of `liquidity` dollars, both
+ *  sides counted: half of it is the side the sale pushes against. */
+const impactOf = (v: number, liquidity: number) => (liquidity > 0 ? (v / (liquidity / 2 + v)) * 100 : null)
+
+/** The perp header's second row: the day's range off the bars, and what the book says about itself. */
+function PerpStats({ candles, ctx, last, fmt }: { candles: Candle[], ctx: PerpCtx | null, last: number | undefined, fmt: (v: number) => string }) {
+  const end = candles.at(-1)?.t ?? 0
+  // a day's range needs bars smaller than a day: on 1d and 1w the last bar is a calendar day or week
+  const step = candles.length > 1 ? end - candles.at(-2)!.t : Infinity
+  const day = step <= 3_600_000 ? candles.filter((c) => c.t > end - 86_400_000) : []
+  const hi = day.length ? Math.max(...day.map((c) => c.h)) : null
+  const lo = day.length ? Math.min(...day.map((c) => c.l)) : null
+  const ch = ctx?.prevDayPx && last ? ((last - ctx.prevDayPx) / ctx.prevDayPx) * 100 : null
+  // the venue quotes funding per hour; eight hours is the unit every other venue quotes it in
+  const f8 = ctx?.funding != null ? ctx.funding * 8 * 100 : null
+  const oi = ctx?.openInterest != null && ctx.mark ? ctx.openInterest * ctx.mark : null
+  const stats: [string, string, string, string][] = [
+    ['24h', ch == null ? '—' : signedPct(ch), tone(ch), 'Against the price 24 hours ago'],
+    ['24h high', hi == null ? '—' : fmt(hi), '', hi == null ? 'On bars of an hour or less' : 'Highest of the bars in the last 24h'],
+    ['24h low', lo == null ? '—' : fmt(lo), '', lo == null ? 'On bars of an hour or less' : 'Lowest of the bars in the last 24h'],
+    ['Funding / 8h', f8 == null ? '—' : signedPct(f8, 4), f8 == null ? '' : f8 >= 0 ? 'text-amber-600 dark:text-amber-400' : UP,
+      'Positive: longs pay shorts. Paid hourly, shown per 8h'],
+    ['Open interest', compact(oi), '', 'Every open position on this perp, in dollars'],
+    ['24h volume', compact(ctx?.dayVolume ?? null), '', 'Traded on Hyperliquid over the last day'],
+  ]
+  return (
+    <div className="flex flex-wrap gap-x-5 gap-y-1">
+      {stats.map(([k, v, cls, hint]) => (
+        <Hint key={k} label={hint}>
+          <div className="flex flex-col">
+            <span className="text-muted-foreground text-[10px] tracking-wider uppercase">{k}</span>
+            <span className={cn('text-sm tabular-nums', cls)}>{v}</span>
+          </div>
+        </Hint>
+      ))}
+    </div>
+  )
+}
+
+/** A token header's moves: four windows as chips, each tinted the way it went. */
+function PoolMoves({ p }: { p: PoolFacts | null }) {
+  const moves = ([['m5', '5m'], ['h1', '1h'], ['h6', '6h'], ['h24', '24h']] as const)
+    .map(([k, label]) => [label, p?.changes?.[k] ?? (k === 'h24' ? p?.change : null) ?? null] as const)
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {moves.map(([k, v]) => (
+        <div key={k} className={cn('flex min-w-14 flex-col items-center rounded-lg px-2.5 py-1',
+          v == null ? 'bg-muted/50' : v >= 0 ? 'bg-emerald-500/10' : 'bg-destructive/10')}>
+          <span className="text-muted-foreground text-[10px]">{k}</span>
+          <span className={cn('text-xs tabular-nums', tone(v))}>{v == null ? '—' : signedPct(v, 1)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Where price sits against the levels the chart draws, each with how far it is from here. */
+function KeyLevels({ rows, last, fmt }: {
+  rows: { k: string, v: number | null, color: string, hint: string, d?: string }[], last: number, fmt: (v: number) => string
+}) {
+  return (
+    <section className="grid gap-1.5">
+      <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Key levels</span>
+      {rows.filter((r) => r.v != null).map((r) => {
+        const d = r.d ?? signedPct(((r.v! - last) / last) * 100)
+        return (
+          <Hint key={r.k} label={r.hint}>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="h-0.5 w-3 shrink-0" style={{ background: r.color }} />
+              <span className="text-muted-foreground flex-1">{r.k}</span>
+              <span className="tabular-nums">{fmt(r.v!)}</span>
+              <span className="text-muted-foreground w-16 text-right text-xs tabular-nums">{d}</span>
+            </div>
+          </Hint>
+        )
+      })}
+    </section>
+  )
+}
+
+/** The arithmetic of a trade the lean points at, if one were taken in Fomo: a stop one ATR away,
+ *  a target two, and what that pays after the fee at both ends. Geometry, not a call. */
+function TradeBox({ dir, last, atrValue, fee, fmt, interval }: {
+  dir: 'long' | 'short', last: number, atrValue: number, fee: number, fmt: (v: number) => string, interval: string
+}) {
+  const long = dir === 'long'
+  const plan = priced(long, last, long ? last - atrValue : last + atrValue, long ? last + 2 * atrValue : last - 2 * atrValue, fee)
+  if (!plan) return null
+  return (
+    <section className="grid gap-2 rounded-lg border p-3">
+      <span className="text-muted-foreground text-xs">A {dir} here, if you take one in Fomo</span>
+      <div className="grid grid-cols-3 gap-2 tabular-nums">
+        <div><span className="text-muted-foreground block text-[10px] uppercase">Stop</span><span className="text-destructive">{fmt(plan.stop)}</span></div>
+        <div><span className="text-muted-foreground block text-[10px] uppercase">Entry</span>{fmt(plan.entry)}</div>
+        <div><span className="text-muted-foreground block text-[10px] uppercase">Target</span><span className={UP}>{fmt(plan.target)}</span></div>
+      </div>
+      <span className="text-muted-foreground text-xs">
+        1 ATR ({interval}) out, 2 ATR on · after {fee}% a side: {plan.net.toFixed(1)}R
+      </span>
+    </section>
+  )
+}
+
+/**
+ * A DEX token's pool, where a listed asset has its readings: what you hold of it, its depth, size
+ * and the day's trade, and whether it could be sold — the numbers that decide whether a memecoin
+ * can be sold at the price on the chart at all.
+ */
+function DexFacts({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
+  const held = useHolding(asset.mint, asset.pool)
   const rows: [string, string][] = p ? [
     ['Liquidity', compact(p.liquidity)],
     ['Market cap', compact(p.marketCap)],
     ['Volume 24h', compact(p.volume)],
-    ['Move 24h', p.change == null ? '—' : `${p.change >= 0 ? '+' : ''}${p.change.toFixed(2)}%`],
+    ['Pool age', p.createdAt ? ageOf(p.createdAt) : '—'],
   ] : []
+  const trades = p && p.buys != null && p.sells != null && p.buys + p.sells > 0 ? { b: p.buys, s: p.sells } : null
+  const today = held && held.h.change != null ? held.h.value - held.h.value / (1 + held.h.change / 100) : null
+  const share = held && held.total > 0 ? (held.h.value / held.total) * 100 : null
+  const sellAll = held && p ? impactOf(held.h.value, p.liquidity) : null
+  const thousand = p ? impactOf(1000, p.liquidity) : null
+  const pctTxt = (v: number) => (v < 0.01 ? '<0.01%' : `~${v < 1 ? v.toFixed(2) : v.toFixed(1)}%`)
   return (
-    <section className="flex flex-col gap-2 border-t pt-3">
+    // ruled off only from whatever sits above it — on a wide window, often nothing
+    <section className="flex flex-col gap-3 [div:not(:empty)+&]:border-t [div:not(:empty)+&]:pt-3">
+      {held && (
+        <div className="bg-muted/40 grid gap-1.5 rounded-lg p-3">
+          <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">You hold</span>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xl font-medium tabular-nums">{dollars(held.h.value)}</span>
+            {today != null && <span className={cn('text-sm tabular-nums', tone(today))}>{today >= 0 ? '+' : '−'}{dollars(Math.abs(today))} 24h</span>}
+          </div>
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {amountOf(held.h.amount)} {held.h.symbol}{share != null && <> · {share.toFixed(0)}% of your tokens</>}
+          </span>
+          {share != null && (
+            <div className="bg-muted h-1.5 overflow-hidden rounded-full"><span className="block h-full bg-amber-500" style={{ width: `${Math.min(100, share)}%` }} /></div>
+          )}
+        </div>
+      )}
       <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">The pool</span>
       {!p ? <Skeleton className="h-20" /> : (
         <>
@@ -1600,10 +1803,32 @@ function DexFacts({ asset }: { asset: Asset }) {
               </div>
             ))}
           </dl>
+          {trades && (
+            <div className="grid gap-1">
+              <div className="text-muted-foreground flex justify-between text-xs tabular-nums">
+                <span>Buys {trades.b.toLocaleString('en-US')}</span><span>Sells {trades.s.toLocaleString('en-US')}</span>
+              </div>
+              <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full" aria-hidden>
+                <span className="bg-emerald-500" style={{ flexGrow: trades.b }} />
+                <span className="bg-destructive" style={{ flexGrow: trades.s }} />
+              </div>
+              <span className="text-muted-foreground text-[11px]">trades in the last 24 hours</span>
+            </div>
+          )}
           {p.liquidity < 50_000 && (
             <p className="text-xs text-amber-600 dark:text-amber-500">
               A thin pool: selling a few hundred dollars moves this price.
             </p>
+          )}
+          {thousand != null && (
+            <div className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Could you sell it?</span>
+              {sellAll != null && (
+                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Selling all of it moves price</span><span className="tabular-nums">{pctTxt(sellAll)}</span></div>
+              )}
+              <div className="flex justify-between gap-2"><span className="text-muted-foreground">$1,000 would move it</span><span className="tabular-nums">{pctTxt(thousand)}</span></div>
+              <span className="text-muted-foreground text-[11px]">Read off the pool's depth — a rough guide, not a quote.</span>
+            </div>
           )}
           <p className="text-muted-foreground text-xs">
             No readings for DEX tokens — the rules were measured on major perps, not coins this young.{' '}

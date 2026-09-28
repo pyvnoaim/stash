@@ -21,9 +21,9 @@ type Holding = {
  *  need a quote every second to answer "what am I holding". */
 const EVERY = 60_000
 
-const dollars = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+export const dollars = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 /** Amounts run from 0.0004 SOL to 552,000 of a coin: enough digits to tell, never a wall of them. */
-const amountOf = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: n >= 1000 ? 0 : n >= 1 ? 2 : 4 })
+export const amountOf = (n: number) => n.toLocaleString('en-US', { maximumFractionDigits: n >= 1000 ? 0 : n >= 1 ? 2 : 4 })
 
 /** The token's logo, through this app's own server (/api/logo) — the page loads images from its own
  *  origin only, and no reader's address goes to DexScreener for the sake of an icon. A token with
@@ -72,6 +72,30 @@ export function useHoldingsTotal(): number | null {
     return () => { on = false; clearInterval(h) }
   }, [user])
   return total
+}
+
+/** The one token of the watched wallets that a chart is about, matched by mint or by pool, beside
+ *  what all the tokens are worth — for the chart's "You hold" card. Null when none of it is held. */
+export function useHolding(mint?: string, pool?: string): { h: Holding, total: number } | null {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const [out, setOut] = useState<{ h: Holding, total: number } | null>(null)
+  useEffect(() => {
+    setOut(null)
+    if (!user || (!mint && !pool)) return
+    let on = true
+    const look = () => {
+      if (document.visibilityState !== 'visible') return
+      void lookHoldings().then((j) => {
+        if (!on) return
+        const h = j?.holdings?.find((x) => (mint && x.mint === mint) || (pool && x.pool === pool))
+        setOut(h ? { h, total: Number(j?.total) || h.value } : null)
+      })
+    }
+    look()
+    const t = setInterval(look, EVERY)
+    return () => { on = false; clearInterval(t) }
+  }, [user, mint, pool])
+  return out
 }
 
 /** What the watched wallets are worth, for the sidebar's Markets tile — null until it is known, and

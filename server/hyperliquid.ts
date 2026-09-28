@@ -240,6 +240,42 @@ export function mids(): Promise<Record<string, number>> {
   return got
 }
 
+/* ---------- the day's context ---------- */
+
+/** What a perp's header shows past its price: funding per hour as a fraction, open interest in
+ *  coins, the day's notional volume, yesterday's price at this hour, and the mark. */
+export type Ctx = { funding: number | null; openInterest: number | null; dayVolume: number | null; prevDayPx: number | null; mark: number | null }
+
+const finite = (v: unknown) => { const n = Number(v); return v != null && v !== '' && isFinite(n) ? n : null }
+
+/** metaAndAssetCtxs is [meta, ctxs], the two lists index-aligned — so the names come off the first. */
+export function shapeCtx(j: unknown): Record<string, Ctx> {
+  const [meta, ctxs] = Array.isArray(j) ? j : []
+  const names = ((meta as any)?.universe ?? []) as { name?: string }[]
+  const out: Record<string, Ctx> = {}
+  names.forEach((u, i) => {
+    const c = (ctxs as any[] | undefined)?.[i]
+    if (!u?.name || !COIN.test(u.name) || !c) return
+    out[u.name] = {
+      funding: finite(c.funding), openInterest: finite(c.openInterest), dayVolume: finite(c.dayNtlVlm),
+      prevDayPx: finite(c.prevDayPx), mark: finite(c.markPx),
+    }
+  })
+  return out
+}
+
+let ctxCache: { at: number; ctx: Promise<Record<string, Ctx>> } | null = null
+
+/** Every listed perp's context in one call, half a minute fresh — funding and open interest move by
+ *  the hour, and every chart open asks. */
+export function contexts(): Promise<Record<string, Ctx>> {
+  if (ctxCache && Date.now() - ctxCache.at < 30_000) return ctxCache.ctx
+  const got = info({ type: 'metaAndAssetCtxs' }, 20).then(shapeCtx)
+  got.catch(() => { if (ctxCache?.ctx === got) ctxCache = null })
+  ctxCache = { at: Date.now(), ctx: got }
+  return got
+}
+
 /* ---------- an account ---------- */
 
 /** What an EVM address looks like. Lower-cased before it goes anywhere: the venue's own keys are. */

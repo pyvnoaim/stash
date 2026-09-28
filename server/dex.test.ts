@@ -5,7 +5,7 @@ import { POOL, shapeOhlcv, shapeSearch, weeks } from './dex.ts'
 
 const SOLPOOL = 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD'
 const found = shapeSearch({ pairs: [
-  { chainId: 'solana', pairAddress: SOLPOOL, baseToken: { address: 'SImint', symbol: 'SI', name: 'Super Inu' }, priceUsd: '0.0231', liquidity: { usd: 900000 }, marketCap: 23000000, volume: { h24: 4800000 }, priceChange: { h24: 31.9 } },
+  { chainId: 'solana', pairAddress: SOLPOOL, baseToken: { address: 'SImint', symbol: 'SI', name: 'Super Inu' }, priceUsd: '0.0231', liquidity: { usd: 900000 }, marketCap: 23000000, volume: { h24: 4800000 }, priceChange: { m5: 1.2, h1: -3.4, h24: 31.9 }, pairCreatedAt: 1757000000000, txns: { h24: { buys: 4812, sells: 3907 } } },
   // the same token in a shallower pool: not a second row
   { chainId: 'solana', pairAddress: '9WDg8ibeX3pkqZ4Xm6B9GBqrn6Aq8miuXkB8VDDWhHn5', baseToken: { address: 'SImint', symbol: 'SI' }, priceUsd: '0.03', liquidity: { usd: 20000 } },
   // a copycat a few dollars deep, and a chain nothing here can chart
@@ -16,6 +16,10 @@ const found = shapeSearch({ pairs: [
 ] })
 assert.deepEqual(found.map((f) => [f.network, f.symbol, f.pool]), [['solana', 'SI', SOLPOOL], ['base', 'SIB', '0x' + 'b'.repeat(40)]])
 assert.deepEqual([found[0].marketCap, found[0].volume, found[0].change], [23000000, 4800000, 31.9])
+assert.deepEqual(found[0].changes, { m5: 1.2, h1: -3.4, h24: 31.9 })
+assert.deepEqual([found[0].createdAt, found[0].buys, found[0].sells], [1757000000000, 4812, 3907])
+// fields a pair didn't carry are absent, not zero
+assert.deepEqual([found[1].changes, found[1].createdAt, found[1].buys], [{}, null, null])
 assert.ok(POOL.test(SOLPOOL) && POOL.test('0x' + 'c'.repeat(40)) && !POOL.test('../../etc') && !POOL.test('0x12'))
 
 const bars = shapeOhlcv({ data: { attributes: { ohlcv_list: [

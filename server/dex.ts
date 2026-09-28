@@ -30,6 +30,13 @@ export type Found = {
   marketCap: number | null
   volume: number | null
   change: number | null
+  /** Price change over 5m / 1h / 6h / 24h, in percent — whichever DexScreener gave. */
+  changes?: Partial<Record<'m5' | 'h1' | 'h6' | 'h24', number>>
+  /** When the pool was made, ms. */
+  createdAt?: number | null
+  /** Trades over the last 24 hours. */
+  buys?: number | null
+  sells?: number | null
 }
 
 /** DexScreener's search answer into rows: chartable chains, liquid pools, one per token — its
@@ -56,10 +63,18 @@ export function shapeSearch(j: unknown): Found[] {
       marketCap: isFinite(mc) && mc > 0 ? mc : null,
       volume: isFinite(vol) ? vol : null,
       change: isFinite(ch) ? ch : null,
+      changes: Object.fromEntries((['m5', 'h1', 'h6', 'h24'] as const)
+        .map((k) => [k, Number(p?.priceChange?.[k])] as const)
+        .filter(([k, v]) => p?.priceChange?.[k] != null && isFinite(v))),
+      createdAt: Number(p?.pairCreatedAt) > 0 ? Number(p.pairCreatedAt) : null,
+      buys: count(p?.txns?.h24?.buys),
+      sells: count(p?.txns?.h24?.sells),
     })
   }
   return [...best.values()].sort((a, b) => b.liquidity - a.liquidity).slice(0, 8)
 }
+
+const count = (v: unknown) => { const n = Number(v); return v != null && Number.isInteger(n) && n >= 0 ? n : null }
 
 const searched = new Map<string, { at: number; rows: Promise<Found[]> }>()
 
