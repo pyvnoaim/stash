@@ -102,19 +102,26 @@ function tokenRow(t: TokenTrade): Row {
 
 /** Your finished token trades — every token bought and sold back out of the watched wallets. Five
  *  minutes fresh; the first look at a wallet reads its history and can take a few seconds. */
-function useTokenTrades(): { trades: TokenTrade[], loading: boolean } {
+function useTokenTrades(): { trades: TokenTrade[], loading: boolean, partial: boolean } {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
-  const [out, setOut] = useState<{ trades: TokenTrade[], loading: boolean }>({ trades: [], loading: true })
+  const [out, setOut] = useState<{ trades: TokenTrade[], loading: boolean, partial: boolean }>({ trades: [], loading: true, partial: false })
   useEffect(() => {
-    if (!user) { setOut({ trades: [], loading: false }); return }
-    let on = true
+    if (!user) { setOut({ trades: [], loading: false, partial: false }); return }
+    let on = true, again = 0
     const look = () => fetch('/api/token-trades')
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => { if (on) setOut((was) => ({ trades: Array.isArray(j?.trades) ? j.trades : was.trades, loading: false })) })
+      .then((j) => {
+        if (!on) return
+        const partial = j?.complete === false
+        setOut((was) => ({ trades: Array.isArray(j?.trades) ? j.trades : was.trades, loading: false, partial }))
+        // a read that missed transactions asks again soon, rather than showing a short sum for five minutes
+        window.clearTimeout(again)
+        if (partial) again = window.setTimeout(() => { void look() }, 20_000)
+      })
       .catch(() => { if (on) setOut((was) => ({ ...was, loading: false })) })
     void look()
     const h = setInterval(() => { if (document.visibilityState === 'visible') void look() }, 300_000)
-    return () => { on = false; clearInterval(h) }
+    return () => { on = false; clearInterval(h); window.clearTimeout(again) }
   }, [user])
   return out
 }
@@ -222,7 +229,7 @@ export function TradesScreen({ onPick, onBack }: { onPick: (asset: string) => vo
         {tab === 'mine' && <RecapButton all={real} who={user} />}
       </header>
       {tab === 'mine'
-        ? <YourTrades rows={all.filter((x) => inPeriod(x.closedAt, period))} period={period} loadingTokens={tokens.loading} total={all.length} onPick={onPick} />
+        ? <YourTrades rows={all.filter((x) => inPeriod(x.closedAt, period))} period={period} loadingTokens={tokens.loading || tokens.partial} total={all.length} onPick={onPick} />
         : <Friends period={period} mine={all} onPick={onPick} onMine={() => setTab('mine')} />}
     </div>
   )

@@ -77,6 +77,7 @@ export default function App() {
    *  away behind the header's + and an input with no layout cannot take focus. */
   const openCapture = () => {
     if (boxRef.current?.offsetParent) { boxRef.current.focus(); return }
+    setPhoneSearch(false) // one overlay across the header at a time
     setPhoneCapture(true)
     requestAnimationFrame(() => boxRef.current?.focus())
   }
@@ -504,7 +505,7 @@ export default function App() {
               size="icon"
               aria-label="Filter items"
               className="size-8 sm:hidden"
-              onClick={() => { setPhoneSearch(true); requestAnimationFrame(() => searchRef.current?.focus()) }}
+              onClick={() => { setPhoneCapture(false); setPhoneSearch(true); requestAnimationFrame(() => searchRef.current?.focus()) }}
             >
               <Search />
             </Button>
