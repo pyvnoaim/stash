@@ -372,7 +372,12 @@ export default function MarketPage() {
        toggle. */
   }, [asset, interval, live, online, feed, screen]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const view = useMemo(() => (candles.length ? signals(candles, cfg) : null), [candles, cfg])
+  /* The readings are maths over every fetched bar — averages, RSI, MACD, the range — and the live
+     tick rewrites the last bar several times a second. Recomputing all of it per tick kept a phone's
+     main thread busy under the finger panning the chart. They move with a new bar, not a new price:
+     keyed on the window's ends, so a tick leaves them be and the next bar (or a refetch) redoes them. */
+  const barsKey = `${candles.length}:${candles[0]?.t ?? 0}:${candles.at(-1)?.t ?? 0}`
+  const view = useMemo(() => (candles.length ? signals(candles, cfg) : null), [barsKey, cfg]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The drawn window: `win` bars wide, `scroll` bars back from the newest. Clamped here rather than
   // in the setters, so a wheel spin or a drag can overshoot and just stop at the end of the data.
@@ -433,6 +438,7 @@ export default function MarketPage() {
     setScroll((v) => Math.max(0, Math.min(Math.max(0, len - win), Math.min(v, Math.max(0, len - win)) + whole)))
   }
   const glide = useRef(0) // the frame a flick is coasting on, to cancel when anything else starts
+  const dragFrame = useRef(0), dragTo = useRef(0) // a drag's pending frame, and where it lands
   const stopGlide = () => { cancelAnimationFrame(glide.current); glide.current = 0 }
 
   /* The wheel, which is three devices. A mouse wheel: big vertical steps — zoom, a notch at a time,
@@ -460,7 +466,7 @@ export default function MarketPage() {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [candles.length > 0]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => stopGlide, [])
+  useEffect(() => () => { stopGlide(); cancelAnimationFrame(dragFrame.current) }, [])
 
   // drag-to-pan: remember where the grab started, then offset from there (not per-move deltas, which
   // drift). Null means "not dragging", which is also what tells the move handler to do the crosshair.
@@ -485,7 +491,7 @@ export default function MarketPage() {
   /* Where price sits against the average paid since the session opened — the intraday reference
      whatever you are looking at. It returns null on its own for a daily bar or a feed with no
      volume, which is every case it would be a lie in. */
-  const vwap = useMemo(() => (candles.length ? sessionVwap(candles) : null), [candles])
+  const vwap = useMemo(() => (candles.length ? sessionVwap(candles) : null), [barsKey]) // eslint-disable-line react-hooks/exhaustive-deps
   // the header's second row: a perp's funding and open interest, or a token's pool
   const poolFacts = usePool(current)
   const perpCtx = usePerpCtx(current)
@@ -740,11 +746,12 @@ export default function MarketPage() {
                 </div>
                 <span className="bg-border mx-1 h-4 w-px" />
                 <Hint label={!online ? 'Offline' : notLive ? 'Feed not answering'
-                  : !live ? 'Live off' : polling ? `Stream quiet — polling every ${LIVE / 1000}s` : 'Live, streaming'}>
+                  : !live ? 'Live off' : current.source === 'dex' ? `Live — a token has no stream; refreshed every ${LIVE / 1000}s`
+                  : polling ? `Stream quiet — polling every ${LIVE / 1000}s` : 'Live, streaming'}>
                   <Button size="sm" variant="ghost" className={cn('h-6 gap-1.5 px-2 text-xs', (!live || stale) && 'text-muted-foreground')}
                     onClick={() => setLive((v) => !v)}>
                     <span className={cn('size-1.5 rounded-full', !live || stale ? 'bg-muted-foreground'
-                      : polling ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse')} />
+                      : polling && current.source !== 'dex' ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse')} />
                     Live
                   </Button>
                 </Hint>
@@ -822,14 +829,14 @@ export default function MarketPage() {
                       const first = recent[0], last = recent.at(-1)
                       let v = first && last && last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0 // px per ms
                       const width = e.currentTarget.getBoundingClientRect().width || 1
-                      if (Math.abs(v) > 0.3) {
+                      if (Math.abs(v) > 0.15) {
                         carry.current = 0
                         let then = performance.now()
                         const step = (now: number) => {
                           const dt = Math.min(64, now - then)
                           then = now
                           panBy(((v * dt) / width) * nav.current.win)
-                          v *= Math.pow(0.94, dt / 16)
+                          v *= Math.pow(0.965, dt / 16) // about the coast of a phone's own scrolling
                           glide.current = Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0
                         }
                         glide.current = requestAnimationFrame(step)
@@ -857,9 +864,13 @@ export default function MarketPage() {
                       if (Math.abs(e.clientX - g.x) >= 6) g.moved = true
                       g.trail.push({ t: e.timeStamp, x: e.clientX })
                       if (g.trail.length > 8) g.trail.shift()
-                      // drag right → walk back in time by however many bars that many pixels covers
+                      // drag right → walk back in time by however many bars that many pixels covers —
+                      // at most once a frame: a 120Hz screen sends twice the moves it can draw
                       const bars = Math.round(((e.clientX - g.x) / r.width) * winBars)
-                      setScroll(Math.max(0, Math.min(Math.max(0, candles.length - winBars), g.scroll + bars)))
+                      dragTo.current = Math.max(0, Math.min(Math.max(0, candles.length - winBars), g.scroll + bars))
+                      if (!dragFrame.current) {
+                        dragFrame.current = requestAnimationFrame(() => { dragFrame.current = 0; setScroll(dragTo.current) })
+                      }
                       return
                     }
                     if (e.pointerType !== 'mouse') return // touch never hovers; its crosshair is the tap above
