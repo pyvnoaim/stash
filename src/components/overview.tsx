@@ -1,132 +1,83 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useState } from 'react'
 import { ChevronRight, Flag, Lightbulb, StickyNote } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Hint } from '@/components/ui/tooltip'
 import { cn, MONEY_IN } from '@/lib/utils'
-import { ASSETS, assetOf, fetchHours, fmtPrice, remember, venueName } from '@/lib/market'
+import { ASSETS, assetOf, fmtPrice, remember } from '@/lib/market'
 import { addDays, dayLabel, today } from '@/lib/parse'
 import {
   MARKET, monthlyCost, nextCharge, setMarketAsset, SUBS, toggleDone, useStash, type Item, type Project,
 } from '@/lib/store'
-import { Sparkline, useExchangePositions } from '@/components/market-page'
+import { useDeskRows, useExchangePositions } from '@/components/market-page'
+import { Avatar } from '@/components/settings-dialog'
 import { Holdings } from '@/components/holdings'
 import { treemap } from '@/lib/treemap'
-
-const logoOf = (id: string) => ASSETS.find((a) => a.id === id)?.logo ?? ''
-
-/* A glance at the desk — whichever assets actually moved, not a fixed four. One hourly-closes call
-   for every asset ranks them by the size of the move; the top few are the rows, and the biggest is
-   the one the briefing line names. */
-const MOVERS = 4
-/* How often the rows re-read. Fetched once and left there, a tab open since the morning showed the
-   morning's market under a percentage still labelled 24h — the one thing this app is careful about
-   everywhere else. A few requests a minute at most, and only while somebody is looking. */
-const TILE_LIVE = 60_000
-type Mover = { id: string; label: string; closes: number[]; price: number; change: number }
-
-/** The movers, shared by the briefing line and the Markets panel so the two never disagree. */
-function useMovers() {
-  const [rows, setRows] = useState<Mover[]>([])
-  // the feed is someone else's server: it can be slow, and it can be down. Both used to look
-  // identical from here — four tiles of em-dashes that never filled in.
-  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [nonce, setNonce] = useState(0)
-  /* Skeletons on the first fetch only. A refresh that emptied the rows every minute would be a
-     page that flickers at you rather than one that stays current. */
-  const drawn = useRef(false)
-  useEffect(() => {
-    let live = true
-    if (!drawn.current) setState('loading')
-    fetchHours(ASSETS)
-      .then((bars) => {
-        if (!bars.length) throw new Error('no prices')
-        // biggest move either way — a 6% drop is as much news as a 6% rally
-        const next = bars
-          .map(({ a, c }) => ({
-            id: a.id, label: a.label, price: c.at(-1)!.c, closes: c.map((k) => k.c),
-            change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100,
-          }))
-          .filter((t) => isFinite(t.change) && isFinite(t.price))
-          .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
-          .slice(0, MOVERS)
-        if (live) {
-          setRows(next)
-          drawn.current = next.length > 0
-          setState(next.length ? 'ready' : 'error')
-        }
-      })
-      // a refresh that fails leaves the rows that are already up rather than replacing a live
-      // market with an error panel — it is the first fetch that has nothing to fall back on
-      .catch(() => { if (live && !drawn.current) setState('error') })
-    return () => { live = false }
-  }, [nonce])
-  /* …and again on a timer, only while the tab is being looked at, and the moment it is looked at
-     again — which on a phone is the event that fires, where focus does not. */
-  useEffect(() => {
-    const beat = () => { if (document.visibilityState === 'visible') setNonce((n) => n + 1) }
-    const h = setInterval(beat, TILE_LIVE)
-    addEventListener('visibilitychange', beat)
-    return () => { clearInterval(h); removeEventListener('visibilitychange', beat) }
-  }, [])
-  return { rows, state, retry: () => setNonce((n) => n + 1) }
-}
 
 const pct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
 const upDown = (v: number) => (v >= 0 ? MONEY_IN : 'text-destructive')
 
 /**
- * The market as rows: what you hold first, where a venue reports anything, then the day's biggest
- * moves. It was four tiles under a card of position tiles — two grids saying "markets" twice. One
- * list, and every row is the way through to the desk on that asset.
+ * What is open, yours and your friends': your perps on the venue, then what your friends are in
+ * right now with the money it is making — every row the way through to the desk on that coin. The
+ * day's biggest movers stood here, and they were news about coins nobody here held.
  */
-function Markets({ movers, onOpen }: { movers: ReturnType<typeof useMovers>; onOpen: (asset: string) => void }) {
-  const { rows: held, equity } = useExchangePositions()
-  const { rows, state, retry } = movers
+function Markets({ onOpen }: { onOpen: (asset: string) => void }) {
+  const { rows: held } = useExchangePositions()
+  const { rows: desk, user } = useDeskRows(true)
+  const friends = desk.filter((p) => p.name !== user?.name).flatMap((p) => p.open.map((w) => ({ p, w })))
+  const side = (dir: 'long' | 'short', lev: number | null | undefined) => (
+    <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[11px]',
+      dir === 'long' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive')}>
+      {dir === 'long' ? 'Long' : 'Short'}{lev ? ` ${lev}×` : ''}
+    </span>
+  )
+  const money = (v: number) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
   return (
-    <div className="flex flex-col gap-0.5">
-      {held.map((p) => {
-        const id = assetOf(p.symbol)
-        const a = ASSETS.find((x) => x.id === id)
-        const move = p.mark != null && p.entry > 0 ? (p.mark / p.entry - 1) * (p.side === 'long' ? 100 : -100) : null
-        const lead = [p.pnl != null && `${p.pnl >= 0 ? '+' : '−'}$${Math.abs(p.pnl).toFixed(2)}`, move != null && pct(move)]
-          .filter(Boolean).join(' · ')
-        return (
-          <button key={`${p.venue ?? ''}-${p.symbol}`} type="button" onClick={() => onOpen(id)}
-            className="hover:bg-accent flex items-center gap-2 rounded-md bg-fuchsia-500/8 px-2 py-1.5 text-left text-sm">
-            <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] tracking-wide uppercase',
-              p.side === 'long' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive')}>
-              {p.side}{p.lev ? ` ${p.lev}×` : ''}
-            </span>
-            <span className="truncate">{a?.label ?? p.symbol}</span>
-            <span className="text-muted-foreground truncate text-xs">from {fmtPrice(p.entry)}{p.venue && ` · ${venueName(p.venue)}`}</span>
-            {lead && <span className={cn('ml-auto shrink-0 font-mono text-xs tabular-nums', upDown(p.pnl ?? move ?? 0))}>{lead}</span>}
-          </button>
-        )
-      })}
-      {state === 'error' ? (
-        <div className="text-muted-foreground flex flex-col items-center gap-2 py-4 text-sm">
-          <p>Prices are not loading — the exchange feed didn't answer.</p>
-          <button type="button" onClick={retry} className="text-foreground hover:bg-accent rounded-md border px-2.5 py-1 text-xs">Try again</button>
+    <div className="flex flex-col gap-3">
+      {held.length > 0 && (
+        <div className="flex flex-col">
+          <p className="text-muted-foreground px-2 pb-1 text-xs">Your perps</p>
+          {held.map((p) => {
+            const id = assetOf(p.symbol)
+            const a = ASSETS.find((x) => x.id === id)
+            const move = p.mark != null && p.entry > 0 ? (p.mark / p.entry - 1) * (p.side === 'long' ? 100 : -100) : null
+            return (
+              <button key={`${p.venue ?? ''}-${p.symbol}`} type="button" onClick={() => onOpen(id)}
+                className="hover:bg-accent flex h-11 items-center gap-2.5 rounded-lg px-2 text-left text-sm">
+                <span className="truncate font-medium">{a?.label ?? p.symbol.replace(/USDT$/, '')}</span>
+                {side(p.side, p.lev)}
+                <span className="text-muted-foreground truncate text-xs tabular-nums">from {fmtPrice(p.entry)}</span>
+                <span className={cn('ml-auto shrink-0 text-right tabular-nums', upDown(p.pnl ?? move ?? 0))}>
+                  {p.pnl != null ? money(p.pnl) : move != null ? pct(move) : ''}
+                </span>
+              </button>
+            )
+          })}
         </div>
-      ) : state === 'loading' ? Array.from({ length: MOVERS }, (_, i) => <Skeleton key={i} className="h-8" />)
-        : rows.map((r) => (
-          <button key={r.id} type="button" onClick={() => onOpen(r.id)}
-            className="hover:bg-accent flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm">
-            <img src={logoOf(r.id)} alt="" loading="lazy" className="size-4 rounded-full object-contain"
-              onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />
-            <span className="mr-auto truncate">{r.label}</span>
-            <Sparkline data={r.closes} up={r.change >= 0} id={r.id} className="h-4 w-14 shrink-0" />
-            {/* the asset's own precision: $0.17 is three different Cardano prices rounded together */}
-            <span className="w-20 shrink-0 text-right text-xs tabular-nums">{fmtPrice(r.price)}</span>
-            <span className={cn('w-14 shrink-0 text-right text-xs tabular-nums', upDown(r.change))}>{pct(r.change)}</span>
-          </button>
-        ))}
-      <p className="text-muted-foreground mt-1 px-2 text-xs">
-        {[held.length && `${held.length} open`, equity != null && `equity $${equity.toFixed(2)}`, 'biggest 24-hour moves · tap one through to the desk']
-          .filter(Boolean).join(' · ')}
-      </p>
+      )}
+      {friends.length > 0 && (
+        <div className="flex flex-col">
+          <p className="text-muted-foreground px-2 pb-1 text-xs">Friends in a trade</p>
+          {friends.map(({ p, w }) => {
+            const coin = w.label.replace(/[_-]?USDT$/i, '')
+            const id = assetOf(w.label)
+            return (
+              <button key={`${p.name}-${w.id}`} type="button" onClick={() => onOpen(id)}
+                className="hover:bg-accent flex h-11 items-center gap-2.5 rounded-lg px-2 text-left text-sm">
+                <Avatar name={p.name} avatar={p.avatar} className="size-6 shrink-0 text-[10px]" />
+                <span className="text-muted-foreground max-w-24 truncate text-xs">{p.name}</span>
+                <span className="truncate font-medium">{coin}</span>
+                {side(w.dir, w.lev)}
+                <span className={cn('ml-auto shrink-0 text-right tabular-nums', upDown(w.pnl ?? 0))}>{w.pnl != null ? money(w.pnl) : ''}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {!held.length && !friends.length && (
+        <p className="text-muted-foreground px-2 text-xs">No perps open — yours or your friends'.</p>
+      )}
     </div>
   )
 }
@@ -366,7 +317,6 @@ export default function Overview({ onNavigate, onOpen }: {
 }) {
   const s = useStash()
   const t = today()
-  const movers = useMovers()
   const projects = useMemo(() => new Map(s.projects.map((p) => [p.id, p])), [s.projects])
 
   /* The day: what is late, what is due, what is flagged — in that order, because that is the order
@@ -426,7 +376,6 @@ export default function Overview({ onNavigate, onOpen }: {
 
   const toDesk = (id: string) => { setMarketAsset(id); onNavigate(MARKET) }
   const next = money.bills[0]
-  const top = movers.rows[0]
   const inDays = (n: number) => (n === 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`)
 
   return (
@@ -447,11 +396,6 @@ export default function Overview({ onNavigate, onOpen }: {
             {next.name || 'Untitled'} <span className={cn('text-muted-foreground', next.kind === 'income' && MONEY_IN)}>
               {next.kind === 'income' ? '+' : ''}{euro(next.cost)} {inDays(next.days)}
             </span>
-          </button>
-        )}
-        {top && (
-          <button type="button" onClick={() => toDesk(top.id)} className="hover:underline">
-            {top.label} <span className={cn('tabular-nums', upDown(top.change))}>{pct(top.change)}</span>
           </button>
         )}
         <span className="text-muted-foreground ml-auto text-xs tabular-nums">
@@ -564,10 +508,10 @@ export default function Overview({ onNavigate, onOpen }: {
 
         <Panel title="Markets" className={cn('lg:col-start-2', s.subs.length ? 'lg:row-start-3' : 'lg:row-start-1 lg:row-span-3')}
           action={{ label: 'Desk', onClick: () => onNavigate(MARKET) }}>
-          {/* what the wallet holds leads — it is money, and the movers below are only news */}
+          {/* what you hold leads — the wallet's tokens, then your perps and your friends' */}
           <Holdings onOpen={(a) => { remember(a); toDesk(a.id) }} />
           <div className="-mx-2">
-            <Markets movers={movers} onOpen={toDesk} />
+            <Markets onOpen={toDesk} />
           </div>
         </Panel>
       </div>
