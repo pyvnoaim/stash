@@ -604,11 +604,13 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
                       const meta = id === MARKET && wallet != null ? `$${wallet.toFixed(2)}` : null
                       return (
                         <button key={id} type="button" onClick={() => go(id)} aria-current={s.sel === id ? 'page' : undefined}
-                          className={cn('hover:bg-sidebar-accent flex min-h-14 flex-col items-start justify-between gap-1 rounded-lg border px-2.5 py-2 text-left',
+                          className={cn('hover:bg-sidebar-accent flex flex-col items-start gap-1 rounded-lg border px-2.5 py-2 text-left',
                             s.sel === id && 'bg-sidebar-accent text-sidebar-accent-foreground')}>
                           <Icon className="text-muted-foreground size-4" />
                           <span className="w-full truncate text-xs font-medium">{name}</span>
-                          {meta && <span className="text-muted-foreground font-mono text-[11px] tabular-nums">{meta}</span>}
+                          {/* the second line's room is kept on every tile, so the names sit on one
+                              row whichever tiles have something to say under them */}
+                          <span className="text-muted-foreground min-h-4 font-mono text-[11px] tabular-nums">{meta}</span>
                         </button>
                       )
                     })}
