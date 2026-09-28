@@ -284,7 +284,9 @@ export function shapeTx(tx: any, owner: string, sig: string): Priced | null {
 
 /** A token bought and sold back to nothing: what went in, what came out, and when. */
 export type TokenTrade = {
-  mint: string, symbol: string, pool: string | null, openedAt: number, closedAt: number,
+  /** `listed` false: DexScreener has no pair for it any more, so `symbol` and `name` are empty and
+   *  the mint is all there is to call it by. */
+  mint: string, symbol: string, name: string, listed: boolean, pool: string | null, openedAt: number, closedAt: number,
   amount: number, cost: number, proceeds: number, pnl: number, pct: number, buys: number, sells: number,
 }
 
@@ -294,8 +296,8 @@ export type TokenTrade = {
  * held is not in the list: it is in the wallet. `usd` prices a swap in dollars; one it cannot price
  * leaves that trade out rather than printing half a sum.
  */
-export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null): Omit<TokenTrade, 'symbol' | 'pool'>[] {
-  const out: Omit<TokenTrade, 'symbol' | 'pool'>[] = []
+export function tradesOf(swaps: Priced[], usd: (s: Priced) => number | null): Omit<TokenTrade, 'symbol' | 'name' | 'listed' | 'pool'>[] {
+  const out: Omit<TokenTrade, 'symbol' | 'name' | 'listed' | 'pool'>[] = []
   const by = new Map<string, Priced[]>()
   for (const s of [...swaps].sort((a, b) => a.t - b.t)) by.set(s.mint, [...(by.get(s.mint) ?? []), s])
   for (const [mint, list] of by) {
@@ -359,9 +361,14 @@ export function tokenTrades(owner: string, solUsd: (t: number) => Promise<number
     return rows.map((r) => {
       const p = pairs.get(r.mint)
       noteLogo(r.mint, p?.info?.imageUrl)
+      /* No pair is a token nobody trades any more — a dead memecoin, mostly. Its mint is then all
+         there is to call it by, and the page says so rather than printing the mint's first letters
+         as if they were a ticker. */
       return {
         ...r,
-        symbol: String(p?.baseToken?.symbol ?? r.mint.slice(0, 4)).slice(0, 20),
+        listed: !!p,
+        name: String(p?.baseToken?.name ?? '').slice(0, 60),
+        symbol: String(p?.baseToken?.symbol ?? '').slice(0, 20),
         pool: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(p?.pairAddress ?? '') ? p!.pairAddress! : null,
       }
     })
