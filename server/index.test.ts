@@ -924,6 +924,9 @@ const bars = await (await get('/api/hl/candles?coin=BTC&interval=1d&bars=1')).js
 assert.deepEqual(bars, [{ t: 2, o: 1.5, h: 2, l: 1, c: 1.8, v: 4 }])
 assert.equal((await get('/api/hl/candles?coin=BTC&interval=2d')).status, 400)
 assert.equal((await get('/api/hl/candles?coin=BTC%26x%3D1&interval=1d')).status, 400)
+// a well-formed name that is not listed is refused too — every new name would be an upstream call
+assert.equal((await get('/api/hl/candles?coin=FAKECOIN&interval=1d')).status, 400)
+assert.equal((await get('/api/hl/candles?coin=PAXG&interval=1d')).status, 200)
 assert.deepEqual(await (await get('/api/hl/mids')).json(), { BTC: 100000, PAXG: 2400 })
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 

@@ -15,7 +15,7 @@
  * rather than guessing, so a field named otherwise shows as nothing, not as a wrong number.
  */
 
-import { setFeed } from '../src/lib/market.ts'
+import { hlCoin, setFeed } from '../src/lib/market.ts'
 
 const INFO = 'https://api.hyperliquid.xyz/info'
 
@@ -113,9 +113,8 @@ export function info<T = any>(body: Record<string, unknown>, weight = 20): Promi
 
 /** The app speaks BTCUSDT; Hyperliquid speaks BTC. Gold is the one that is not a rename: the main
  *  book has no XAU, and PAXG — a token that is one ounce — is the gold it lists. */
-const TO_COIN: Record<string, string> = { XAUUSDT: 'PAXG' }
 const TO_ID: Record<string, string> = { PAXG: 'XAUUSDT' }
-export const coinOf = (id: string) => TO_COIN[id] ?? id.replace(/USDT$/, '')
+export const coinOf = hlCoin
 export const idOf = (coin: string) => TO_ID[coin] ?? `${coin}USDT`
 
 /** What a coin name may be before it goes into a request: the listed ones, k-prefixed (kPEPE) and
@@ -183,6 +182,8 @@ export function candles(coin: string, interval: string, bars = WINDOW): Promise<
     })
     // only an answer is kept: a failure is asked again next time rather than remembered as none
     got.catch(() => { if (candleCache.get(k)?.bars === got) candleCache.delete(k) })
+    // a ceiling, not an expectation: the relay only asks for listed coins, so this is ~70 entries
+    if (candleCache.size >= 256) candleCache.clear()
     candleCache.set(k, { at: Date.now(), bars: got })
   }
   return got.then((c) => c.slice(-Math.max(1, Math.min(bars, WINDOW))))
