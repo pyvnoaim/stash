@@ -471,19 +471,23 @@ export default function MarketPage() {
   // drag-to-pan: remember where the grab started, then offset from there (not per-move deltas, which
   // drift). Null means "not dragging", which is also what tells the move handler to do the crosshair.
   // `trail` is the last few moves, for the speed a flick leaves with.
-  const grab = useRef<{ x: number; scroll: number; moved: boolean; trail: { t: number; x: number }[] } | null>(null)
+  /* `axis` is which way a finger's drag turned out to go, decided on its first few pixels: across
+     pans the chart, up or down scrolls the page — by hand, since the box takes every touch (see
+     `touch-none` below) and the browser no longer does it. `py` is the last height, for that. */
+  const grab = useRef<{ x: number; y: number; py: number; axis: 'x' | 'y' | null; scroll: number; moved: boolean; trail: { t: number; x: number }[] } | null>(null)
   /* Every pointer that is down is kept here, and the moment there are two the gesture becomes a
      pinch: the bar count scales with the span between the fingers against the span they started
      at, pivoting on the bar that was between them — and moving both fingers together pans, since
-     that bar follows their midpoint. `touch-pan-y` on the box is what makes this arrive at all: it
-     leaves the vertical swipe to the page and takes pinch-zoom off the browser. */
-  const pts = useRef(new Map<number, number>())
+     that bar follows their midpoint. The span is the straight-line distance between the fingers,
+     not the sideways one: a pinch made with one finger above the other has almost no sideways
+     span, and the zoom leapt on every pixel of it. */
+  const pts = useRef(new Map<number, { x: number, y: number }>())
   const pinch = useRef<{ span: number; win: number; anchor: number } | null>(null)
   /** The distance between the two fingers and their midpoint, or null while there are not two. */
   const twoOf = () => {
     if (pts.current.size !== 2) return null
     const [a, b] = [...pts.current.values()]
-    return { span: Math.abs(a - b), mid: (a + b) / 2 }
+    return { span: Math.hypot(a.x - b.x, a.y - b.y), mid: (a.x + b.x) / 2 }
   }
   const lastTap = useRef(0) // for the double-tap that resets the view on a phone
   const resetView = () => { stopGlide(); carry.current = 0; setWin(VISIBLE); setScroll(0) }
@@ -784,17 +788,18 @@ export default function MarketPage() {
             )}
             {view && !error && (
               <>
-                {/* Pointer events rather than mouse: they are the same handlers on a phone, where
-                    this chart had no input at all. touch-pan-y leaves the vertical swipe to the
-                    page and hands the horizontal one to the pan; a mostly-vertical drag arrives
-                    as pointercancel, which just lets go. */}
+                {/* Pointer events rather than mouse: they are the same handlers on a phone. The box
+                    takes every touch (touch-none) — with pan-y the browser claimed any swipe that
+                    began a little diagonal, and any pinch with one finger above the other, as a
+                    page scroll, and the chart let go mid-gesture. A drag that turns out vertical
+                    scrolls the page from here instead; see `axis`. */}
                 <div
-                  className="absolute inset-0 cursor-crosshair touch-pan-y active:cursor-grabbing"
+                  className="absolute inset-0 cursor-crosshair touch-none active:cursor-grabbing"
                   onPointerDown={(e) => {
                     // capture, so a drag that leaves the box keeps panning instead of stalling
                     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* a pointer already gone */ }
                     stopGlide()
-                    pts.current.set(e.pointerId, e.clientX)
+                    pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
                     const two = twoOf()
                     if (two) {
                       // a second finger ends the pan and starts the pinch, from where it stands now
@@ -802,7 +807,10 @@ export default function MarketPage() {
                       pinch.current = { span: Math.max(two.span, 1), win: nav.current.winF, anchor: len - back - win + barFrac(two.mid) * (win - 1) }
                       grab.current = null
                     } else {
-                      grab.current = { x: e.clientX, scroll: nav.current.scroll, moved: false, trail: [{ t: e.timeStamp, x: e.clientX }] }
+                      grab.current = {
+                        x: e.clientX, y: e.clientY, py: e.clientY, axis: e.pointerType === 'mouse' ? 'x' : null,
+                        scroll: nav.current.scroll, moved: false, trail: [{ t: e.timeStamp, x: e.clientX }],
+                      }
                     }
                     if (e.pointerType === 'mouse') setHover(null)
                   }}
@@ -824,7 +832,7 @@ export default function MarketPage() {
                     }
                     /* A flick keeps going: the speed over the last tenth of a second, decaying by
                        friction each frame until it is too slow to see. */
-                    if (g?.moved && !pinch.current) {
+                    if (g?.moved && g.axis === 'x' && !pinch.current) {
                       const recent = g.trail.filter((p) => e.timeStamp - p.t < 100)
                       const first = recent[0], last = recent.at(-1)
                       let v = first && last && last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0 // px per ms
@@ -849,7 +857,7 @@ export default function MarketPage() {
                   onPointerMove={(e) => {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
-                    if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, e.clientX)
+                    if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
                     const two = twoOf()
                     if (pinch.current && two) {
                       /* fingers apart → fewer bars across the same box, which is zooming in. Off the
@@ -861,6 +869,18 @@ export default function MarketPage() {
                     }
                     const g = grab.current
                     if (g) {
+                      // which way this drag goes, once it has gone far enough to tell
+                      if (!g.axis) {
+                        const dx = Math.abs(e.clientX - g.x), dy = Math.abs(e.clientY - g.y)
+                        if (Math.max(dx, dy) >= 8) g.axis = dy > dx ? 'y' : 'x'
+                      }
+                      if (g.axis === 'y') {
+                        g.moved = true
+                        scrollerOf(e.currentTarget).scrollBy(0, g.py - e.clientY)
+                        g.py = e.clientY
+                        return
+                      }
+                      if (g.axis !== 'x') return
                       if (Math.abs(e.clientX - g.x) >= 6) g.moved = true
                       g.trail.push({ t: e.timeStamp, x: e.clientX })
                       if (g.trail.length > 8) g.trail.shift()
@@ -1501,6 +1521,16 @@ function useSearch(q: string) {
     return () => { on = false; clearTimeout(h) }
   }, [q])
   return out
+}
+
+/** What scrolls the page around the chart: the nearest ancestor that scrolls up and down, or the
+ *  document. A chart that takes every touch has to pass a vertical swipe on by hand. */
+function scrollerOf(el: Element): Element {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY
+    if ((o === 'auto' || o === 'scroll') && p.scrollHeight > p.clientHeight) return p
+  }
+  return document.scrollingElement ?? document.documentElement
 }
 
 /** One watchlist row's shape: mark, name, price, move — the same grid for every section. */
