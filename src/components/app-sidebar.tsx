@@ -630,7 +630,9 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
       </SidebarContent>
 
       {/* who you are and where your data stands — the account and Settings live in its menu */}
-      <SidebarFooter className="border-t">
+      {/* h-16, the same as the Record strip along the foot of Markets: the two rules meet across the
+          seam instead of stepping at it */}
+      <SidebarFooter className="h-16 justify-center border-t py-0">
         <SidebarMenu>
           <SidebarMenuItem>
             <NavUser onSettings={() => setSettings(true)} />

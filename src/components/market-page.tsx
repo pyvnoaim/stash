@@ -2847,7 +2847,7 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
   // nothing finished is nothing to say: the header's Trades button is the way in meanwhile
   if (!t.n) return null
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-1.5 text-xs tabular-nums lg:col-span-3">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 py-1.5 text-xs tabular-nums lg:col-span-3 lg:h-16 lg:flex-nowrap lg:py-0">
       <span className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">Record</span>
       {t.n > 0 && (
         <>
