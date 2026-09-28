@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
-import { TradesScreen } from '@/components/trades-page'
+import { HeldRange, TradesScreen } from '@/components/trades-page'
 import { amountOf, dollars, Holdings, TokenIcon, useHolding, useWalletRows } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
@@ -1439,6 +1439,7 @@ function TokenCards({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
           <span className="text-muted-foreground text-xs tabular-nums">
             {amountOf(held.h.amount)} {held.h.symbol}{share != null && <> · {share.toFixed(0)}% of your wallet</>}
           </span>
+          <HeldRange asset={asset} mint={held.h.mint} amount={held.h.amount} value={held.h.value} />
         </PanelCard>
       )}
       {!p ? <Skeleton className="h-36 rounded-2xl" /> : (
@@ -1651,7 +1652,7 @@ function Watchlist({ current, onPick, inputRef }: {
             {/* what you hold first: the tokens in the watched wallets, by what they are worth — the
                 wallet's total beside the label, so there is no separate card saying it again */}
             {wallet && !q.trim() && (
-              <div className="hidden lg:block">
+              <div className="hidden gap-0.5 lg:flex lg:flex-col">
                 <p className="text-muted-foreground flex justify-between px-2.5 pt-1 pb-1.5 text-xs">
                   <span>Wallet</span><span className="tabular-nums">{dollars(wallet.total)}</span>
                 </p>
@@ -1672,7 +1673,7 @@ function Watchlist({ current, onPick, inputRef }: {
               const shown = list.filter(hit)
               if (!shown.length) return null
               return (
-                <div key={group} className="contents lg:block">
+                <div key={group} className="contents lg:flex lg:flex-col lg:gap-0.5">
                   <p className="text-muted-foreground hidden px-2.5 pt-4 pb-1.5 text-xs first:pt-1 lg:block">{group}</p>
                   {shown.map((a) => {
                     const r = priced.get(a.id)
@@ -2184,7 +2185,7 @@ const PEAK_IV: [Interval, number][] = [['5m', 3e5], ['1h', 36e5], ['4h', 144e5],
  * ponytail: the fill's own bar counts whole, so a price from minutes before the entry can stand as
  * the peak — at most one bar of it, 5m on anything under three days old.
  */
-export function useExtremes(symbol: string, openedAt: number | string | null | undefined, now: number | null) {
+export function useExtremes(symbol: string | Asset, openedAt: number | string | null | undefined, now: number | null) {
   const feed = useVenue()
   const [x, setX] = useState<{ hi: number, lo: number } | null>(null)
   const t0 = openedAt != null ? new Date(openedAt).getTime() : NaN
@@ -2196,7 +2197,7 @@ export function useExtremes(symbol: string, openedAt: number | string | null | u
     // the same tile can outlive its trade — a reopened symbol keeps its key — so never carry the
     // last fill's extremes into the next one
     setX(null)
-    const a = ASSETS.find((y) => y.id === assetOf(symbol))
+    const a = typeof symbol === 'string' ? ASSETS.find((y) => y.id === assetOf(symbol)) : symbol
     if (feed === undefined || !a || !Number.isFinite(t0)) return
     const age = Date.now() - t0
     const [iv, ms] = PEAK_IV.find(([, ms]) => age / ms < BARS - 2) ?? PEAK_IV[PEAK_IV.length - 1]
@@ -2208,7 +2209,7 @@ export function useExtremes(symbol: string, openedAt: number | string | null | u
       }
     }).catch(() => {})
     return () => { on = false }
-  }, [symbol, t0, feed])
+  }, [typeof symbol === 'string' ? symbol : symbol.id, t0, feed]) // eslint-disable-line react-hooks/exhaustive-deps
   return x
 }
 
@@ -2824,8 +2825,8 @@ function RecordBar({ onOpen }: { onOpen: () => void }) {
           {t.money !== null && <span className={cn('font-mono', tone(t.money))}>{signedEuro(t.money)} priced here</span>}
         </>
       )}
-      <Button size="sm" variant="secondary" className="ml-auto h-6 gap-1 px-2 text-xs" onClick={onOpen}>
-        All trades <ChevronRight className="size-3" />
+      <Button size="sm" variant="secondary" className="ml-auto h-8 gap-1.5 rounded-lg px-3.5 text-sm" onClick={onOpen}>
+        All trades <ChevronRight className="size-4" />
       </Button>
     </div>
   )

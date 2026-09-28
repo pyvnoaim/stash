@@ -36,7 +36,7 @@ import {
   positions as hlPositions, universe as hlUniverse, type Closed,
 } from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
-import { holdings as solHoldings, logo as solLogo, swaps as solSwaps, tokenTrades, tradesPartial } from './solana.ts'
+import { holdings as solHoldings, logo as solLogo, swaps as solSwaps, openLots, tokenTrades, tradesPartial } from './solana.ts'
 import { candles as dexCandles, NETWORKS, pool as dexPool, POOL, search as dexSearch, TIMEFRAME } from './dex.ts'
 import { ASSETS, hlCoin } from '../src/lib/market.ts'
 
@@ -1277,7 +1277,7 @@ export function start({
       try {
         const all = (await Promise.all(sol.map((a) => tokenTrades(a, solUsdAt)))).flat().sort((a, b) => b.closedAt - a.closedAt)
         const complete = !sol.some(tradesPartial)
-        return send(res, 200, { trades: all, complete }, { 'cache-control': complete ? 'private, max-age=60' : 'no-store' })
+        return send(res, 200, { trades: all, open: sol.flatMap(openLots), complete }, { 'cache-control': complete ? 'private, max-age=60' : 'no-store' })
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
