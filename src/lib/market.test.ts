@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 const { sma, rsi, lastCross, signals, candlePatterns, orb, sessionVwap, tradePlan, dayPlan, holdPlan, strategyPlan, divergence,
   ema, macd, atr, squeeze, volumeSurge, trend, trendFilter, parseTrending, fetchTrending, priceDigits, fmtPrice, DEMOS, mirrorDemo, DEMO_MACD, DEMO_RSI, FRESH_CROSS,
   ANCHOR, HIGHER, HORIZONS, INTERVALS, readInterval, tally, openDesks, backtest, amdBacktest, hold, fill, deskSignals, fvg, liquiditySweep, structureBreak, swings, standingSwings, topDown,
-  heikin, heikinRun, toll, sparkPath, ASSETS, fetchCandles } = await import('./market.ts')
+  heikin, heikinRun, toll, sparkPath, ASSETS, fetchCandles, fetchPrices, hlCoin } = await import('./market.ts')
 type Signal = import('./market.ts').Signal
 
 // sma: nulls until the window fills, then the trailing average
@@ -1035,47 +1035,19 @@ assert.ok(!sparkPath([1, 2, NaN, 3])!.includes('NaN'))
 // …and a series that is all rubbish still draws nothing rather than a straight lie
 assert.equal(sparkPath([NaN, NaN]), null)
 
-/* The daily read pages back through Bitget's history endpoint: the recent one answers ninety days
-   and nothing a 200-MA can warm on. Stitched oldest first with no bar twice, stopped at DEEP, and a
-   history page that fails leaves the recent bars standing rather than failing the chart. */
+/* The browser's feed is this app's own relay: the venue's coin in the query, gold as PAXG, and the
+   mids read back onto the app's ids with anything unlisted left out. */
 {
-  const DAY = 86_400_000, now = 1000 * DAY
-  const row = (t: number) => [String(t), '1', '2', '0.5', '1.5', '10', '15']
-  const days = (from: number, n: number) => Array.from({ length: n }, (_, i) => row(from + i * DAY))
   const asked: string[] = []
-  let failHistory = false
   globalThis.fetch = ((url: string) => {
     asked.push(url)
-    let data: string[][]
-    if (url.includes('/history-candles')) {
-      if (failHistory) return Promise.resolve({ json: () => Promise.resolve({ code: '429', msg: 'slow down' }) })
-      const end = Number(new URL(url).searchParams.get('endTime'))
-      // the venue answers newest first here; the bar at endTime's edge comes back too
-      data = days(end + 1 - 199 * DAY, 200).reverse()
-    } else data = days(now - 89 * DAY, 90)
-    return Promise.resolve({ json: () => Promise.resolve({ code: '00000', data }) })
+    const body = url.startsWith('/api/hl/mids') ? { BTC: 100000, PAXG: 2400, DOGE: 'nope' }
+      : [{ t: 1, o: 1, h: 2, l: 0.5, c: 1.5 }]
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
   }) as unknown as typeof fetch
-  const btc = ASSETS.find((a) => a.id === 'BTCUSDT')!
-
-  const daily = await fetchCandles(btc, '1d')
-  assert.equal(daily.length, 90 + 199 + 199, 'two history pages on top of the recent ninety, the shared bar once')
-  assert.ok(daily.every((c, i) => i === 0 || c.t - daily[i - 1].t === DAY), 'oldest first, one bar a day, none twice')
-  assert.equal(daily.at(-1)!.t, now, 'the recent bars are the newest')
-  assert.equal(asked.filter((u) => u.includes('/history-candles')).length, 2, 'paged until DEEP, then stopped')
-
-  asked.length = 0
-  assert.equal((await fetchCandles(btc, '1h', null, 25)).length, 25, 'the fast intervals never page')
-  assert.equal(asked.length, 1)
-
-  // closed bars are kept: the same daily read again asks only for the recent window
-  asked.length = 0
-  assert.equal((await fetchCandles(btc, '1d')).length, 488)
-  assert.equal(asked.filter((u) => u.includes('/history-candles')).length, 0, 'history pages are cached')
-
-  failHistory = true
-  const eth = ASSETS.find((a) => a.id === 'ETHUSDT')!
-  assert.equal((await fetchCandles(eth, '1d')).length, 90, 'a failed history page keeps the recent bars')
-  // and a failure is not what gets remembered
-  failHistory = false
-  assert.equal((await fetchCandles(eth, '1d')).length, 488, 'a failed page is asked again next time')
+  const gold = ASSETS.find((a) => a.id === 'XAUUSDT')!
+  assert.equal((await fetchCandles(gold, '1d', null, 300)).length, 1)
+  assert.equal(asked[0], '/api/hl/candles?coin=PAXG&interval=1d&bars=300')
+  assert.deepEqual(await fetchPrices(['BTCUSDT', 'XAUUSDT', 'DOGEUSDT', 'NOTLISTED']), { BTCUSDT: 100000, XAUUSDT: 2400 })
+  assert.equal(hlCoin('BTCUSDT'), 'BTC')
 }

@@ -21,9 +21,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select'
 import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
@@ -460,110 +457,80 @@ function MarketsPanel() {
           which none has for a while, so it was already invisible. The feed is gone now and so is
           the key: it was the one secret this app kept in the synced document. */}
 
-      <ExchangeSection />
+      <WalletSection />
     </>
   )
 }
 
-/** The venues an account key can come from, and how each cuts one. */
-const VENUES = [
-  /* Read is still the advice, and still all the positions panel wants. Trade rights are the one
-     exception and they buy exactly one thing — the auto-cancel on a saved setup, which cannot take
-     an order off the book with a key that may only look at it. A key that can cancel can also open
-     a position, so this says what it is rather than leaving it to be discovered. */
-  { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
-    hint: 'From Bitget → API Management. Read is enough; add Trade only for auto-cancel, which is the same right that opens positions. Three parts — the passphrase is the one you chose.' },
-  /* Read is all there is: an Omni order is signed by the wallet's L2 key, not the API key. */
-  { id: 'apex', name: 'ApeX', route: '/api/apex', passphrase: true,
-    hint: 'From ApeX Omni → API Management. Key, secret and passphrase. Read only — orders on Omni are signed by your wallet, so nothing here can place one.' },
-] as const
+type Wallet = { address: string, chain: 'evm' | 'solana', label: string | null }
 
 /**
- * The keys, and where they live: an exchange key signs against an account, so it is typed here and
- * kept on the server, each account its own. It never comes back — the server will only say whether
- * one is set — so the fields always read empty, and saving again replaces it. Nothing secret rides
- * the synced document any more.
- *
- * One venue at a time, picked at the top: stacked key forms was a wall of fields, and nobody sets
- * more than one in a sitting. The picker is the first thing in the section because it
- * decides what every field under it means — it sat in the section's footer before, under the Save
- * button, which reads as one more setting rather than as the thing the form is about. `· set`
- * marks the venues already carrying a key, rather than a ✓ that landed beside the list's own.
+ * The wallets this account watches — addresses, never keys. Paste one and the server reads its
+ * chain off its shape, looks it up, and says what it found there, so a wrong address is found out
+ * here rather than as a panel that stays empty. Kept on the server, each account its own; nothing
+ * here can sign, so nothing here can move a cent. Fomo uses one 0x address on every EVM chain —
+ * that one is Hyperliquid perps — and one Solana address.
  */
-function ExchangeSection() {
+function WalletSection() {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
-  const [venue, setVenue] = useState<(typeof VENUES)[number]['id']>('bitget')
-  const [have, setHave] = useState<Record<string, boolean>>({})
-  const [key, setKey] = useState('')
-  const [secret, setSecret] = useState('')
-  const [pass, setPass] = useState('')
+  const [wallets, setWallets] = useState<Wallet[]>([])
+  const [address, setAddress] = useState('')
+  const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (user) {
-      for (const v of VENUES) {
-        void fetch(v.route).then((r) => r.json()).then((j) => setHave((h) => ({ ...h, [v.id]: !!j.set }))).catch(() => {})
-      }
-    }
+    if (!user) return
+    void fetch('/api/wallets').then((r) => r.json()).then((j) => setWallets(j.wallets ?? [])).catch(() => {})
   }, [user])
-  // no account, no server to keep a key on — the section is simply not there
+  // no account, no server to keep an address on — the section is simply not there
   if (!user) return null
 
-  const v = VENUES.find((x) => x.id === venue)!
-  const pick = (id: typeof venue) => { setVenue(id); setKey(''); setSecret(''); setPass('') }
-
-  const save = async (k: string, s: string, p: string) => {
+  const send = async (method: 'POST' | 'DELETE', body: Record<string, string>) => {
     setBusy(true)
     try {
-      const r = await fetch(v.route, { method: 'POST', body: JSON.stringify({ key: k, secret: s, ...(v.passphrase && { passphrase: p }) }) })
+      const r = await fetch('/api/wallets', { method, body: JSON.stringify(body) })
       const j = await r.json()
       if (!r.ok) throw new Error(j.error ?? r.status)
-      setHave((h) => ({ ...h, [v.id]: !!j.set }))
-      setKey(''); setSecret(''); setPass('')
-      toast(j.set ? `${v.name} key saved` : `${v.name} key removed`)
+      setWallets(j.wallets ?? [])
+      return j as { found?: string }
     } catch (e) {
       toast(String((e as Error).message))
+      return null
     } finally {
       setBusy(false)
     }
   }
+  const add = async () => {
+    const j = await send('POST', { address: address.trim(), label: label.trim() })
+    if (!j) return
+    setAddress(''); setLabel('')
+    toast(j.found ? `Wallet added — ${j.found}` : 'Wallet added')
+  }
+  const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
 
-  const whole = !!key.trim() && !!secret.trim() && (!v.passphrase || !!pass.trim())
   return (
     <Section
-      title="Exchange key"
-      hint={`${v.hint} Kept on the server, never shown back. Nothing here can trade.`}
+      title="Wallets"
+      hint="In Fomo: your profile → the 0x address (Hyperliquid perps, Base) and the Solana address. Watch-only — Stash never holds a key, so it can see and never trade."
       action={
-        <Button size="sm" disabled={busy || !whole} onClick={() => save(key.trim(), secret.trim(), pass.trim())}>
-          Save
-        </Button>
+        <Button size="sm" disabled={busy || !address.trim()} onClick={() => void add()}>Add</Button>
       }
     >
-      {/* a picker with one venue in it is a label pretending to be a choice */}
-      {VENUES.length > 1 && <Select value={venue} onValueChange={(id) => pick(id as typeof venue)}>
-        <SelectTrigger size="sm" aria-label="Exchange"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          {VENUES.map((x) => (
-            <SelectItem key={x.id} value={x.id}>
-              {x.name}
-              {have[x.id] && <span className="text-muted-foreground">· set</span>}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>}
-      {have[v.id] && (
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-muted-foreground text-xs">A {v.name} key is on this account. Saving replaces it.</p>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => save('', '', '')}>Remove</Button>
+      {wallets.map((w) => (
+        <div key={w.address} className="flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-xs">
+            <span className="text-muted-foreground">{w.chain === 'evm' ? 'EVM · Hyperliquid' : 'Solana'}</span>{' '}
+            <span className="font-mono">{short(w.address)}</span>
+            {w.label && <span className="text-muted-foreground"> · {w.label}</span>}
+          </p>
+          <Button size="sm" variant="outline" disabled={busy}
+            onClick={() => void send('DELETE', { address: w.address })}>Remove</Button>
         </div>
-      )}
-      <PasswordInput placeholder={`${v.name} API key`} autoComplete="off" value={key}
-        onChange={(e) => setKey(e.target.value)} />
-      <PasswordInput placeholder="API secret" autoComplete="off" value={secret}
-        onChange={(e) => setSecret(e.target.value)} />
-      {v.passphrase && (
-        <PasswordInput placeholder="Passphrase" autoComplete="off" value={pass}
-          onChange={(e) => setPass(e.target.value)} />
-      )}
+      ))}
+      <Input placeholder="0x… or a Solana address" autoComplete="off" spellCheck={false} value={address}
+        onChange={(e) => setAddress(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && address.trim() && !busy) void add() }} />
+      <Input placeholder="Label (optional) — e.g. Fomo" autoComplete="off" value={label} maxLength={40}
+        onChange={(e) => setLabel(e.target.value)} />
     </Section>
   )
 }

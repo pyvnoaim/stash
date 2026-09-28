@@ -31,9 +31,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
-import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
-import { closed as apexClosed, pending as apexPending, positions as apexPositions } from './apex.ts'
-import { cancel, desk, place, setLevels, type Cred } from './trade.ts'
+import {
+  ADDRESS, candles as hlCandles, closed as hlClosed, COIN, INTERVAL, mids as hlMids, pending as hlPending,
+  positions as hlPositions, type Closed,
+} from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
 
@@ -278,6 +279,11 @@ function readBytes(req: IncomingMessage, cap: number): Promise<Buffer> {
 const refused = new Map<string, number>()
 const REFUSED_FOR = 5 * 60_000
 
+/** A Solana address: base58, 32 to 44 characters — the alphabet leaves out 0, O, I and l. */
+const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
+/** How many wallets one account watches. Each EVM one is a read of the venue per half minute. */
+const MAX_WALLETS = 5
+
 /* Closed positions, per account, for the half minute /api/closed hands them out over. The venue
    caches its own open book; this list has no cache of its own down there, and a phone and a laptop
    both noticing the same close would otherwise be two history calls for one answer.
@@ -433,13 +439,19 @@ export function start({
   try { db.exec('alter table users add column feed text') } catch { /* already there */ }
   // and the calendar coming the other way: the one .ics URL this account subscribes to
   try { db.exec('alter table users add column cal text') } catch { /* already there */ }
-  // each account's own read-only exchange key — see the /api/bitget route. Bitget's key comes in
-  // three parts: JSON {key, secret, passphrase}
-  try { db.exec('alter table users add column bitget text') } catch { /* already there */ }
-  // MEXC came off the desk the same way Kraken did, and its column goes with it
-  try { db.exec('alter table users drop column mexc') } catch { /* already gone */ }
-  // ApeX Omni's key, three parts like Bitget's: JSON {key, secret, passphrase}
-  try { db.exec('alter table users add column apex text') } catch { /* already there */ }
+  /* Exchange keys came off the desk with the exchanges: Kraken, then MEXC, then Bitget and ApeX, all
+     for a watched wallet. Each column goes, so the credential it held leaves the file rather than
+     sitting in it unread. */
+  for (const col of ['mexc', 'bitget', 'apex']) {
+    try { db.exec(`alter table users drop column ${col}`) } catch { /* already gone */ }
+  }
+  /* The wallets an account watches. Addresses, not keys: public by nature, which is why nothing
+     that reads them can move a cent — and why they live here rather than in the synced document,
+     since an address beside a name says everything that name holds. */
+  db.exec(`create table if not exists wallets (
+    user integer not null, address text not null, chain text not null, label text, ts integer not null,
+    primary key (user, address)
+  )`)
   // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
   // than sitting in the file forever unread
   try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
@@ -495,10 +507,9 @@ export function start({
     sweepable: db.prepare('select id from blobs where owner = ? and ts < ?'),
     allDocs: db.prepare('select json from docs union all select json from pdocs'),
     dropBlob: db.prepare('delete from blobs where id = ?'),
-    bitget: db.prepare('select bitget from users where id = ?'),
-    setBitget: db.prepare('update users set bitget = ? where id = ?'),
-    apex: db.prepare('select apex from users where id = ?'),
-    setApex: db.prepare('update users set apex = ? where id = ?'),
+    wallets: db.prepare('select address, chain, label from wallets where user = ? order by ts'),
+    addWallet: db.prepare('insert or replace into wallets (user, address, chain, label, ts) values (?, ?, ?, ?, ?)'),
+    dropWallet: db.prepare('delete from wallets where user = ? and address = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -580,6 +591,9 @@ export function start({
     /** The project's sub-project setting, taken off any row on it — it is the same on every one. */
     shareSubs: db.prepare('select subs from shares where owner = ? and pid = ? limit 1'),
   }
+  /** The EVM wallets an account watches — the addresses the venue is read by. */
+  const evmOf = (user: number) => (q.wallets.all(user) as { address: string, chain: string }[])
+    .filter((w) => w.chain === 'evm').map((w) => w.address)
 
   /* A shared project's document lives on the server for exactly as long as something can reach it:
      a member, or a live link. When the last of them goes it is a private project again and the copy
@@ -1198,41 +1212,70 @@ export function start({
       return send(res, 200, { alerts: push.alerts(user.id, tz) })
     }
 
-    /* Each account's own exchange key, kept here because it signs requests — a browser holding it
-       would be a browser that can be read. It never travels back out: GET answers only whether one
-       is set. Stored as given rather than hashed, since signing needs it back — which is exactly
-       why the key is made read-only at the exchange: a copied database leaks a viewer, not a wallet. */
-    /* One route per venue, one rule for both: each cuts its key in three parts, and every part
-       arrives together or not at all — a fraction of a credential is a config that fails at three
-       in the morning. */
-    const venue = /^\/api\/(bitget|apex)$/.exec(path)?.[1] as 'bitget' | 'apex' | undefined
-    if (venue) {
+    /* The wallets this account watches. Paste an address and the chain is read off its shape — a
+       0x one is EVM (Hyperliquid perps, Base), a base58 one is Solana — and it is looked up before
+       it is kept, so the answer says what was found there rather than leaving that to a panel that
+       stays empty. An empty wallet is still kept: it may be new, and the answer says it is empty. */
+    if (path === '/api/wallets') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
-      const get = { bitget: q.bitget, apex: q.apex }[venue]
-      const set = { bitget: q.setBitget, apex: q.setApex }[venue]
-      if (req.method === 'GET') {
-        return send(res, 200, { set: !!(get.get(user.id) as Record<string, string | null> | undefined)?.[venue] })
-      }
-      if (req.method === 'POST') {
+      if (req.method === 'GET') return send(res, 200, { wallets: q.wallets.all(user.id) })
+      if (req.method === 'POST' || req.method === 'DELETE') {
         let b: any
         try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const key = String(b?.key ?? '').trim(), secret = String(b?.secret ?? '').trim(), passphrase = String(b?.passphrase ?? '').trim()
-        const parts = [key, secret, passphrase]
-        const given = parts.filter(Boolean).length
-        if (given !== 0 && given !== parts.length) return send(res, 400, { error: 'every part of the credential arrives together' })
-        /* Every one of these ends up as an HTTP header value on a signed call to the exchange, so
-           printable ASCII and nothing else. A newline pasted in with a key is refused here, where
-           it can be explained, rather than at the fetch that throws on it — which surfaced as a
-           500 with no words on it, at the moment somebody was trying to place a trade. */
-        if (parts.some((p) => p.length > 256 || /[^\x20-\x7e]/.test(p))) {
-          return send(res, 400, { error: 'a key, secret or passphrase is plain text — check what was pasted' })
+        const raw = String(b?.address ?? '').trim()
+        const chain = ADDRESS.test(raw) ? 'evm' : SOLANA.test(raw) ? 'solana' : null
+        if (!chain) return send(res, 400, { error: 'that is not a wallet address — a 0x… one or a Solana one' })
+        // EVM addresses are case-insensitive, and stored one way so the same wallet is one row
+        const address = chain === 'evm' ? raw.toLowerCase() : raw
+        if (req.method === 'DELETE') {
+          q.dropWallet.run(user.id, address)
+          return send(res, 200, { wallets: q.wallets.all(user.id) })
         }
-        set.run(key ? JSON.stringify({ key, secret, passphrase }) : null, user.id)
-        log(venue, user.name, via(req))
-        return send(res, 200, { set: !!key })
+        if ((q.wallets.all(user.id) as unknown[]).length >= MAX_WALLETS && !(q.wallets.all(user.id) as { address: string }[]).some((w) => w.address === address)) {
+          return send(res, 400, { error: `${MAX_WALLETS} wallets is the most one account watches` })
+        }
+        const label = String(b?.label ?? '').trim().slice(0, 40).replace(/[^\x20-\x7e\u00a0-\uffff]/g, '') || null
+        /* What is there, said in words. Solana is only kept for now — its holdings are the next
+           step — so it says that rather than pretending to have looked. */
+        let found = chain === 'solana' ? 'saved — Solana holdings are not read yet' : ''
+        if (chain === 'evm') {
+          try {
+            const f = await hlPositions(address)
+            found = f.positions.length || (f.equity ?? 0) > 0
+              ? `found on Hyperliquid: ${f.positions.length} position${f.positions.length === 1 ? '' : 's'}${f.equity != null ? `, $${f.equity.toFixed(2)} account value` : ''}`
+              : 'nothing on Hyperliquid at this address — is it the one Fomo trades perps from?'
+          } catch {
+            found = 'saved, but Hyperliquid did not answer just now'
+          }
+        }
+        q.addWallet.run(user.id, address, chain, label, Date.now())
+        log('wallet', user.name, via(req))
+        return send(res, 200, { wallets: q.wallets.all(user.id), found })
       }
       return send(res, 405, { error: 'method not allowed' })
+    }
+
+    /* The market feed, relayed. Hyperliquid's info endpoint is a POST, which no service worker can
+       cache and every browser would spend from the same small per-IP budget; through here it is a
+       GET the worker keeps for offline, and one cached upstream call per coin and interval however
+       many tabs ask. Public data and no session asked for — the charts work signed out — and the
+       coin and interval are matched against a pattern and a list before anything goes upstream. */
+    const feed = /^\/api\/hl\/(candles|mids)$/.exec(path)?.[1]
+    if (feed && req.method === 'GET') {
+      if (feed === 'mids') {
+        try { return send(res, 200, await hlMids(), { 'cache-control': 'no-store' }) }
+        catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
+      }
+      const u = new URL(req.url ?? '/', 'http://x').searchParams
+      const coin = u.get('coin') ?? '', interval = u.get('interval') ?? ''
+      if (!COIN.test(coin) || !INTERVAL[interval]) return send(res, 400, { error: 'not a market' })
+      const bars = Math.floor(Number(u.get('bars') ?? '1000')) || 1000
+      try {
+        return send(res, 200, await hlCandles(coin, interval, bars), { 'cache-control': 'private, max-age=5' })
+      } catch (e) {
+        return send(res, 502, { error: String((e as Error).message) })
+      }
     }
 
     /* A picture for a note. The bytes stay out of the synced document — see blob.ts — which is why
@@ -1360,17 +1403,16 @@ export function start({
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const stored = [
-        { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase), book: (c: any) => bitgetPending(c.key, c.secret, c.passphrase) },
-        { venue: 'apex', raw: (q.apex.get(user.id) as { apex: string | null } | undefined)?.apex, go: (c: any) => apexPositions(c.key, c.secret, c.passphrase), book: (c: any) => apexPending(c.key, c.secret, c.passphrase) },
-      ].filter((v) => v.raw)
-      if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
+        ...evmOf(user.id).map((raw) => ({ venue: 'hyperliquid', raw, go: hlPositions, book: hlPending })),
+      ]
+      if (!stored.length) return send(res, 501, { error: 'no wallet on this account' })
       try {
         /* The book rides along with the positions, and on softer terms: a limit order waiting at a
            price is not a position and nothing files itself off it, so a venue that will not answer
            for its book contributes an empty one rather than failing the call the rows come in. */
         const [feeds, books] = await Promise.all([
-          Promise.all(stored.map((v) => v.go(JSON.parse(v.raw!)))),
-          Promise.all(stored.map((v) => v.book(JSON.parse(v.raw!)).catch(() => []))),
+          Promise.all(stored.map((v) => v.go(v.raw))),
+          Promise.all(stored.map((v) => v.book(v.raw).catch(() => []))),
         ])
         return send(res, 200, {
           positions: feeds.flatMap((f, i) => f.positions.map((p) => ({ ...p, venue: stored[i].venue }))),
@@ -1382,112 +1424,6 @@ export function start({
       } catch (e) {
         return send(res, 502, { error: String((e as Error).message) })
       }
-    }
-
-    /* The desk, and the one thing on this server that can move money.
-       GET says what the account has and whether its key may trade at all; POST places one order,
-       with its stop and target riding it; PATCH moves the stop or the target resting against a
-       position that is already open; DELETE takes a resting one back off the book. Bitget only —
-       an ApeX Omni order wants a zk signature off the wallet's L2 seed, which no API key carries.
-       All of them refuse without a stored key, the same 501 the positions route answers with. */
-    if (path === '/api/trade') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const raw = (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget
-      if (!raw) return send(res, 501, { error: 'no Bitget key on this account' })
-      const cred = JSON.parse(raw) as Cred
-      // the symbol travels in a URL and into a signed request path: an allowlist of what a
-      // perpetual is ever called, so nothing else can be appended to a query this server signs
-      const ok = (s: unknown) => /^[A-Z0-9]{4,20}$/.test(String(s ?? ''))
-      if (req.method === 'GET') {
-        const symbol = String(new URL(req.url ?? '/', 'http://x').searchParams.get('symbol') ?? '').toUpperCase()
-        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
-        try { return send(res, 200, await desk(cred, symbol)) }
-        catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
-      }
-      /* And take one back off. The mirror of POST and the cheaper direction — this only ever
-         un-commits money — so it keeps its own counter rather than spending the ten orders a
-         quarter hour that placing has. */
-      if (req.method === 'DELETE') {
-        const p = new URL(req.url ?? '/', 'http://x').searchParams
-        const symbol = String(p.get('symbol') ?? '').toUpperCase()
-        const id = String(p.get('id') ?? '')
-        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
-        if (!/^[0-9]{1,32}$/.test(id)) return send(res, 400, { error: 'not an order id' })
-        if (limited(`cancel:${user.id}`)) return send(res, 429, { error: 'ten cancels in fifteen minutes is the limit — wait it out' })
-        try {
-          await cancel(cred, symbol, id)
-          log(`cancel ${symbol} ${id}`, user.name, via(req))
-          return send(res, 200, { ok: true })
-        } catch (e) {
-          return send(res, 502, { error: String((e as Error).message) })
-        }
-      }
-      /* Moving the levels on a position that is already open. Its own counter and a looser one
-         than placing: this is the request a person makes over and over while a trade is running,
-         and every one of them either narrows the risk or moves a target — it commits nothing new.
-         What it must not become is a loop, which is what the ceiling is for. Its own key, so a
-         morning spent minding one stop cannot use up the ten orders placing has. */
-      if (req.method === 'PATCH') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const symbol = String(b?.symbol ?? '').toUpperCase()
-        const side = b?.side === 'short' ? 'short' as const : 'long' as const
-        const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : NaN }
-        const level = (v: unknown) => (v == null || v === '' ? null : n(v))
-        const stop = level(b?.stop), target = level(b?.target)
-        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
-        for (const [what, v] of [['stop', stop], ['target', target]] as const) {
-          if (v !== null && !(v > 0)) return send(res, 400, { error: `${what} has to be a price over zero` })
-        }
-        if (stop === null && target === null) return send(res, 400, { error: 'nothing to move' })
-        if (limited(`levels:${user.id}`)) return send(res, 429, { error: 'ten moves in fifteen minutes is the limit — wait it out' })
-        try {
-          await setLevels(cred, symbol, side, { stop, target })
-          log(`levels ${side} ${symbol} stop=${stop ?? '-'} target=${target ?? '-'}`, user.name, via(req))
-          return send(res, 200, { ok: true })
-        } catch (e) {
-          return send(res, 502, { error: String((e as Error).message) })
-        }
-      }
-      if (req.method === 'POST') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const symbol = String(b?.symbol ?? '').toUpperCase()
-        const side = b?.side === 'short' ? 'short' as const : 'long' as const
-        /* Every number checked here rather than at the exchange: this is the request that spends
-           money, and a NaN margin or a leverage typed with a trailing letter must not reach a
-           signed call. The caps are the sane end of each range, not the venue's — the contract's
-           own maximum is checked in trade.ts, against the spec. */
-        const n = (v: unknown) => { const x = Number(v); return isFinite(x) ? x : NaN }
-        const margin = n(b?.margin), leverage = n(b?.leverage)
-        const level = (v: unknown) => (v == null || v === '' ? null : n(v))
-        const entry = level(b?.entry), stop = level(b?.stop), target = level(b?.target)
-        if (!ok(symbol)) return send(res, 400, { error: 'not a symbol' })
-        if (!(margin > 0)) return send(res, 400, { error: 'margin has to be a number over zero' })
-        // whole multipliers only: the venue takes nothing else, and "3.5" would be refused after
-        // the leverage call had already changed the account's setting for the symbol
-        if (!Number.isInteger(leverage) || !(leverage >= 1 && leverage <= 125)) {
-          return send(res, 400, { error: 'leverage is a whole number, 1 to 125' })
-        }
-        for (const [what, v] of [['entry', entry], ['stop', stop], ['target', target]] as const) {
-          if (v !== null && !(v > 0)) return send(res, 400, { error: `${what} has to be a price over zero` })
-        }
-        /* A ceiling on how fast this can go wrong. Ten orders in a quarter of an hour is far past
-           how anyone here trades, and it is the blast radius for the two ways this route ever
-           fires without a person: a loop in the client, or a session someone else is holding.
-           Last of the checks, so a malformed request costs its sender rather than the account. */
-        if (limited(`trade:${user.id}`)) return send(res, 429, { error: 'ten orders in fifteen minutes is the limit — wait it out' })
-        try {
-          const done = await place(cred, { symbol, side, margin, leverage, entry, stop, target })
-          // in the log beside the sign-ins: this is the event anyone auditing the server wants
-          log(`trade ${side} ${symbol} ${done.size}@${done.price} ${leverage}x`, user.name, via(req))
-          return send(res, 200, done)
-        } catch (e) {
-          return send(res, 502, { error: String((e as Error).message) })
-        }
-      }
-      return send(res, 405, { error: 'method not allowed' })
     }
 
     /* What the exchanges have already closed, so a trade files itself into the record at the price
@@ -1505,10 +1441,9 @@ export function start({
       if (hit && Date.now() - hit.at < 30_000) return send(res, 200, { closed: hit.rows })
       const since = Date.now() - 7 * 86400_000
       const stored = [
-        { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetClosed(c.key, c.secret, c.passphrase, since) },
-        { venue: 'apex', raw: (q.apex.get(user.id) as { apex: string | null } | undefined)?.apex, go: (c: any) => apexClosed(c.key, c.secret, c.passphrase, since) },
-      ].filter((v) => v.raw)
-      if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
+        ...evmOf(user.id).map((raw) => ({ venue: 'hyperliquid', raw, go: (a: string) => hlClosed(a, since) })),
+      ]
+      if (!stored.length) return send(res, 501, { error: 'no wallet on this account' })
       /* A venue that will not answer says so in the answer, not only in the log. An empty list is
          indistinguishable from a quiet week, and "the history endpoint is refusing this key" is not
          something anyone should have to infer from a record that stays empty — least of all by
@@ -1521,7 +1456,7 @@ export function start({
           log('closed-fail', `${v.venue}: ${said}`, via(req))
           return []
         }
-        try { return v.go(JSON.parse(v.raw!)).catch(oops) } catch (e) { return oops(e) }
+        try { return v.go(v.raw).catch(oops) } catch (e) { return oops(e) }
       }))
       const rows = lists.flat().sort((a, b) => b.closedAt - a.closedAt)
       /* Only a good read is cached. Half a minute of "the venue was down once" would otherwise be
@@ -1717,13 +1652,14 @@ export function start({
            account's bad data. */
         try {
         const keys = [
-          { venue: 'Bitget', raw: (q.bitget.get(who[i]) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
-          { venue: 'ApeX', raw: (q.apex.get(who[i]) as { apex: string | null } | undefined)?.apex, go: (c: any) => apexPositions(c.key, c.secret, c.passphrase) },
-        ].filter((v) => v.raw && !((refused.get(`${v.venue}:${who[i]}`) ?? 0) > Date.now() - REFUSED_FOR))
+          /* "unverified" rides the label: an address is pasted, not proven, so a desk could be showing
+             somebody else's wallet as its own. Proof would mean a signature Fomo's wallet cannot give. */
+          ...evmOf(who[i]).map((raw) => ({ venue: 'Hyperliquid · unverified', raw, go: hlPositions })),
+        ].filter((v) => !((refused.get(`${v.raw}:${who[i]}`) ?? 0) > Date.now() - REFUSED_FOR))
         if (!keys.length) return
-        const feeds = await Promise.all(keys.map((v) => v.go(JSON.parse(v.raw!)).catch(() => {
+        const feeds = await Promise.all(keys.map((v) => v.go(v.raw).catch(() => {
           if (refused.size >= 64) refused.clear()
-          refused.set(`${v.venue}:${who[i]}`, Date.now())
+          refused.set(`${v.raw}:${who[i]}`, Date.now())
           return null
         })))
         if (feeds.every((f) => f === null)) return
@@ -2183,11 +2119,13 @@ export function start({
             // own device, played back to them and recorded. Nothing here fetches media over the
             // network, so no host is named.
             + "media-src 'self' blob:; "
-            // Bitget's REST and socket are the market feed and the live prices.
+            // The market feed rides 'self' through the relay; the live prices are Hyperliquid's
+            // socket, and a socket carries no CORS to be refused by. Frankfurter is the euro rate a
+            // share card converts at, and nothing else.
             // GeckoTerminal came off with the Trending panel: no browser code reaches it any more
             // (the MCP tool asks from this process), so the grant was permission for nothing —
             // and a connect-src host nothing uses is a host anything injected could use.
-            + "connect-src 'self' https://api.bitget.com wss://ws.bitget.com; "
+            + "connect-src 'self' wss://api.hyperliquid.xyz https://api.frankfurter.app; "
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),

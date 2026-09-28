@@ -73,13 +73,12 @@ export default defineConfig({
            alerts in notification-bell against a number that isn't true any more, and the watcher
            is written so a *missing* price fires nothing. Missing is the honest answer offline. */
         runtimeCaching: [{
-          /* Gold's feed, on the same footing as Binance's bars: the candles endpoint only, never
-             the ticker beside it. Matched on the path, so the signed calls to the same host — which
-             go through the server and never appear here anyway — could not join by accident. */
-          urlPattern: /^https:\/\/api\.bitget\.com\/api\/v2\/mix\/market\/(history-)?candles/,
+          /* The bars, through this app's own relay: the candles route only, never the mids beside
+             it. Same-origin, so a regex on the path is the whole match. */
+          urlPattern: /\/api\/hl\/candles\?/,
           handler: 'NetworkFirst',
           options: {
-            cacheName: 'candles-bitget',
+            cacheName: 'candles-hyperliquid',
             networkTimeoutSeconds: 10,
             cacheableResponse: { statuses: [200] },
             expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },

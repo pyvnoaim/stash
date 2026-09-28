@@ -79,7 +79,7 @@ const presetOf = (bg: string | null) =>
 /* ponytail: its own copy of market.ts's venueName. This file imports nothing on purpose — pure
    string in, pure string out is what makes it testable — and a two-entry lookup is a cheaper
    duplicate than a dependency on the whole feed module. */
-const venueName = (v?: string) => ({ bitget: 'Bitget', apex: 'ApeX', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
+const venueName = (v?: string) => ({ hyperliquid: 'Hyperliquid', bitget: 'Bitget', apex: 'ApeX', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 /* How wide a string is, in ems, without a canvas to ask.
    ponytail: a table of the eight characters that are nowhere near the average, and three buckets
    for everything else. Every position on this card is arithmetic — a chip sized to its line, a band
@@ -108,23 +108,22 @@ const money = (n: number, unit: Unit = 'USDT', rate = 1) => {
   return unit === 'USDT' ? `${sign}${fig} USDT` : `${sign}${unit}${fig}`
 }
 
-/** The spot pair that prices the settlement token in each — both are listed on the same host the
- *  positions come off, which is the whole reason the card converts at all: no second venue, no key,
- *  and the rate is the one the money could actually be sold at rather than a central bank's fix. */
-const PAIR: Record<Unit, string | null> = { USDT: null, $: 'USDTUSD', '€': 'USDTEUR' }
-
 /**
- * What one USDT buys in `unit`, or null if the venue would not say. Null is not 1: a card that
- * quietly falls back to a rate of one prints the token's figure under a euro sign, which is the
- * one thing this is here to stop — the caller keeps the card in USDT until a real number lands.
+ * What one unit of the settlement token buys in `unit`, or null if nobody would say. Null is not 1:
+ * a card that quietly falls back to a rate of one prints the token's figure under a euro sign, which
+ * is the one thing this is here to stop — the caller keeps the card in the token until a real
+ * number lands.
+ *
+ * Hyperliquid settles in USDC, which is a dollar by design, so `$` is one and asks nothing. The euro
+ * is the ECB's reference rate through Frankfurter — free, keyless, and a day's fix rather than a
+ * price anyone could sell at, which is the honest precision of a figure on a card.
  */
 export async function rateOf(unit: Unit): Promise<number | null> {
-  const pair = PAIR[unit]
-  if (!pair) return 1
-  const j = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbol=${pair}`)
-    .then((r) => r.json() as Promise<{ data?: { lastPr?: string }[] }>)
+  if (unit !== '€') return 1
+  const j = await fetch('https://api.frankfurter.app/latest?from=USD&to=EUR')
+    .then((r) => r.json() as Promise<{ rates?: { EUR?: number } }>)
     .catch(() => null)
-  const n = Number(j?.data?.[0]?.lastPr)
+  const n = Number(j?.rates?.EUR)
   return isFinite(n) && n > 0 ? n : null
 }
 

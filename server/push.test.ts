@@ -291,7 +291,7 @@ assert.equal(fillsOf(book([order()], [pos(4)]), book([], [pos(4), pos(3.1)])).le
 // and the whole book shrinking by more than the order is not a fill, however it is split
 assert.deepEqual(fillsOf(book([order()], [pos(4), pos(1)]), book([], [pos(4)])), [])
 // the venue is inside the id, so two exchanges counting from one cannot collide on a key
-assert.equal(tag('bitget', [order({ id: '1' })])[0].id, 'bitget:1')
-assert.equal(fillsOf(book(tag('bitget', [order({ id: '1' })])), book([], [pos(3.1)]))[0].key, 'fill-bitget:1')
+assert.equal(tag('hl:0xabc', [order({ id: '1' })])[0].id, 'hl:0xabc:1')
+assert.equal(fillsOf(book(tag('hl:0xabc', [order({ id: '1' })])), book([], [pos(3.1)]))[0].key, 'fill-hl:0xabc:1')
 
 console.log('push alerts ok')

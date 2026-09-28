@@ -471,9 +471,11 @@ Deleting gives the same undo toast every other delete in the app does.
 
 ## Markets
 
-A read-only desk over other people's price feeds. Every asset is a USDT-margined perpetual on
-Bitget — keyless, CORS-open, no signup — gold included, since Bitget lists XAUUSDT. One
-feed, one kind of instrument, nothing to configure. The stocks and the index ETFs came off the list
+A read-only desk over Hyperliquid's price feed — the book Fomo's perps trade on. Keyless, no
+signup, and relayed through this server (`/api/hl/candles`, `/api/hl/mids`) so the service worker
+can keep the bars for offline and every tab shares one cached, rate-budgeted upstream call. Gold is
+PAXG, the ounce-backed token the main book lists. One feed, one kind of instrument, nothing to
+configure; the daily read is a thousand bars deep, which is room for the 200-MA. The stocks and the index ETFs came off the list
 and their Twelve Data feed came off with them: a second provider, an API key riding the synced
 document, a US-session clock and two slower poll rates, all for a group nothing pointed at.
 
@@ -557,41 +559,31 @@ setup is dead), and when it hits the target.
 
 ### What the exchange says you hold
 
-The desk's one row of fact among the readings: give your account a **read-only** futures key —
-**Settings → Markets → Exchange key**, each account its own — and a card above the verdicts lists
-what the exchange actually has open: symbol, side, size, entry against the current mark, the move
-from entry signed by the side, and the stop and target resting against it where the venue's feed
-carries them.
+The desk's one row of fact among the readings: add your **wallet address** — **Settings → Markets →
+Wallets**, each account its own — and a card above the verdicts lists what Hyperliquid has open for
+it: symbol, side, size, entry against the current mark, the move from entry signed by the side,
+leverage, funding, the venue's own liquidation price, and the stop and target resting against it.
 
-Two venues, **Bitget** and **ApeX Omni**, picked one at a time from the top of that section — `· set`
-marks the ones already carrying a key, and a key on each means one list with the venue named on
-every row. Both cut the credential in three parts (key, secret, passphrase), and every part arrives
-together or not at all, since a fraction of a credential is a config that fails at three in the
-morning. ApeX is read-only whatever the key allows: an Omni order is signed by the wallet's L2 key,
-so the Long and Short buttons stay a Bitget thing, and the charts stay on Bitget's feed either way. Kraken Futures and then MEXC were venues here and are
-gone: their columns are dropped on the next start, so the credentials they held leave the database
-rather than sitting in the file unread.
+Fomo uses one `0x` address on every EVM chain — that one is Hyperliquid — and one Solana address.
+Paste either: the chain is read off its shape, the server looks it up on the spot and says what it
+found there (*1 position, $1,240 account value*, or *nothing on Hyperliquid at this address*), and
+it is kept whatever the answer. Solana addresses are stored for the memecoin holdings that come next;
+nothing reads them yet. Up to five per account.
 
-The key is typed in the browser but kept on the server, because it signs requests. It is the only
-credential this app holds, and it never comes back out: the server will only say whether one is set,
-and saving again replaces it. The server signs the requests and joins in the mark prices; each
-exchange is asked at most every thirty seconds per key however many tabs poll; and the card renders
-nothing at all when no key is saved. Every venue answers or none of them do: one
-feed failing while the other answered would read as its positions having closed.
+**Watch-only.** An address is public and signs nothing, so there is no key here at all and nothing
+this server holds could place, move or cancel an order — trading happens in Fomo. The worst a copied
+database leaks is what an address holds, which is why addresses live on the server beside the
+account rather than in the synced document. Bitget, ApeX, MEXC and Kraken were venues here with
+exchange keys; each column is dropped on the next start, so the credentials leave the database.
 
-Flat, the card is one line: **Flat**, and the balance the venue reports — which is what equity is
-when nothing is open against it. The number was always on the card and only ever printed beside
-rows, so *what is in the account* was unanswerable on exactly the days there was nothing else to
-read. Several venues sum into one figure, the way they do with a position open.
+Each address is asked at most every thirty seconds however many tabs poll, and the whole server
+keeps under Hyperliquid's per-IP weight budget, queueing past it rather than collecting 429s. Every
+wallet answers or none do: one failing while another answered would read as its positions having
+closed.
 
-The percentage is price move, not return on margin: leverage is not in a read-only feed's scope,
-and a made-up ROE would be worse than none. Where a feed vouches for a liquidation price — Bitget's
-does — the card leads with the nearest one as a distance, which is the worst number on the desk
-said first; an estimate has no place next to real money, so a venue that doesn't say goes without.
-Create the key read-only on the exchange's side too, with withdrawal set to no access — this code
-could not place an order even if it wanted to, and the key should not be able to either. Stored as
-given rather than hashed, since signing needs it back — which is exactly why read-only matters: a
-copied database leaks a viewer, not a wallet.
+Flat, the card is one line: **Flat**, and the account value the venue reports. Closed trades are
+rebuilt from the account's fills — entry and exit as the size-weighted averages of each half, the
+money as the venue's realised P&L less every fee — and file into the record at the real exit.
 
 A position that was there last look and is gone this one has closed, and files itself into the
 record like any other trade — the same Result a hand-entered position writes, so the bell announces
@@ -668,13 +660,15 @@ in now — become readable by everyone with an account on this server, and their
 you say so, and off is what a document that has never heard of the setting means. The tab says so
 when nobody has, rather than showing an empty page.
 
-**What you are in now is your exchange's book**, for anyone whose account has a venue key on it
+**What you are in now is your exchange's book**, for anyone whose account watches a wallet
 (Settings → Markets). Those are fills — the positions the exchange says are open — rather than the
 ones somebody remembered to type in, and they arrive without anyone writing anything down. The page
 re-asks on the minute, so a position closed at the venue leaves the others' screens too; behind that
-the server keeps its answer per key for thirty seconds, so ten people reading is not ten calls to
-Bitget. An account with no key still shows what it typed, and so does one whose key has stopped
-working — a credential that expired is not a book that went flat.
+the server keeps its answer per address for thirty seconds, so ten people reading is not ten calls
+to Hyperliquid. An account with no wallet still shows what it typed, and so does one whose wallet
+did not answer — a venue that is down is not a book that went flat. An address is pasted, not
+proven, so their tiles say **unverified**: nothing stops a desk from watching somebody else's
+wallet, and the signature that would prove it is one Fomo's wallet cannot give.
 
 **Only trades you were really in travel.** A plan you watched and never took is not sent at all,
 which is a stronger promise than not showing it: the filter is on the server, so an untaken idea
@@ -889,8 +883,7 @@ is still in the file and still copies out.
 - `server/push.ts` — VAPID, the minute loop, and the rule that decides whether a phone is worth waking
 - `server/cal.ts` — the subscribed calendar: the guard on fetching a URL somebody typed, and the .ics reader behind it
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
-- `server/bitget.ts` — Bitget Futures read-only: the signing, the shape every venue answers in, and the thirty-second cache
-- `server/apex.ts` — ApeX Omni read-only: positions, resting orders and closed trades, held to that same shape
+- `server/hyperliquid.ts` — Hyperliquid, read-only by address: the rate budget, the candle cache, positions, orders, and closed trades rebuilt from fills
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions and Markets pages
 - `src/components/markdown.tsx` — the small markdown renderer for the note page
@@ -916,7 +909,7 @@ as long as the tab is open; none of it is being kept.
 
 `⌘K → Export a backup` writes a JSON file; **Import a backup** replaces the current data with it.
 Nothing is stripped on the way out any more: the Twelve Data key was the one credential the
-document held, and the feed that wanted it is gone. An exchange key has never been in there.
+document held, and the feed that wanted it is gone. No wallet address has ever been in there.
 Backups from the original pre-React version import fine. It stored a project's
 colour as an HSL hue rather than a hex, so those are dropped and the projects come in uncoloured;
 nothing else is.
@@ -940,8 +933,8 @@ while the server is unreachable opens your own data rather than the sign-in scre
 One rule decides every conflict: the device that edited last wins, and the fifty versions the
 server keeps per user are the undo for the day that rule picks wrong. There is no merge engine —
 recovery over prevention, at a fraction of the code. Nothing secret rides the sync: the document
-is your rows and your settings, and the one credential this app keeps — an exchange key — is typed
-into Settings and stays on the server.
+is your rows and your settings, and the wallet addresses you watch are typed into Settings and stay
+on the server.
 
 Signup wants an invite code: sixteen hex characters out of `randomBytes`, good once and dead after
 a week, so a code that leaks somewhere is a code that stops working. Wrong codes from one address
@@ -1128,8 +1121,8 @@ Every push to `main` here lands as a versioned GitHub release, so pin a tag if y
 not track `main` live. Updating is `git pull && docker compose up -d --build` — schema migrations
 run on boot, and a tab that is already open offers **Reload** when the new bundle is waiting.
 
-No optional variables on the container. The exchange keys are not the container's either: each
-account sets its own in Settings → Markets.
+No optional variables on the container. The watched wallets are not the container's either: each
+account adds its own in Settings → Markets.
 
 Data sits in one named volume; backing it up is copying one SQLite file — via `vacuum into`, since
 the live file is in WAL mode and a raw `cp` of it can catch a write half-landed:

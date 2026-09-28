@@ -9,6 +9,26 @@ import { fileURLToPath } from 'node:url'
 
 process.env.NODE_ENV = 'production'   // assert the cookie as the container serves it
 const { start } = await import('./index.ts')
+const { setBudget } = await import('./hyperliquid.ts')
+setBudget(1e9)
+
+/* Hyperliquid, answered here rather than over the network, for the whole file: an address with one
+   ETH short on it, two bars for anything asking candles, and nothing for everything else. Every
+   other request goes through. The rate budget is lifted — nothing here is a real venue to spare. */
+const realFetch = globalThis.fetch
+const hlAsked: any[] = []
+globalThis.fetch = ((u: any, o?: any) => {
+  if (!String(u).startsWith('https://api.hyperliquid.xyz')) return realFetch(u, o)
+  const body = JSON.parse(o?.body ?? '{}')
+  hlAsked.push(body)
+  const answer = body.type === 'clearinghouseState'
+    ? { marginSummary: { accountValue: '1240.5' }, assetPositions: [{ position: { coin: 'ETH', szi: '-2', entryPx: '2000', positionValue: '3900', unrealizedPnl: '100', liquidationPx: '2450', leverage: { value: 10 } } }] }
+    : body.type === 'candleSnapshot' ? [{ t: 1, o: '1', h: '2', l: '0.5', c: '1.5', v: '3' }, { t: 2, o: '1.5', h: '2', l: '1', c: '1.8', v: '4' }]
+    : body.type === 'allMids' ? { BTC: '100000', PAXG: '2400' }
+    : []
+  return Promise.resolve(new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } }))
+}) as typeof fetch
+
 
 const root = mkdtempSync(join(tmpdir(), 'stash-'))
 writeFileSync(join(root, 'index.html'), '<!doctype html>hi')
@@ -857,34 +877,54 @@ r = await post('/api/signup', { user: 'ines', pass: 'longenough', invite: ` ${me
 assert.equal(r.status, 200)
 assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', invite: messy })).status, 403)
 
-/* ---------- the exchange key: set, replaced, never shown, gone ---------- */
+/* ---------- wallets: pasted, recognised, looked up, never more than an address ---------- */
 
 const kInv = server.invite()
 const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
-// no session, no key business at all
-assert.equal((await get('/api/bitget')).status, 401)
-// no key on the account yet: the status says so, and positions has nothing to sign with
-assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: false })
+const EVM = '0x3BeD814b714017c170D8081c663C4C8e7E89b183'
+const SOL = '9WDg8ibeX3pkqZ4Xm6B9GBqrn6Aq8miuXkB8VDDWhHn5'
+// no session, no wallet business at all
+assert.equal((await get('/api/wallets')).status, 401)
+assert.deepEqual(await (await get('/api/wallets', kUser)).json(), { wallets: [] })
+// no wallet: positions and closed have nothing to read
 assert.equal((await get('/api/positions', kUser)).status, 501)
-// half a credential is refused rather than stored
-assert.equal((await post('/api/bitget', { key: 'k', secret: 's' }, kUser)).status, 400)
-// a whole one lands, and the answer never carries the secret back
-assert.deepEqual(await (await post('/api/bitget', { key: 'k', secret: 's', passphrase: 'p' }, kUser)).json(), { set: true })
-assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: true })
-// empty both takes it off again
-assert.deepEqual(await (await post('/api/bitget', {}, kUser)).json(), { set: false })
-assert.equal((await get('/api/positions', kUser)).status, 501)
-// ApeX takes the same three parts on its own route, and never hands them back either
-assert.equal((await get('/api/apex')).status, 401)
-assert.equal((await post('/api/apex', { key: 'k', secret: 's' }, kUser)).status, 400)
-assert.deepEqual(await (await post('/api/apex', { key: 'k', secret: 's', passphrase: 'p' }, kUser)).json(), { set: true })
-assert.deepEqual(await (await get('/api/apex', kUser)).json(), { set: true })
-assert.deepEqual(await (await get('/api/bitget', kUser)).json(), { set: false }, 'one venue\'s key is not the other\'s')
-assert.deepEqual(await (await post('/api/apex', {}, kUser)).json(), { set: false })
-// the closed book asks the same keys, so with none on the account it answers the same way
-assert.equal((await get('/api/closed')).status, 401)
 assert.equal((await get('/api/closed', kUser)).status, 501)
+// anything that is not an address is refused, and nothing is stored
+assert.equal((await post('/api/wallets', { address: 'not-an-address' }, kUser)).status, 400)
+assert.equal((await post('/api/wallets', { address: '0x123' }, kUser)).status, 400)
+// an EVM one is looked up and the answer says what was found, in words
+r = await post('/api/wallets', { address: EVM, label: 'Fomo' }, kUser)
+let w = await r.json()
+assert.equal(r.status, 200)
+assert.match(w.found, /1 position, \$1240\.50 account value/)
+// stored lower-cased: the same wallet pasted in another case is one row, not two
+assert.deepEqual(w.wallets, [{ address: EVM.toLowerCase(), chain: 'evm', label: 'Fomo' }])
+await post('/api/wallets', { address: EVM.toUpperCase().replace('0X', '0x') }, kUser)
+assert.equal((await (await get('/api/wallets', kUser)).json()).wallets.length, 1)
+// Solana is recognised by its shape and kept, and says it is not read yet rather than pretending
+w = await (await post('/api/wallets', { address: SOL }, kUser)).json()
+assert.match(w.found, /Solana/)
+assert.deepEqual(w.wallets.map((x: any) => x.chain), ['evm', 'solana'])
+// the wallet is what positions read now: the short, off the address, never anything to sign with
+const book = await (await get('/api/positions', kUser)).json()
+assert.equal(book.positions[0].symbol, 'ETHUSDT')
+assert.equal(book.positions[0].venue, 'hyperliquid')
+assert.equal(book.equity, 1240.5)
+assert.ok(hlAsked.some((b) => b.type === 'clearinghouseState' && b.user === EVM.toLowerCase()))
+// removed is gone, and positions go back to having nothing to read
+await del2('/api/wallets', { address: EVM }, kUser)
+await del2('/api/wallets', { address: SOL }, kUser)
+assert.deepEqual(await (await get('/api/wallets', kUser)).json(), { wallets: [] })
+assert.equal((await get('/api/positions', kUser)).status, 501)
+assert.equal((await get('/api/closed')).status, 401)
 
+/* The market relay: public, since the charts work signed out, and nothing reaches the venue that
+   is not a coin and an interval this app knows. */
+const bars = await (await get('/api/hl/candles?coin=BTC&interval=1d&bars=1')).json()
+assert.deepEqual(bars, [{ t: 2, o: 1.5, h: 2, l: 1, c: 1.8, v: 4 }])
+assert.equal((await get('/api/hl/candles?coin=BTC&interval=2d')).status, 400)
+assert.equal((await get('/api/hl/candles?coin=BTC%26x%3D1&interval=1d')).status, 400)
+assert.deepEqual(await (await get('/api/hl/mids')).json(), { BTC: 100000, PAXG: 2400 })
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 
 /* kUser's session, rather than one more account: the signup limiter is deliberately tight and this
@@ -956,20 +996,6 @@ assert.equal(r.headers.get('x-content-type-options'), 'nosniff')
 // the page must never be held by a proxy: a stale index.html pins a stale service worker
 assert.equal(r.headers.get('cache-control'), 'no-cache')
 assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`)).status, 403)
-
-/* The exchange credential, which is the one thing this server stores that it later signs a
-   request with. Every part goes into an HTTP header, so a newline in one is refused at the door:
-   left to the fetch it throws there instead, as a 500 with nothing on it, at whatever moment the
-   key is next used — which is the moment somebody is trying to place a trade. */
-assert.equal((await post('/api/bitget', { key: 'k', secret: 's' }, leon)).status, 400, 'half a credential')
-assert.equal((await post('/api/bitget',
-  { key: 'k\r\nX-Evil: 1', secret: 's', passphrase: 'p' }, leon)).status, 400, 'a header break went in')
-assert.equal((await post('/api/bitget',
-  { key: 'k'.repeat(257), secret: 's', passphrase: 'p' }, leon)).status, 400, 'no ceiling on a key')
-assert.equal((await post('/api/bitget', { key: 'k', secret: 's', passphrase: 'p p' }, leon)).status, 200)
-// and it never comes back out — GET says only whether one is set
-assert.deepEqual(await (await get('/api/bitget', leon)).json(), { set: true })
-assert.equal((await post('/api/bitget', { key: '', secret: '', passphrase: '' }, leon)).status, 200)
 
 server.close()
 

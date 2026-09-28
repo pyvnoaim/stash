@@ -215,10 +215,10 @@ async function account(path: string, body: object): Promise<string | null> {
     const j = await r.json().catch(() => ({}))
     if (!r.ok) return String(j.error ?? `error ${r.status}`)
     setSnap({ user: asUser(j) })
-    /* Whose exchange key this is has just changed. venue.ts asks once and holds the answer for the
+    /* Whose wallets these are has just changed. venue.ts asks once and holds the answer for the
        life of the tab — which is right while one person is signed in, and wrong the moment the
        person changes. Nothing here reloads the page, so a tab that read `null` signed out would
-       go on treating an account with a Bitget key as one without. */
+       go on treating an account with a wallet as one without. */
     forgetVenue()
     await syncNow()
     return null

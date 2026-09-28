@@ -27,6 +27,8 @@ Object.assign(globalThis, {
 })
 const store = await import('../src/lib/store.ts')
 const market = await import('../src/lib/market.ts')
+// the market feed, installed on import — this process reads the venue straight, not through the relay
+await import('./hyperliquid.ts')
 const { parseCapture } = await import('../src/lib/parse.ts')
 
 const UA = 'stash-mcp'   // names this client in the sessions list, so it can be revoked on sight
