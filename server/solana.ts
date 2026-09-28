@@ -28,8 +28,11 @@ const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 /** How many mints one wallet gets priced — five calls. A wallet sprayed with airdrops holds
  *  hundreds, and the rest of them are the scam coins the liquidity floor would drop anyway. */
 const MAX_MINTS = 150
-/** Below this in value, a token is dust: shown by nobody, summed by nobody. */
+/** Below this in value, a token is dust: not a row of its own, but still in the total — the way
+ *  Fomo's own "Show dust" works, so the two totals agree. */
 export const DUST = 0.5
+/** Below this it is not even dust: rounding, and closed accounts' leftovers. */
+const CRUMB = 0.005
 /** Below this in pool depth, a price is a number somebody typed into an empty pool. */
 export const MIN_LIQUIDITY = 1000
 
@@ -48,6 +51,8 @@ export type Holding = {
   url: string | null
   /** The pool the price came off — what the app's own chart reads its candles from. */
   pool: string | null
+  /** Worth under DUST: counted in the total, left out of the list. */
+  dust: boolean
 }
 
 const rpc = (method: string, params: unknown[]) => fetch(RPC, {
@@ -98,7 +103,7 @@ export function bestPairs(pairs: unknown): Map<string, Pair> {
   return out
 }
 
-/** Balances and pairs into the rows the panel shows: priced, liquid, not dust, biggest first. */
+/** Balances and pairs into rows: priced, liquid, dust flagged, biggest first. */
 export function shapeHoldings(balances: Map<string, number>, pairs: Map<string, Pair>): Holding[] {
   const out: Holding[] = []
   for (const [mint, amount] of balances) {
@@ -106,11 +111,12 @@ export function shapeHoldings(balances: Map<string, number>, pairs: Map<string, 
     const price = Number(p?.priceUsd)
     if (!p || !isFinite(price) || price <= 0 || (p.liquidity?.usd ?? 0) < MIN_LIQUIDITY) continue
     const value = amount * price
-    if (value < DUST) continue
+    if (value < CRUMB) continue
     const change = Number(p.priceChange?.h24)
     out.push({
       chain: 'solana', mint, amount, price,
       value: Math.round(value * 100) / 100,
+      dust: value < DUST,
       symbol: String(p.baseToken?.symbol ?? mint.slice(0, 4)),
       name: String(p.baseToken?.name ?? ''),
       logo: p.info?.imageUrl ?? null,

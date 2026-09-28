@@ -390,7 +390,12 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
         {/* folded, the mark centres on the same axis as the icons under it rather than keeping
             the open sidebar's left inset */}
         <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
-          <span className="bg-foreground text-background grid size-6 shrink-0 place-items-center rounded-md text-[12px] font-bold">S</span>
+          {/* the app icon itself (public/favicon.svg), in the sidebar's colours: inverted, so it
+              stands off a dark sidebar rather than sinking into it */}
+          <svg viewBox="0 0 64 64" aria-hidden className="text-foreground size-6 shrink-0">
+            <rect width="64" height="64" rx="14" fill="currentColor" />
+            <rect x="27" y="15" width="10" height="34" rx="5" className="fill-background" />
+          </svg>
           <span className="font-heading text-[13px] tracking-[0.18em] uppercase group-data-[collapsible=icon]:hidden">Stash</span>
         </div>
       </SidebarHeader>

@@ -43,7 +43,7 @@ function TokenIcon({ mint, symbol }: { mint: string, symbol: string }) {
   )
 }
 
-type HoldingsAnswer = { holdings?: Holding[], total?: number } | null
+type HoldingsAnswer = { holdings?: Holding[], total?: number, dust?: { count: number, value: number } } | null
 let shared: { at: number, answer: Promise<HoldingsAnswer> } | null = null
 /** One look at /api/holdings for everything on the page that wants it — the Wallet card, the
  *  Markets totals and the sidebar's tile each asking on their own minute was three calls for one
@@ -134,6 +134,7 @@ export function Holdings({ onOpen }: { onOpen?: (a: Asset) => void }) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
   const [rows, setRows] = useState<Holding[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [dust, setDust] = useState<{ count: number, value: number } | null>(null)
   useEffect(() => {
     if (!user) return
     let on = true
@@ -145,6 +146,7 @@ export function Holdings({ onOpen }: { onOpen?: (a: Asset) => void }) {
           if (!on || !j?.holdings) return
           setRows(j.holdings)
           setTotal(j.total ?? 0)
+          setDust(j.dust?.count ? j.dust : null)
         })
         .catch(() => {})
     }
@@ -180,7 +182,8 @@ export function Holdings({ onOpen }: { onOpen?: (a: Asset) => void }) {
               <span className="ml-auto text-right tabular-nums">
                 <span className="block">{dollars(r.value)}</span>
                 {r.change != null && (
-                  <span className={cn('block text-xs',
+                  <span title="The token's price over the last 24 hours — not your return since you bought"
+                    className={cn('block text-xs',
                     r.change >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
                     {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}% 24h
                   </span>
@@ -188,6 +191,12 @@ export function Holdings({ onOpen }: { onOpen?: (a: Asset) => void }) {
               </span>
             </a>
           ))}
+          {/* in the total above, as Fomo counts it, but not worth a row each */}
+          {dust && (
+            <p className="text-muted-foreground px-0.5 pt-0.5 text-xs tabular-nums">
+              + {dollars(dust.value)} in {dust.count} small balance{dust.count === 1 ? '' : 's'}
+            </p>
+          )}
         </div>
       </CardContent>
     </Card>
