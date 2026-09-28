@@ -74,6 +74,26 @@ export function useHoldingsTotal(): number | null {
   return total
 }
 
+/** What the watched wallets hold, as rows, and what they come to — for the watchlist's Wallet
+ *  section. Null for an account watching nothing; a minute fresh, while the tab is visible. */
+export function useWalletRows(): { rows: Holding[], total: number } | null {
+  const { user } = useSyncExternalStore(subscribeSync, getSync)
+  const [out, setOut] = useState<{ rows: Holding[], total: number } | null>(null)
+  useEffect(() => {
+    if (!user) { setOut(null); return }
+    let on = true
+    const look = () => {
+      if (document.visibilityState !== 'visible') return
+      // a failed look keeps what the last one said rather than emptying the section
+      void lookHoldings().then((j) => { if (on && j?.holdings) setOut(j.holdings.length ? { rows: j.holdings, total: Number(j.total) || 0 } : null) })
+    }
+    look()
+    const t = setInterval(look, EVERY)
+    return () => { on = false; clearInterval(t) }
+  }, [user])
+  return out
+}
+
 /** The one token of the watched wallets that a chart is about, matched by mint or by pool, beside
  *  what all the tokens are worth — for the chart's "You hold" card. Null when none of it is held. */
 export function useHolding(mint?: string, pool?: string): { h: Holding, total: number } | null {
