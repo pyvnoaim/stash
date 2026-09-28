@@ -2051,18 +2051,31 @@ function Watchlist({ current, onPick, inputRef }: {
   const perpOf = (c: string) => ASSETS.find((a) => hlCoin(a.id) === c) ?? perpAsset(c)
   const pick = (a: Asset) => { remember(a); onPick(a.id); setQ('') }
   const listKey = listed.map((a) => a.id).join(',')
+  /* Tokens every fifth minute, perps every minute. A token's bars come off GeckoTerminal, whose
+     thirty calls a minute the whole server shares — a list of pinned tokens asking on the minute
+     would spend that on sparklines and leave people's charts answering "busy". Perps are one cheap
+     call each and stream between polls anyway. A token not yet priced is asked for at once. */
+  const ticks = useRef(0)
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
   useEffect(() => {
     if (feed === undefined) return // which venue is still being asked — see useVenue
     let on = true
-    fetchHours(listed, feed)
+    const tokenTurn = ticks.current++ % 5 === 0
+    const have = new Set(rowsRef.current.map((r) => r.a.id))
+    const ask = listed.filter((a) => a.source !== 'dex' || tokenTurn || !have.has(a.id))
+    fetchHours(ask, feed)
       .then((bars) => {
         if (!on) return
-        const next = bars
+        const fresh = bars
           .map(({ a, c }) => ({
             a, price: c.at(-1)!.c, open: c[0].o, change: ((c.at(-1)!.c - c[0].o) / c[0].o) * 100,
             closes: c.map((k) => k.c),
           }))
           .filter((r) => isFinite(r.price) && isFinite(r.change))
+        // what was not asked this time keeps its last answer, as long as it is still on the list
+        const asked = new Set(ask.map((a) => a.id)), keep = new Set(listed.map((a) => a.id))
+        const next = [...fresh, ...rowsRef.current.filter((r) => !asked.has(r.a.id) && keep.has(r.a.id))]
         setRows(next)
         setState(next.length ? 'ready' : 'error')
       })
