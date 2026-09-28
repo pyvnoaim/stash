@@ -138,13 +138,40 @@ async function fetchBitget(symbol: string, interval: Interval, bars = BARS): Pro
   const want = Math.min(bars, DEEP[interval] ?? 0)
   for (let n = 0; n < MAX_PAGES && out.length && out.length < want; n++) {
     const oldest = out[0].t
-    const older = await bitgetPage(
+    const older = await historyPage(
       `https://api.bitget.com/api/v2/mix/market/history-candles?${q}&endTime=${oldest - 1}&limit=200`,
     ).then((c) => c.filter((k) => k.t < oldest)).catch(() => [] as Candle[])
     if (!older.length) break
     out = [...older, ...out]
   }
   return out.slice(-bars)
+}
+
+/* A history page is bars that have closed, so the same page is the same answer until the window
+   in front of it moves — once a day on daily bars, once a week on weekly. Kept, then, rather than
+   asked again on every chart load and every pass of the Scan, which reads every asset at once. And
+   no more than a few in flight: the Scan fanning out eleven assets' pages together is exactly the
+   burst Bitget's per-IP limit answers with a 429, which here reads as `warmup`. */
+const HISTORY_TTL = 6 * 3600_000
+const HISTORY_KEEP = 200
+const HISTORY_AT_ONCE = 4
+const history = new Map<string, { at: number; bars: Promise<Candle[]> }>()
+let inFlight = 0
+const waiting: (() => void)[] = []
+
+function historyPage(url: string): Promise<Candle[]> {
+  const hit = history.get(url)
+  if (hit && Date.now() - hit.at < HISTORY_TTL) return hit.bars
+  const bars = (async () => {
+    if (inFlight >= HISTORY_AT_ONCE) await new Promise<void>((go) => waiting.push(go))
+    inFlight++
+    try { return await bitgetPage(url) } finally { inFlight--; waiting.shift()?.() }
+  })()
+  // only an answer is kept: a failed page is asked again next time rather than remembered as none
+  bars.catch(() => history.delete(url))
+  if (history.size >= HISTORY_KEEP) history.clear()
+  history.set(url, { at: Date.now(), bars })
+  return bars
 }
 
 /** One call to either candle endpoint. Both answer in the same rows. */
