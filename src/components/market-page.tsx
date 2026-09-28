@@ -13,6 +13,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
+import { Holdings } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, liqOf, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
 import { Hint } from '@/components/ui/tooltip'
@@ -1328,6 +1329,8 @@ export default function MarketPage() {
             {/* what the exchange says you hold, account-wide — the one block here that is fact
                 rather than reading. Absent unless a venue reports something open. */}
             <ExchangePositions onOpen={setAsset} />
+            {/* and what the watched wallets hold as tokens — the memecoins, which no book carries */}
+            <Holdings />
             {/* and what the others with their desk on are in, the same tiles signed with a name */}
             <FriendsOpen onPick={setAsset} />
             </div>
