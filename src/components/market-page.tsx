@@ -392,7 +392,10 @@ export default function MarketPage() {
 
   // The drawn window: `win` bars wide, `scroll` bars back from the newest. Clamped here rather than
   // in the setters, so a wheel spin or a drag can overshoot and just stop at the end of the data.
-  const winBars = Math.max(MIN_BARS, Math.min(win, MAX_BARS))
+  // `win` is kept fractional: a trackpad zooms in steps of half a percent, and rounding each one
+  // back to the same whole bar count meant a slow pinch never got anywhere
+  const winF = Math.max(MIN_BARS, Math.min(win, MAX_BARS))
+  const winBars = Math.round(winF)
   const stop = candles.length - Math.min(scroll, Math.max(0, candles.length - winBars))
   const start = Math.max(0, stop - winBars)
   // memoised so it's the same array across hover re-renders — the session scan below leans on that
@@ -404,36 +407,96 @@ export default function MarketPage() {
   const atEdge = stop === candles.length
   const future = atEdge ? Math.max(3, Math.round(winBars * 0.08)) : 0
 
-  // wheel zoom needs a non-passive listener to stop the page scrolling under it, which React's
-  // onWheel can't promise. Anchored on the right edge, so the newest bar stays put while you zoom.
+  /* Moving about the chart. Everything below reads the window through `nav` — a ref refreshed every
+     render — because the wheel listener is bound once and the gestures outlive the render they
+     started in. Two verbs, and every input is one or both of them:
+       zoomAt: so many times the bars, pivoting on a point of the box, so the bar under the cursor
+               (or between the fingers) stays under it;
+       panBy:  so many bars, fractions kept, so a slow trackpad swipe of a third of a bar per event
+               still arrives rather than rounding to nothing every time. */
   const plot = useRef<HTMLDivElement>(null)
+  const nav = useRef({ win: winBars, winF, scroll, len: candles.length, span: 1 })
+  nav.current = { win: winBars, winF, scroll: Math.min(scroll, Math.max(0, candles.length - winBars)), len: candles.length, span: Math.max(1, winBars - 1 + future) }
+  /** The bar a point of the box sits over, as a fraction of the drawn bars — the empty room on the
+   *  right counts as the newest bar, which is what zooming over it should hold still. */
+  const barFrac = (clientX: number) => {
+    const r = plot.current?.getBoundingClientRect()
+    if (!r?.width) return 1
+    const { win, span } = nav.current
+    return Math.max(0, Math.min(1, (((clientX - r.left) / r.width) * span) / Math.max(1, win - 1)))
+  }
+  /** Show `win` bars with the bar at `anchor` (an absolute index, fractional) at fraction `f`. */
+  const place = (win: number, anchor: number, f: number) => {
+    const { len } = nav.current
+    const wf = Math.max(MIN_BARS, Math.min(MAX_BARS, win))
+    const w = Math.round(wf)
+    const stop = Math.round(anchor - f * (w - 1) + w)
+    setWin(wf)
+    setScroll(Math.max(0, Math.min(Math.max(0, len - w), len - stop)))
+  }
+  const zoomAt = (factor: number, f: number) => {
+    const { win, winF: wf, scroll: back, len } = nav.current
+    const start = len - back - win
+    place(wf * factor, start + f * (win - 1), f)
+  }
+  const carry = useRef(0) // the part of a bar a pan has moved but not yet drawn
+  const panBy = (bars: number) => {
+    carry.current += bars
+    const whole = Math.trunc(carry.current)
+    if (!whole) return
+    carry.current -= whole
+    const { len, win } = nav.current
+    setScroll((v) => Math.max(0, Math.min(Math.max(0, len - win), Math.min(v, Math.max(0, len - win)) + whole)))
+  }
+  const glide = useRef(0) // the frame a flick is coasting on, to cancel when anything else starts
+  const stopGlide = () => { cancelAnimationFrame(glide.current); glide.current = 0 }
+
+  /* The wheel, which is three devices. A mouse wheel: big vertical steps — zoom, a notch at a time,
+     about 15%. A trackpad: small steps on both axes — sideways is a pan, vertical a zoom, both in
+     proportion to how far the fingers went rather than a notch per event (which made a gentle
+     trackpad zoom lurch across the whole range). A trackpad pinch: the browser sends it as a wheel
+     with ctrlKey — zoom, finer again. Shift turns a mouse wheel sideways. Non-passive, so the page
+     does not scroll under a chart that is zooming. */
   useEffect(() => {
     const el = plot.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
-      if (!e.deltaY) return
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1
+      const sideways = e.shiftKey && !e.deltaX
+      const dx = (sideways ? e.deltaY : e.deltaX) * unit
+      const dy = (sideways ? 0 : e.deltaY) * unit
+      if (!dx && !dy) return
       e.preventDefault()
-      setWin((w) => Math.round(Math.max(MIN_BARS, Math.min(MAX_BARS, w * (e.deltaY > 0 ? 1.15 : 1 / 1.15)))))
+      stopGlide()
+      const f = barFrac(e.clientX)
+      if (e.ctrlKey) zoomAt(Math.exp(dy * 0.01), f)
+      else if (Math.abs(dx) > Math.abs(dy)) panBy((-dx / (el.clientWidth || 1)) * nav.current.win)
+      else zoomAt(Math.exp(Math.max(-100, Math.min(100, dy)) * 0.0014), f)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [candles.length > 0]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => stopGlide, [])
+
   // drag-to-pan: remember where the grab started, then offset from there (not per-move deltas, which
   // drift). Null means "not dragging", which is also what tells the move handler to do the crosshair.
-  const grab = useRef<{ x: number; scroll: number } | null>(null)
-  /* Zoom was the wheel and only the wheel, which on a phone is no zoom at all: the chart panned, the
-     tap read a bar, and the footer said "scroll to zoom" to a device with nothing to scroll. Every
-     pointer that is down is kept here, and the moment there are two the gesture becomes a pinch —
-     the ratio of the span between the fingers against the span they started at, applied to the bar
-     count they started at. `touch-pan-y` on the box is what makes this arrive at all: it leaves the
-     vertical swipe to the page and takes pinch-zoom off the browser, so the two fingers are ours. */
+  // `trail` is the last few moves, for the speed a flick leaves with.
+  const grab = useRef<{ x: number; scroll: number; moved: boolean; trail: { t: number; x: number }[] } | null>(null)
+  /* Every pointer that is down is kept here, and the moment there are two the gesture becomes a
+     pinch: the bar count scales with the span between the fingers against the span they started
+     at, pivoting on the bar that was between them — and moving both fingers together pans, since
+     that bar follows their midpoint. `touch-pan-y` on the box is what makes this arrive at all: it
+     leaves the vertical swipe to the page and takes pinch-zoom off the browser. */
   const pts = useRef(new Map<number, number>())
-  const pinch = useRef<{ span: number; win: number } | null>(null)
-  /** The distance between the two fingers, or null while there are not two. */
-  const spanOf = () => {
+  const pinch = useRef<{ span: number; win: number; anchor: number } | null>(null)
+  /** The distance between the two fingers and their midpoint, or null while there are not two. */
+  const twoOf = () => {
+    if (pts.current.size !== 2) return null
     const [a, b] = [...pts.current.values()]
-    return pts.current.size === 2 ? Math.abs(a - b) : null
+    return { span: Math.abs(a - b), mid: (a + b) / 2 }
   }
+  const lastTap = useRef(0) // for the double-tap that resets the view on a phone
+  const resetView = () => { stopGlide(); carry.current = 0; setWin(VISIBLE); setScroll(0) }
 
   // session-open x-positions, memoised off the candles so hovering doesn't re-run the Intl work.
   // Mark the first bar that reaches the open each local day — works whether bars run continuously
@@ -914,6 +977,13 @@ export default function MarketPage() {
             {/* only when there is nothing to draw yet: over a chart already on screen, the refresh
                 button's own spin says it is fetching, and the candles stay readable meanwhile */}
             {loading && !view && <ChartSkeleton label={current.label} />}
+            {/* scrolled back into history: one press home, rather than a drag per screen of bars */}
+            {view && !error && !atEdge && (
+              <Button size="sm" variant="secondary" onClick={() => { stopGlide(); carry.current = 0; setScroll(0) }}
+                className="absolute right-16 bottom-8 z-10 h-7 gap-1 rounded-full px-3 text-xs shadow-md">
+                Latest <ChevronRight className="size-3.5" />
+              </Button>
+            )}
             {view && !error && (
               <>
                 {/* Pointer events rather than mouse: they are the same handlers on a phone, where
@@ -924,28 +994,55 @@ export default function MarketPage() {
                   className="absolute inset-0 cursor-crosshair touch-pan-y active:cursor-grabbing"
                   onPointerDown={(e) => {
                     // capture, so a drag that leaves the box keeps panning instead of stalling
-                    e.currentTarget.setPointerCapture(e.pointerId)
+                    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* a pointer already gone */ }
+                    stopGlide()
                     pts.current.set(e.pointerId, e.clientX)
-                    const span = spanOf()
-                    if (span) {
+                    const two = twoOf()
+                    if (two) {
                       // a second finger ends the pan and starts the pinch, from where it stands now
-                      pinch.current = { span, win: winBars }
+                      const { win, scroll: back, len } = nav.current
+                      pinch.current = { span: Math.max(two.span, 1), win: nav.current.winF, anchor: len - back - win + barFrac(two.mid) * (win - 1) }
                       grab.current = null
                     } else {
-                      grab.current = { x: e.clientX, scroll }
+                      grab.current = { x: e.clientX, scroll: nav.current.scroll, moved: false, trail: [{ t: e.timeStamp, x: e.clientX }] }
                     }
                     if (e.pointerType === 'mouse') setHover(null)
                   }}
+                  onDoubleClick={resetView}
                   onPointerUp={(e) => {
+                    const g = grab.current
                     // a finger has no hover, so the crosshair rides on the tap: a press that never
                     // travelled reads the bar under it rather than having panned nowhere. A second
-                    // tap on the bar it is already on puts it away — a read-out with no pointer to
-                    // leave the box would otherwise sit over the chart until another bar was tapped.
-                    if (grab.current && !pinch.current && e.pointerType !== 'mouse'
-                      && Math.abs(e.clientX - grab.current.x) < 10 && n) {
-                      const r = e.currentTarget.getBoundingClientRect()
-                      const at = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * xSpan)))
-                      setHover((was) => (was === at ? null : at))
+                    // tap on the bar it is already on puts it away. Two taps in quick succession
+                    // are the phone's double-click: back to the newest bars at the usual zoom.
+                    if (g && !pinch.current && !g.moved && e.pointerType !== 'mouse' && n) {
+                      if (e.timeStamp - lastTap.current < 300) { lastTap.current = 0; setHover(null); resetView() }
+                      else {
+                        lastTap.current = e.timeStamp
+                        const r = e.currentTarget.getBoundingClientRect()
+                        const at = Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * xSpan)))
+                        setHover((was) => (was === at ? null : at))
+                      }
+                    }
+                    /* A flick keeps going: the speed over the last tenth of a second, decaying by
+                       friction each frame until it is too slow to see. */
+                    if (g?.moved && !pinch.current) {
+                      const recent = g.trail.filter((p) => e.timeStamp - p.t < 100)
+                      const first = recent[0], last = recent.at(-1)
+                      let v = first && last && last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0 // px per ms
+                      const width = e.currentTarget.getBoundingClientRect().width || 1
+                      if (Math.abs(v) > 0.3) {
+                        carry.current = 0
+                        let then = performance.now()
+                        const step = (now: number) => {
+                          const dt = Math.min(64, now - then)
+                          then = now
+                          panBy(((v * dt) / width) * nav.current.win)
+                          v *= Math.pow(0.94, dt / 16)
+                          glide.current = Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0
+                        }
+                        glide.current = requestAnimationFrame(step)
+                      }
                     }
                     pts.current.delete(e.pointerId)
                     if (pts.current.size < 2) pinch.current = null
@@ -955,19 +1052,23 @@ export default function MarketPage() {
                     if (!n) return
                     const r = e.currentTarget.getBoundingClientRect()
                     if (pts.current.has(e.pointerId)) pts.current.set(e.pointerId, e.clientX)
-                    const span = spanOf()
-                    if (pinch.current && span) {
+                    const two = twoOf()
+                    if (pinch.current && two) {
                       /* fingers apart → fewer bars across the same box, which is zooming in. Off the
                          span they started at rather than the last move, for the same reason the pan
                          is: per-move ratios multiply their own rounding and the chart drifts. */
-                      const want = pinch.current.win * (pinch.current.span / Math.max(span, 1))
-                      setWin(Math.round(Math.max(MIN_BARS, Math.min(MAX_BARS, want))))
+                      const p = pinch.current
+                      place(p.win * (p.span / Math.max(two.span, 1)), p.anchor, Math.max(0, Math.min(1, (two.mid - r.left) / r.width)))
                       return
                     }
-                    if (grab.current) {
+                    const g = grab.current
+                    if (g) {
+                      if (Math.abs(e.clientX - g.x) >= 6) g.moved = true
+                      g.trail.push({ t: e.timeStamp, x: e.clientX })
+                      if (g.trail.length > 8) g.trail.shift()
                       // drag right → walk back in time by however many bars that many pixels covers
-                      const bars = Math.round(((e.clientX - grab.current.x) / r.width) * winBars)
-                      setScroll(Math.max(0, Math.min(candles.length - winBars, grab.current.scroll + bars)))
+                      const bars = Math.round(((e.clientX - g.x) / r.width) * winBars)
+                      setScroll(Math.max(0, Math.min(Math.max(0, candles.length - winBars), g.scroll + bars)))
                       return
                     }
                     if (e.pointerType !== 'mouse') return // touch never hovers; its crosshair is the tap above
@@ -1354,7 +1455,7 @@ export default function MarketPage() {
                 {/* the verbs the device actually has: a phone has no wheel to scroll and no pointer
                     to hover, and being told to use one is how a chart reads as broken */}
                 <span className={cn('opacity-70', !structure && 'mr-4')}>
-                  {phone ? 'drag to pan · pinch to zoom · tap a bar' : 'drag to pan · scroll to zoom'} · {n} bars
+                  {phone ? 'drag to pan · pinch to zoom · double-tap to reset' : 'drag or swipe to pan · scroll or pinch to zoom · double-click to reset'} · {n} bars
                   {/* the one thing nobody would try unprompted: two of the lines on this chart are
                       the live order, and they can be taken hold of */}
                 </span>
