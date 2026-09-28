@@ -79,7 +79,7 @@ const presetOf = (bg: string | null) =>
 /* ponytail: its own copy of market.ts's venueName. This file imports nothing on purpose — pure
    string in, pure string out is what makes it testable — and a two-entry lookup is a cheaper
    duplicate than a dependency on the whole feed module. */
-const venueName = (v?: string) => ({ bitget: 'Bitget', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
+const venueName = (v?: string) => ({ bitget: 'Bitget', apex: 'ApeX', mexc: 'MEXC' })[v ?? ''] ?? v ?? 'Exchange'
 /* How wide a string is, in ems, without a canvas to ask.
    ponytail: a table of the eight characters that are nowhere near the average, and three buckets
    for everything else. Every position on this card is arithmetic — a chip sized to its line, a band

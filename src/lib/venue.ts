@@ -16,7 +16,8 @@ import type { Venue } from './market'
 /** What `useVenue` hands back: `undefined` until the answer lands, then the venue or null. */
 export type VenueFeed = Venue | undefined
 
-const VENUES = ['bitget'] as const
+// Bitget first: with a key on each, it is the one the desk can trade on
+const VENUES = ['bitget', 'apex'] as const
 
 let asked: Promise<Venue> | null = null
 

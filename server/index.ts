@@ -32,6 +32,7 @@ import { allowed, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
 import { closed as bitgetClosed, pending as bitgetPending, positions as bitgetPositions, type Closed } from './bitget.ts'
+import { closed as apexClosed, pending as apexPending, positions as apexPositions } from './apex.ts'
 import { cancel, desk, place, setLevels, type Cred } from './trade.ts'
 import { createStash } from './mcp.ts'
 import { chargeAt, createPush } from './push.ts'
@@ -437,6 +438,8 @@ export function start({
   try { db.exec('alter table users add column bitget text') } catch { /* already there */ }
   // MEXC came off the desk the same way Kraken did, and its column goes with it
   try { db.exec('alter table users drop column mexc') } catch { /* already gone */ }
+  // ApeX Omni's key, three parts like Bitget's: JSON {key, secret, passphrase}
+  try { db.exec('alter table users add column apex text') } catch { /* already there */ }
   // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
   // than sitting in the file forever unread
   try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
@@ -494,6 +497,8 @@ export function start({
     dropBlob: db.prepare('delete from blobs where id = ?'),
     bitget: db.prepare('select bitget from users where id = ?'),
     setBitget: db.prepare('update users set bitget = ? where id = ?'),
+    apex: db.prepare('select apex from users where id = ?'),
+    setApex: db.prepare('update users set apex = ? where id = ?'),
     feedOf: db.prepare('select feed from users where id = ?'),
     setFeed: db.prepare('update users set feed = ? where id = ?'),
     byFeed: db.prepare('select id, name from users where feed = ?'),
@@ -1197,13 +1202,17 @@ export function start({
        would be a browser that can be read. It never travels back out: GET answers only whether one
        is set. Stored as given rather than hashed, since signing needs it back — which is exactly
        why the key is made read-only at the exchange: a copied database leaks a viewer, not a wallet. */
-    /* Bitget cuts its key in three parts, and every part arrives together or not at all: a
-       fraction of a credential is a config that fails at three in the morning. */
-    if (path === '/api/bitget') {
+    /* One route per venue, one rule for both: each cuts its key in three parts, and every part
+       arrives together or not at all — a fraction of a credential is a config that fails at three
+       in the morning. */
+    const venue = /^\/api\/(bitget|apex)$/.exec(path)?.[1] as 'bitget' | 'apex' | undefined
+    if (venue) {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
+      const get = { bitget: q.bitget, apex: q.apex }[venue]
+      const set = { bitget: q.setBitget, apex: q.setApex }[venue]
       if (req.method === 'GET') {
-        return send(res, 200, { set: !!(q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget })
+        return send(res, 200, { set: !!(get.get(user.id) as Record<string, string | null> | undefined)?.[venue] })
       }
       if (req.method === 'POST') {
         let b: any
@@ -1219,8 +1228,8 @@ export function start({
         if (parts.some((p) => p.length > 256 || /[^\x20-\x7e]/.test(p))) {
           return send(res, 400, { error: 'a key, secret or passphrase is plain text — check what was pasted' })
         }
-        q.setBitget.run(key ? JSON.stringify({ key, secret, passphrase }) : null, user.id)
-        log('bitget', user.name, via(req))
+        set.run(key ? JSON.stringify({ key, secret, passphrase }) : null, user.id)
+        log(venue, user.name, via(req))
         return send(res, 200, { set: !!key })
       }
       return send(res, 405, { error: 'method not allowed' })
@@ -1352,6 +1361,7 @@ export function start({
       if (!user) return send(res, 401, { error: 'unauthorized' })
       const stored = [
         { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase), book: (c: any) => bitgetPending(c.key, c.secret, c.passphrase) },
+        { venue: 'apex', raw: (q.apex.get(user.id) as { apex: string | null } | undefined)?.apex, go: (c: any) => apexPositions(c.key, c.secret, c.passphrase), book: (c: any) => apexPending(c.key, c.secret, c.passphrase) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       try {
@@ -1377,8 +1387,8 @@ export function start({
     /* The desk, and the one thing on this server that can move money.
        GET says what the account has and whether its key may trade at all; POST places one order,
        with its stop and target riding it; PATCH moves the stop or the target resting against a
-       position that is already open; DELETE takes a resting one back off the book. Bitget, the
-       one venue on the desk.
+       position that is already open; DELETE takes a resting one back off the book. Bitget only —
+       an ApeX Omni order wants a zk signature off the wallet's L2 seed, which no API key carries.
        All of them refuse without a stored key, the same 501 the positions route answers with. */
     if (path === '/api/trade') {
       const user = auth(req)
@@ -1496,6 +1506,7 @@ export function start({
       const since = Date.now() - 7 * 86400_000
       const stored = [
         { venue: 'bitget', raw: (q.bitget.get(user.id) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetClosed(c.key, c.secret, c.passphrase, since) },
+        { venue: 'apex', raw: (q.apex.get(user.id) as { apex: string | null } | undefined)?.apex, go: (c: any) => apexClosed(c.key, c.secret, c.passphrase, since) },
       ].filter((v) => v.raw)
       if (!stored.length) return send(res, 501, { error: 'no exchange key on this account' })
       /* A venue that will not answer says so in the answer, not only in the log. An empty list is
@@ -1707,6 +1718,7 @@ export function start({
         try {
         const keys = [
           { venue: 'Bitget', raw: (q.bitget.get(who[i]) as { bitget: string | null } | undefined)?.bitget, go: (c: any) => bitgetPositions(c.key, c.secret, c.passphrase) },
+          { venue: 'ApeX', raw: (q.apex.get(who[i]) as { apex: string | null } | undefined)?.apex, go: (c: any) => apexPositions(c.key, c.secret, c.passphrase) },
         ].filter((v) => v.raw && !((refused.get(`${v.venue}:${who[i]}`) ?? 0) > Date.now() - REFUSED_FOR))
         if (!keys.length) return
         const feeds = await Promise.all(keys.map((v) => v.go(JSON.parse(v.raw!)).catch(() => {

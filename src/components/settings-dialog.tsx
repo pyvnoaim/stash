@@ -473,6 +473,9 @@ const VENUES = [
      a position, so this says what it is rather than leaving it to be discovered. */
   { id: 'bitget', name: 'Bitget', route: '/api/bitget', passphrase: true,
     hint: 'From Bitget → API Management. Read is enough; add Trade only for auto-cancel, which is the same right that opens positions. Three parts — the passphrase is the one you chose.' },
+  /* Read is all there is: an Omni order is signed by the wallet's L2 key, not the API key. */
+  { id: 'apex', name: 'ApeX', route: '/api/apex', passphrase: true,
+    hint: 'From ApeX Omni → API Management. Key, secret and passphrase. Read only — orders on Omni are signed by your wallet, so nothing here can place one.' },
 ] as const
 
 /**

@@ -37,6 +37,7 @@ import {
 /* The one venue with a book this process can read. Everything else here is a public feed served
    the same to everyone; this is one account's own orders, off the key it stored. */
 import { pending as bitgetPending, positions as bitgetPositions, type Order } from './bitget.ts'
+import { pending as apexPending, positions as apexPositions } from './apex.ts'
 
 /** Nothing goes out before this hour, local to the device — except a price level, which cannot wait. */
 const QUIET_UNTIL = 8
@@ -367,7 +368,7 @@ export function createPush(db: DatabaseSync) {
     seen: db.prepare('update pushes set seen = ? where endpoint = ?'),
     doc: db.prepare('select json from docs where user = ? order by v desc limit 1'),
     tzOf: db.prepare('select tz from pushes where user = ? limit 1'),
-    keys: db.prepare('select bitget from users where id = ?'),
+    keys: db.prepare('select bitget, apex from users where id = ?'),
   }
 
   /* One keypair for this server, kept because the browsers tie a subscription to the key that
@@ -604,7 +605,7 @@ export function createPush(db: DatabaseSync) {
   /** Whichever venues this account stored a key for, each as the two calls a look takes — the same
    *  stored blobs and the same pair of readers /api/positions goes through. */
   const venuesOf = (user: number) => {
-    const row = q.keys.get(user) as { bitget: string | null } | undefined
+    const row = q.keys.get(user) as { bitget: string | null, apex: string | null } | undefined
     const of = (raw: string | null | undefined, need: string[], look: (c: any) => Promise<Book>) => {
       if (!raw) return null
       try {
@@ -619,6 +620,13 @@ export function createPush(db: DatabaseSync) {
           bitgetPositions(c.key, c.secret, c.passphrase),
         ])
         return { orders: tag('bitget', orders), positions: feed.positions }
+      }),
+      of(row?.apex, ['key', 'secret', 'passphrase'], async (c) => {
+        const [orders, feed] = await Promise.all([
+          apexPending(c.key, c.secret, c.passphrase),
+          apexPositions(c.key, c.secret, c.passphrase),
+        ])
+        return { orders: tag('apex', orders), positions: feed.positions }
       }),
     ].filter((v) => v !== null)
   }
