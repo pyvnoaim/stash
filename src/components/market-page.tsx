@@ -1005,7 +1005,7 @@ export default function MarketPage() {
                   return (
                     // no tooltip of its own: the crosshair's box says the same, and the pointer passes
                     // through to it, so a mark is read one way on a mouse and on a finger alike
-                    <FillMark key={`f-${k}`} buy={m.buy} open={m.open}
+                    <FillMark key={`f-${k}`} buy={m.buy}
                       className="pointer-events-none absolute z-20 size-[18px] -translate-x-1/2 -translate-y-full"
                       style={{
                         left: `${xAt(m.i)}%`,
@@ -1046,7 +1046,7 @@ export default function MarketPage() {
                     style={{ left: `${Math.min(85, Math.max(15, xAt(hover!)))}%` }}>
                     {hoverFills.map((m, k) => (
                       <span key={`h-${k}`} className={cn('flex items-center gap-1.5', k > 0 && 'mt-0.5 border-t pt-0.5')}>
-                        <FillMark buy={m.buy} open={m.open} />
+                        <FillMark buy={m.buy} />
                         {note(m)}
                       </span>
                     ))}
@@ -1179,24 +1179,21 @@ export function Sparkline({ data, up, id, className = 'h-8 w-full' }: {
  *
  *  Visibility is the keyline, not the size. The chart under it is white wicks, two moving averages
  *  and a wash of dashed levels, all of which a flat shape sinks into; a stroke in the pane's own
- *  colour cuts the mark out of whatever it lands on, in either theme. Entries are the solid disc,
- *  exits the same outline hollowed out — in and out at a glance, which one triangle at 60% opacity
- *  never said. */
-export function FillMark({ buy, open = true, className, ...rest }: {
-  buy: boolean; open?: boolean
+ *  colour cuts the mark out of whatever it lands on, in either theme. Every mark is a solid disc
+ *  with its sign cut out — plus for a buy, minus for a sell; whether it was a way in or out is the
+ *  tooltip's to say. */
+export function FillMark({ buy, className, ...rest }: {
+  buy: boolean
 } & React.ComponentProps<'svg'>) {
   return (
     <svg viewBox="0 0 12 12" aria-hidden className={cn('size-3 shrink-0', className)} {...rest}>
       {/* keyline first, in the pane's own colour, so a mark landing on a wick still reads as a
           disc and not as part of the candle behind it */}
       <circle cx="6" cy="6" r="5" strokeWidth={1.5}
-        className={cn(buy ? 'text-emerald-400' : 'text-rose-400',
-          open ? 'fill-current stroke-card' : 'fill-card stroke-current')}
+        className={cn('stroke-card fill-current', buy ? 'text-emerald-400' : 'text-rose-400')}
         style={{ paintOrder: 'stroke' }} />
-      {/* the sign, cut out of the disc when it is solid and drawn in the colour when it is not */}
-      <path d={buy ? 'M6 3.4v5.2M3.4 6h5.2' : 'M3.4 6h5.2'} strokeWidth={1.6} strokeLinecap="round"
-        className={cn(buy ? 'text-emerald-400' : 'text-rose-400',
-          open ? 'stroke-card' : 'stroke-current')} fill="none" />
+      {/* the sign, cut out of the disc */}
+      <path d={buy ? 'M6 3.4v5.2M3.4 6h5.2' : 'M3.4 6h5.2'} strokeWidth={1.6} strokeLinecap="round" className="stroke-card" fill="none" />
     </svg>
   )
 }
