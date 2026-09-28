@@ -76,7 +76,7 @@ export default defineConfig({
           /* Gold's feed, on the same footing as Binance's bars: the candles endpoint only, never
              the ticker beside it. Matched on the path, so the signed calls to the same host — which
              go through the server and never appear here anyway — could not join by accident. */
-          urlPattern: /^https:\/\/api\.bitget\.com\/api\/v2\/mix\/market\/candles/,
+          urlPattern: /^https:\/\/api\.bitget\.com\/api\/v2\/mix\/market\/(history-)?candles/,
           handler: 'NetworkFirst',
           options: {
             cacheName: 'candles-bitget',

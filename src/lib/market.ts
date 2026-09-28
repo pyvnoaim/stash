@@ -79,8 +79,9 @@ export function fetchCandles(
   return fetchBitget(asset.id, interval, bars)
 }
 
-/** What Bitget's daily candles top out at, measured against the endpoint rather than documented by
- *  it: ask for a thousand and ninety come back. The 200-MA is what this number blocks. */
+/** What Bitget's recent-candles endpoint tops out at for days, measured against it rather than
+ *  documented by it: ask for a thousand and ninety come back. fetchBitget pages history-candles
+ *  for the rest — see DEEP. */
 export const BG_DAILY_MAX = 90
 
 /** The window a chart reads, and every venue's own ceiling for one call. */
@@ -116,17 +117,45 @@ export async function fetchPrices(
    spend the free tier's 800 daily credits being told a closing price. It fed a bell for assets the
    list no longer holds. */
 
+/** How deep the slow intervals are paged back through Bitget's history endpoint. The recent one
+ *  answers ninety days of anything — 90 daily bars, 13 weekly — which a 200-MA on days and a MACD
+ *  on weeks cannot warm up on. Enough to warm them with room for the crosses behind, and no more:
+ *  each page is a call, the server's scan asks for every mover at once, and the market endpoints
+ *  are rate-limited by IP. */
+const DEEP: Partial<Record<Interval, number>> = { '1d': 300, '1w': 60 }
+/** A ceiling on the pages, so an endpoint answering the same page forever cannot spin. */
+const MAX_PAGES = 8
+
 /** Bitget's USDT-margined futures, keyless and CORS-open like Binance's. A thousand bars is the
  *  endpoint's ceiling and the contract's history may be shorter than that — a symbol listed this
- *  year simply has fewer, which the callers already handle: an MA with no window returns null. */
+ *  year simply has fewer, which the callers already handle: an MA with no window returns null.
+ *  The daily and weekly reads are topped up off history-candles, walked backwards from the oldest
+ *  bar in hand — see DEEP. A page that fails or comes back empty ends the walk with whatever is
+ *  already there: fewer bars is a `warmup`, which is what the read said before any of this. */
 async function fetchBitget(symbol: string, interval: Interval, bars = BARS): Promise<Candle[]> {
-  const url = `https://api.bitget.com/api/v2/mix/market/candles?symbol=${symbol}`
-    + `&productType=USDT-FUTURES&granularity=${BG_INTERVAL[interval]}&limit=${bars}`
+  const q = `symbol=${symbol}&productType=USDT-FUTURES&granularity=${BG_INTERVAL[interval]}`
+  let out = await bitgetPage(`https://api.bitget.com/api/v2/mix/market/candles?${q}&limit=${bars}`)
+  const want = Math.min(bars, DEEP[interval] ?? 0)
+  for (let n = 0; n < MAX_PAGES && out.length && out.length < want; n++) {
+    const oldest = out[0].t
+    const older = await bitgetPage(
+      `https://api.bitget.com/api/v2/mix/market/history-candles?${q}&endTime=${oldest - 1}&limit=200`,
+    ).then((c) => c.filter((k) => k.t < oldest)).catch(() => [] as Candle[])
+    if (!older.length) break
+    out = [...older, ...out]
+  }
+  return out.slice(-bars)
+}
+
+/** One call to either candle endpoint. Both answer in the same rows. */
+async function bitgetPage(url: string): Promise<Candle[]> {
   const j = await fetch(url).then((r) => r.json())
   // the venue reports its own errors in the body, with its success code on the good ones
   if (j?.code !== '00000' || !Array.isArray(j.data)) throw new Error(j?.msg || 'No data for this symbol')
-  // [openTime, open, high, low, close, baseVolume, quoteVolume], oldest first
+  // [openTime, open, high, low, close, baseVolume, quoteVolume] — sorted here rather than trusted,
+  // since two pages are stitched end to end
   return j.data.map((k: string[]) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }))
+    .sort((a: Candle, b: Candle) => a.t - b.t)
 }
 
 /** One asset's last day of hourly bars — what both movers sweeps and the Overview tiles are built
@@ -2007,7 +2036,7 @@ export const HORIZONS = {
        entry-day stop, which is the rule they were filed under. Two rules, two names, one record. */
     strategy: 'Regime hold',
     rule: 'Long only. Own it at market while price is above the 200-MA, out on a daily close back under. No pull-back to wait for, no target, and nothing takes you out intraday. The wide high is a trim if you want one.',
-    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget keeps only 90 daily bars and a 200-MA cannot exist on them, so until a longer daily feed is wired in this rule reads warmup.',
+    measured: 'Walked on 2000 daily bars from MEXC — eight perps, five and a half years, 0.05% a side — this returns +15% compounded per asset against −49% for simply holding, and beats holding on six of the eight. Split in half it holds up: +28% against −34% in 2021-09 → 2024-02, +3% against −23% in 2024-02 → 2026-08. It is in the market 40% of the time, and most of what it earns is the drawdown it sits out rather than a return it finds — worth having, and not the same claim. The version that shipped before it added a dip entry, a target and an intrabar stop to exactly this idea and lost 67 points doing it; the ladder between them is in the note above HORIZONS. Bitget answers only 90 daily bars at a time, so the daily read pages back through its history to warm the 200-MA; where that history runs short, it reads warmup.',
   },
   short: {
     label: 'Trading', fast: 9, slow: 21, srWindow: 20, interval: '1h',
@@ -2094,11 +2123,10 @@ export const FILES: Record<Horizon, boolean> = { long: true, short: false }
  * different rule wearing its name, and it is where the desk's one −1.39R accumulation trade
  * came from.
  *
- * Worth knowing what this refuses: Bitget keeps 90 daily bars for its perps, and paging its
- * history endpoint does not find more, so a 200-MA cannot exist there at all and the card now says
- * so through `warmup` instead of quietly reading a faster chart — a feed with a longer daily
- * history is what it takes, which is a thing you can act on, unlike a number that was never what
- * it claimed.
+ * Worth knowing what this refuses: Bitget's recent endpoint answers 90 daily bars, and a 200-MA
+ * cannot exist on those. fetchBitget pages history-candles back for more (see DEEP). An earlier
+ * note here said paging found nothing more; if that turns out to hold, the card says so through
+ * `warmup` instead of quietly reading a faster chart.
  */
 export const readInterval = (h: Horizon, chosen: Interval): Interval =>
   h === 'long' ? HORIZONS.long.interval : chosen
@@ -2239,7 +2267,7 @@ export function signals(c: Candle[], cfg: { fast: number; slow: number; srWindow
      +0.143R vs +0.122R on 600 bars of 1h, +0.111R vs +0.071R on 900, +0.064R vs +0.048R on 500 bars
      of 4h — and −0.091R vs −0.069R on 300 bars of 4h, the shortest window and the one that
      disagrees. Per asset the voting version wins 5 to 7 of the 9 on the three that agree. Daily is
-     missing from the run: Bitget's 90 daily bars cannot fill the window.
+     missing from the run: the daily feed is paged 300 bars deep, which cannot fill the window.
      That is a weak positive, and it is written down as one — three windows out of four, deltas of
      two to four hundredths of an R, in-sample and gross, which is the same standing every other
      number in this file has. It is a better showing than the plain gap card managed (it flipped
