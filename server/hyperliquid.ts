@@ -82,22 +82,33 @@ let BUDGET = 1100
 /** Tests answer the venue themselves and have no minute to wait out; nothing else calls this. */
 export const setBudget = (n: number) => { BUDGET = n }
 const spent: { at: number; w: number }[] = []
-let queue = Promise.resolve()
 
 /** One info call, paid for out of the minute's budget. Calls wait their turn rather than fail:
  *  a scan that takes two minutes is better than one that comes back half 429s. */
-export function info<T = any>(body: Record<string, unknown>, weight = 20): Promise<T> {
-  const turn = queue.then(async () => {
+/** Who is waiting. A person with a chart open goes first; the server's own sweeps — the scan, the
+ *  movers, the alerts — only ever spend what people are not, so a cold start's sixty-odd candle
+ *  reads can never sit in front of the one chart somebody is actually looking at. */
+export type Lane = 'person' | 'sweep'
+/** The share of the budget a sweep may take. The rest is kept for people, always. */
+const SWEEP_SHARE = 0.6
+const lines: Record<Lane, Promise<void>> = { person: Promise.resolve(), sweep: Promise.resolve() }
+
+/** One info call, paid for out of the minute's budget. Calls wait their turn rather than fail —
+ *  each lane in its own line, so a person never queues behind a sweep. */
+export function info<T = any>(body: Record<string, unknown>, weight = 20, lane: Lane = 'person'): Promise<T> {
+  const cap = () => (lane === 'person' ? BUDGET : BUDGET * SWEEP_SHARE)
+  const turn = lines[lane].then(async () => {
     for (;;) {
       const now = Date.now()
       while (spent.length && now - spent[0].at > 60_000) spent.shift()
       const used = spent.reduce((n, s) => n + s.w, 0)
-      if (used + weight <= BUDGET) break
+      if (used + weight <= cap()) break
+      // the oldest spend leaving the window is the soonest anything frees up
       await new Promise((go) => setTimeout(go, Math.max(250, 60_000 - (now - spent[0].at))))
     }
     spent.push({ at: Date.now(), w: weight })
   })
-  queue = turn.catch(() => {})
+  lines[lane] = turn.catch(() => {})
   return turn.then(() => fetch(INFO, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -138,7 +149,7 @@ export const INTERVAL: Record<string, { name: string; ms: number; ttl: number }>
  *  pair, and a thousand bars is three years of days, which is all the desk ever reads. */
 export const WINDOW = 1000
 
-const candleCache = new Map<string, { at: number; bars: Promise<Candle[]> }>()
+const candleCache = new Map<string, { at: number; bars: Promise<Candle[]>; lane: Lane; done: boolean }>()
 
 export const shapeCandles = (rows: unknown): Candle[] =>
   (Array.isArray(rows) ? rows as Record<string, unknown>[] : [])
@@ -162,18 +173,21 @@ export const merge = (old: Candle[], fresh: Candle[]): Candle[] => {
  * still forming — which is a call of base weight rather than base plus a thousand bars' worth, and
  * the difference between the quarter-hour scan fitting in a minute's budget and not.
  */
-export function candles(coin: string, interval: string, bars = WINDOW): Promise<Candle[]> {
+export function candles(coin: string, interval: string, bars = WINDOW, lane: Lane = 'person'): Promise<Candle[]> {
   const iv = INTERVAL[interval]
   if (!iv || !COIN.test(coin)) return Promise.reject(new Error('not a market'))
   const k = `${coin}:${interval}`
   const hit = candleCache.get(k)
-  let got = hit && Date.now() - hit.at < iv.ttl ? hit.bars : null
+  /* A sweep's read still waiting for spare budget is not a person's answer: they get their own call
+     in their own lane, and it becomes the cached one — the sweep's lands later and is simply older. */
+  const stuck = !!hit && !hit.done && hit.lane === 'sweep' && lane === 'person'
+  let got = hit && !stuck && Date.now() - hit.at < iv.ttl ? hit.bars : null
   if (!got) {
     const end = Date.now()
     const ask = (start: number, n: number) => info<unknown>({
       type: 'candleSnapshot', req: { coin, interval: iv.name, startTime: start, endTime: end },
-    }, 20 + Math.ceil(Math.min(n, 5000) / 60)).then(shapeCandles)
-    const before = hit?.bars.catch(() => [] as Candle[]) ?? Promise.resolve([] as Candle[])
+    }, 20 + Math.ceil(Math.min(n, 5000) / 60), lane).then(shapeCandles)
+    const before = hit && !stuck ? hit.bars.catch(() => [] as Candle[]) : Promise.resolve([] as Candle[])
     got = before.then((old) => {
       const last = old.at(-1)?.t
       return last
@@ -184,7 +198,9 @@ export function candles(coin: string, interval: string, bars = WINDOW): Promise<
     got.catch(() => { if (candleCache.get(k)?.bars === got) candleCache.delete(k) })
     // a ceiling, not an expectation: the relay only asks for listed coins, so this is ~70 entries
     if (candleCache.size >= 256) candleCache.clear()
-    candleCache.set(k, { at: Date.now(), bars: got })
+    const entry = { at: Date.now(), bars: got, lane, done: false }
+    got.then(() => { entry.done = true }, () => { entry.done = true })
+    candleCache.set(k, entry)
   }
   return got.then((c) => c.slice(-Math.max(1, Math.min(bars, WINDOW))))
 }
@@ -447,7 +463,7 @@ export const closed = async (address: string, since: number): Promise<Closed[]> 
    where the browser goes through the relay. Installed on import, so any server module that touches
    the venue brings the feed with it: the scan, the alerts and the MCP tools all read these. */
 setFeed({
-  candles: (id, interval, bars) => candles(coinOf(id), interval, bars),
+  candles: (id, interval, bars) => candles(coinOf(id), interval, bars, 'sweep'),
   prices: async (ids) => {
     const m = await mids()
     const out: Record<string, number> = {}
