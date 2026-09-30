@@ -1,7 +1,7 @@
 // npm test — DEX search and candles: copycat pools cut, one row per token at its deepest pool,
 // GeckoTerminal's newest-first rows turned around, and weeks built from days
 import assert from 'node:assert/strict'
-import { POOL, shapeOhlcv, shapeSearch, weeks } from './dex.ts'
+import { candles, POOL, setGtBudget, shapeOhlcv, shapeSearch, weeks } from './dex.ts'
 
 const SOLPOOL = 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD'
 const found = shapeSearch({ pairs: [
@@ -42,3 +42,12 @@ assert.deepEqual(w[0], { t: mon, o: 1, h: 12, l: 1, c: 4, v: 3 })
 assert.equal(w[1].t, mon + 7 * day)
 
 console.log('dex ok')
+
+// a call whose wait for the budget would outlast the proxy's 60s is refused at once — held, it came
+// back as nginx's HTML 504 and the chart printed Safari's JSON parse error instead of anything useful
+globalThis.fetch = async () => new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [[1759190400, '1', '1', '1', '1', '1']] } } }))
+setGtBudget(1)
+assert.equal((await candles('solana', SOLPOOL, '1h')).length, 1)
+const t0 = Date.now()
+await assert.rejects(candles('solana', '9WDg8ibeX3pkqZ4Xm6B9GBqrn6Aq8miuXkB8VDDWhHn5', '1h'), /busy/)
+assert.ok(Date.now() - t0 < 1000, 'refused, not queued')
