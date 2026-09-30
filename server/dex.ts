@@ -174,16 +174,23 @@ export const setGtBudget = (n: number) => { perMinute = n }
 /** How many calls may wait for the budget. Past it a new one is refused at once rather than joining
  *  a line minutes long: a chart that says "busy" beats every chart on the server going quiet. */
 const MAX_WAITING = 40
+/** How long a call may queue — under the proxy's 60s, leaving room for the 15s fetch itself. */
+const MAX_WAIT = 40_000
 let waiting = 0
 const turn = () => {
   if (waiting >= MAX_WAITING) return Promise.reject(new Error('GeckoTerminal is busy — try again in a minute'))
   waiting++
+  const start = Date.now()
   const mine = line.then(async () => {
     for (;;) {
       const now = Date.now()
       while (calls.length && now - calls[0] > 60_000) calls.shift()
       if (calls.length < perMinute) break
-      await new Promise((go) => setTimeout(go, 60_000 - (now - calls[0]) + 50))
+      const wait = 60_000 - (now - calls[0]) + 50
+      /* nginx proxy manager gives up on a response at sixty seconds and answers with its own HTML
+         504, which the browser then fails to parse as JSON. Better to say busy while we still can. */
+      if (now + wait - start > MAX_WAIT) throw new Error('GeckoTerminal is busy — try again in a minute')
+      await new Promise((go) => setTimeout(go, wait))
     }
     calls.push(Date.now())
   }).finally(() => { waiting-- })

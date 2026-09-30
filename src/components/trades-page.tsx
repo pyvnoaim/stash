@@ -419,12 +419,12 @@ function RangeBar({ worst: w, peak: p, at: v }: { worst: number, peak: number, a
 type OpenLot = { mint: string, openedAt: number, held: number, basis: number }
 
 /** The swaps' account of a token still held — when it was bought and for how much. */
-function useOpenLot(mint: string) {
+export function useOpenLot(mint: string) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
   const [lot, setLot] = useState<OpenLot | null>(null)
   useEffect(() => {
     setLot(null)
-    if (!user) return
+    if (!user || !mint) return
     let on = true
     const look = () => fetch('/api/token-trades').then((r) => (r.ok ? r.json() : null)).then((j) => {
       const all: OpenLot[] = Array.isArray(j?.open) ? j.open : []
@@ -443,8 +443,7 @@ function useOpenLot(mint: string) {
  * chart's "You hold" card. Only where the swaps account for what the wallet holds: a token that
  * came in by transfer, or was bought before the history this reads, has no cost to measure from.
  */
-export function HeldRange({ asset, mint, amount, value }: { asset: Asset, mint: string, amount: number, value: number }) {
-  const lot = useOpenLot(mint)
+export function HeldRange({ asset, lot, amount, value }: { asset: Asset, lot: OpenLot | null, amount: number, value: number }) {
   const price = amount > 0 ? value / amount : null
   const ext = useExtremes(asset, lot?.openedAt, price)
   if (!lot || !ext || price == null || Math.abs(lot.held - amount) > amount * 0.05) return null

@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar } from '@/components/settings-dialog'
-import { HeldRange, TradesScreen } from '@/components/trades-page'
+import { HeldRange, TradesScreen, useOpenLot } from '@/components/trades-page'
 import { amountOf, dollars, Holdings, TokenIcon, useHolding, useWalletRows } from '@/components/holdings'
 import { useVenue } from '@/lib/venue'
 import { cashAt, euro, netOf, openRisk, rLabel, riskOf, rOf, signedEuro, signedUsdt, stakeOf, suggestLine, usdt } from '@/lib/notify'
@@ -1419,7 +1419,11 @@ function LeanCard({ label, cls, bulls, bears, interval }: { label: string, cls: 
  */
 function TokenCards({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
   const held = useHolding(asset.mint, asset.pool)
-  const today = held && held.h.change != null ? held.h.value - held.h.value / (1 + held.h.change / 100) : null
+  const lot = useOpenLot(held?.h.mint ?? asset.mint ?? '')
+  // the token's 24h move on the whole holding — which you did not have 24h ago if you bought since.
+  // Then "Since you bought" below is the true figure, and this one would claim the pump as yours.
+  const fresh = lot != null && Date.now() - lot.openedAt < 86_400_000
+  const today = held && !fresh && held.h.change != null ? held.h.value - held.h.value / (1 + held.h.change / 100) : null
   const share = held && held.total > 0 ? (held.h.value / held.total) * 100 : null
   const trades = p && p.buys != null && p.sells != null && p.buys + p.sells > 0 ? { b: p.buys, s: p.sells } : null
   return (
@@ -1436,7 +1440,7 @@ function TokenCards({ asset, p }: { asset: Asset, p: PoolFacts | null }) {
           <span className="text-muted-foreground text-xs tabular-nums">
             {amountOf(held.h.amount)} {held.h.symbol}{share != null && <> · {share.toFixed(0)}% of your wallet</>}
           </span>
-          <HeldRange asset={asset} mint={held.h.mint} amount={held.h.amount} value={held.h.value} />
+          <HeldRange asset={asset} lot={lot} amount={held.h.amount} value={held.h.value} />
         </PanelCard>
       )}
       {!p ? <Skeleton className="h-36 rounded-2xl" /> : (

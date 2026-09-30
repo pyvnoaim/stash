@@ -72,8 +72,8 @@ export type Feed = {
 let feed: Feed = {
   candles: async (id, interval, bars) => {
     const r = await fetch(`/api/hl/candles?coin=${encodeURIComponent(hlCoin(id))}&interval=${interval}&bars=${bars}`)
-    const j = await r.json()
-    if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || 'No data for this symbol')
+    const j = await r.json().catch(() => null) // a proxy's HTML error page is not JSON
+    if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || (r.ok ? 'No data for this symbol' : `Chart feed answered ${r.status}`))
     return j as Candle[]
   },
   prices: async (ids) => {
@@ -93,8 +93,8 @@ export function fetchCandles(
   if (asset.source === 'dex') {
     return fetch(`/api/dex/candles?network=${asset.network}&pool=${asset.pool}&interval=${interval}&bars=${bars}`)
       .then(async (r) => {
-        const j = await r.json()
-        if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || 'No bars for this pool')
+        const j = await r.json().catch(() => null) // a proxy's HTML error page is not JSON
+        if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || (r.ok ? 'No bars for this pool' : `Chart feed answered ${r.status}`))
         return j as Candle[]
       })
   }
