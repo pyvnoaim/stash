@@ -33,7 +33,7 @@ export function NavUser({ onSettings }: { onSettings: () => void }) {
             : <CloudOff />}
           <div className="grid flex-1 text-left leading-tight">
             <span className="truncate">{user ? user.name : 'Offline'}</span>
-            <span className="text-muted-foreground truncate text-xs">{HINT[status]}</span>
+            <span className="text-muted-foreground truncate font-mono text-[11px]">{HINT[status]}</span>
           </div>
         </SidebarMenuButton>
       </DropdownMenuTrigger>

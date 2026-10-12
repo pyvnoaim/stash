@@ -28,17 +28,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { allowed, chargeAt, icsText, parseIcs } from './cal.ts'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
-import { claim as clipClaim, hasFfmpeg, container, MAX_CLIP, release as clipRelease, toMp4 } from './clip.ts'
-import {
-  ADDRESS, candles as hlCandles, contexts as hlContexts, closed as hlClosed, INTERVAL, mids as hlMids, pending as hlPending,
-  positions as hlPositions, universe as hlUniverse, type Closed,
-} from './hyperliquid.ts'
 import { createStash } from './mcp.ts'
-import { holdings as solHoldings, logo as solLogo, swaps as solSwaps, openLots, tokenTrades, tradesPartial } from './solana.ts'
-import { candles as dexCandles, NETWORKS, pool as dexPool, POOL, search as dexSearch, TIMEFRAME } from './dex.ts'
-import { ASSETS, hlCoin } from '../src/lib/market.ts'
 
 /** The whole document, not an upload endpoint. */
 const MAX_BODY = 8 * 1024 * 1024
@@ -90,146 +81,6 @@ function send(res: ServerResponse, code: number, body: unknown, headers?: Record
   res.end(s)
 }
 
-/* ---------- the calendar feed ---------- */
-
-/**
- * RFC 5545's escaping: a backslash, a semicolon, a comma and a newline all mean something.
- *
- * A lone carriage return counts as a newline here too. It is not a line break by the letter of the
- * format, but lenient parsers take it as one — and a line break that survives into the file is how
- * a note ends up able to write `END:VEVENT` and invent the next event. The text is not always your
- * own: a project shared with you is in your document, so it is in your feed.
- */
-const esc = (s: unknown) => String(s).replace(/([\\;,])/g, '\\$1').replace(/\r\n|[\r\n]/g, '\\n')
-
-/** …and its folding: 75 octets to a line, the rest carried on indented by one space. */
-function fold(line: string): string {
-  const out: string[] = []
-  let cur = '', n = 0
-  // by character, not by index — splitting inside one is how an emoji becomes two broken bytes
-  for (const ch of line) {
-    const w = Buffer.byteLength(ch)
-    if (n + w > 72) { out.push(cur); cur = ' '; n = 1 }
-    cur += ch
-    n += w
-  }
-  out.push(cur)
-  return out.join('\r\n')
-}
-
-const utcDay = (at = Date.now()) => new Date(at).toISOString().slice(0, 10)
-const dense = (d: string) => d.replace(/-/g, '')
-const nextDay = (d: string) => {
-  const x = new Date(d + 'T00:00Z')
-  x.setUTCDate(x.getUTCDate() + 1)
-  return dense(x.toISOString().slice(0, 10))
-}
-
-/** An hour after 'HH:MM', as the dense 'HHMM' a DTEND wants. 23:30 stops at midnight rather than
- *  spilling into a day the DTSTART doesn't name — an event that ends before it starts is one no
- *  calendar draws. ponytail: a late-night item is half an hour long, which nobody will notice. */
-const plusHour = (at: string) => {
-  const [h, m] = at.split(':').map(Number)
-  return h >= 23 ? '2359' : String(h + 1).padStart(2, '0') + String(m).padStart(2, '0')
-}
-
-/** How far ahead a subscription's charges are written out. A year of a monthly abo is a dozen rows. */
-const ICS_MONTHS = 12
-
-/**
- * The stash as a calendar anyone's calendar app can subscribe to: what is due, and what is about
- * to be charged. All-day events, so there is no timezone to get wrong — the alarm at PT9H is nine
- * in the morning wherever the phone reading it happens to be.
- *
- * Read-only and derived: nothing here is stored, and the file is built fresh for every fetch.
- */
-function icsOf(json: string, who: string): string {
-  let s: any
-  try { s = JSON.parse(json) } catch { s = {} }
-  const now = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z'
-  const from = utcDay()
-  const out: string[] = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Stash//Calendar feed//EN', 'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH', `X-WR-CALNAME:${esc(`Stash — ${who}`)}`, 'X-PUBLISHED-TTL:PT1H',
-  ]
-
-  /**
-   * `at` is 'HH:MM' local for an item that named an hour, and null for one that only named a day.
-   * A timed event is written in floating local time — no TZID, no VTIMEZONE block — because the
-   * hour was typed on a phone in the pocket of the person the calendar belongs to: 18:00 means
-   * six wherever they are, which is exactly what a floating time says and what a fixed zone would
-   * quietly get wrong the week they land somewhere else.
-   */
-  const event = (uid: string, day: string, at: string | null, summary: string, description: string, alarm: boolean) => {
-    out.push('BEGIN:VEVENT', `UID:${esc(uid)}`, `DTSTAMP:${now}`)
-    if (at) {
-      out.push(`DTSTART:${dense(day)}T${at.replace(':', '')}00`, `DTEND:${dense(day)}T${plusHour(at)}00`)
-    } else {
-      out.push(`DTSTART;VALUE=DATE:${dense(day)}`, `DTEND;VALUE=DATE:${nextDay(day)}`)
-    }
-    out.push(`SUMMARY:${esc(summary)}`)
-    if (description) out.push(`DESCRIPTION:${esc(description)}`)
-    // a subscribed calendar only ever says anything if the event asks it to. An all-day event
-    // starts at midnight, so nine hours in is nine in the morning; a timed one wants ten minutes'
-    // warning, which is the difference between an alarm and a note that it already started.
-    if (alarm) {
-      out.push('BEGIN:VALARM', 'ACTION:DISPLAY', `TRIGGER:${at ? '-PT10M' : 'PT9H'}`,
-        `DESCRIPTION:${esc(summary)}`, 'END:VALARM')
-    }
-    out.push('END:VEVENT')
-  }
-
-  const projects = new Map<string, string>(
-    (Array.isArray(s.projects) ? s.projects : []).map((p: any) => [String(p?.id), String(p?.name ?? '')]),
-  )
-
-  // what is due. Finished work is left out: a calendar is what is coming, and a struck-through
-  // event is not a thing the format can say
-  for (const i of Array.isArray(s.items) ? s.items : []) {
-    if (!i || i.done || typeof i.due !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(i.due)) continue
-    const where = projects.get(String(i.pid)) ?? ''
-    // the hour, where the item named one — and only ever alongside its day, which the line above
-    // has already established
-    const at = typeof i.at === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(i.at) ? i.at : null
-    event(`${String(i.id)}@stash`, i.due, at, String(i.text || 'Untitled'),
-      [where && `@${where}`, String(i.note ?? '').slice(0, 500)].filter(Boolean).join('\n'),
-      i.type !== 'note')
-  }
-
-  // and what it costs. Income rides along with a +, since the two are the same row one sign apart
-  const horizon = new Date(from + 'T00:00Z')
-  horizon.setUTCMonth(horizon.getUTCMonth() + ICS_MONTHS)
-  const until = horizon.toISOString().slice(0, 10)
-  for (const x of Array.isArray(s.subs) ? s.subs : []) {
-    if (!x || typeof x.due !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(x.due)) continue
-    const income = x.kind === 'income'
-    const cost = Number(x.cost) || 0
-    for (let n = 0; n < 500; n++) {
-      const day = chargeAt(x.due, String(x.cycle), n)
-      if (day > until) break
-      if (day < from) continue
-      event(`${String(x.id)}-${day}@stash`, day, null,
-        `${income ? '+' : ''}€${cost.toFixed(2)} ${String(x.name ?? 'Subscription')}`, '', !income)
-    }
-  }
-
-  out.push('END:VCALENDAR')
-  return out.map(fold).join('\r\n') + '\r\n'
-}
-
-/** SOL's dollar price at a moment, for pricing a token swap paid in SOL: off Hyperliquid's hourly
- *  SOL bars (about six weeks of them), then its daily ones for anything older. The bar the moment
- *  falls in, at its close — a swap is priced to within the hour it happened in. */
-async function solUsdAt(t: number): Promise<number | null> {
-  for (const iv of ['1h', '1d'] as const) {
-    const bars = await hlCandles('SOL', iv, 1000, 'sweep').catch(() => [])
-    const step = iv === '1h' ? 3_600_000 : 86_400_000
-    const b = bars.find((c) => t >= c.t && t < c.t + step)
-    if (b) return b.c
-  }
-  return null
-}
-
 function readBody(req: IncomingMessage): Promise<any> {
   return new Promise((ok, fail) => {
     const chunks: Buffer[] = []
@@ -264,30 +115,6 @@ function readBytes(req: IncomingMessage, cap: number): Promise<Buffer> {
 }
 
 /** Hashing a miss against this keeps "no such user" as slow as "wrong password". */
-/**
- * When a venue last refused someone's key, so the Desk stops asking for a while. The venue modules
- * cache an answer and never a failure — right for /api/positions, where one person waits on their
- * own key, and wrong here, where every reader waits on everybody's. One expired credential would
- * otherwise put its ten-second timeout in front of every load of the People tab, for everyone, for
- * as long as nobody noticed. Five minutes is long enough to outlast the tab's own minute-long
- * refresh, so a dead key costs one slow read rather than every read.
- */
-const refused = new Map<string, number>()
-const REFUSED_FOR = 5 * 60_000
-
-/** A Solana address: base58, 32 to 44 characters — the alphabet leaves out 0, O, I and l. */
-const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
-/** How many wallets one account watches. Each EVM one is a read of the venue per half minute. */
-const MAX_WALLETS = 5
-/** The coins the public candle relay will ask the venue about: the listed assets, by the venue's name. */
-const LISTED = new Set(ASSETS.map((a) => hlCoin(a.id)))
-
-/* Closed positions, per account, for the half minute /api/closed hands them out over. The venue
-   caches its own open book; this list has no cache of its own down there, and a phone and a laptop
-   both noticing the same close would otherwise be two history calls for one answer.
-   ponytail: clear-all past 64, the same as every other cache here — the roster is ten people. */
-const closedCache = new Map<number, { at: number, rows: Closed[] }>()
-
 /** One message down one stream. A socket that died between the check and the write is not an
  *  error worth having: the close handler is what clears it up, and it has already been scheduled. */
 const wire = (res: ServerResponse, event: string, data: unknown) => {
@@ -433,10 +260,6 @@ export function start({
   } catch { /* already there */ }
   // sessions from before the list existed have no label, and read as the unknown device they are
   try { db.exec('alter table sessions add column device text') } catch { /* already there */ }
-  // the calendar feed's secret, null until someone asks for one
-  try { db.exec('alter table users add column feed text') } catch { /* already there */ }
-  // and the calendar coming the other way: the one .ics URL this account subscribes to
-  try { db.exec('alter table users add column cal text') } catch { /* already there */ }
   /* Exchange keys came off the desk with the exchanges: Kraken, then MEXC, then Bitget and ApeX, all
      for a watched wallet. Each column goes, so the credential it held leaves the file rather than
      sitting in it unread. */
@@ -446,13 +269,6 @@ export function start({
   /* Notifications came out: the phones subscribed to them, and the key the server signed them
      with, go with the feature rather than sitting in the file unread. */
   db.exec('drop table if exists pushes; drop table if exists meta')
-  /* The wallets an account watches. Addresses, not keys: public by nature, which is why nothing
-     that reads them can move a cent — and why they live here rather than in the synced document,
-     since an address beside a name says everything that name holds. */
-  db.exec(`create table if not exists wallets (
-    user integer not null, address text not null, chain text not null, label text, ts integer not null,
-    primary key (user, address)
-  )`)
   // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
   // than sitting in the file forever unread
   try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
@@ -483,22 +299,12 @@ export function start({
        every one of them to find the two that opted in is the whole cost of this route. It matches
        the exact shape JSON.stringify writes, and a note that happens to contain the same string
        only buys itself a parse that then turns it down. */
-    everyone: db.prepare(`select * from (
-        select u.id, u.name, u.avatar,
-          (select json from docs d where d.user = u.id order by d.v desc limit 1) as json
-        from users u where u.id <> ?
-      ) where json like '%"desk":true%' order by name`),
     invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
     openInvites: db.prepare('select code, ts from invites where used is null and ts > ? order by ts desc'),
     dropInvite: db.prepare('delete from invites where code = ? and used is null'),
     rename: db.prepare('update users set name = ? where id = ?'),
-    /* The calendar feed: one secret per user, and the only thing that stands between a URL and
-       what is due. Nothing is written through it and it names no one — a leaked one is rotated
-       by asking for another, which is what makes the old string stop working. */
-    calOf: db.prepare('select cal from users where id = ?'),
-    setCal: db.prepare('update users set cal = ? where id = ?'),
     addBlob: db.prepare('insert into blobs (id, owner, mime, bytes, ts) values (?, ?, ?, ?, ?)'),
     blob: db.prepare('select mime, bytes from blobs where id = ?'),
     blobBytes: db.prepare('select coalesce(sum(length(bytes)), 0) as n from blobs where owner = ?'),
@@ -508,12 +314,6 @@ export function start({
     sweepable: db.prepare('select id from blobs where owner = ? and ts < ?'),
     allDocs: db.prepare('select json from docs union all select json from pdocs'),
     dropBlob: db.prepare('delete from blobs where id = ?'),
-    wallets: db.prepare('select address, chain, label from wallets where user = ? order by ts'),
-    addWallet: db.prepare('insert or replace into wallets (user, address, chain, label, ts) values (?, ?, ?, ?, ?)'),
-    dropWallet: db.prepare('delete from wallets where user = ? and address = ?'),
-    feedOf: db.prepare('select feed from users where id = ?'),
-    setFeed: db.prepare('update users set feed = ? where id = ?'),
-    byFeed: db.prepare('select id, name from users where feed = ?'),
     setAvatar: db.prepare('update users set avatar = ? where id = ?'),
     setPass: db.prepare('update users set salt = ?, hash = ?, n = ? where id = ?'),
     userById: db.prepare('select * from users where id = ?'),
@@ -592,10 +392,6 @@ export function start({
     /** The project's sub-project setting, taken off any row on it — it is the same on every one. */
     shareSubs: db.prepare('select subs from shares where owner = ? and pid = ? limit 1'),
   }
-  /** The EVM wallets an account watches — the addresses the venue is read by. */
-  const evmOf = (user: number) => (q.wallets.all(user) as { address: string, chain: string }[])
-    .filter((w) => w.chain === 'evm').map((w) => w.address)
-
   /* A shared project's document lives on the server for exactly as long as something can reach it:
      a member, or a live link. When the last of them goes it is a private project again and the copy
      here goes with it — which is why every path that removes one of the two ends up in here rather
@@ -1073,311 +869,6 @@ export function start({
       })
     }
 
-    /* ---------- the calendar feed ---------- */
-
-    if (path === '/api/feed') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (req.method === 'GET') {
-        return send(res, 200, { feed: (q.feedOf.get(user.id) as { feed: string | null }).feed })
-      }
-      // cutting a second one is also how the first stops working — there is no other revocation
-      if (req.method === 'POST') {
-        const feed = randomBytes(16).toString('hex')
-        q.setFeed.run(feed, user.id)
-        log('feed', user.name, via(req))
-        return send(res, 200, { feed })
-      }
-      if (req.method === 'DELETE') {
-        q.setFeed.run(null, user.id)
-        log('feed-off', user.name, via(req))
-        return send(res, 200, { feed: null })
-      }
-      return send(res, 405, { error: 'method not allowed' })
-    }
-
-    /* ---------- the calendar coming the other way ---------- */
-
-    /* One subscribed .ics URL, and what it holds for a window of days. Fetched here rather than in
-       the browser because no calendar provider answers a cross-origin request for a feed — and
-       because a server that fetches a URL somebody typed is a thing to be careful with, which is
-       what cal.ts's guard is for. Read-only in every direction: nothing here writes to anyone's
-       calendar, and none of it lands in the stash. */
-    if (path === '/api/cal') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const url = (q.calOf.get(user.id) as { cal: string | null }).cal
-
-      if (req.method === 'GET') {
-        const p = new URL(req.url ?? '/', 'http://x').searchParams
-        const day = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
-        const from = day(p.get('from'))
-        const to = day(p.get('to'))
-        // the reader's own zone, for the events written as real instants. A name this runtime does
-        // not know is not a zone, and UTC is the honest fallback rather than a guess at theirs.
-        let tz = p.get('tz') ?? 'UTC'
-        try { new Intl.DateTimeFormat('en-GB', { timeZone: tz }) } catch { tz = 'UTC' }
-        /* A window is a month or so of a calendar; a decade of one is a way to ask this server to
-           expand a daily rule four thousand times. Refused before anything else looks at it, so
-           the answer to a given window does not depend on whether anyone happens to be subscribed. */
-        if (from && to && Date.parse(to) - Date.parse(from) > 120 * 864e5) {
-          return send(res, 400, { error: 'window too wide' })
-        }
-        // and a window that is not a window yet — the page asks once before it knows — is an empty
-        // answer rather than an error
-        if (!url || !from || !to || to < from) return send(res, 200, { url, events: [] })
-        const text = await icsText(url)
-        return send(res, 200, { url, events: text ? parseIcs(text, from, to, tz) : [] })
-      }
-
-      if (req.method === 'POST') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const raw = String(b?.url ?? '').trim()
-        if (raw.length > 2048) return send(res, 400, { error: 'that is not a calendar link' })
-        // checked before it is stored, so a link this server would refuse to fetch is refused where
-        // the person can still see why — and checked again on every fetch, since a name's answer
-        // can change under it
-        const ok = await allowed(raw)
-        if (!ok) return send(res, 400, { error: 'that is not a calendar link' })
-        q.setCal.run(ok.href, user.id)
-        log('cal', user.name, via(req))
-        return send(res, 200, { url: ok.href })
-      }
-
-      if (req.method === 'DELETE') {
-        q.setCal.run(null, user.id)
-        return send(res, 200, { url: null })
-      }
-      return send(res, 405, { error: 'method not allowed' })
-    }
-
-    /* The feed itself. No session, because no calendar app can hold one: the token in the URL is
-       the whole of the authorisation, which is why it is 128 bits out of randomBytes and why
-       asking for a new one is what revokes the old. Read-only, one document, always text. */
-    if (path.startsWith('/ics/') && (req.method === 'GET' || req.method === 'HEAD')) {
-      const token = path.slice(5)
-      const owner = /^[a-f0-9]{32}$/.test(token)
-        ? q.byFeed.get(token) as { id: number, name: string } | undefined
-        : undefined
-      if (!owner) return send(res, 404, { error: 'not found' })
-      const row = q.latest.get(owner.id) as { json: string } | undefined
-      const body = icsOf(row?.json ?? '{}', owner.name)
-      res.writeHead(200, {
-        'content-type': 'text/calendar; charset=utf-8',
-        'content-length': Buffer.byteLength(body),
-        'cache-control': 'no-store',
-        'content-disposition': 'inline; filename="stash.ics"',
-        'x-content-type-options': 'nosniff',
-      })
-      return res.end(req.method === 'HEAD' ? undefined : body)
-    }
-
-    /* The wallets this account watches. Paste an address and the chain is read off its shape — a
-       0x one is EVM (Hyperliquid perps, Base), a base58 one is Solana — and it is looked up before
-       it is kept, so the answer says what was found there rather than leaving that to a panel that
-       stays empty. An empty wallet is still kept: it may be new, and the answer says it is empty. */
-    if (path === '/api/wallets') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (req.method === 'GET') return send(res, 200, { wallets: q.wallets.all(user.id) })
-      if (req.method === 'POST' || req.method === 'DELETE') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const raw = String(b?.address ?? '').trim()
-        const chain = ADDRESS.test(raw) ? 'evm' : SOLANA.test(raw) ? 'solana' : null
-        if (!chain) return send(res, 400, { error: 'that is not a wallet address — a 0x… one or a Solana one' })
-        // EVM addresses are case-insensitive, and stored one way so the same wallet is one row
-        const address = chain === 'evm' ? raw.toLowerCase() : raw
-        if (req.method === 'DELETE') {
-          q.dropWallet.run(user.id, address)
-          return send(res, 200, { wallets: q.wallets.all(user.id) })
-        }
-        if ((q.wallets.all(user.id) as unknown[]).length >= MAX_WALLETS && !(q.wallets.all(user.id) as { address: string }[]).some((w) => w.address === address)) {
-          return send(res, 400, { error: `${MAX_WALLETS} wallets is the most one account watches` })
-        }
-        const label = String(b?.label ?? '').trim().slice(0, 40).replace(/[^\x20-\x7e\u00a0-\uffff]/g, '') || null
-        /* What is there, said in words, off the same reads the panels make. */
-        let found = ''
-        if (chain === 'solana') {
-          try {
-            const all = await solHoldings(address)
-            const worth = all.reduce((n, r) => n + r.value, 0)
-            const h = all.filter((r) => !r.dust)
-            found = h.length ? `found on Solana: ${h.length} token${h.length === 1 ? '' : 's'}, $${worth.toFixed(2)}` : 'nothing worth more than dust on this Solana address'
-          } catch {
-            found = 'saved, but Solana did not answer just now'
-          }
-        }
-        if (chain === 'evm') {
-          try {
-            const f = await hlPositions(address)
-            found = f.positions.length || (f.equity ?? 0) > 0
-              ? `found on Hyperliquid: ${f.positions.length} position${f.positions.length === 1 ? '' : 's'}${f.equity != null ? `, $${f.equity.toFixed(2)} account value` : ''}`
-              : 'nothing on Hyperliquid at this address — is it the one Fomo trades perps from?'
-          } catch {
-            found = 'saved, but Hyperliquid did not answer just now'
-          }
-        }
-        q.addWallet.run(user.id, address, chain, label, Date.now())
-        log('wallet', user.name, via(req))
-        return send(res, 200, { wallets: q.wallets.all(user.id), found })
-      }
-      return send(res, 405, { error: 'method not allowed' })
-    }
-
-    /* What the watched Solana wallets hold — the memecoins, which are tokens rather than positions
-       on a book. Every wallet or none, for the reason the positions route gives. */
-    if (path === '/api/holdings' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
-        .filter((w) => w.chain === 'solana').map((w) => w.address)
-      if (!sol.length) return send(res, 200, { holdings: [], total: 0, dust: { count: 0, value: 0 } })
-      try {
-        const all = (await Promise.all(sol.map(solHoldings))).flat().sort((a, b) => b.value - a.value)
-        const cents = (n: number) => Math.round(n * 100) / 100
-        // dust is summed, not listed: the total is what the wallet is worth, the list what is worth a row
-        const small = all.filter((r) => r.dust)
-        return send(res, 200, {
-          holdings: all.filter((r) => !r.dust),
-          total: cents(all.reduce((n, r) => n + r.value, 0)),
-          dust: { count: small.length, value: cents(small.reduce((n, r) => n + r.value, 0)) },
-        })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
-    /* Your buys and sells of one token, off your own watched Solana wallets' history — what the
-       token chart marks on its bars. Signed in only, and only your own wallets: the mint is the
-       one thing asked for, and it is checked as an address before anything goes upstream. */
-    if (path === '/api/dex/fills' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const mint = new URL(req.url ?? '/', 'http://x').searchParams.get('mint') ?? ''
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) return send(res, 400, { error: 'not a mint' })
-      const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
-        .filter((w) => w.chain === 'solana').map((w) => w.address)
-      try {
-        const all = (await Promise.all(sol.map((a) => solSwaps(a, mint)))).flat().sort((a, b) => a.t - b.t)
-        return send(res, 200, { fills: all.map(({ t, side, amount }) => ({ t, side, amount })) }, { 'cache-control': 'private, max-age=60' })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
-    /* Your finished token trades — every token bought and sold back out of your watched Solana
-       wallets, with what it cost and what it paid. Your own wallets only; nothing is asked for. */
-    if (path === '/api/token-trades' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const sol = (q.wallets.all(user.id) as { address: string, chain: string }[])
-        .filter((w) => w.chain === 'solana').map((w) => w.address)
-      try {
-        const all = (await Promise.all(sol.map((a) => tokenTrades(a, solUsdAt)))).flat().sort((a, b) => b.closedAt - a.closedAt)
-        const complete = !sol.some(tradesPartial)
-        return send(res, 200, { trades: all, open: sol.flatMap(openLots), complete }, { 'cache-control': complete ? 'private, max-age=60' : 'no-store' })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
-    /* A held token's logo, from this origin — see logo() in solana.ts. Only mints somebody's
-       wallet was read holding are served, so this is not a way to have the server fetch anything. */
-    const mintLogo = /^\/api\/logo\/([1-9A-HJ-NP-Za-km-z]{32,44})$/.exec(path)?.[1]
-    if (mintLogo && req.method === 'GET') {
-      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
-      const img = await solLogo(mintLogo)
-      if (!img) return send(res, 404, { error: 'no logo' })
-      res.writeHead(200, {
-        'content-type': img.type,
-        'content-length': img.bytes.byteLength,
-        'cache-control': 'private, max-age=86400',
-        'x-content-type-options': 'nosniff',
-        'cross-origin-resource-policy': 'same-origin',
-        'content-disposition': 'inline',
-      })
-      return res.end(img.bytes)
-    }
-
-    /* Search beyond the desk's list: every perp Hyperliquid lists, and tokens on DexScreener that
-       GeckoTerminal can chart. Signed in only — each query is a call to somebody else's API. */
-    if (path === '/api/search' && req.method === 'GET') {
-      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
-      const q = (new URL(req.url ?? '/', 'http://x').searchParams.get('q') ?? '').trim()
-      if (q.length < 2) return send(res, 200, { perps: [], tokens: [] })
-      const needle = q.toLowerCase()
-      const [coins, tokens] = await Promise.all([
-        hlUniverse().catch(() => [] as string[]),
-        dexSearch(q).catch(() => []),
-      ])
-      const perps = coins.filter((c) => c.toLowerCase().includes(needle))
-        .sort((a, b) => Number(!a.toLowerCase().startsWith(needle)) - Number(!b.toLowerCase().startsWith(needle)) || a.length - b.length)
-        .slice(0, 8)
-      /* A token Hyperliquid lists as a perp is charted as the perp: its DEX namesakes are wrapped
-         copies at best and copycats at worst, and the perp's book is the deepest price there is. */
-      const listed = new Set(coins.map((c) => c.toUpperCase()))
-      return send(res, 200, { perps, tokens: tokens.filter((t) => !listed.has(t.symbol.toUpperCase())) })
-    }
-
-    /* A DEX pool's bars, off GeckoTerminal through its own budget — see dex.ts — and the pool's
-       facts for the panel beside the chart. Signed in only, and only a well-formed pool on a
-       network that can be charted: GeckoTerminal allows thirty calls a minute for everybody. */
-    const dexRoute = /^\/api\/dex\/(candles|pool)$/.exec(path)?.[1]
-    if (dexRoute && req.method === 'GET') {
-      if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
-      const u = new URL(req.url ?? '/', 'http://x').searchParams
-      const network = u.get('network') ?? '', address = u.get('pool') ?? ''
-      if (!Object.values(NETWORKS).includes(network) || !POOL.test(address)) return send(res, 400, { error: 'not a pool' })
-      try {
-        if (dexRoute === 'pool') return send(res, 200, { pool: await dexPool(network, address) })
-        const interval = u.get('interval') ?? ''
-        if (!TIMEFRAME[interval]) return send(res, 400, { error: 'not an interval' })
-        const want = Math.floor(Number(u.get('bars') ?? '1000')) || 1000
-        return send(res, 200, await dexCandles(network, address, interval, want), { 'cache-control': 'private, max-age=15' })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
-    /* The market feed, relayed. Hyperliquid's info endpoint is a POST, which no service worker can
-       cache and every browser would spend from the same small per-IP budget; through here it is a
-       GET the worker keeps for offline, and one cached upstream call per coin and interval however
-       many tabs ask. Public data and no session asked for — the charts work signed out — and the
-       coin and interval are matched against a pattern and a list before anything goes upstream. */
-    const feed = /^\/api\/hl\/(candles|mids|ctx)$/.exec(path)?.[1]
-    if (feed && req.method === 'GET') {
-      if (feed === 'ctx') {
-        // one coin's, not the whole book's few hundred: the coin is only a key into a cached answer
-        const coin = new URL(req.url ?? '/', 'http://x').searchParams.get('coin') ?? ''
-        try {
-          const c = (await hlContexts())[coin]
-          return c ? send(res, 200, c, { 'cache-control': 'private, max-age=30' }) : send(res, 404, { error: 'not a market' })
-        } catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
-      }
-      if (feed === 'mids') {
-        try { return send(res, 200, await hlMids(), { 'cache-control': 'no-store' }) }
-        catch (e) { return send(res, 502, { error: String((e as Error).message) }) }
-      }
-      const u = new URL(req.url ?? '/', 'http://x').searchParams
-      const coin = u.get('coin') ?? '', interval = u.get('interval') ?? ''
-      /* Coins the venue lists and nothing else. The pattern alone would let anyone ask for made-up
-         coins, and every new name is a cache entry and an upstream call out of the one budget the
-         whole server shares — a signed-out stranger could stall everyone's charts that way. The
-         desk's own list answers without asking; anything else is checked against the book's. */
-      if (!INTERVAL[interval]) return send(res, 400, { error: 'not a market' })
-      if (!LISTED.has(coin) && !(await hlUniverse().catch(() => [] as string[])).includes(coin)) {
-        return send(res, 400, { error: 'not a market' })
-      }
-      const bars = Math.floor(Number(u.get('bars') ?? '1000')) || 1000
-      try {
-        return send(res, 200, await hlCandles(coin, interval, bars), { 'cache-control': 'private, max-age=5' })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
     /* A picture for a note. The bytes stay out of the synced document — see blob.ts — which is why
        this is the one thing in the app that needs an account: with no server there is nowhere for
        them to be, and the editor says so rather than dropping the paste quietly. */
@@ -1427,7 +918,7 @@ export function start({
     /* And back out again. Any signed-in account may read one: a note in a shared project has to
        render for everyone on it, and working out which share a picture belongs to means knowing
        which note holds it — which is the document's business, not this table's. The id is 128 bits
-       of randomness and is what stands in for that, the same bargain the calendar feed makes. */
+       of randomness and is what stands in for that */
     const pic = /^\/api\/blob\/([0-9a-f]{32})$/.exec(path)?.[1]
     if (pic && req.method === 'GET') {
       if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
@@ -1445,127 +936,6 @@ export function start({
         'content-disposition': 'inline',
       })
       return res.end(Buffer.from(row.bytes))
-    }
-
-    /* A card's clip as the browser recorded it, handed back as an MP4 a chat app will play rather
-       than file as a document or send on with no length. Nothing is stored: the bytes go to a temp
-       directory, ffmpeg reads them, and the answer is the reply body.
-
-       Every refusal here is one the app can live with — it keeps the recording and says so — so
-       none of them is an error worth a red toast. See server/clip.ts for why this is on the server
-       at all. */
-    if (path === '/api/clip' && req.method === 'POST') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (!await hasFfmpeg()) return send(res, 501, { error: 'this server has no ffmpeg' })
-      const tooBig = `a clip has to be under ${MAX_CLIP / 1024 / 1024} MB`
-      /* What it says it is, before a byte of it is read. readBytes stops at the cap either way, so
-         this is not the check — it is the refusal that costs nothing, made before the slot below
-         is taken and before anything is buffered. */
-      if (Number(req.headers['content-length']) > MAX_CLIP) return send(res, 413, { error: tooBig })
-      /* One at a time, across the upload as well as the encode — the body is buffered whole, so
-         requests waiting their turn are resident memory rather than a queue. See server/clip.ts. */
-      if (!clipClaim()) return send(res, 503, { error: 'another clip is converting — try again in a moment' })
-      try {
-        let bytes: Buffer
-        try { bytes = await readBytes(req, MAX_CLIP) }
-        catch { return send(res, 413, { error: tooBig }) }
-        const kind = container(bytes)
-        if (!kind) return send(res, 415, { error: 'a clip has to be a webm or an mp4' })
-        let mp4: Buffer
-        try { mp4 = await toMp4(bytes, kind) }
-        catch (e) {
-          /* The reason goes to the log, not to the browser: ffmpeg names the temp file it was
-             reading, and the app does nothing with the sentence anyway — any refusal here means
-             the same thing to it, which is keep the recording and say so. */
-          console.error(`${new Date().toISOString()} clip ${user.name}`, (e as Error).message)
-          return send(res, 422, { error: 'that clip could not be converted' })
-        }
-        res.writeHead(200, {
-          'content-type': 'video/mp4',
-          'content-length': mp4.length,
-          'cache-control': 'no-store',
-          'x-content-type-options': 'nosniff',
-          'cross-origin-resource-policy': 'same-origin',
-        })
-        return res.end(mp4)
-      } finally {
-        clipRelease()
-      }
-    }
-
-    /* The exchanges' word on what the caller holds, off their own stored keys, proxied so they
-       never reach a browser. 501 with no key on the account — the market page reads any non-200
-       as "no panel" and moves on. Every venue or none: one feed failing while the other answered
-       would read as its positions having closed, and fileClosed in the app would write trades
-       down off a mark that was really an outage. */
-    if (path === '/api/positions' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const stored = [
-        ...evmOf(user.id).map((raw) => ({ venue: 'hyperliquid', raw, go: hlPositions, book: hlPending })),
-      ]
-      if (!stored.length) return send(res, 501, { error: 'no wallet on this account' })
-      try {
-        /* The book rides along with the positions, and on softer terms: a limit order waiting at a
-           price is not a position and nothing files itself off it, so a venue that will not answer
-           for its book contributes an empty one rather than failing the call the rows come in. */
-        const [feeds, books] = await Promise.all([
-          Promise.all(stored.map((v) => v.go(v.raw))),
-          Promise.all(stored.map((v) => v.book(v.raw).catch(() => []))),
-        ])
-        return send(res, 200, {
-          positions: feeds.flatMap((f, i) => f.positions.map((p) => ({ ...p, venue: stored[i].venue }))),
-          orders: books.flatMap((b, i) => b.map((o) => ({ ...o, venue: stored[i].venue }))),
-          // one number when any venue says one, summed when several do — null only when none
-          equity: feeds.every((f) => f.equity == null) ? null
-            : Math.round(feeds.reduce((n, f) => n + (f.equity ?? 0), 0) * 100) / 100,
-        })
-      } catch (e) {
-        return send(res, 502, { error: String((e as Error).message) })
-      }
-    }
-
-    /* What the exchanges have already closed, so a trade files itself into the record at the price
-       it really left at. The app can only ever notice a close by missing a row it saw last look,
-       and by then the price is gone — this is the venue's own average close, matched back to that
-       missing row. A week is the window: anything older has been filed or was never seen.
-
-       Per account and behind a half minute, the same as the positions it is polled beside. A venue
-       that errors contributes nothing rather than failing the call: an empty list means the record
-       falls back to the last mark, which is what it did before this route existed. */
-    if (path === '/api/closed' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const hit = closedCache.get(user.id)
-      if (hit && Date.now() - hit.at < 30_000) return send(res, 200, { closed: hit.rows })
-      const since = Date.now() - 7 * 86400_000
-      const stored = [
-        ...evmOf(user.id).map((raw) => ({ venue: 'hyperliquid', raw, go: (a: string) => hlClosed(a, since) })),
-      ]
-      if (!stored.length) return send(res, 501, { error: 'no wallet on this account' })
-      /* A venue that will not answer says so in the answer, not only in the log. An empty list is
-         indistinguishable from a quiet week, and "the history endpoint is refusing this key" is not
-         something anyone should have to infer from a record that stays empty — least of all by
-         reading a container's log. The page ignores `why`; a person opening the route reads it. */
-      const why: string[] = []
-      const lists = await Promise.all(stored.map((v) => {
-        const oops = (e: unknown) => {
-          const said = String((e as Error)?.message ?? e)
-          why.push(`${v.venue}: ${said}`)
-          log('closed-fail', `${v.venue}: ${said}`, via(req))
-          return []
-        }
-        try { return v.go(v.raw).catch(oops) } catch (e) { return oops(e) }
-      }))
-      const rows = lists.flat().sort((a, b) => b.closedAt - a.closedAt)
-      /* Only a good read is cached. Half a minute of "the venue was down once" would otherwise be
-         handed to every tab that asked, and the first look of a session is the one that matters. */
-      if (!why.length) {
-        if (closedCache.size >= 64) closedCache.clear()
-        closedCache.set(user.id, { at: Date.now(), rows })
-      }
-      return send(res, 200, { closed: rows, ...(why.length ? { why } : {}) })
     }
 
     /* MCP over plain HTTP: the same dispatcher the stdio server runs, mounted where the app
@@ -1639,146 +1009,6 @@ export function start({
       if (!user) return send(res, 401, { error: 'unauthorized' })
       // name and face, since every place that offers this list draws both
       return send(res, 200, { users: q.people.all(user.id) })
-    }
-
-    /* The Desk: how everyone else's trades went, and what they are in now. Opt-in per account —
-       a document that has not set `desk` is not read past that field. Read-only, and everyone here
-       is someone an admin let in.
-
-       What the exchange says about a live position now goes out whole: the running dollars, what it
-       is worth at the mark, and where it liquidates. That is money, and it is a deliberate change of
-       what switching the desk on means — the size is recoverable from any of those three, so the
-       switch now reads "everyone here sees this trade and what it is doing", which is what the
-       screen says beside it. What stays behind is the document's own euros: `size` and `lev` are
-       still read only to decide whether a row is real, and a hand-typed position carries no venue
-       numbers at all, so it still leaves as levels and nothing else.
-
-       Real trades only, on both lists — sized by hand, or closed and settled by a venue, which is
-       the same test the Log applies to its own rows. A record keeps watched plans beside taken
-       ones, which is fine on your own page where the distinction is drawn — and is not fine here,
-       where someone else reads a hit rate as a claim about how the person trades. Nobody scrolls a leaderboard thinking "some of these were never taken". The
-       filter is here rather than on the page because this is the boundary: a plan somebody never
-       took should not leave their document at all, and filtering after it arrived would ship it and
-       then hide it. */
-    if (path === '/api/desk' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const rows = q.everyone.all(user.id) as
-        { id: number, name: string, avatar: string | null, json: string | null }[]
-      // another person's document is untrusted input to my page: numbers are numbers or the row goes
-      const num = (n: unknown) => (typeof n === 'number' && isFinite(n) ? n : null)
-      const arr = (a: unknown) => (Array.isArray(a) ? a : [])
-      /* Real money on it, decided the same way the app's own isPosition does — but written out
-         here rather than imported, because this reads someone else's document: `size` arriving as
-         the string "500" must not count, and NaN must not either. Both fall out of the typeof. */
-      const taken = (w: any) => typeof w?.size === 'number' && w.size > 0 && typeof w?.lev === 'number' && w.lev > 0
-      /* A finished row is real the same three ways isReal counts them, and a venue's own close is
-         two of them: an exchange fills and settles without anyone typing a size, so `taken` alone
-         threw away every trade a desk let its venue close and left the whole log reading "nothing
-         finished yet". `cash` is the venue's settled figure and a hyphenated id is `venue-symbol-when`
-         — either one is a fill, whatever the document forgot to write down beside it. */
-      const real = (r: any) => taken(r)
-        || (typeof r?.cash === 'number' && isFinite(r.cash))
-        || String(r?.id ?? '').includes('-')
-      const desk = []
-      // whose desk each row is, kept beside the list rather than on it: the account id is ours
-      const who: number[] = []
-      for (const row of rows) {
-        let s: any
-        try { s = JSON.parse(row.json ?? '{}') } catch { continue }
-        if (s?.desk !== true) continue
-        who.push(row.id)
-        desk.push({
-          /* Who they are: the name, and the picture the roster of a shared project already puts
-             beside it. The cap is 128 KB, but what the picker writes is a 128px JPEG — a few KB —
-             so a page of desks is kilobytes of picture rather than the megabyte this route once
-             assumed and left the faces out over. */
-          name: row.name, avatar: row.avatar,
-          results: arr(s.results).filter(real).map((r: any) => ({
-            id: String(r?.id ?? ''), label: String(r?.label ?? ''), horizon: String(r?.horizon ?? ''),
-            dir: r?.dir === 'short' ? 'short' : 'long',
-            level: r?.level === 'target' ? 'target' : 'stop',
-            /* The venue's settled dollars where the trade had them — fees and funding already in
-               it. The same money the open list already sends as `pnl`, one exit later, so it is
-               the switch's existing promise rather than a wider one. A row the app priced itself
-               carries none: that figure is this app's arithmetic over a size they typed, and it is
-               not sent. */
-            r: num(r?.r), cash: num(r?.cash), closedAt: num(r?.closedAt) ?? 0,
-            /* The trade itself: which asset, what it was got in and out at, when it opened, and
-               what it returned on the margin behind it. The list read as a column of Rs against a
-               column of labels and could not be shared, because a card is drawn from prices — and
-               a price a venue printed for everyone is the least private thing on this row. The
-               money above is the wider promise; this is the trade the money came from. */
-            asset: String(r?.asset ?? ''),
-            entry: num(r?.entry), exit: num(r?.exit), entryAt: num(r?.entryAt),
-            roi: num(r?.roi),
-          })).filter((r: any) => r.r !== null),
-          open: arr(s.watches).filter(taken).map((w: any) => ({
-            id: String(w?.id ?? ''), label: String(w?.label ?? ''), horizon: String(w?.horizon ?? ''),
-            dir: w?.dir === 'short' ? 'short' : 'long',
-            entry: num(w?.entry), stop: num(w?.stop), target: num(w?.target),
-            /* what they typed carries none of the venue's numbers; the sweep below fills them in
-               where an account has a key, and leaves them null where it does not */
-            entryAt: num(w?.entryAt),
-            mark: null as number | null, pnl: null as number | null,
-            value: null as number | null, liq: null as number | null,
-            // the one venue number a document does have: what they said they took it at
-            lev: num(w?.lev),
-          })).filter((w: any) => w.entry !== null && w.stop !== null && w.target !== null),
-        })
-      }
-
-      /* What they are in *now* is the exchange's word where there is one. A hand-entered position
-         is a thing somebody typed; a venue row is a fill, and it is the only kind that appears
-         without anyone remembering to write it down — which is why a desk whose account has a key
-         shows its book and not its notes. Same stored keys and same 30s per-key cache as
-         /api/positions, so a page of desks costs one call per venue per half minute, not one per
-         reader. A venue that errors leaves that desk on what the document said rather than
-         emptying it: a key that expired is not a book that closed.
-
-         The allowlist still decides, it is simply wider than it was: the trade, its levels, and what
-         the venue says it is doing — mark, running pnl, value at the mark, liquidation. The account
-         equity is not on it, and neither is `size`: the coins are recoverable from value ÷ mark
-         anyway, so leaving them off is tidiness rather than a promise, but the equity is about
-         everything they hold and this route is about one trade.
-
-         ponytail: every opted-in desk is asked on every read. Ten accounts behind a 30s cache is
-         nothing; if this server ever has a hundred, one sweep writing the books into a table the
-         route reads is the lever. */
-      await Promise.all(desk.map(async (d, i) => {
-        /* One desk's exchange never takes the page down with it. The venue calls have their own
-           catch; this is for everything around them — a credential row that will not parse being
-           the one that would otherwise throw past the awaits and 500 the whole route over one
-           account's bad data. */
-        try {
-        const keys = [
-          /* "unverified" rides the label: an address is pasted, not proven, so a desk could be showing
-             somebody else's wallet as its own. Proof would mean a signature Fomo's wallet cannot give. */
-          ...evmOf(who[i]).map((raw) => ({ venue: 'Hyperliquid · unverified', raw, go: hlPositions })),
-        ].filter((v) => !((refused.get(`${v.raw}:${who[i]}`) ?? 0) > Date.now() - REFUSED_FOR))
-        if (!keys.length) return
-        const feeds = await Promise.all(keys.map((v) => v.go(v.raw).catch(() => {
-          if (refused.size >= 64) refused.clear()
-          refused.set(`${v.raw}:${who[i]}`, Date.now())
-          return null
-        })))
-        if (feeds.every((f) => f === null)) return
-        d.open = feeds.flatMap((f, n) => (f?.positions ?? []).map((p) => ({
-          // the venue and the fill stamp make it the same row across reads, the way the app's own does
-          id: `${keys[n].venue}-${p.symbol}-${p.openedAt ?? p.entry}`,
-          label: p.symbol, horizon: keys[n].venue,
-          dir: p.side, entry: p.entry, stop: p.stop, target: p.target,
-          /* What the trade is doing, as the venue has it: the price it is marked at, the running
-             money, what it is worth there, and where it gets closed for them. The page reads the
-             first into a percent and an R and prints the rest under the fold. */
-          mark: p.mark, pnl: p.pnl, value: p.value, liq: p.liq ?? null, lev: p.lev,
-          /* Open means in, whatever the feed says about when: a venue that carries no fill stamp
-             must not read as a setup still waiting for its entry. */
-          entryAt: (p.openedAt ? Date.parse(p.openedAt) : NaN) || Date.now(),
-        })))
-        } catch { /* this desk stays on what its document said */ }
-      }))
-      return send(res, 200, { desk })
     }
 
     if (path === '/api/shares' && req.method === 'GET') {
@@ -2211,21 +1441,11 @@ export function start({
         'cache-control': forever ? 'public, max-age=31536000, immutable' : 'no-cache',
         'x-content-type-options': 'nosniff',
         // set here rather than in the proxy, so they hold whatever terminates TLS in front.
-        // wasm-unsafe-eval is pdf.js; the one host is the market feed; nothing else may load.
+        // wasm-unsafe-eval is pdf.js; nothing off this origin may load.
         ...(ext === 'html' && {
           'content-security-policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
             + "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            // blob: is the clip somebody puts behind a share card — a file they picked off their
-            // own device, played back to them and recorded. Nothing here fetches media over the
-            // network, so no host is named.
-            + "media-src 'self' blob:; "
-            // The market feed rides 'self' through the relay; the live prices are Hyperliquid's
-            // socket, and a socket carries no CORS to be refused by. Frankfurter is the euro rate a
-            // share card converts at, and nothing else.
-            // GeckoTerminal came off with the Trending panel: no browser code reaches it any more
-            // (the MCP tool asks from this process), so the grant was permission for nothing —
-            // and a connect-src host nothing uses is a host anything injected could use.
-            + "connect-src 'self' wss://api.hyperliquid.xyz https://api.frankfurter.app; "
+            + "connect-src 'self'; "
             + 'frame-ancestors \'none\'',
           'referrer-policy': 'no-referrer',
         }),

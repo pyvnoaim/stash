@@ -53,10 +53,14 @@ const updateSW = registerSW({
   },
 })
 
+/* The chart's offline bars, left in every browser that ever opened Markets. The routes that filled
+   and expired them are gone, so nothing else would ever clear them. */
+for (const name of ['candles-hyperliquid', 'candles-twelvedata']) void globalThis.caches?.delete(name)
+
 /* Reload means reload: every cache goes and the worker with it, so the page that comes back is
    fetched rather than remembered, with nothing left in the middle to serve half the old build. The
-   next load registers a worker again and precaches the new one. Costs the offline candle history,
-   which refills on the next look. */
+   next load registers a worker again and precaches the new one. Costs the cached note pictures,
+   which refill on the next look. */
 async function hardReload() {
   // ...unless there is nothing to fetch it back from. The toast sits until it is answered, which
   // can be hours later on a train: offline the caches are the only copy of the app there is, and

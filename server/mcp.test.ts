@@ -41,7 +41,7 @@ assert.equal(hello.result.protocolVersion, '2025-06-18')
 assert.deepEqual(hello.result.capabilities, { tools: {} })
 const listed: any = await send('tools/list')
 assert.deepEqual(listed.result.tools.map((t: any) => t.name).sort(),
-  ['market_read', 'market_setups', 'market_trending', 'stash_capture', 'stash_edit', 'stash_project', 'stash_read', 'stash_subs'])
+  ['stash_capture', 'stash_edit', 'stash_project', 'stash_read', 'stash_subs'])
 
 /* Which of them can take something away, since that is the whole of what an annotation is for:
    a client with no way to tell reads every call as equally safe. */
@@ -103,14 +103,6 @@ assert.equal((await call('stash_read', { view: 'flagged' })).count, 1)
 assert.equal((await call('stash_read', { view: 'done' })).count, 0)
 assert.deepEqual((await call('stash_read', {})).projects, [{ name: 'Kova', open: 1 }])
 
-/* The open positions come off the exchange feed rather than the document, and this account has no
-   key on it — so /api/positions 501s and the answer is an empty `open`, not a failed call. The rows
-   themselves need a real venue to assert; this is the branch that would otherwise take the whole
-   tool down for every account that has never connected one. */
-const desk = await call('market_setups', {})
-assert.deepEqual(desk.open, [])
-assert.deepEqual(desk.watching, [])
-
 // finishing a repeating task opens the next one — the store's rule, reached rather than copied
 const rep = await call('stash_capture', { text: 'water the plants every week' })
 await call('stash_edit', { id: rep.added[0].id, done: true })
@@ -121,12 +113,12 @@ assert.equal(open.length, 1)                      // the one that took its place
 assert.notEqual(open[0].id, rep.added[0].id)
 assert.equal((await call('stash_read', { view: 'done' })).count, 1)
 
-// an edit, a move to Quick notes, and a delete
+// an edit, a move to Inbox, and a delete
 const edited = await call('stash_edit', { id: cap.added[0].id, text: 'fix the preset loader', project: null, due: null })
 assert.equal(edited.item.text, 'fix the preset loader')
 assert.equal(edited.item.project, null)
 assert.equal(edited.item.due, undefined)
-// Quick notes is now both of them: the one just moved out of Kova, and the repeat that never had one
+// Inbox is now both of them: the one just moved out of Kova, and the repeat that never had one
 assert.equal((await call('stash_read', { view: 'inbox' })).count, 2)
 assert.equal((await call('stash_edit', { id: cap.added[0].id, remove: true })).removed, cap.added[0].id)
 assert.equal((await call('stash_read', { query: 'preset' })).count, 0)

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck,
+  CalendarClock, CalendarDays, CheckCheck,
   FileText, Flag, Inbox, Layers, Lightbulb, ListTodo, Monitor, PanelLeft, Plus, Search, StickyNote,
   Wallet,
 } from 'lucide-react'
@@ -83,7 +83,7 @@ function Wordmark() {
 }
 
 const LISTS = [
-  { icon: Inbox, label: 'Quick notes', count: 4 },
+  { icon: Inbox, label: 'Inbox', count: 4 },
   { icon: CalendarDays, label: 'Today', count: 3, active: true },
   { icon: CalendarClock, label: 'Upcoming', count: 9 },
   { icon: Flag, label: 'Flagged', count: 1 },
@@ -98,9 +98,7 @@ const PROJECTS = [
 ]
 const TAGS = [{ name: 'audio', count: 3 }, { name: 'errands', count: 2 }]
 const TOOLS = [
-  { icon: CalendarRange, label: 'Calendar' },
   { icon: Wallet, label: 'Subscriptions' },
-  { icon: CandlestickChart, label: 'Markets' },
   { icon: FileText, label: 'PDF editor' },
 ]
 
@@ -141,12 +139,10 @@ function Teaser() {
       <div className="bg-sidebar flex flex-col border-r">
         {/* STASH shares a baseline with the page title, the way the real header does */}
         <div className="flex h-9 items-center gap-1.5 border-b px-3">
-          <div className="bg-foreground h-3 w-0.5 rounded-full" />
-          <span className="font-heading text-[10px] tracking-[0.18em] uppercase">Stash</span>
+          <span className="font-pixel text-xs">stash</span>
         </div>
 
         <div className="flex-1 p-1.5">
-          <Item icon={ChartColumn} label="Overview" />
           <GroupLabel>Lists</GroupLabel>
           {LISTS.map((l) => <Item key={l.label} {...l} />)}
           <GroupLabel action>Projects</GroupLabel>

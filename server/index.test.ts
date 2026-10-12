@@ -8,54 +8,6 @@ import { fileURLToPath } from 'node:url'
 
 process.env.NODE_ENV = 'production'   // assert the cookie as the container serves it
 const { start } = await import('./index.ts')
-const { setBudget } = await import('./hyperliquid.ts')
-setBudget(1e9)
-
-/* Hyperliquid, answered here rather than over the network, for the whole file: an address with one
-   ETH short on it, two bars for anything asking candles, and nothing for everything else. Every
-   other request goes through. The rate budget is lifted — nothing here is a real venue to spare. */
-const DEXPOOL = 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD'
-const realFetch = globalThis.fetch
-const hlAsked: any[] = []
-globalThis.fetch = ((u: any, o?: any) => {
-  // a Solana wallet holding 553 SI and no SOL, and SI's one deep pool
-  if (String(u) === 'https://api.mainnet-beta.solana.com') {
-    const { method, params } = JSON.parse(o?.body ?? '{}')
-    // the classic token program holds it; Token-2022 has nothing for this wallet
-    const result = method === 'getBalance' || params?.[1]?.programId !== 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' ? { value: method === 'getBalance' ? 0 : [] }
-      : { value: [{ account: { data: { parsed: { info: { mint: 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD', tokenAmount: { uiAmountString: '553' } } } } } }] }
-    return Promise.resolve(new Response(JSON.stringify({ result })))
-  }
-  if (String(u).startsWith('https://api.dexscreener.com/tokens/')) {
-    return Promise.resolve(new Response(JSON.stringify([
-      { baseToken: { address: 'DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD', symbol: 'SI' }, priceUsd: '0.0231', liquidity: { usd: 900000 } },
-    ])))
-  }
-  if (String(u).startsWith('https://api.dexscreener.com/latest/dex/search')) {
-    return Promise.resolve(new Response(JSON.stringify({ pairs: [
-      { chainId: 'solana', pairAddress: DEXPOOL, baseToken: { address: 'HDmint', symbol: 'HYPEDOG' }, priceUsd: '0.01', liquidity: { usd: 50000 }, volume: { h24: 20000 } },
-      // a DEX namesake of a listed perp: the perp is the chart, so this is not offered
-      { chainId: 'solana', pairAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', baseToken: { address: 'WHmint', symbol: 'HYPE' }, priceUsd: '30', liquidity: { usd: 1e6 }, volume: { h24: 1e6 } },
-    ] })))
-  }
-  if (String(u).startsWith('https://api.geckoterminal.com/')) {
-    return Promise.resolve(new Response(JSON.stringify({ data: { attributes: { ohlcv_list: [
-      [1759190400, '2', '3', '1.5', '2.5', '100'], [1759186800, '1', '2', '0.5', '1.5', '50'],
-    ] } } })))
-  }
-  if (!String(u).startsWith('https://api.hyperliquid.xyz')) return realFetch(u, o)
-  const body = JSON.parse(o?.body ?? '{}')
-  hlAsked.push(body)
-  const answer = body.type === 'clearinghouseState'
-    ? { marginSummary: { accountValue: '1240.5' }, assetPositions: [{ position: { coin: 'ETH', szi: '-2', entryPx: '2000', positionValue: '3900', unrealizedPnl: '100', liquidationPx: '2450', leverage: { value: 10 } } }] }
-    : body.type === 'candleSnapshot' ? [{ t: 1, o: '1', h: '2', l: '0.5', c: '1.5', v: '3' }, { t: 2, o: '1.5', h: '2', l: '1', c: '1.8', v: '4' }]
-    : body.type === 'allMids' ? { BTC: '100000', PAXG: '2400' }
-    : body.type === 'metaAndAssetCtxs' ? [{ universe: [{ name: 'BTC' }] }, [{ funding: '0.00001', openInterest: '10', dayNtlVlm: '1000', prevDayPx: '99000', markPx: '100000' }]]
-    : body.type === 'meta' ? { universe: [{ name: 'BTC' }, { name: 'HYPE' }, { name: 'OLD', isDelisted: true }] }
-    : []
-  return Promise.resolve(new Response(JSON.stringify(answer), { headers: { 'content-type': 'application/json' } }))
-}) as typeof fetch
-
 
 const root = mkdtempSync(join(tmpdir(), 'stash-'))
 writeFileSync(join(root, 'index.html'), '<!doctype html>hi')
@@ -209,55 +161,6 @@ assert.deepEqual(await (await get('/api/users', leon)).json(),
 assert.deepEqual(await (await get('/api/users', mia)).json(),
   { users: [{ name: 'kim', avatar: null }, { name: 'leon', avatar: null }] })
 
-/* the Desk: only accounts that switched it on, and only what a trade is — never what it cost or
-   paid anyone. Leon leaves his off, so mia's desk stays empty while his reads hers.
-   Mia's document holds one of each kind on both lists: a trade she was really in, and a plan she
-   only ever watched. Only the taken ones may leave the server — a hit rate someone else reads is a
-   claim about how she trades, and untaken ideas do not get to vouch for it.
-   Her third result is the kind a venue closed for her: settled cash and a `venue-symbol-when` id,
-   and no size anywhere on it, because nobody typed one. Reading only size once emptied every desk
-   whose exchange does the closing — which is most of them. */
-await post('/api/account', { avatar: px }, mia)   // her face rides along with her desk
-await put(mia, (await (await get('/state', mia)).json()).version, {
-  desk: true,
-  results: [
-    { id: 'r1', label: 'Bitcoin', horizon: 'Trading', dir: 'long', level: 'target', r: 2, closedAt: 5, size: 500, lev: 10 },
-    { id: 'r2', label: 'Solana', horizon: 'Trading', dir: 'long', level: 'stop', r: -1, closedAt: 6 },
-    { id: 'mexc-BTCUSDT-7', label: 'Bitcoin', horizon: 'Trading', dir: 'short', level: 'target', r: 3, closedAt: 7, cash: 12.4,
-      asset: 'BTCUSDT', entry: 66420, exit: 64100, entryAt: 6, roi: 0.42 },
-  ],
-  watches: [
-    { id: 'w1', label: 'Ether', horizon: 'Trading', dir: 'short', entry: 3, stop: 4, target: 1, size: 500, lev: 10 },
-    { id: 'w2', label: 'Cardano', horizon: 'Investing', dir: 'long', entry: 3, stop: 1, target: 9 },
-  ],
-})
-assert.equal((await get('/api/desk')).status, 401)
-const seen = (await (await get('/api/desk', leon)).json()).desk
-assert.deepEqual(seen.map((p: any) => p.name), ['mia'], 'only the account that opted in')
-assert.equal(seen[0].avatar, px, 'the face beside the name')
-assert.deepEqual(seen[0].results.map((r: any) => r.id), ['r1', 'mexc-BTCUSDT-7'],
-  'a plan she never took is not her record, and one her venue closed is')
-assert.equal(seen[0].results[0].r, 2)
-// the venue's settled dollars ride along; a row she sized herself has none to send
-assert.equal(seen[0].results[0].cash, null, 'no venue closed it, so there is no settled figure')
-assert.equal(seen[0].results[1].cash, 12.4, 'what her exchange settled it for')
-/* the trade behind the money: the asset, the two prices and the open stamp, which is what the
-   card the Desk now offers is drawn from. A price a venue printed for everyone is the least
-   private thing on the row, and without them somebody else's log is a column of letters. */
-assert.deepEqual(
-  (({ asset, entry, exit, entryAt, roi }) => ({ asset, entry, exit, entryAt, roi }))(seen[0].results[1]),
-  { asset: 'BTCUSDT', entry: 66420, exit: 64100, entryAt: 6, roi: 0.42 })
-// and a row whose document never held them says null rather than a number it made up
-assert.deepEqual(
-  (({ asset, entry, exit, roi }) => ({ asset, entry, exit, roi }))(seen[0].results[0]),
-  { asset: '', entry: null, exit: null, roi: null })
-assert.deepEqual(seen[0].open.map((w: any) => w.id), ['w1'], 'nor is a plan she is only watching')
-assert.equal(seen[0].open[0].mark, null, 'a document row carries no live price')
-// the filter reads size and leverage to decide, and neither one is what it sends
-assert.ok(!JSON.stringify(seen).includes('500'), "someone else's size left the server")
-assert.ok(!JSON.stringify(seen).includes('Cardano'), 'a watched plan left the server')
-assert.deepEqual((await (await get('/api/desk', mia)).json()).desk, [], 'a desk that is off is not read')
-
 /* where you are signed in: yours only, the one asking marked, and never the hash that proves it —
    a list that handed those out would be a list of working cookies. */
 assert.equal((await get('/api/sessions')).status, 401)
@@ -267,97 +170,6 @@ assert.ok(seats.every((d: any) => !('hash' in d)), 'a session hash left the serv
 // mia's own list is hers, and none of leon's is in it
 assert.ok((await (await get('/api/sessions', mia)).json()).sessions.length >= 1)
 assert.equal(seats.length, db.prepare('select count(*) as n from sessions where user = 1').get()!.n)
-
-/* ---------- the calendar feed ---------- */
-
-// a document with something in it worth putting in a calendar
-await put(leon, (await (await get('/state', leon)).json()).version, {
-  projects: [{ id: 'p1', name: 'Kova' }],
-  items: [
-    { id: 'i1', type: 'task', text: 'ship it, now', note: 'first line\nsecond', due: '2020-01-01', pid: 'p1' },
-    { id: 'i2', type: 'task', text: 'already done', due: '2020-01-02', done: true },
-    { id: 'i3', type: 'task', text: 'no date at all', due: null },
-    { id: 'i4', type: 'task', text: 'gym', due: '2020-01-03', at: '18:00' },
-    { id: 'i5', type: 'task', text: 'last thing', due: '2020-01-03', at: '23:30' },
-  ],
-  subs: [{ id: 's1', kind: 'expense', name: 'Netflix', cost: 12.99, cycle: 'monthly', due: '2026-08-03' }],
-})
-
-// nothing until it is asked for, and never to someone who is not signed in
-assert.equal((await get('/api/feed')).status, 401)
-assert.deepEqual(await (await get('/api/feed', leon)).json(), { feed: null })
-const feed = (await (await post('/api/feed', {}, leon)).json()).feed
-assert.match(feed, /^[a-f0-9]{32}$/, 'a feed token is 128 bits of hex or it is guessable')
-
-// the link is the whole of the authorisation, and it carries one person's document
-r = await fetch(`${url}/ics/${feed}`)
-assert.equal(r.status, 200)
-assert.match(r.headers.get('content-type') ?? '', /^text\/calendar/)
-const ics = await r.text()
-assert.match(ics, /^BEGIN:VCALENDAR/)
-assert.match(ics, /END:VCALENDAR\r\n$/)
-// the open dated item, escaped the way the format wants and carrying its project and its note
-assert.match(ics, /SUMMARY:ship it\\, now/)
-assert.match(ics, /DESCRIPTION:@Kova\\nfirst line\\nsecond/)
-assert.match(ics, /DTSTART;VALUE=DATE:20200101\r\nDTEND;VALUE=DATE:20200102/)
-assert.match(ics, /BEGIN:VALARM/, 'a subscribed calendar says nothing without an alarm on the event')
-/* An item that named an hour is an hour in the calendar, not a banner across the day — floating
-   local time, so six is six wherever the phone is, and ten minutes' warning rather than the
-   all-day event's nine hours. The last half hour of the day stops at midnight instead of ending
-   on a date its DTSTART never named. */
-assert.match(ics, /DTSTART:20200103T180000\r\nDTEND:20200103T190000/)
-assert.match(ics, /DTSTART:20200103T233000\r\nDTEND:20200103T235900/)
-assert.match(ics, /TRIGGER:-PT10M/)
-assert.match(ics, /TRIGGER:PT9H/, 'an all-day event still fires in the morning')
-// finished work and undated work are not things a calendar can show
-assert.ok(!ics.includes('already done') && !ics.includes('no date at all'))
-// and a year of the monthly charge, rolled forward from an anchor that is already in the past
-assert.ok(ics.match(/SUMMARY:€12.99 Netflix/g)!.length >= 12)
-// every line inside what the format allows, continuations indented by one space
-assert.ok(ics.split('\r\n').every((l) => Buffer.byteLength(l) <= 75), 'an unfolded line went out')
-
-/* A line break that survives escaping is a note able to write its own events into the file — and
-   the text is not always the feed owner's, since a project shared with them is in their document.
-   Every flavour of break has to come out as the two characters \n. */
-await put(leon, (await (await get('/state', leon)).json()).version, {
-  items: [{ id: 'i9', type: 'task', due: '2020-03-01', text: 'ok', note: 'a\r\nb\rEND:VEVENT\nc' }],
-})
-const escaped = await (await fetch(`${url}/ics/${feed}`)).text()
-assert.ok(escaped.includes('DESCRIPTION:a\\nb\\nEND:VEVENT\\nc'), escaped)
-assert.equal(escaped.match(/BEGIN:VEVENT/g)!.length, 1, 'a note wrote itself a second event')
-
-/* ---------- the calendar coming the other way ---------- */
-
-// nobody's calendar without a session, and nothing subscribed until somebody says so
-assert.equal((await get('/api/cal')).status, 401)
-assert.deepEqual(await (await get('/api/cal?from=2026-08-01&to=2026-08-31', leon)).json(),
-  { url: null, events: [] })
-
-/* A link this server would refuse to fetch is refused here, where the person can still see why —
-   the guard is cal.ts's, and this is the boundary that uses it. */
-for (const bad of ['http://127.0.0.1/cal.ics', 'file:///etc/passwd', 'nonsense', '']) {
-  const r = await post('/api/cal', { url: bad }, leon)
-  assert.equal(r.status, 400, bad)
-  assert.deepEqual(await (await get('/api/cal?from=2026-08-01&to=2026-08-31', leon)).json(),
-    { url: null, events: [] }, 'and nothing was stored on the way past')
-}
-
-// a window wide enough to expand a daily rule thousands of times is not a window
-assert.equal((await get('/api/cal?from=2020-01-01&to=2030-01-01', leon)).status, 400)
-// a window that is not two days is no answer rather than an error — the page asks before it knows
-assert.deepEqual(await (await get('/api/cal?from=nope&to=2026-08-31', leon)).json(),
-  { url: null, events: [] })
-
-// a token that is not one, and one that no longer is
-assert.equal((await fetch(`${url}/ics/nope`)).status, 404)
-assert.equal((await fetch(`${url}/ics/${'a'.repeat(32)}`)).status, 404)
-const feed2 = (await (await post('/api/feed', {}, leon)).json()).feed
-assert.notEqual(feed2, feed)
-assert.equal((await fetch(`${url}/ics/${feed}`)).status, 404, 'the old link still reads')
-assert.equal((await fetch(`${url}/ics/${feed2}`)).status, 200)
-const off = await fetch(`${url}/api/feed`, { method: 'DELETE', headers: { cookie: leon } })
-assert.deepEqual(await off.json(), { feed: null })
-assert.equal((await fetch(`${url}/ics/${feed2}`)).status, 404)
 
 // deleting a user cascades: their session dies with the row — and never yourself
 const del = (name: string, cookie: string) => fetch(`${url}/api/admin/user`, {
@@ -785,89 +597,14 @@ r = await post('/api/signup', { user: 'ines', pass: 'longenough', invite: ` ${me
 assert.equal(r.status, 200)
 assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', invite: messy })).status, 403)
 
-/* ---------- wallets: pasted, recognised, looked up, never more than an address ---------- */
-
+/* The routes that left with the trading desk and the calendar are gone, not merely unlinked. */
 const kInv = server.invite()
 const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
-const EVM = '0x3BeD814b714017c170D8081c663C4C8e7E89b183'
-const SOL = '9WDg8ibeX3pkqZ4Xm6B9GBqrn6Aq8miuXkB8VDDWhHn5'
-// no session, no wallet business at all
-assert.equal((await get('/api/wallets')).status, 401)
-assert.deepEqual(await (await get('/api/wallets', kUser)).json(), { wallets: [] })
-// no wallet: positions and closed have nothing to read
-assert.equal((await get('/api/positions', kUser)).status, 501)
-assert.equal((await get('/api/closed', kUser)).status, 501)
-// anything that is not an address is refused, and nothing is stored
-assert.equal((await post('/api/wallets', { address: 'not-an-address' }, kUser)).status, 400)
-assert.equal((await post('/api/wallets', { address: '0x123' }, kUser)).status, 400)
-// an EVM one is looked up and the answer says what was found, in words
-r = await post('/api/wallets', { address: EVM, label: 'Fomo' }, kUser)
-let w = await r.json()
-assert.equal(r.status, 200)
-assert.match(w.found, /1 position, \$1240\.50 account value/)
-// stored lower-cased: the same wallet pasted in another case is one row, not two
-assert.deepEqual(w.wallets, [{ address: EVM.toLowerCase(), chain: 'evm', label: 'Fomo' }])
-await post('/api/wallets', { address: EVM.toUpperCase().replace('0X', '0x') }, kUser)
-assert.equal((await (await get('/api/wallets', kUser)).json()).wallets.length, 1)
-// Solana is recognised by its shape, looked up, and its tokens priced off their deepest pool
-w = await (await post('/api/wallets', { address: SOL }, kUser)).json()
-assert.match(w.found, /found on Solana: 1 token, \$12\.77/)
-const held = await (await get('/api/holdings', kUser)).json()
-assert.deepEqual(held.holdings.map((h: any) => [h.symbol, h.value]), [['SI', 12.77]])
-assert.equal(held.total, 12.77)
-assert.deepEqual(held.dust, { count: 0, value: 0 })
-// a logo is served only for a mint a wallet was read holding, and only once it sniffs as an image
-assert.equal((await get('/api/logo/So11111111111111111111111111111111111111112')).status, 401)
-assert.equal((await get('/api/logo/So11111111111111111111111111111111111111112', kUser)).status, 404)
-assert.equal((await get('/api/logo/not-a-mint', kUser)).status, 404)
-assert.deepEqual(w.wallets.map((x: any) => x.chain), ['evm', 'solana'])
-// the wallet is what positions read now: the short, off the address, never anything to sign with
-const book = await (await get('/api/positions', kUser)).json()
-assert.equal(book.positions[0].symbol, 'ETHUSDT')
-assert.equal(book.positions[0].venue, 'hyperliquid')
-assert.equal(book.equity, 1240.5)
-assert.ok(hlAsked.some((b) => b.type === 'clearinghouseState' && b.user === EVM.toLowerCase()))
-// removed is gone, and positions go back to having nothing to read
-await del2('/api/wallets', { address: EVM }, kUser)
-await del2('/api/wallets', { address: SOL }, kUser)
-assert.deepEqual(await (await get('/api/wallets', kUser)).json(), { wallets: [] })
-assert.equal((await get('/api/positions', kUser)).status, 501)
-assert.deepEqual(await (await get('/api/holdings', kUser)).json(), { holdings: [], total: 0, dust: { count: 0, value: 0 } })
-assert.equal((await get('/api/holdings')).status, 401)
-// your buys and sells of a token: signed in, a mint-shaped address, and only your own wallets
-assert.equal((await get('/api/dex/fills?mint=So11111111111111111111111111111111111111112')).status, 401)
-assert.equal((await get('/api/dex/fills?mint=../etc', kUser)).status, 400)
-assert.equal((await get('/api/token-trades')).status, 401)
-assert.deepEqual(await (await get('/api/token-trades', kUser)).json(), { trades: [], open: [], complete: true })
-assert.deepEqual(await (await get('/api/dex/fills?mint=So11111111111111111111111111111111111111112', kUser)).json(), { fills: [] })
-assert.equal((await get('/api/closed')).status, 401)
+for (const gone of ['/api/wallets', '/api/positions', '/api/closed', '/api/holdings', '/api/desk', '/api/feed', '/api/cal', '/api/search?q=hy']) {
+  assert.equal((await get(gone, kUser)).status, 404, `${gone} still answers`)
+}
+assert.equal((await get('/api/hl/candles?coin=BTC&interval=1d')).status, 404)
 
-/* The market relay: public, since the charts work signed out, and nothing reaches the venue that
-   is not a coin and an interval this app knows. */
-const bars = await (await get('/api/hl/candles?coin=BTC&interval=1d&bars=1')).json()
-assert.deepEqual(bars, [{ t: 2, o: 1.5, h: 2, l: 1, c: 1.8, v: 4 }])
-assert.equal((await get('/api/hl/candles?coin=BTC&interval=2d')).status, 400)
-assert.equal((await get('/api/hl/candles?coin=BTC%26x%3D1&interval=1d')).status, 400)
-// a well-formed name that is not listed is refused too — every new name would be an upstream call
-assert.equal((await get('/api/hl/candles?coin=FAKECOIN&interval=1d')).status, 400)
-assert.equal((await get('/api/hl/candles?coin=PAXG&interval=1d')).status, 200)
-assert.deepEqual(await (await get('/api/hl/mids')).json(), { BTC: 100000, PAXG: 2400 })
-assert.deepEqual(await (await get('/api/hl/ctx?coin=BTC')).json(), { funding: 0.00001, openInterest: 10, dayVolume: 1000, prevDayPx: 99000, mark: 100000 })
-assert.equal((await get('/api/hl/ctx?coin=NOPE')).status, 404)
-// a perp off the desk's list charts too, once the venue's own listing says it exists
-assert.equal((await get('/api/hl/candles?coin=HYPE&interval=1h')).status, 200)
-assert.equal((await get('/api/hl/candles?coin=NOTLISTED&interval=1h')).status, 400)
-
-/* Search: the book's perps and DexScreener's tokens, signed in only. */
-assert.equal((await get('/api/search?q=hy')).status, 401)
-const sr = await (await get('/api/search?q=hy', kUser)).json()
-assert.deepEqual(sr.perps, ['HYPE'])
-assert.deepEqual(sr.tokens.map((t: any) => t.symbol), ['HYPEDOG'])
-// a DEX pool's bars: well-formed pools on chartable networks only, weeks built from days
-assert.equal((await get('/api/dex/candles?network=solana&pool=../x&interval=1h', kUser)).status, 400)
-assert.equal((await get('/api/dex/candles?network=tron&pool=' + DEXPOOL + '&interval=1h', kUser)).status, 400)
-const dbars = await (await get('/api/dex/candles?network=solana&pool=' + DEXPOOL + '&interval=1h', kUser)).json()
-assert.deepEqual(dbars.map((b: any) => b.c), [1.5, 2.5])
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 
 /* kUser's session, rather than one more account: the signup limiter is deliberately tight and this

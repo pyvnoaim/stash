@@ -1,13 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { HOTKEYS } from './keys.ts'
-import { DIALS, dialsOf, INTERVALS, type Dials, type Interval } from './market.ts'
 import { isRepeat, nextAfter, parseList, today, type Parsed, type Repeat } from './parse.ts'
 
-export type MarketPin = { id: string, label: string, mint?: string }
-/** A perp's id or a DEX pool's — the two shapes assetById can turn back into a market. */
-const PIN_ID = /^(?:(?:[a-z]{1,10}:)?[A-Za-z0-9]{1,20}USDT|dex:[a-z]+:(?:[1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40}))$/
-const MINT_ID = /^(?:[1-9A-HJ-NP-Za-km-z]{32,44}|0x[0-9a-fA-F]{40})$/
-export const MAX_PINS = 30
 
 export type ItemType = 'task' | 'idea' | 'note'
 export type Theme = 'auto' | 'light' | 'dark'
@@ -101,152 +95,8 @@ export interface Sub {
   cycle: Cycle
   /** The next charge/payday, 'YYYY-MM-DD', or null if you haven't dated it. */
   due: string | null
-}
-
-/**
- * A Markets setup you asked to be told about. The levels are a snapshot taken when you saved it —
- * the entry sits on a moving average that walks every bar, and a target that moved under you is not
- * the trade you agreed to. `label` is copied in so the bell never has to look the asset up.
- */
-export interface Watch {
-  id: string
-  /** An ASSETS id from market.ts, e.g. 'BTCUSDT'. */
-  asset: string
-  label: string
-  /**
-   * Which horizon produced it — the HORIZONS label, 'Investing' or 'Trading'. The two disagree
-   * often and read different timeframes, so a daily setup and an hourly one on the same asset in
-   * the same direction are two trades, not one, and neither may quietly overwrite the other.
-   */
-  horizon: string
-  /**
-   * Which strategy actually produced it — the HORIZONS `strategy` name, e.g. 'VWAP pull-back'. The
-   * horizon above only says which lane; it does not say which rule, and those stopped being the
-   * same thing when the two horizons got their own strategies (see strategyPlan in market.ts).
-   *
-   * Optional, and deliberately not backfilled: every row saved before that change was made under
-   * the old shared swing rule, and there is no honest way to relabel it as something it wasn't. The
-   * Record groups on this where it exists and on the horizon where it doesn't, so the old trades
-   * keep their own lane instead of quietly averaging into a rule that never made them.
-   */
-  rule?: string
-  dir: 'long' | 'short'
-  entry: number
-  stop: number
-  target: number
-  ts: number
-  /**
-   * Which bar it was read on — '4h', '1d'. The horizon above says which MA pair, not which candle,
-   * and the two stopped being the same thing the moment the interval picker let you move off the
-   * horizon's default. The server's sweeper needs it to ask the right chart whether the thesis
-   * still holds; absent on every row saved before it existed, and there the horizon's own interval
-   * is the fallback.
-   */
-  interval?: string
-  /**
-   * When a live price was first actually seen at the entry — the window really opening. Absent
-   * until it is, which is what separates a setup that ran from one that never started: a plan
-   * whose entry never came round is not a trade that lost, it is a trade nobody was ever in.
-   */
-  entryAt?: number
-  /**
-   * What you actually put in, in euros, and at what leverage — set only on a setup you took for
-   * real. Absent is the old meaning of every row here: a plan being watched, nothing bought.
-   * Together they are the position's size: `size × lev` is the notional, and the money at risk
-   * between the entry and the stop is what `stakeOf` turns them into. A row without them has no
-   * euros on it at all and reads in R.
-   */
-  size?: number
-  lev?: number
-}
-
-/**
- * A setup that ran its course: its entry was reached, and then one of its two exits was. Kept so
- * the desk can say what the plan would have paid — nothing here was ever a position, and nothing
- * here claims one was.
- */
-export interface Result extends Watch {
-  entryAt: number
-  closedAt: number
-  /** Which level ended it, and the price actually on screen when it did. */
-  level: 'target' | 'stop'
-  exit: number
-  /** Multiples of the risk. The only unit two setups on two different assets compare in. */
-  r: number
-  /**
-   * What the trade really paid, in the exchange's own quote currency, where an exchange closed it
-   * and said so. Not euros and never converted: a venue settles in USDT and this app counts in
-   * euros, so the two are shown side by side rather than added. Absent on every row the app priced
-   * itself — those are `size × lev` against the stop, which is the euro arithmetic `netOf` does.
-   */
-  cash?: number
-  /**
-   * The money over the margin it was put up against — the number a venue prints as ROI, as a
-   * fraction: 2.17 is +217%. Not the price move, which on a leveraged trade is the whole leverage
-   * smaller, and not always the R beside it: an R measured off a resting stop is a share of what
-   * the trade was willing to lose, and this is a share of what it had on the table.
-   *
-   * Only where the venue said what the margin was. A row the app sized itself needs nothing here —
-   * its `size` and `lev` say it outright — and a row filed before this existed has no honest way
-   * back to it, so those simply don't carry one.
-   */
-  roi?: number
-}
-
-/** Whether this row is money you actually have on the table, which is a different sentence. */
-export const isPosition = (w: Pick<Watch, 'size' | 'lev'>) => !!(w.size && w.lev)
-
-/**
- * Whether a finished row was a trade that really happened — one you sized yourself, or one a venue
- * closed and settled. A setup that was only ever watched is neither: it has no size and so no money
- * on it, and a log of what happened is not a log of what would have. The Log shows these and only
- * these; the calendar has held to the same rule already.
- *
- * The id is the third test because an exchange row does not always carry the venue's own figure —
- * the position-diff path files one whenever the history has no matching row — and the id is where
- * the venue already is: those are built as `venue-symbol-when` (see closeWatch's callers in
- * market-page.tsx), while everything the app saves itself is a bare `uid()`, seven characters of
- * base36 that cannot contain a hyphen. Any venue, including one added later, reads as real.
- */
-export const isReal = (r: Pick<Watch, 'id' | 'size' | 'lev'> & { cash?: number }) =>
-  r.cash != null || isPosition(r) || r.id.includes('-')
-
-/** How long a finished setup stays news — the bell's window, and the only reason a watched plan is
- *  kept at all once the Log stopped showing it. */
-export const RESULT_FRESH = 12 * 3600_000
-
-/** How many finished setups are kept. Past a few dozen it is a spreadsheet, not a scoreboard. */
-const KEEP_RESULTS = 50
-
-/**
- * One trade filed twice under two ids.
- *
- * The exchange filer has two ways to a finished trade — a position that vanished from the open
- * book, and the venue's own closed history — and each builds an id out of what its own feed
- * carries. Where a venue stamps its history differently from its book the two ids differ, the
- * id is all the dedupe below can see, and the same trade lands twice: same money, two Rs, because
- * the two paths measure risk off different things (see fileClosed in market-page.tsx).
- *
- * The asset, the side, an hour of each other, and then either of the two things a venue cannot
- * hand two different trades: the same average fill price, or the same settled money. Either alone
- * is enough — the book and the history do not always average an entry the same way, and a row the
- * diff path filed before the history answered carries no money at all.
- *
- * A scratch is not a fingerprint: $0.00 is the one figure two different trades really do share, so
- * the money only identifies a pair when there is some.
- *
- * Both sides have to be the exchange filer's own row, whose id is `venue-symbol-when` (see isReal).
- * A plan you watched and a trade you took on the same asset at the same price *are* two rows, and
- * this must never quietly eat one of them: only the filer writes one close down twice.
- */
-type Filed = { id: string; asset: string; dir: string; entry: number; closedAt: number; cash?: number }
-function twice(a: Filed, b: Filed) {
-  const price = b.entry > 0 && Math.abs(a.entry - b.entry) <= b.entry * 1e-6
-  const money = a.cash != null && a.cash !== 0 && a.cash === b.cash
-  return a.id.includes('-') && b.id.includes('-')
-    && a.asset === b.asset && a.dir === b.dir
-    && Math.abs(a.closedAt - b.closedAt) < 3600_000
-    && (price || money)
+  /** What it cost before the last time the price was changed — so a row can say it went up. */
+  was?: number
 }
 
 /** What to set aside each month to cover it: a €120 yearly abo is €10 a month. The whole point. */
@@ -320,58 +170,9 @@ function cleanDate(v: unknown): string | null {
 const cleanTime = (v: unknown): string | null =>
   typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : null
 
-/**
- * Whether a setup's three levels describe a trade at all: for a long the stop sits under the entry
- * and the target over it, and for a short the other way round. Anything else is not a plan, it is
- * an alarm that is already going off — which is why both the live list and the record are held to
- * it on the way in.
- */
-/**
- * The two numbers that turn a watched plan into a position you're actually in: both there and both
- * above zero, or neither. Half of one — money at no leverage stated, or leverage on no money —
- * would price the trade wrong in euros, and a wrong number is worse here than no number.
- */
-const positionOf = (w: { size?: unknown, lev?: unknown }) => {
-  const size = Number(w.size), lev = Number(w.lev)
-  return isFinite(size) && size > 0 && isFinite(lev) && lev > 0 ? { size, lev } : {}
-}
-
-const liveGeometry = (w: Pick<Watch, 'asset' | 'dir' | 'entry' | 'stop' | 'target'>) =>
-  !!w.asset && [w.entry, w.stop, w.target].every(isFinite)
-  && (w.dir === 'long' ? w.stop < w.entry && w.target > w.entry : w.stop > w.entry && w.target < w.entry)
-
 /** Manual is the drag order the sidebar has always had; the other two are derived on the way past. */
 export const PROJECT_SORTS = ['manual', 'name', 'name-desc', 'edited', 'edited-asc'] as const
 export type ProjectSort = (typeof PROJECT_SORTS)[number]
-
-/** How the Markets chart draws price: a single line, or OHLC candlesticks. */
-export type ChartStyle = 'line' | 'candles'
-
-/**
- * The two colours everything that reads up or down on the chart is painted in — candle bodies and
- * wicks, the volume bars under them, the open gaps behind them, the last-price line. `wick`, where
- * a pair carries one, paints the wicks of both sides instead of the body colour.
- *
- * Five pairs rather than a picker: this is the one choice a desk actually makes, and it is made
- * once. Colourblindness is the reason the setting exists at all — emerald against red is the pair
- * the most common deficiency cannot separate, and Pastel's blue against yellow is the pair no
- * common deficiency can confuse.
- *
- * The monochrome sides are `var(--foreground)`, not literal white: the theme flips, and a white
- * candle on the light theme's white card is a candle you cannot see.
- */
-export const CANDLE_PAIRS = [
-  { id: 'classic', label: 'Classic', up: '#10b981', down: '#ef4444' },
-  { id: 'pastel', label: 'Pastel', up: '#8ecae6', down: '#ffd166' },
-  { id: 'ice', label: 'Ice', up: 'var(--foreground)', down: '#3b82f6', wick: 'var(--foreground)' },
-  { id: 'ink', label: 'Ink', up: '#3b82f6', down: 'var(--foreground)' },
-  { id: 'mono', label: 'Mono', up: 'var(--foreground)', down: 'var(--muted-foreground)' },
-] as const
-export type CandlePair = (typeof CANDLE_PAIRS)[number]['id']
-
-/** The chosen pair, or the one it shipped with — so a document carrying a retired id still draws. */
-export const candlePair = (s: State): { id: CandlePair; label: string; up: string; down: string; wick?: string } =>
-  CANDLE_PAIRS.find((p) => p.id === s.candles) ?? CANDLE_PAIRS[0]
 
 /** Subscriptions view state, kept so it survives leaving the tab. */
 export const SUB_SORTS = ['recent', 'name', 'cost', 'due'] as const
@@ -391,61 +192,21 @@ export interface State {
   /** Parent projects folded shut in the sidebar. */
   collapsed: string[]
   /** Tools switched off in Settings — see `TOOLS`. Off rather than on, so nothing has to be
-   *  written into every existing document for the four of them to keep showing. */
+   *  written into every existing document for them to keep showing. */
   hidden: string[]
-  chart: ChartStyle
-  /** Which colour pair up and down wear — see `CANDLE_PAIRS`, read through `candlePair`. */
-  candles: CandlePair
   /** Only the bindings that were changed; anything missing is the default in `HOTKEYS`. Local,
    *  like the theme — a keyboard is a property of the machine, not of the stash. */
   hotkeys: Record<string, string>
   subSort: SubSort
   /** Which side of Subscriptions is open — expenses or income. */
   subView: 'expense' | 'income'
-  /** Whether Calendar is showing the month or one week. The week is the only view with an hour
-   *  axis, so it is where a timed item finally sits at the time it says. */
-  calView: 'month' | 'week'
-  /** Saved Markets setups the bell watches the live price against. */
-  watches: Watch[]
-  /** The ones that finished, newest first. */
-  results: Result[]
-  /**
-   * Whether everyone else with an account on this server may read how your setups went and what
-   * you are in now — the Desk. Off until you turn it on: a record is yours before it is a
-   * scoreboard. What leaves is the trade and never the money — the size and leverage a position
-   * was taken with stay in this document.
-   */
-  desk: boolean
-  /** Which asset the Markets desk is on. Lives here so a mover tile or an alert can open the desk
-   *  already showing the right thing — and so it survives a reload. Validated by the page, which
-   *  owns the asset table and falls back to Bitcoin for an id it doesn't recognise. */
-  marketAsset: string
-  /** Which horizon the desk reads on — a HORIZONS key. Here rather than in the page's own state for
-   *  the same reason as the asset: it is a standing preference, not a thing to pick again on every
-   *  reload, and the two horizons give genuinely different verdicts. Trading is the default. */
-  marketHorizon: 'long' | 'short'
-  /** Which bar the desk is reading, and which preset it is in. Here for a third reason on top of
-   *  the two above: the push server reads them. The scan behind a notification is the desk's own
-   *  read, and while these lived in the page it could only guess at the horizon's default — so the
-   *  phone told you about an hourly setup while the screen you had been staring at all day was the
-   *  15m one. A picker whose answer only exists in a tab is a picker a shut phone cannot honour. */
-  marketInterval: Interval
-  marketPreset: 'standard' | 'orb'
-  /** The markets the watchlist carries under the four it always shows — perps and DEX tokens alike,
-   *  in the order they were pinned. The label and mint ride along so a pinned token keeps its name
-   *  and logo on a device that has never searched for it. */
-  marketPins: MarketPin[]
-  /** What the bell counts as worth interrupting you for. In the document rather than on the device
-   *  because the push server reads it too — a threshold set here has to be the one that decides
-   *  whether a shut phone rings. See Dials in market.ts, which owns the defaults and the ranges. */
-  dials: Dials
 }
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
    and finally the archive. */
 export const VIEWS = {
-  inbox: { name: 'Quick notes', filter: (i: Item) => !i.done && !i.pid },
+  inbox: { name: 'Inbox', filter: (i: Item) => !i.done && !i.pid },
   today: { name: 'Today', filter: (i: Item) => !i.done && !!i.due && i.due <= today(), grouped: true },
   upcoming: { name: 'Upcoming', filter: (i: Item) => !i.done && !!i.due && i.due > today(), grouped: true },
   flagged: { name: 'Flagged', filter: (i: Item) => !i.done && i.flag },
@@ -464,42 +225,35 @@ export type ViewId = keyof typeof VIEWS
 export const isView = (id: string): id is ViewId => id in VIEWS
 
 /** Not filtered lists, so they stay out of VIEWS and App renders each on its own. */
-export const OVERVIEW = 'overview'
-export const CALENDAR = 'calendar'
 export const PDF = 'pdf'
 export const SUBS = 'subs'
-export const MARKET = 'market'
-const PAGES: string[] = [OVERVIEW, CALENDAR, SUBS, MARKET, PDF]
+const PAGES: string[] = [SUBS, PDF]
 export const isPage = (id: string) => PAGES.includes(id)
 
 /**
- * The four that are switched off as easily as on, in the order the sidebar lists them. A stash
- * kept for the shopping is not one that wants a candlestick chart in the corner of it, and four
- * tools nobody opens are four things to read past every time.
+ * The tools, switched off as easily as on, in the order the sidebar lists them: a stash kept for
+ * the shopping does not want a PDF editor in the corner of it.
  *
- * Overview is not among them: it is where the app opens, and a home you can delete is a bug.
- * Names live here rather than beside each icon, so the sidebar and Settings cannot drift apart on
+ * Names live here rather than beside each row, so the sidebar and Settings cannot drift apart on
  * what a thing is called.
  */
 export const TOOLS = [
-  { id: CALENDAR, name: 'Calendar' },
   { id: SUBS, name: 'Subscriptions' },
-  { id: MARKET, name: 'Markets' },
   { id: PDF, name: 'PDF editor' },
 ]
 
-/** Off, not on: a document written before this existed lists none, and shows all four — and a
+/** Off, not on: a document written before this existed lists none, and shows them all — and a
  *  tool added later is on for everyone until they say otherwise, which is the kinder default. */
 export const toolOn = (s: Pick<State, 'hidden'>, id: string) => !s.hidden.includes(id)
 export const setTool = (id: string, on: boolean) => set((s) => ({
   ...s,
   hidden: on ? s.hidden.filter((h) => h !== id) : [...s.hidden, id],
   // switched off while you are standing on it, which is otherwise a page with no way back to it
-  sel: !on && s.sel === id ? OVERVIEW : s.sel,
+  sel: !on && s.sel === id ? 'today' : s.sel,
 }))
 
 /** Everything `sel` is allowed to be, which is also everything the URL hash may name. A tool that
- *  is switched off is not a route, so a bookmark or a stale hash to one lands on Overview. */
+ *  is switched off is not a route, so a bookmark or a stale hash to one lands on Today. */
 export const isRoute = (s: Pick<State, 'projects' | 'hidden'>, id: string) =>
   ((isPage(id) && toolOn(s, id)) || isView(id) || s.projects.some((p) => p.id === id))
 
@@ -525,13 +279,8 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
   v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], hidden: [], chart: 'line', candles: 'classic', hotkeys: {},
-  subSort: 'recent', subView: 'expense', calView: 'month',
-  watches: [], results: [], desk: false,
-  // '1d' is what the desk opened on before the picker was a stored thing — kept, so upgrading does
-  // not silently move everybody's chart
-  marketAsset: 'BTCUSDT', marketHorizon: 'short', marketInterval: '1d', marketPreset: 'standard', marketPins: [],
-  dials: { ...DIALS },
+  projectSort: 'manual', collapsed: [], hidden: [], hotkeys: {},
+  subSort: 'recent', subView: 'expense',
 })
 
 /** How long a deleted item is kept before it goes for good. */
@@ -579,7 +328,7 @@ function cleanItems(list: unknown, projects: Project[]): Item[] {
         editedBy: typeof i.editedBy === 'string' ? i.editedBy.slice(0, 32) : undefined,
         // a name, cut to the length the server lets one be — the same reason as the two above
         who: typeof i.who === 'string' && i.who ? i.who.slice(0, 32) : undefined,
-        // orphans land in Quick notes rather than becoming invisible
+        // orphans land in Inbox rather than becoming invisible
         pid: projects.some((p) => p.id === i.pid) ? i.pid : null,
       }
     })
@@ -641,98 +390,8 @@ export function load(data: unknown): State {
       cost: typeof x.cost === 'number' && isFinite(x.cost) && x.cost >= 0 ? x.cost : 0,
       cycle: (CYCLES as readonly string[]).includes(x.cycle) ? x.cycle : 'monthly',
       due: cleanDate(x.due),
+      ...(typeof x.was === 'number' && isFinite(x.was) && x.was > 0 ? { was: x.was } : {}),
     }))
-
-  /* Gold changed venue: the desk's gold was Binance's XAUT token and is now Bitget's XAUUSDT
-     perpetual, which is the contract the orders are actually placed on (see market.ts). Rows
-     already written name the old symbol, and an id on no list prices at nothing — the alarm never
-     fires, the chart falls back to Bitcoin, and the record's gold rows lose their asset. Same metal
-     a few dollars apart, so they come across rather than being dropped. Harmless once no document
-     mentions XAUT: it is one string comparison on load. */
-  const assetId = (v: unknown) => (String(v ?? '') === 'XAUTUSDT' ? 'XAUUSDT' : String(v ?? ''))
-
-  // a level that isn't a real number can't be compared against a price — the alert would either
-  // never fire or fire forever, so a broken row is dropped rather than kept and half-honoured
-  const wseen = new Set<string>()
-  st.watches = (Array.isArray(st.watches) ? st.watches : [])
-    .filter((w) => w && w.id && !wseen.has(String(w.id)) && wseen.add(String(w.id)))
-    .map((w) => ({
-      id: String(w.id),
-      asset: assetId(w.asset),
-      label: String(w.label || w.asset || 'Setup'),
-      horizon: String(w.horizon ?? ''),
-      // absent stays absent — see Watch.rule. Defaulting it to '' would be harmless, but defaulting
-      // it to a rule name would relabel every pre-strategies row as something that never made it
-      ...(w.rule ? { rule: String(w.rule) } : {}),
-      dir: w.dir === 'short' ? 'short' as const : 'long' as const,
-      entry: Number(w.entry),
-      stop: Number(w.stop),
-      target: Number(w.target),
-      ts: typeof w.ts === 'number' ? w.ts : Date.now(),
-      // checked against the real list: the arm button turns this into a span of bars, and an
-      // interval that isn't one gives NaN — a button that quietly does nothing when pressed
-      ...((INTERVALS as readonly string[]).includes(String(w.interval)) ? { interval: String(w.interval) } : {}),
-      /* killAt was the auto-cancel's deadline, and the sweeper that read it is gone — the desk no
-         longer arms anything at an exchange. Dropped on load rather than carried: a field nothing
-         writes and nothing reads is a field that will be misread eventually. */
-      // undefined rather than 0: the difference between "never opened" and "opened at the epoch"
-      ...(typeof w.entryAt === 'number' && isFinite(w.entryAt) ? { entryAt: w.entryAt } : {}),
-      ...positionOf(w),
-    }))
-    // levels the wrong way round for their side are not a trade, they are an alarm that fires on
-    // every tick forever: a long whose stop sits above its entry is already "stopped out" the
-    // moment it loads. The app can't build one — tradePlan checks the geometry — but a hand-edited
-    // backup can, and this is the boundary that decides what the bell is allowed to shout about.
-    .filter(liveGeometry)
-
-  /* The bare price alarms stood here — a level, a side and nothing else. Nothing reads them now:
-     the bell, the push server and the popover that made them are all gone. An `alarms` array in an
-     already-written document rides through untouched and is read past, the same as a retired dial
-     key; it is a list of levels rather than a secret, so there is nothing here worth a migration. */
-    .slice(0, 100)
-
-  /* The record of the finished ones. Same geometry rule, since these are the same setups one step
-     later — plus the two things only a finished one has: when it ended and what it did. A row
-     whose R is not a number would put NaN in a total and take the whole scoreboard with it. */
-  const rseen = new Set<string>()
-  st.results = (Array.isArray(st.results) ? st.results : [])
-    .filter((r) => r && r.id && !rseen.has(String(r.id)) && rseen.add(String(r.id)))
-    .map((r) => ({
-      id: String(r.id),
-      asset: assetId(r.asset),
-      label: String(r.label || r.asset || 'Setup'),
-      horizon: String(r.horizon ?? ''),
-      ...(r.rule ? { rule: String(r.rule) } : {}), // as on the watch above
-      dir: r.dir === 'short' ? 'short' as const : 'long' as const,
-      entry: Number(r.entry),
-      stop: Number(r.stop),
-      target: Number(r.target),
-      ts: typeof r.ts === 'number' ? r.ts : Date.now(),
-      entryAt: Number(r.entryAt),
-      closedAt: Number(r.closedAt),
-      level: r.level === 'stop' ? 'stop' as const : 'target' as const,
-      exit: Number(r.exit),
-      r: Number(r.r),
-      // the venue's own figure, and zero is a real answer: a scratch is not a missing number
-      ...(typeof r.cash === 'number' && isFinite(r.cash) ? { cash: r.cash } : {}),
-      ...(typeof r.roi === 'number' && isFinite(r.roi) ? { roi: r.roi } : {}),
-      ...positionOf(r),
-    }))
-    /* `> 0` rather than isFinite for the three that cannot be zero: Number(null) and Number('')
-       are both 0, which is finite — a row with no closing time would otherwise load as one that
-       finished in 1970 and sit at the bottom of the record forever. */
-    .filter((r) => liveGeometry(r) && [r.entryAt, r.closedAt, r.exit].every((n) => n > 0)
-      && isFinite(r.r))
-    /* and the same trade under two ids, which is what every record written before closeWatch
-       checked for it already holds — one close, twice, with two different Rs against one lot of
-       money. The newer row wins for no better reason than being first in the list; both name the
-       same trade and the money on them agrees.
-       ponytail: O(n²) over fifty rows, once per load. */
-    .filter((r, i, all) => !all.slice(0, i).some((x) => twice(x, r)))
-    .slice(0, KEEP_RESULTS)
-
-  // publishing is a decision, so only the word yes counts as one — anything else is private
-  st.desk = st.desk === true
 
   /* Before the route check below, which reads it: a document carrying anything but an array here
      would throw on the first `includes` and take the whole load with it. Only real tool ids are
@@ -744,7 +403,6 @@ export function load(data: unknown): State {
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'
   st.collapsed = Array.isArray(st.collapsed) ? st.collapsed.map(String) : []
-  st.chart = st.chart === 'candles' ? 'candles' : 'line'
   /* The one field that has to be actively removed rather than merely stopped being read. `st` is
      `{ ...blank(), ...raw }`, so anything a stored document carries rides through untouched and is
      saved and synced again — which for a retired *credential* means the Twelve Data key would sit
@@ -762,26 +420,6 @@ export function load(data: unknown): State {
   )
   st.subSort = (SUB_SORTS as readonly string[]).includes(st.subSort) ? st.subSort : 'recent'
   st.subView = st.subView === 'income' ? 'income' : 'expense'
-  st.calView = st.calView === 'week' ? 'week' : 'month'
-  st.marketAsset = typeof st.marketAsset === 'string' && st.marketAsset ? assetId(st.marketAsset) : 'BTCUSDT'
-  /* Both retired here rather than coerced, the way apiKey above is. Markets draws one chart now —
-     the Investing horizon and the opening-range preset went with the mode switch — but the fields
-     stay in the document because `server/push.ts` still reads them to decide what to scan. Left
-     alone they would be write-only history: a document last saved on Investing would go on sending
-     alerts off a rule nothing draws, and pinning them from the page would only ever reach people
-     who open the tab. This reaches every document on its first load, once. */
-  st.marketHorizon = 'short'
-  st.marketPreset = 'standard'
-  st.marketInterval = (INTERVALS as readonly string[]).includes(st.marketInterval) ? st.marketInterval : '1d'
-  // a hand-edited or damaged list keeps what is well-formed, once each, and no more than a list holds
-  st.marketPins = (Array.isArray(st.marketPins) ? st.marketPins : [])
-    .filter((p: MarketPin, i: number, all: MarketPin[]) => typeof p?.id === 'string' && PIN_ID.test(p.id)
-      && typeof p.label === 'string' && (p.mint == null || (typeof p.mint === 'string' && MINT_ID.test(p.mint)))
-      && all.findIndex((x) => x?.id === p.id) === i)
-    .slice(0, MAX_PINS)
-    .map((p: MarketPin) => ({ id: p.id, label: p.label.slice(0, 40), ...(p.mint ? { mint: p.mint } : {}) }))
-  // dialsOf owns the ranges: a hand-edited backup cannot set a cost outside them
-  st.dials = dialsOf(st)
   // the bell's silenced alerts, from before there was no bell: an old document sheds them here
   delete (st as Partial<State> & { dismissed?: unknown }).dismissed
   return st
@@ -794,12 +432,12 @@ const read = (raw: string | null): State => {
 }
 
 let state: State = read(localStorage.getItem(KEY))
-/* Open on the Overview dashboard rather than on whatever view was last active — unless the URL
+/* Open on Today rather than on whatever view was last active — unless the URL
    names somewhere, which is what a reload, a bookmark and a pasted link all are. Without this the
    hash was write-only on a cold start: App wrote it on mount and every link into the app landed on
-   Overview instead of where it pointed. The search that rides the hash is App's half. */
+   Today instead of where it pointed. The search that rides the hash is App's half. */
 const booted = readHash().sel
-state = { ...state, sel: isRoute(state, booted) ? booted : OVERVIEW }
+state = { ...state, sel: isRoute(state, booted) ? booted : 'today' }
 
 const listeners = new Set<() => void>()
 
@@ -841,7 +479,7 @@ function commit(next: State) {
      Which is worse than the wasted write. A dirty device pushes instead of pulling, and a push that
      meets another device's write forces its way past the 409 — so the exchange poll, which files
      every closed trade it sees once a minute and finds them all already filed, was enough to make a
-     window left open on Overview overwrite a note just typed on somebody's phone. */
+     window left open overwrite a note just typed on somebody's phone. */
   if (next === state) return
   state = next
   listeners.forEach((fn) => fn())
@@ -948,7 +586,7 @@ export function adoptShared(pid: string, slice: unknown, share?: { by: string, e
       /* It stopped being shared with you, so it leaves this device — the trash included. Their
          rows sitting in your trash would otherwise be their writing in your synced document for
          the rest of the fortnight, and a Restore would file work you can no longer read into your
-         own Quick notes. "Leaving takes nothing with it" has to mean nothing. */
+         own Inbox. "Leaving takes nothing with it" has to mean nothing. */
       return {
         ...s,
         projects: s.projects.filter((p) => !localIds.has(p.id)),
@@ -1048,11 +686,12 @@ export function mergeRemote(mine: State, theirs: unknown): State {
     else items.delete(id)
   }
   return {
+    // `t` first: a field this build no longer names (a retired tool's data) rides through from
+    // their side when ours never had it, so merging on a fresh device cannot drop it from the server
+    ...t,
     ...mine,
     projects: [...byId(mine.projects, t.projects).values()],
     subs: [...byId(mine.subs, t.subs).values()],
-    watches: [...byId(mine.watches, t.watches).values()],
-    results: [...byId(mine.results, t.results).values()],
     items: [...items.values()],
     trash: [...trash.values()],
   }
@@ -1117,7 +756,7 @@ export const useStash = () => useSyncExternalStore(subscribe, getState)
 export const project = (s: State, id: string | null) => s.projects.find((p) => p.id === id)
 
 const PAGE_NAMES: Record<string, string> = {
-  [OVERVIEW]: 'Overview', [CALENDAR]: 'Calendar', [PDF]: 'PDF', [SUBS]: 'Subscriptions', [MARKET]: 'Markets',
+  [PDF]: 'PDF', [SUBS]: 'Subscriptions',
 }
 
 export const viewName = (s: State) =>
@@ -1329,8 +968,6 @@ export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
 export const select = (sel: string) => set((s) => ({ ...s, sel }))
 export const focus = (focus: string | null) => set((s) => ({ ...s, focus }))
 export const setTheme = (theme: Theme) => set((s) => ({ ...s, theme }))
-export const setChart = (chart: ChartStyle) => set((s) => ({ ...s, chart }))
-export const setCandles = (candles: CandlePair) => set((s) => ({ ...s, candles }))
 export const setSubSort = (subSort: SubSort) => set((s) => ({ ...s, subSort }))
 
 /** The binding in force for one action: yours if you set one, otherwise the one it shipped with. */
@@ -1341,105 +978,7 @@ export const setHotkey = (id: string, combo: string) =>
 /** Back to the shipped keys by forgetting yours, rather than by writing them out again. */
 export const resetHotkeys = () => set((s) => ({ ...s, hotkeys: {} }))
 
-/** One saved setup per asset, direction and horizon — re-saving replaces that one, and leaves the
- *  other horizon's alone: an hourly long and a daily long on the same coin are two different trades. */
-export const addWatch = (w: Watch) =>
-  set((s) => ({
-    ...s,
-    watches: [w, ...s.watches.filter((x) => !(x.asset === w.asset && x.dir === w.dir && x.horizon === w.horizon))],
-  }))
-/* One field, set to a value — and not set at all when it already holds it. The ORB preset pins the
-   interval to 15m from an effect that runs on every mount, which unguarded was a write to disk and
-   a dirty document per mount, for a setting nobody touched. `commit` drops what comes back as `s`. */
-const field = <K extends keyof State>(k: K) => (v: State[K]) =>
-  set((s) => (s[k] === v ? s : { ...s, [k]: v }))
-
-/** Pins a market, or unpins it if it is pinned already. */
-export const togglePin = (pin: MarketPin) => set((s) => {
-  const has = s.marketPins.some((p) => p.id === pin.id)
-  if (!has && s.marketPins.length >= MAX_PINS) return s
-  return { ...s, marketPins: has ? s.marketPins.filter((p) => p.id !== pin.id) : [...s.marketPins, pin] }
-})
-
-/** Which asset the Markets desk opens on — set by a mover tile or ⌘K before navigating. */
-export const setMarketAsset = field('marketAsset')
-export const setMarketInterval = field('marketInterval')
-/* No setters for marketHorizon or marketPreset: `load` pins both, because the page they were the
-   controls for draws one chart now. The fields stay in the document for the MCP tools to read. */
-/** One dial, clamped to what it may be — the same guard a loaded document goes through. */
-export const setDial = (k: keyof Dials, v: number) =>
-  set((s) => ({ ...s, dials: dialsOf({ dials: { ...s.dials, [k]: v } }) }))
-export const resetDials = () => set((s) => ({ ...s, dials: { ...DIALS } }))
-export const removeWatch = (id: string) => set((s) => ({ ...s, watches: s.watches.filter((w) => w.id !== id) }))
-
-/** A live price was seen at the entry: the window really opened, once, at this moment. */
-export const openWatch = (id: string, at: number) => set((s) => ({
-  ...s,
-  watches: s.watches.map((w) => (w.id === id && !w.entryAt ? { ...w, entryAt: at } : w)),
-}))
-
-/**
- * It ran to its target or its stop: off the live list, into the record. Idempotent on the id, so
- * two ticks landing on the same crossing file it once — and on the trade itself, so the exchange
- * filer's two paths cannot write one close twice under two ids (see `twice`).
- *
- * With one exception, below: a row already on file that never got the venue's money takes it when
- * it finally arrives.
- */
-export const closeWatch = (r: Result, at = Date.now()) => set((s) => {
-  const filed = s.results.findIndex((x) => x.id === r.id || twice(x, r))
-  /**
-   * Already here — and the second telling is worth more than the first exactly once: when it
-   * carries the venue's settled money and the row on file does not.
-   *
-   * That row is the position-diff's work. It files the moment a symbol goes missing from the open
-   * book, and where the venue's history has not caught up with the close yet there is nothing to
-   * price it by: no `cash`, an exit that is only the last mark this app happened to see, and an R
-   * off whatever risk could be reconstructed — a liquidation price, or the leverage the account is
-   * set to today. The history row that turns up on a later poll is better sourced on every one of
-   * those: the venue's own average close, its own realised money, and that money over the margin
-   * the position really put up. So it replaces the row wholesale rather than lending it a figure.
-   *
-   * Only ever in that direction. Two rows that both have money, or both lack it, are the same
-   * trade told twice and the first telling stands — which is the dedupe this has always been, and
-   * what stops two ticks racing on one close from rewriting each other. A hand-entered position
-   * cannot be reached from here at all: `twice` and the id both need the filer's `venue-symbol-when`
-   * on either side, and what you type is a bare `uid()`.
-   */
-  if (filed >= 0) {
-    /* …and the same exception for the return on the margin, which arrives the same way and just as
-       late: a row filed with the venue's money but no margin behind it yet is a card that can only
-       say what the price did. Either figure turning up where the row on file has none is the
-       history catching up, and the history row is better sourced on every field. */
-    const better = (r.cash != null && s.results[filed].cash == null)
-      || (r.roi != null && s.results[filed].roi == null)
-    if (!better) return s
-    const results = s.results.slice()
-    results[filed] = r
-    return { ...s, results }
-  }
-  return {
-    ...s,
-    watches: s.watches.filter((w) => w.id !== r.id),
-    /* A plan that was only ever watched is news for half a day — the bell says how it went — and
-       after that nothing reads it: the Log shows real trades only. Kept in the list past that, it
-       would spend the fifty on trades nobody took and push the real ones out the bottom. So the cap
-       is spent on real rows, and a watched one holds a place only while it is still being said. */
-    results: [r, ...s.results].filter((x) => isReal(x) || at - x.closedAt < RESULT_FRESH).slice(0, KEEP_RESULTS),
-  }
-})
-
-/** Returns what it cleared so the caller can offer an undo — the same as every other delete here. */
-export function clearResults() {
-  const gone = state.results
-  if (!gone.length) return null
-  set((s) => ({ ...s, results: [] }))
-  return { n: gone.length, undo: () => set((s) => ({ ...s, results: gone.concat(s.results).slice(0, KEEP_RESULTS) })) }
-}
-
-export const setDesk = (desk: boolean) => set((s) => ({ ...s, desk }))
 export const setSubView = (subView: 'expense' | 'income') => set((s) => ({ ...s, subView }))
-export const setCalView = (calView: 'month' | 'week') => set((s) => ({ ...s, calView }))
 export const setProjectSort = (projectSort: ProjectSort) => set((s) => ({ ...s, projectSort }))
 
 /**
@@ -1485,7 +1024,7 @@ export function addShared(search: string): string | null {
   if (!lines.length) return null
   addItems(lines.map((l) => itemOf(l)))
   // land where it went, or it reads as nothing having happened: the project the line named, or
-  // Quick notes, which is where anything unfiled goes
+  // Inbox, which is where anything unfiled goes
   return lines.length === 1 && lines[0].pid ? lines[0].pid : 'inbox'
 }
 
@@ -1502,7 +1041,7 @@ export function toggleDone(id: string) {
         : i))
 
     // A repeating task doesn't end when you finish it: the one you ticked stays finished, so it
-    // still counts on Overview, and a fresh one takes its place at the same spot in the list.
+    // still counts as finished, and a fresh one takes its place at the same spot in the list.
     // ponytail: reopening the finished one leaves the new one behind — untick, then delete it.
     if (closing && it.repeat) {
       // step from the finished one's own date so the anchor day survives a late completion, but
@@ -1554,7 +1093,7 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
 /**
  * Put deleted rows back on the list. They go to the end — the trash keeps the index nothing else
  * does, and after a fortnight the row it sat above may not be there any more. A project that was
- * deleted in the meantime is not one to file into, so those land in Quick notes, the same landing
+ * deleted in the meantime is not one to file into, so those land in Inbox, the same landing
  * `load` gives an orphan. Read-only shares are refused the same way every other write is.
  */
 export function restoreTrash(ids: string[]) {
@@ -1714,7 +1253,7 @@ export const patchProject = (id: string, p: Partial<Project>) =>
   }))
 
 /**
- * The project goes, its items don't — they fall back to Quick notes, same as an orphan on load.
+ * The project goes, its items don't — they fall back to Inbox, same as an orphan on load.
  * Its sub-projects don't go either: they come up a level rather than vanishing with their parent.
  */
 export const removeProject = (id: string) =>

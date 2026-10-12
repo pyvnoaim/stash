@@ -8,8 +8,9 @@ import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { blocksOf, headingClass, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
-import { patch, select, useStash, type Item } from '@/lib/store'
+import { Backlinks } from '@/components/inspector'
+import { blocksOf, headingClass, promoteBox, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
+import { addItem, itemOf, patch, readOnly, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 
 /**
@@ -309,7 +310,7 @@ export function NotePage({ it, onBack, onOpen }: {
            step left when a block opens, on phones only, and a page stuck zoomed is worse. */
         className={cn(
           'block w-full resize-none overflow-hidden bg-transparent font-mono outline-none',
-          level ? headingClass(level) : 'text-base leading-relaxed md:text-sm',
+          level ? headingClass(level) : 'text-base leading-[1.7]',
         )}
       />
       {bar && (
@@ -382,11 +383,22 @@ export function NotePage({ it, onBack, onOpen }: {
            stands exactly as tall as the textarea that opens in its place — 1.2em was shorter than
            a line of text, so the gap you saw was part blank line and part the leading of the
            blocks around it, and clicking the middle of an empty line landed in one of them. */
-        className={cn('cursor-text', !b.text.trim() && 'h-[1.625em] text-base md:text-sm')}
+        className={cn('cursor-text [&>div]:text-base [&>div]:leading-[1.7]', !b.text.trim() && 'h-[1.7em] text-base')}
       >
         <Markdown
           text={b.text}
           onToggle={(l) => patch(it.id, { note: toggleBox(it.note, b.from + l) })}
+          /* The line becomes a link and a task of the same words lands beside the note, in its
+             project — so the two point at each other from the start.
+             ponytail: ticking one does not tick the other; they are a note and a task, not one row. */
+          // not in a project you may only read: both writes would be refused, and said to have worked
+          onPromote={readOnly(s, it.pid) ? undefined : (l) => {
+            const made = promoteBox(it.note, b.from + l)
+            if (!made) return
+            addItem(itemOf({ text: made.title, tags: [], pid: it.pid, flag: false, due: null, at: null, repeat: null }))
+            patch(it.id, { note: made.note })
+            toast(`Task added${filed ? ` to ${filed.name}` : ''}`)
+          }}
           /* A link lands on whichever it named: a row opens its own page, a project is simply
              selected — there is no page of a project to open, the list is it. */
           links={{
@@ -402,18 +414,26 @@ export function NotePage({ it, onBack, onOpen }: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-        <Button variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to list">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3 md:px-5">
+        {/* back says where back is: the project this is filed under, wearing its dot */}
+        <Button variant="ghost" size="sm" onClick={onBack} aria-label="Back to list" className="text-muted-foreground">
           <ArrowLeft />
+          {filed && <span className="bg-muted-foreground size-2 rounded-full" style={filed.color ? { backgroundColor: filed.color } : undefined} />}
+          {filed?.name ?? 'Back'}
         </Button>
-        <span className="text-muted-foreground font-heading text-sm tracking-wide uppercase select-none">Page</span>
         {/* Who else is in the project this note is filed under — and lit, if they are in it now.
             The list header has carried these since sharing existed; this page is where a document
             is actually read and written, which makes it the one place the question is urgent. */}
         {filed && <Faces p={filed} />}
+        <span className="flex-1" />
+        {it.editedAt && (
+          <span className="text-muted-foreground font-mono text-[11px]">
+            Edited {new Date(it.editedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+          </span>
+        )}
       </div>
 
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-3 px-6 py-6">
+      <div className="mx-auto flex min-h-0 w-full max-w-[680px] flex-1 flex-col gap-4 px-6 pt-10 pb-6 md:pt-14">
         {/* A textarea, not an input: a title long enough to matter — a person, a company and what
             was done for them — ran off the right edge of a single line and took its own beginning
             with it as you typed. It wraps and grows instead. Enter is still not a newline; a title
@@ -427,8 +447,14 @@ export function NotePage({ it, onBack, onOpen }: {
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); open(blocks[0]) } }}
           placeholder="Untitled"
           aria-label="Title"
-          className="placeholder:text-muted-foreground shrink-0 resize-none overflow-hidden bg-transparent text-2xl font-medium outline-none"
+          className="placeholder:text-muted-foreground shrink-0 resize-none overflow-hidden bg-transparent text-[34px] leading-[1.15] font-semibold tracking-[-0.025em] outline-none"
         />
+        {/* what kind of thing it is and what it is tagged, said once under the title */}
+        <div className="-mt-1 flex shrink-0 flex-wrap gap-1.5 font-mono text-xs">
+          {[it.type, ...it.tags.map((t) => '#' + t)].map((c) => (
+            <span key={c} className="bg-secondary rounded-md px-2 py-0.5">{c}</span>
+          ))}
+        </div>
         {/* Everything rendered, all the time — except the one piece the cursor is in, which shows
             its own source. That is the whole page: reading a note and working on it stopped being
             two modes with a button between them.
@@ -470,6 +496,10 @@ export function NotePage({ it, onBack, onOpen }: {
               Write… markdown supported
             </button>
           )}
+          {/* the other half of every [[link]]: what points here, at the foot of what it points at */}
+          <div className="[&_label]:text-muted-foreground mt-10 border-t pt-5 empty:hidden [&_label]:font-mono [&_label]:text-[11px] [&_label]:font-medium [&_label]:tracking-[0.06em] [&_label]:uppercase">
+            <Backlinks it={it} onOpen={onOpen} />
+          </div>
         </div>
       </div>
     </div>

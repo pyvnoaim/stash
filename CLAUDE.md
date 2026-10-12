@@ -27,7 +27,7 @@ Which part to move:
 
 The version is the only way to tell what a deployment is actually running. `vite.config.ts` reads
 it out of `package.json` into `__BUILD__`, and Settings → About shows it beside `__BUILT_AT__`
-(`settings-dialog.tsx:287`). Portainer strips `.git` from its clone before building, so there is
+(`settings-dialog.tsx:352`). Portainer strips `.git` from its clone before building, so there is
 no commit sha on the deployed side — `__BUILD__` is the whole story. Leave the version alone and
 two different builds both claim to be the same one, and the only thing separating them is a
 timestamp.

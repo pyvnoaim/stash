@@ -625,7 +625,7 @@ export default function Editor({ visible }: { visible: boolean }) {
         </Button>
       </div>
 
-      <div className="bg-muted/40 flex-1 overflow-auto p-6">
+      <div className="bg-muted flex-1 overflow-auto p-6">
         <div className="relative mx-auto w-fit">
           {/* nothing drawn yet: hold the space with a sheet rather than collapsing to a line
               and then jumping the page open once the first render lands */}

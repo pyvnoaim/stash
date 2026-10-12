@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, ChartColumn, CheckCheck, ClipboardCopy,
+  ArrowRight, CalendarClock, CalendarDays, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
   Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
@@ -12,11 +12,9 @@ import {
 import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
-  CALENDAR, clearDone, getState, isPage, MARKET, openIn, OVERVIEW, patch, PDF, project, replaceAll, select,
-  setMarketAsset, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
+  clearDone, getState, isPage, openIn, patch, PDF, project, replaceAll, select,
+  SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
-import { ASSETS, assetById, dexAsset, fmtPrice, hlCoin, perpAsset, remember, type Asset } from '@/lib/market'
-import { TokenIcon } from '@/components/holdings'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
    VIEWS, so a view added there and forgotten here rendered `<undefined />` — which is not a missing
@@ -33,9 +31,6 @@ const VIEW_ICONS: Record<ViewId, React.ElementType> = {
 }
 
 const PAGES = [
-  { id: OVERVIEW, name: 'Overview', icon: ChartColumn },
-  { id: MARKET, name: 'Markets', icon: CandlestickChart },
-  { id: CALENDAR, name: 'Calendar', icon: CalendarRange },
   { id: PDF, name: 'PDF editor', icon: FileText },
   { id: SUBS, name: 'Subscriptions', icon: Wallet },
 ]
@@ -110,43 +105,6 @@ export function CommandPalette({
   const [q, setQ] = useState('')
   useEffect(() => { if (!open) setQ('') }, [open])
 
-  /* The money side of the search: what the wallet holds, fetched as the palette opens, and the
-     markets — the book's perps and DEX tokens — asked a quarter second after the last key. Both
-     are the server's; signed out they are simply absent and the palette is what it always was. */
-  type Held = { mint: string, symbol: string, name: string, amount: number, value: number, change: number | null, pool: string | null }
-  type Tok = { network: string, pool: string, mint: string, symbol: string, name: string, price: number, liquidity: number }
-  const [held, setHeld] = useState<Held[]>([])
-  type Pos = { symbol: string, side: 'long' | 'short', lev: number | null, pnl: number | null, value: number | null, entry: number, mark: number | null }
-  const [pos, setPos] = useState<Pos[]>([])
-  const [market, setMarket] = useState<{ perps: string[], tokens: Tok[] }>({ perps: [], tokens: [] })
-  useEffect(() => {
-    if (!open) return
-    fetch('/api/holdings').then((r) => (r.ok ? r.json() : null)).then((j) => setHeld(j?.holdings ?? [])).catch(() => {})
-    fetch('/api/positions').then((r) => (r.ok ? r.json() : null)).then((j) => setPos(j?.positions ?? [])).catch(() => {})
-  }, [open])
-  useEffect(() => {
-    const k = q.trim()
-    if (!open || k.length < 2) { setMarket({ perps: [], tokens: [] }); return }
-    let on = true
-    const h = setTimeout(() => {
-      fetch(`/api/search?q=${encodeURIComponent(k)}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => { if (on && j) setMarket({ perps: j.perps ?? [], tokens: j.tokens ?? [] }) })
-        .catch(() => {})
-    }, 250)
-    return () => { on = false; clearTimeout(h) }
-  }, [q, open])
-  const needle = q.trim().toLowerCase()
-  // with nothing typed, the whole wallet — the palette opens on your money, then the places to go
-  const heldHits = needle ? held.filter((h) => `${h.symbol} ${h.name}`.toLowerCase().includes(needle)) : held
-  const posHits = needle ? pos.filter((p) => p.symbol.toLowerCase().includes(needle)) : pos
-  const signedUsd = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(n).toFixed(2)}`
-  const tone = (n: number | null | undefined) => (n == null ? 'text-muted-foreground' : n >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')
-  const listedHits = needle.length >= 2 ? ASSETS.filter((a) => `${a.label} ${a.id}`.toLowerCase().includes(needle)) : []
-  const perpHits = market.perps.filter((c) => !ASSETS.some((a) => hlCoin(a.id) === c))
-  /** Onto the Markets desk, showing this. */
-  const chart = (a: Asset) => { remember(a); setMarketAsset(a.id); select(MARKET) }
-
   // two letters in, because one letter matches half of everything and the list is not the point.
   // memoised so an unrelated re-render doesn't rescan every item building a hay string apiece.
   const found = useMemo(() => {
@@ -177,58 +135,15 @@ export function CommandPalette({
       open={open}
       onOpenChange={onOpenChange}
       title="Search"
-      description="Find an item, a project, a market or a token; run a command"
+      description="Find an item or a project; run a command"
       // room for a row's two lines and the numbers beside them
       className="sm:max-w-xl"
     >
       {/* CommandDialog drops children straight into DialogContent, so the cmdk root is ours to add */}
       <Command>
-        <CommandInput value={q} onValueChange={setQ} placeholder="Search notes, projects, markets, tokens…" />
+        <CommandInput value={q} onValueChange={setQ} placeholder="Search items and projects, or run a command…" />
         <CommandList className="max-h-[60vh]">
           <CommandEmpty>Nothing matches that.</CommandEmpty>
-
-          {/* Your money first: what is open on the venue and what the wallet holds, each with the
-              number that says how it is doing. cmdk scores on the value, and a server's answer need
-              not contain the typed letters — so the query rides in each value. */}
-          {(posHits.length > 0 || heldHits.length > 0) && (
-            <>
-              <CommandGroup heading="Your money">
-                {posHits.map((p) => (
-                  <CommandItem key={`pos-${p.symbol}`} value={`position ${p.symbol} ${p.side} ${q}`}
-                    onSelect={run(() => { const a = assetById(p.symbol); if (a) chart(a); else select(MARKET) })}>
-                    {assetById(p.symbol)?.logo
-                      ? <img src={assetById(p.symbol)!.logo} alt="" className="size-7 shrink-0 rounded-full" />
-                      : <CandlestickChart />}
-                    <span className="flex min-w-0 flex-col">
-                      <span>{p.symbol.replace(/USDT$/, '')} <span className={cn('text-xs uppercase', p.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>{p.side}{p.lev ? ` ${p.lev}×` : ''}</span></span>
-                      <span className="text-muted-foreground text-xs tabular-nums">from {fmtPrice(p.entry)}{p.mark != null && ` · now ${fmtPrice(p.mark)}`}</span>
-                    </span>
-                    <span className="ml-auto flex flex-col items-end text-xs tabular-nums">
-                      {p.value != null && <span>${p.value.toFixed(2)}</span>}
-                      {p.pnl != null && <span className={tone(p.pnl)}>{signedUsd(p.pnl)}</span>}
-                    </span>
-                  </CommandItem>
-                ))}
-                {heldHits.map((h) => (
-                  <CommandItem key={h.mint} value={`wallet ${h.symbol} ${h.name} ${q}`}
-                    onSelect={run(() => (h.pool
-                      ? chart(dexAsset({ network: 'solana', pool: h.pool, symbol: h.symbol, mint: h.mint }))
-                      : select(MARKET)))}>
-                    <TokenIcon mint={h.mint} symbol={h.symbol} className="size-7" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{h.symbol}</span>
-                      <span className="text-muted-foreground truncate text-xs tabular-nums">{h.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} {h.symbol} · in your wallet</span>
-                    </span>
-                    <span className="ml-auto flex flex-col items-end text-xs tabular-nums">
-                      <span>${h.value.toFixed(2)}</span>
-                      {h.change != null && <span className={tone(h.change)}>{h.change >= 0 ? '+' : ''}{h.change.toFixed(2)}% 24h</span>}
-                    </span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-              <CommandSeparator />
-            </>
-          )}
 
           {/* a tool switched off is not offered here either — hiding it in one list and leaving it
               findable in the other is the same as not hiding it */}
@@ -279,37 +194,6 @@ export function CommandPalette({
               <span>New project</span>
             </CommandItem>
           </CommandGroup>
-
-          {(listedHits.length > 0 || perpHits.length > 0 || market.tokens.length > 0) && (
-            <>
-              <CommandSeparator />
-              <CommandGroup heading="Markets">
-                {listedHits.map((a) => (
-                  <CommandItem key={a.id} value={`market ${a.label} ${a.id} ${q}`} onSelect={run(() => chart(a))}>
-                    <CandlestickChart />
-                    <span>{a.label}</span>
-                    <CommandShortcut>perp</CommandShortcut>
-                  </CommandItem>
-                ))}
-                {perpHits.map((c) => (
-                  <CommandItem key={c} value={`market perp ${c} ${q}`} onSelect={run(() => chart(perpAsset(c)))}>
-                    <CandlestickChart />
-                    <span>{c}</span>
-                    <CommandShortcut>perp · Hyperliquid</CommandShortcut>
-                  </CommandItem>
-                ))}
-                {market.tokens.map((t) => (
-                  <CommandItem key={`${t.network}:${t.pool}`} value={`market token ${t.symbol} ${t.name} ${t.network} ${q}`}
-                    onSelect={run(() => chart(dexAsset(t)))}>
-                    <TokenIcon mint={t.mint} symbol={t.symbol} className="size-5" />
-                    <span>{t.symbol}</span>
-                    <span className="text-muted-foreground truncate text-xs">{t.name}</span>
-                    <CommandShortcut className="tabular-nums">{fmtPrice(t.price)} · {t.network}</CommandShortcut>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            </>
-          )}
 
           {found.items.length > 0 && (
             <>
@@ -374,7 +258,7 @@ export function CommandPalette({
                 {picked.some((i) => i.pid) && (
                   <CommandItem value="move to quick notes" onSelect={run(each({ pid: null }))}>
                     <Inbox />
-                    <span>Move to Quick notes</span>
+                    <span>Move to Inbox</span>
                   </CommandItem>
                 )}
               </CommandGroup>

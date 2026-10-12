@@ -7,7 +7,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Money coming in, wherever it is shown. Overview and Subscriptions are the same numbers read at
+ * Money coming in, wherever it is shown. Every figure on Subscriptions is the same number read at
  * two distances, so the green that means "yours" has to be one string, not two that drift.
  * Anything negative takes `text-destructive`, which the theme already owns.
  */

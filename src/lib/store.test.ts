@@ -11,8 +11,8 @@ Object.assign(globalThis, {
 const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
-  toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge, addWatch, removeWatch,
-  openWatch, closeWatch, clearResults, tagsFor,
+  toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge,
+  tagsFor,
   readHash, emptyTrash, restoreTrash, restoreItem,
   replaceAll,
 } = await import('./store.ts')
@@ -91,7 +91,7 @@ assert.equal(typeof loose.ts, 'number')
 assert.equal(loose.editedAt, null)
 assert.equal(load({ items: [{ id: 'x', editedAt: 5 }] }).items[0].editedAt, 5)
 
-// an item pointing at a project that isn't there lands in Quick notes instead of going invisible
+// an item pointing at a project that isn't there lands in Inbox instead of going invisible
 const orphans = load({
   projects: [{ id: 'a', name: 'Kova' }],
   items: [{ id: '1', pid: 'a' }, { id: '2', pid: 'gone' }],
@@ -104,7 +104,7 @@ assert.equal(load({ items: [{ id: '1' }, { text: 'no id' }, null] }).items.lengt
 
 // sel survives only if it still points somewhere
 assert.equal(load({ sel: 'done' }).sel, 'done')
-assert.equal(load({ sel: 'overview' }).sel, 'overview')
+assert.equal(load({ sel: 'overview' }).sel, 'today')   // a page that was retired opens on Today
 assert.equal(load({ sel: 'pdf' }).sel, 'pdf')
 assert.equal(load({ sel: 'a', projects: [{ id: 'a', name: 'Kova' }] }).sel, 'a')
 assert.equal(load({ sel: 'a' }).sel, 'today')
@@ -341,7 +341,7 @@ assert.ok(shared.due)
 assert.equal(addShared('?title=Read+this&text=later&url=https%3A%2F%2Fx.example'), 'inbox')
 assert.deepEqual(getState().items.slice(0, 3).map((i) => i.text),
   ['Read this', 'later', 'https://x.example'])
-// unfiled lands in Quick notes, which is where anything without a project goes
+// unfiled lands in Inbox, which is where anything without a project goes
 assert.equal(getState().items[0].pid, null)
 removeProject(ferry.id)
 
@@ -556,86 +556,8 @@ assert.deepEqual(subs, [
   { id: 'c', kind: 'expense', name: 'Subscription', cost: 0, cycle: 'monthly', due: null },
 ])
 
-// a saved setup is keyed by asset, side AND horizon: saving the hourly one must not quietly delete
-// the daily one, which is a different trade off a different chart
-const mkWatch = (horizon: string, entry: number) =>
-  ({ id: horizon, asset: 'BTCUSDT', label: 'Bitcoin', horizon, dir: 'long' as const, entry, stop: 1, target: 9, ts: 0 })
-addWatch(mkWatch('Investing', 100))
-addWatch(mkWatch('Trading', 50))
-assert.deepEqual(getState().watches.map((w) => w.horizon).sort(), ['Investing', 'Trading'])
-addWatch({ ...mkWatch('Trading', 55), id: 'again' }) // same asset/side/horizon → replaces that one only
-assert.equal(getState().watches.length, 2)
-assert.equal(getState().watches.find((w) => w.horizon === 'Trading')?.entry, 55)
-assert.equal(getState().watches.find((w) => w.horizon === 'Investing')?.entry, 100)
-removeWatch('again')
-assert.deepEqual(getState().watches.map((w) => w.horizon), ['Investing'])
-
-// the desk's asset survives a reload, and junk falls back to Bitcoin rather than an empty picker
-assert.equal(load({ marketAsset: 'ETHUSDT' }).marketAsset, 'ETHUSDT')
-assert.equal(load({ marketAsset: 7 }).marketAsset, 'BTCUSDT')
-assert.equal(load({}).marketAsset, 'BTCUSDT')
-// pins: well-formed ones kept once each, junk and duplicates dropped, a missing list is empty
-const POOLID = 'dex:solana:DEW9dSxQ7Kb3F2ZVyhTAjrc8Ncpg4nuW5sHaeYki98WD'
-assert.deepEqual(load({ marketPins: [
-  { id: 'XRPUSDT', label: 'XRP' }, { id: 'XRPUSDT', label: 'again' }, { id: '../x', label: 'bad' },
-  { id: POOLID, label: 'SI', mint: 'Ae9ypEFSbwdTgpvhm28m1uNxmkjdY4oFrB3nSPtWpump' }, { id: POOLID + 'x', label: 'long' }, 7,
-] }).marketPins, [{ id: 'XRPUSDT', label: 'XRP' }, { id: POOLID, label: 'SI', mint: 'Ae9ypEFSbwdTgpvhm28m1uNxmkjdY4oFrB3nSPtWpump' }])
-assert.deepEqual(load({}).marketPins, [])
-
-// a backup written before horizons existed loads with an empty one rather than being thrown away
-assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 2, stop: 1, target: 3 }] }).watches[0].horizon, '')
-/* The rule that produced a setup survives the load, and its absence survives it too. The sanitiser
-   rebuilds these rows key by key, so a field nobody lists there is silently dropped — which for
-   this one would look like every saved setup coming back unattributed. And absent must stay absent:
-   a row saved before the two horizons got their own strategies came off the old shared swing rule,
-   and defaulting it to a rule name would file a retired rule's trades under a live one's record. */
-assert.equal(
-  load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110, rule: 'VWAP pull-back' }] }).watches[0].rule,
-  'VWAP pull-back',
-)
-assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110 }] }).watches[0].rule, undefined)
-assert.equal(
-  load({ results: [{ id: 'r', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110, entryAt: 1, closedAt: 2, exit: 110, r: 2, rule: 'Trend accumulation' }] }).results[0].rule,
-  'Trend accumulation',
-)
-// a level that isn't a number can't be compared against a price, so the row goes
-assert.deepEqual(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 'soon', stop: 2, target: 3 }] }).watches, [])
-// nor can levels that are the wrong way round for their side: a long stopped above its own entry
-// is "stopped out" the instant it loads, and would have the bell shouting on every poll forever
-const geometry = (dir: string, entry: number, stop: number, target: number) =>
-  load({ watches: [{ id: 'w', asset: 'BTCUSDT', dir, entry, stop, target }] }).watches.length
-assert.equal(geometry('long', 100, 95, 110), 1)   // stop below, target above — a real long
-assert.equal(geometry('long', 100, 105, 110), 0)  // stop above the entry
-assert.equal(geometry('long', 100, 95, 99), 0)    // target below the entry
-assert.equal(geometry('short', 100, 105, 90), 1)  // mirrored, and valid
-assert.equal(geometry('short', 100, 95, 90), 0)   // stop below a short's entry
-
-/* The record is held to it too, and that is not decoration: the exchange filer measures risk as a
-   distance and writes a level, and for a while it wrote the distance — every short it filed had a
-   stop of 5 against an entry of 100 and was dropped here, silently, on the next read. */
-const finGeometry = (dir: string, stop: number) =>
-  load({ results: [{ id: 'r', asset: 'BTCUSDT', dir, entry: 100, stop, target: dir === 'short' ? 90 : 110, entryAt: 1, closedAt: 2, exit: 99, r: 1 }] }).results.length
-assert.equal(finGeometry('short', 105), 1)        // the stop as a price, which is what the field is
-assert.equal(finGeometry('short', 5), 0)          // the distance to it, which is not a short at all
-assert.equal(finGeometry('long', 95), 1)
-
-/* Gold moved from Binance's XAUT token to Bitget's XAUUSDT perpetual, and every row already
-   written names the old one. An id on no asset list prices at nothing — the chart falls back to
-   Bitcoin — so the rows come across on load rather than going quiet. */
-const moved = load({
-  watches: [{ id: 'w', asset: 'XAUTUSDT', entry: 4000, stop: 3900, target: 4200 }],
-  results: [{ id: 'r', asset: 'XAUTUSDT', entry: 4000, stop: 3900, target: 4200, entryAt: 1, closedAt: 2, exit: 4200, r: 2 }],
-  marketAsset: 'XAUTUSDT',
-})
-assert.equal(moved.watches[0].asset, 'XAUUSDT')
-assert.equal(moved.results[0].asset, 'XAUUSDT')
-assert.equal(moved.marketAsset, 'XAUUSDT')
-// and nothing else is touched on the way past
-assert.equal(load({ watches: [{ id: 'w', asset: 'BTCUSDT', entry: 100, stop: 95, target: 110 }] }).watches[0].asset, 'BTCUSDT')
-
 /* The hash is the view and the search over it, one string. It is what a bookmarked search is, so
-   it has to survive being pasted — including pasted broken, where a bad escape reads as no search
-   rather than as a page that throws before it draws. */
+   a malformed escape — anyone can paste one — reads as no search rather than as an exception. */
 assert.deepEqual(readHash('#flagged'), { sel: 'flagged', query: '' })
 assert.deepEqual(readHash('#all?%23audio%20%40kova'), { sel: 'all', query: '#audio @kova' })
 assert.deepEqual(readHash(''), { sel: '', query: '' })
@@ -644,135 +566,9 @@ assert.deepEqual(readHash('#all?'), { sel: 'all', query: '' })
 assert.deepEqual(readHash('#p1?' + encodeURIComponent('why?')), { sel: 'p1', query: 'why?' })
 assert.deepEqual(readHash('#all?%zz'), { sel: 'all', query: '' })
 
-// size and leverage ride the same row and load as a pair: half of one prices the trade wrong, and
-// a wrong number in euros is worse here than no number at all
-const pos = (extra: object) =>
-  load({ watches: [{ id: 'w', asset: 'BTCUSDT', dir: 'long', entry: 100, stop: 95, target: 110, ...extra }] }).watches[0]
-assert.deepEqual([pos({ size: 100, lev: 10 }).size, pos({ size: 100, lev: 10 }).lev], [100, 10])
-assert.equal(pos({ size: 100 }).size, undefined)          // leverage missing → neither survives
-assert.equal(pos({ size: 100, lev: 0 }).size, undefined)  // …nor does a zero, which is no position
-assert.equal(pos({ size: 'lots', lev: 10 }).lev, undefined)
-assert.equal(pos({}).size, undefined)                     // a plain watched plan, as before
-
-/* ---------- the record of how they went ---------- */
-{
-  const w = { ...mkWatch('Trading', 100), id: 'r1', stop: 95, target: 110 }
-  addWatch(w)
-  // the window opening is stamped once: a price sitting at the entry for an hour is one opening,
-  // not sixty, and the second call must not rewrite the first one's time to now
-  openWatch('r1', 1000)
-  openWatch('r1', 2000)
-  assert.equal(getState().watches.find((x) => x.id === 'r1')?.entryAt, 1000)
-
-  const done = { ...w, entryAt: 1000, closedAt: 5000, level: 'target' as const, exit: 110, r: 2 }
-  // the clock is passed rather than read: these rows close in 1970, and the prune below is the one
-  // thing here that cares what time it is
-  closeWatch(done, 5000)
-  // off the live list and into the record — a finished setup must stop being watched, or the bell
-  // shouts about a trade that is over for as long as the price stays past the level
-  assert.equal(getState().watches.some((x) => x.id === 'r1'), false)
-  assert.deepEqual(getState().results.map((r) => r.id), ['r1'])
-  // filed twice (two ticks landing on one crossing) is filed once
-  closeWatch({ ...done, r: 99 }, 5000)
-  assert.equal(getState().results.length, 1)
-  assert.equal(getState().results[0].r, 2)
-
-  /* The same trade the exchange filer reached both ways: one from the open book it saw vanish, one
-     from the venue's history, two ids, two Rs, one lot of money. It is one trade. A second at the
-     same entry an hour and a half later is not the same trade and still files. */
-  clearResults()
-  closeWatch({ ...done, id: 'mexc-SOLUSDT-2026', asset: 'SOLUSDT', r: -1 }, 5000)
-  closeWatch({ ...done, id: 'mexc-SOLUSDT-142.35', asset: 'SOLUSDT', r: -1.31 }, 5000)
-  assert.deepEqual(getState().results.map((r) => r.r), [-1])
-  closeWatch({ ...done, id: 'mexc-SOLUSDT-later', asset: 'SOLUSDT', closedAt: 5000 + 5400_000, r: -1.4 },
-    5000 + 5400_000)
-  assert.equal(getState().results.length, 2)
-  /* The diff files a close the venue's history has not caught up with yet: no money, and an R off
-     a reconstructed risk. The history row that turns up next poll carries both, and takes the
-     row over — the money the whole point, the R and the exit because the venue's are better
-     sourced than a last mark and a leverage. */
-  clearResults()
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -1.02, exit: 141 }, 5000)
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -0.83, exit: 141.4, cash: -17.2 }, 5000)
-  assert.equal(getState().results.length, 1)
-  assert.equal(getState().results[0].cash, -17.2)
-  assert.equal(getState().results[0].r, -0.83)
-  assert.equal(getState().results[0].exit, 141.4)
-  // and only that way round: a second telling with no money leaves the settled row alone
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9 }, 5000)
-  assert.equal(getState().results[0].r, -0.83)
-  // …as does one that has its own, however it differs — that is the same trade told twice, not news
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9, cash: -99 }, 5000)
-  assert.equal(getState().results[0].cash, -17.2)
-  /* The return on the margin arrives the same way and just as late — the money settles a poll
-     before the margin behind it is known — so a row that has the one and not the other is still
-     news, and the card gets its return instead of only the price move. */
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -0.83, cash: -17.2, roi: -0.62 }, 5000)
-  assert.equal(getState().results[0].roi, -0.62)
-  // and once it is on file, a telling with the same figures is the trade told twice again
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', asset: 'SOLUSDT', r: -9, cash: -99, roi: -9 }, 5000)
-  assert.equal(getState().results[0].roi, -0.62)
-  /* Across the two ids as well, which is the arrangement it actually shows up in: the diff and the
-     history stamp a trade differently, so `twice` is what recognises the row to settle. */
-  clearResults()
-  closeWatch({ ...done, id: 'bitget-XRPUSDT-2026', asset: 'XRPUSDT', r: -1.02 }, 5000)
-  closeWatch({ ...done, id: 'bitget-XRPUSDT-142.35', asset: 'XRPUSDT', r: -0.83, cash: -17.2 }, 5000)
-  assert.deepEqual(getState().results.map((r) => [r.id, r.cash]), [['bitget-XRPUSDT-142.35', -17.2]])
-  // a hand-entered position is out of reach of all of it: no hyphen in a uid, so nothing matches it
-  clearResults()
-  closeWatch({ ...done, id: 'r9', size: 100, lev: 10, r: -1 }, 5000)
-  closeWatch({ ...done, id: 'bitget-SOLUSDT-2026', r: -0.83, cash: -17.2 }, 5000)
-  assert.equal(getState().results.length, 2)
-
-  /* Two trades that both settled at nothing are two trades: a scratch is the one figure real ones
-     share, so the money identifies a pair only when there is some of it. */
-  clearResults()
-  closeWatch({ ...done, id: 'mexc-ADAUSDT-a', asset: 'ADAUSDT', entry: 1, cash: 0, r: 0 }, 5000)
-  closeWatch({ ...done, id: 'mexc-ADAUSDT-b', asset: 'ADAUSDT', entry: 2, cash: 0, r: -0.2 }, 5000)
-  assert.equal(getState().results.length, 2)
-  clearResults()
-  closeWatch(done, 5000)
-
-  const cleared = clearResults()
-  assert.equal(cleared?.n, 1)
-  assert.deepEqual(getState().results, [])
-  cleared?.undo()
-  assert.deepEqual(getState().results.map((r) => r.id), ['r1'])
-  clearResults()
-  assert.equal(clearResults(), null)
-
-  /* A watched plan is kept only while the bell still has something to say about it: half a day on,
-     the next close sweeps it out, because the Log it would otherwise sit in shows real trades only
-     (isReal) and there are fifty places in it. One that really ran stays, whatever its age. */
-  closeWatch({ ...done, id: 'mexc-HBARUSDT-1', closedAt: 6000 }, 6000)
-  closeWatch({ ...done, id: 'paper', closedAt: 6000 }, 6000)
-  assert.deepEqual(getState().results.map((r) => r.id).sort(), ['mexc-HBARUSDT-1', 'paper'])
-  const later = 6000 + 13 * 3600_000
-  closeWatch({ ...done, id: 'newer', closedAt: later }, later)
-  assert.deepEqual(getState().results.map((r) => r.id).sort(), ['mexc-HBARUSDT-1', 'newer'])
-  clearResults()
-}
-
-// the same trust boundary the live setups get, plus the two things only a finished one has: a row
-// whose R is not a number would put NaN in the total and take the whole scoreboard with it
-const finished = (over: Record<string, unknown>) => load({
-  results: [{
-    id: 'x', asset: 'BTCUSDT', label: 'Bitcoin', dir: 'long', entry: 100, stop: 95, target: 110,
-    entryAt: 1, closedAt: 2, level: 'target', exit: 110, r: 2, ...over,
-  }],
-}).results
-assert.equal(finished({}).length, 1)
-assert.equal(finished({}) [0].level, 'target')
-assert.equal(finished({ level: 'nonsense' })[0].level, 'target')   // only the two it can be
-assert.equal(finished({ level: 'stop' })[0].level, 'stop')
-assert.deepEqual(finished({ r: 'lots' }), [])
-assert.deepEqual(finished({ closedAt: null }), [])
-assert.deepEqual(finished({ stop: 105 }), [])                      // a long stopped above its entry
-assert.deepEqual(load({ results: 'nope' }).results, [])
-// the venue's own figure survives the load, including a scratch — and junk in that field does not
-assert.equal(finished({ cash: -4.2 })[0].cash, -4.2)
-assert.equal(finished({ cash: 0 })[0].cash, 0)
-assert.equal(finished({ cash: 'lots' })[0].cash, undefined)
+// the price a subscription had before it changed rides the load; junk in the field does not
+assert.equal(load({ subs: [{ id: 'p', name: 'Music', cost: 10.99, cycle: 'monthly', was: 9.99 }] }).subs[0].was, 9.99)
+assert.equal('was' in load({ subs: [{ id: 'p', name: 'Music', cost: 10.99, cycle: 'monthly', was: 'cheap' }] }).subs[0], false)
 
 console.log('store: ok')
 
@@ -964,7 +760,7 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   removeItem('filed')
   removeProject(pid)
   assert.equal(restoreTrash(['filed']), 1)
-  assert.equal(getState().items.find((i) => i.id === 'filed')?.pid, null, 'an orphan lands in Quick notes')
+  assert.equal(getState().items.find((i) => i.id === 'filed')?.pid, null, 'an orphan lands in Inbox')
   assert.deepEqual(getState().trash, [])
 
   // deleting the named rows, and then all of them, each with its undo
@@ -1075,41 +871,54 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   assert.deepEqual(visible({ ...st, sel: 'trash' }, '').map((i) => i.id), ['a', 'b'])
 }
 
-/* The four tools, switched off and on. What a switch has to do is more than not draw a button:
+/* The tools, switched off and on. What a switch has to do is more than not draw a button:
    the page stops being somewhere `sel` may point, or a hash bookmarked when it was on opens a
    view with nothing in it and no way back. */
 {
-  const { TOOLS, toolOn, isRoute, setTool, MARKET, CALENDAR } = await import('./store.ts')
+  const { TOOLS, toolOn, isRoute, setTool, SUBS, PDF } = await import('./store.ts')
 
   // nothing stored: every one of them on, which is what every document written before this says
   const fresh = load({})
   assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length)
-  assert.equal(isRoute(fresh, MARKET), true)
+  assert.equal(isRoute(fresh, SUBS), true)
 
   // switched off, it is not a route — and a document naming it as the open view opens elsewhere
-  const off = load({ hidden: [MARKET] })
-  assert.equal(toolOn(off, MARKET), false)
-  assert.equal(isRoute(off, MARKET), false)
-  assert.equal(load({ hidden: [MARKET], sel: MARKET }).sel, 'today')
-  assert.equal(load({ hidden: [CALENDAR], sel: MARKET }).sel, MARKET)   // the others are untouched
+  const off = load({ hidden: [SUBS] })
+  assert.equal(toolOn(off, SUBS), false)
+  assert.equal(isRoute(off, SUBS), false)
+  assert.equal(load({ hidden: [SUBS], sel: SUBS }).sel, 'today')
+  assert.equal(load({ hidden: [PDF], sel: SUBS }).sel, SUBS)   // the others are untouched
 
   // junk in the field is not a switch: only real ids, and anything else is no ids at all
-  assert.deepEqual(load({ hidden: 'market' as unknown as string[] }).hidden, [])
-  assert.deepEqual(load({ hidden: [MARKET, 'nonsense', 7 as unknown as string] }).hidden, [MARKET])
+  assert.deepEqual(load({ hidden: 'subs' as unknown as string[] }).hidden, [])
+  assert.deepEqual(load({ hidden: [SUBS, 'market', 7 as unknown as string] }).hidden, [SUBS])
+
+  // a page that was retired is not a route either: a document left standing on it opens on Today
+  assert.equal(load({ sel: 'market' }).sel, 'today')
 
   // switching one off while standing on it moves you off it, rather than leaving a blank page
-  select(MARKET)
-  assert.equal(getState().sel, MARKET)
-  setTool(MARKET, false)
-  assert.equal(getState().sel, 'overview')
-  setTool(MARKET, true)
-  assert.equal(toolOn(getState(), MARKET), true)
+  select(SUBS)
+  assert.equal(getState().sel, SUBS)
+  setTool(SUBS, false)
+  assert.equal(getState().sel, 'today')
+  setTool(SUBS, true)
+  assert.equal(toolOn(getState(), SUBS), true)
+}
+
+/* A retired tool's data is not read, and not thrown away either: it rides through a load and
+   through a merge, including a merge on a device that never held it. */
+{
+  const { mergeRemote } = await import('./store.ts')
+  const old = { watches: [{ id: 'w' }], results: [{ id: 'r' }], marketPins: [{ id: 'BTCUSDT', label: 'Bitcoin' }] }
+  assert.deepEqual((load(old) as unknown as typeof old).watches, old.watches)
+  const merged = mergeRemote(load({}), old) as unknown as typeof old
+  assert.deepEqual(merged.results, old.results)
+  assert.deepEqual(merged.marketPins, old.marketPins)
 }
 
 /* An edit that changes nothing must not reach the disk, and above all must not mark the document
    dirty: a dirty device pushes instead of pulling, and its push forces past another device's write.
-   The exchange poll files every closed trade it sees once a minute and finds them all filed
-   already — a minute's worth of that, and a window left open overwrites what was typed elsewhere. */
+   A window left open and writing nothing overwrites what was typed elsewhere. */
 {
   const { setOnPersist } = await import('./store.ts')
   const settle = () => new Promise((r) => setTimeout(r, 250))   // the 200ms save debounce
@@ -1117,15 +926,12 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   let saves = 0
   setOnPersist(() => { saves++ })
 
-  const closed = { ...mkWatch('Filed', 100), id: 'filed', entryAt: 1, closedAt: 2,
-    level: 'stop' as const, exit: 95, r: -1 }
   addItem(item({ id: 'noop' }))
-  closeWatch(closed, 1)
+  addItem(item({ id: 'noop2' }))
   await settle()
   assert.equal(saves, 1)   // two real changes inside one debounce, one write
 
   patch('gone', { text: 'a row that is not here' })   // mapItem hands back the state it was given
-  closeWatch(closed, 1)                               // and closeWatch on a trade already filed
   await settle()
   assert.equal(saves, 1)
 

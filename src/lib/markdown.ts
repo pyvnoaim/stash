@@ -115,6 +115,22 @@ export function toggleBox(text: string, line: number): string {
   return lines.join('\n')
 }
 
+/**
+ * A checklist line handed over to a task of the same words: `- [ ] call them` becomes
+ * `- [ ] [[call them]]`, a link the new task answers to — and the task, in turn, lists the note
+ * under what links to it. The words come back for the caller to make that task from. Null where
+ * the line is not an open box, or holds a bracket of any kind: a link's label cannot carry one,
+ * so the line already points somewhere or could never be pointed at.
+ */
+export function promoteBox(text: string, line: number): { note: string, title: string } | null {
+  const lines = text.split('\n')
+  const m = /^(\s*(?:[-*]|\d+\.)\s+\[ \]\s+)(.+)$/.exec(lines[line] ?? '')
+  const title = m?.[2].trim()
+  if (!m || !title || /[[\]]/.test(title)) return null
+  lines[line] = `${m[1]}[[${title}]]`
+  return { note: lines.join('\n'), title }
+}
+
 /* ---------- the note as blocks, for the editor that renders everything but the line you are on ---------- */
 
 /** One run of source lines that reads as a single thing: a paragraph, a heading, a fence, a gap. */

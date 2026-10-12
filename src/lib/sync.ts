@@ -17,7 +17,6 @@ import {
   adoptRemote, adoptShared, getState, KEY, mergeRemote, mergeSlice, setMe, setOnPersist, sliceOf,
   uid, type Item, type Project, type Slice,
 } from './store.ts'
-import { forgetVenue } from './venue.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
 export type SyncStatus = 'init' | 'off' | 'out' | 'busy' | 'ok'
@@ -214,11 +213,6 @@ async function account(path: string, body: object): Promise<string | null> {
     const j = await r.json().catch(() => ({}))
     if (!r.ok) return String(j.error ?? `error ${r.status}`)
     setSnap({ user: asUser(j) })
-    /* Whose wallets these are has just changed. venue.ts asks once and holds the answer for the
-       life of the tab — which is right while one person is signed in, and wrong the moment the
-       person changes. Nothing here reloads the page, so a tab that read `null` signed out would
-       go on treating an account with a wallet as one without. */
-    forgetVenue()
     await syncNow()
     return null
   } catch {
@@ -244,7 +238,6 @@ export const signup = (user: string, pass: string, invite: string) =>
 
 export async function logout(everywhere = false) {
   try { await fetch(everywhere ? '/api/logout-all' : '/api/logout', { method: 'POST' }) } catch { /* gone is gone */ }
-  forgetVenue()   // the key that answered it is no longer ours to read — see account() above
   setSnap({ user: null, status: 'out' })
 }
 
@@ -317,19 +310,6 @@ export async function restore(v: number): Promise<string | null> {
   }
 }
 
-/* ---------- the calendar feed ---------- */
-
-/** The token this account's `/ics/…` feed hangs on, or null when there is none. */
-export const feed = (): Promise<string | null> =>
-  call('/api/feed').then((j) => (j.feed as string | null)).catch(() => null)
-
-/** Cuts one. Cutting a second is also what stops the first from working. */
-export const newFeed = (): Promise<string | null> =>
-  call('/api/feed', { method: 'POST' }).then((j) => j.feed as string).catch(() => null)
-
-export const dropFeed = (): Promise<void> =>
-  call('/api/feed', { method: 'DELETE' }).then(() => undefined).catch(() => undefined)
-
 /* ---------- pictures in notes ---------- */
 
 /**
@@ -355,32 +335,6 @@ export async function uploadImage(file: File): Promise<string> {
     throw new Error(m === 'unauthorized' ? 'pictures need an account: they live on the server' : m)
   }
 }
-
-/* ---------- the calendar coming the other way ---------- */
-
-/** One event out of a subscribed calendar. Read-only, and never an item: it is somebody else's
- *  record of the day, shown beside the work rather than mixed into it. */
-export interface CalEvent { day: string, at: string | null, summary: string }
-
-/** What the subscribed calendar holds between two days, plus the URL it came from. The server
- *  fetches it — no provider's feed answers a request from a page — and caches it for ten minutes,
- *  so a month view may ask on every paint without anyone noticing. */
-export const calendar = (from: string, to: string): Promise<{ url: string | null, events: CalEvent[] }> => {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-  const p = new URLSearchParams({ from, to, tz })
-  return call(`/api/cal?${p}`)
-    .then((j) => ({ url: (j.url as string | null) ?? null, events: (j.events as CalEvent[]) ?? [] }))
-    .catch(() => ({ url: null, events: [] }))
-}
-
-/** Subscribe, or replace what is subscribed. Returns the error to show, or null when it took. */
-export const setCalendar = (url: string): Promise<string | null> =>
-  call('/api/cal', { method: 'POST', body: JSON.stringify({ url }) })
-    .then(() => null)
-    .catch((e: Error) => e.message || 'that is not a calendar link')
-
-export const dropCalendar = (): Promise<void> =>
-  call('/api/cal', { method: 'DELETE' }).then(() => undefined).catch(() => undefined)
 
 /* ---------- admin ---------- */
 
@@ -476,52 +430,6 @@ export const joinLink = (t: string): Promise<string | null> =>
 /** Everyone on every project you are on. Its own request: the sync loop never wants the pictures. */
 export const roster = (): Promise<Face[]> =>
   call('/api/roster').then((j) => j.roster as Face[]).catch(() => [])
-
-/**
- * One person on the Desk: how their trades went, and what they are in now. Trades they were really
- * in and nothing else — the server drops watched plans before sending, so every row here is money
- * somebody put down.
- *
- * `open` is the exchange's own book for anyone whose account has a key on it, and what they typed
- * for everyone else. The venue's own numbers ride along on the first kind — the running dollars
- * included, which is what switching the desk on now publishes — and none of them on the second.
- * `results` stay in R: a finished trade is priced off the document, and the document's euros are
- * still nobody else's business.
- */
-export interface DeskRow {
-  name: string
-  /** Their picture, as they saved it — null for anyone who has not chosen one. */
-  avatar: string | null
-  results: {
-    id: string, label: string, horizon: string, dir: 'long' | 'short',
-    level: 'target' | 'stop', r: number, closedAt: number,
-    /** What the venue settled it for, in dollars. Null on a row nobody's exchange closed. */
-    cash: number | null,
-    /** The asset id where their document named one, '' where it did not — the icon beside the row. */
-    asset: string,
-    /** The prices it ran between and when it started, so somebody else's trade draws the same card
-     *  yours does. Null on a row whose document is missing one of them. */
-    entry: number | null, exit: number | null, entryAt: number | null,
-    /** What it made on its margin, as a fraction. Null on every row filed before that was kept. */
-    roi: number | null,
-  }[]
-  open: {
-    id: string, label: string, horizon: string, dir: 'long' | 'short',
-    entry: number, stop: number | null, target: number | null, entryAt: number | null,
-    /**
-     * What the venue says the trade is doing right now: the mark, the running money, what it is
-     * worth at that mark, and where it liquidates. All null on a row that came from someone's
-     * document rather than their exchange — nothing there knows the market.
-     */
-    mark: number | null, pnl: number | null, value: number | null, liq: number | null,
-    /** The multiplier it is held at — the venue's, or what they typed on a hand-written row. */
-    lev: number | null,
-  }[]
-}
-
-/** Everyone who has switched the Desk on. Empty offline, and empty when nobody has — same answer. */
-export const desk = (): Promise<DeskRow[]> =>
-  call('/api/desk').then((j) => j.desk as DeskRow[]).catch(() => [])
 
 /** Everyone else with an account here, for a share field to complete against. Empty when offline.
  *  Name and face both: every place that offers this list draws the face beside the name. */
