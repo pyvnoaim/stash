@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { CornerDownLeft, Lightbulb, ListTodo, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
-import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import { dayLabel, parseCapture, parseList, repeatLabel, type Parsed } from '@/lib/parse'
@@ -14,13 +13,11 @@ const TYPES = [
   { id: 'note', label: 'Note', icon: StickyNote },
 ] as const
 
-export function Capture({ inputRef, className, onDone, announce }: {
+export function Capture({ inputRef, className, announce }: {
   inputRef: React.RefObject<HTMLInputElement | null>
   /** Where it sits — the header gives it a width and no padding of its own. */
   className?: string
-  /** Called after an add, and on Escape: the phone's overlay closes itself with it. */
-  onDone?: () => void
-  /** Say where an add went — on a page that is not a list, nothing on screen would. */
+  /** Say where an add went — under a search, nothing on screen would. */
   announce?: boolean
 }) {
   const s = useStash()
@@ -99,8 +96,7 @@ export function Capture({ inputRef, className, onDone, announce }: {
     const it = make(parsed)
     addItem(it)
     setRaw('')
-    if (announce) toast(`Added to ${it.pid ? project(s, it.pid)?.name ?? 'Stash' : it.due ? 'your lists' : 'Quick notes'}`)
-    onDone?.()
+    if (announce) toast(`Added to ${it.pid ? project(s, it.pid)?.name ?? 'Stash' : it.due ? 'your lists' : 'Inbox'}`)
   }
 
   /** More than one line off the clipboard is a list, not a title — take it a line at a time. */
@@ -125,15 +121,11 @@ export function Capture({ inputRef, className, onDone, announce }: {
   const locked = readOnly || s.sel === TRASH
 
   return (
-    <form onSubmit={submit} autoComplete="off" className={cn('relative', className)}
-      onKeyDown={(e) => { if (e.key === 'Escape') onDone?.() }}>
-      {/* 42px = the 28px toggle plus the addon's own py-1.5 either side plus the border, so the
-          chip is inset by exactly its padding vertically and pl-1.5 matches it horizontally.
-          At h-10 the leftover 5px above the chip fought the 8px beside it. */}
-      <InputGroup className="h-9">
-        {/* 12px of air either side of the divider: the addon's own gap-2 plus the toggle's px-2
-            made the left side twice the input's pl-1.5, so both sides are set here instead */}
-        <InputGroupAddon align="inline-start" className="gap-1 pl-[3px]">
+    <form onSubmit={submit} autoComplete="off" className={cn('relative', className)}>
+      {/* The first thing on the page, and the size of it says so: a filled field rather than an
+          outlined one, tall enough to be the obvious place to start typing. */}
+      <InputGroup className="bg-muted dark:bg-muted h-12 rounded-[10px] border-transparent">
+        <InputGroupAddon align="inline-start" className="pl-2">
           {/* grid-cols-3 under w-fit gives three columns as wide as the widest label, which is what
               lets the pill be a plain w-1/3 translated by column — no measuring, no layout effect */}
           <ToggleGroup
@@ -144,7 +136,7 @@ export function Capture({ inputRef, className, onDone, announce }: {
           >
             <span
               aria-hidden
-              className="bg-muted absolute inset-y-0 left-0 w-1/3 rounded-sm transition-transform duration-200 ease-out motion-reduce:transition-none"
+              className="bg-background ring-border absolute inset-y-0 left-0 w-1/3 rounded-md ring-1 transition-transform duration-200 ease-out motion-reduce:transition-none"
               style={{ transform: `translateX(${TYPES.findIndex((t) => t.id === type) * 100}%)` }}
             />
             {/* labels stay visible: three options fit, and a hover-only label is a bug farm */}
@@ -154,7 +146,7 @@ export function Capture({ inputRef, className, onDone, announce }: {
                 value={id}
                 aria-label={label}
                 // the pill draws the active background now, so the item's own must get out of its way
-                className="text-muted-foreground data-[state=on]:text-foreground relative z-10 h-7 w-full gap-1.5 rounded-sm px-2 hover:bg-transparent data-[state=on]:bg-transparent"
+                className="text-muted-foreground data-[state=on]:text-foreground relative z-10 h-8 w-full gap-1.5 rounded-md px-2.5 hover:bg-transparent data-[state=on]:bg-transparent"
                 // radix focuses the item on click and onValueChange hands focus straight back to the
                 // field — long enough for the focus ring to flash. Keyboard focus still lands normally.
                 onMouseDown={(e) => e.preventDefault()}
@@ -164,8 +156,6 @@ export function Capture({ inputRef, className, onDone, announce }: {
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          {/* same variant fix as the header: it ships stretching to the parent's full height */}
-          <Separator orientation="vertical" className="data-vertical:h-5 data-vertical:self-center" />
         </InputGroupAddon>
 
         <InputGroupInput
@@ -179,23 +169,20 @@ export function Capture({ inputRef, className, onDone, announce }: {
           placeholder={readOnly
             ? `${here!.share!.by} shared this to read`
             : locked ? 'The trash takes nothing new'
-              : here ? `Add to ${here.name}` : 'Add to Stash'}
-          className="pl-3!"   // beats the group's own [&>input]:pl-1.5
+              : here ? `Add to ${here.name}` : s.sel === 'inbox' ? 'Add anything — sort it later' : 'Add to Stash'}
+          className="pl-3! text-[15px]"   // beats the group's own [&>input]:pl-1.5
         />
 
         <InputGroupAddon align="inline-end">
           {understood.length > 0 ? (
-            <span className="flex items-center gap-1.5 font-mono text-xs">
+            <span className="hidden items-center gap-1.5 font-mono text-xs sm:flex">
               {understood.map((b, n) => (
-                <span key={b + n} className="text-foreground">
-                  {n > 0 && <span className="text-muted-foreground mr-1.5">·</span>}
-                  {b}
-                </span>
+                <span key={b + n} className="bg-background text-foreground rounded-md px-2 py-0.5">{b}</span>
               ))}
             </span>
           ) : null}
           {raw.trim() && (
-            <kbd className="text-muted-foreground bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+            <kbd className="text-muted-foreground px-1.5 py-0.5 font-mono text-[10px]">
               <CornerDownLeft className="inline size-3" />
             </kbd>
           )}

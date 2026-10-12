@@ -69,7 +69,7 @@ function Links({ it }: { it: Item }) {
  * ponytail: a scan of every note on every render of the panel, which at a stash's size is nothing.
  * Index it by key on write if a stash ever gets big enough to feel it.
  */
-function Backlinks({ it, onOpen }: { it: Item; onOpen: (id: string) => void }) {
+export function Backlinks({ it, onOpen }: { it: Item; onOpen: (id: string) => void }) {
   const s = useStash()
   const key = wikiKey(it.text)
   // an untitled row has no title to be named by, so nothing can point at it
@@ -206,16 +206,19 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
       aria-label="Item details"
       // on a phone it is the content of a full-width bottom sheet, so the fixed column
       // (and the border that divides it from the list) only applies once there is a list beside it
-      className="bg-background flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
+      className="flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
     >
-      {/* h-14 header + border-b so the type toggle lines up with the main content header */}
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
-        <div className="grid w-full grid-cols-3 gap-1.5">
+      {/* what kind of thing it is: a quiet segmented control, since changing it is rare */}
+      <div className="flex shrink-0 items-center px-5 pt-5">
+        <div className="bg-secondary grid w-full grid-cols-3 gap-0.5 rounded-[9px] p-[3px]">
           {TYPES.map(({ id, label, icon: Icon }) => (
             <Button
               key={id}
               size="sm"
-              variant={it.type === id ? 'default' : 'outline'}
+              variant="ghost"
+              className={cn('h-[26px] rounded-md text-xs', it.type === id
+                ? 'bg-background ring-border hover:bg-background ring-1'
+                : 'text-muted-foreground hover:bg-transparent')}
               onClick={() => patch(it.id, { type: id, done: id === 'task' ? it.done : false })}
             >
               <Icon className="size-3.5" />
@@ -226,7 +229,8 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
       </div>
 
       <div
-        className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0"
+        // field names are mono and muted: they are furniture, and the values are what is read
+        className="[&_label]:text-muted-foreground flex flex-1 flex-col gap-5 overflow-y-auto p-5 *:shrink-0 [&_label]:font-mono [&_label]:text-xs [&_label]:font-normal"
         /* A label here only names its field. `htmlFor` stays — it is what a screen reader reads
            the box by — but the browser's other half of it, click the word and the control takes
            the caret, is not wanted: the fields are a column of headings and boxes, and clicking a
@@ -235,11 +239,13 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
         onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
       >
       <div className="grid gap-2">
-        <Label htmlFor="i-title">Title</Label>
+        <Label htmlFor="i-title" className="sr-only">Title</Label>
+        {/* the title is the heading of the panel, not one more boxed field in it */}
         <Textarea
           ref={title}
           id="i-title"
           rows={2}
+          className="min-h-0 resize-none rounded-md border-transparent bg-transparent px-1.5 py-1 text-lg leading-snug font-semibold tracking-tight shadow-none md:text-lg dark:bg-transparent"
           value={it.text}
           onChange={(e) => patch(it.id, { text: e.target.value })}
         />
@@ -317,7 +323,7 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={QUICK}>Quick notes</SelectItem>
+            <SelectItem value={QUICK}>Inbox</SelectItem>
             {s.projects.map((p) => (
               <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
             ))}
@@ -389,12 +395,8 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
         )}
       </div>
 
-      <Button
-        variant={it.flag ? 'default' : 'outline'}
-        size="sm"
-        onClick={() => patch(it.id, { flag: !it.flag })}
-      >
-        <Flag className={cn('size-3.5', it.flag && 'fill-current')} />
+      <Button variant="outline" size="sm" aria-pressed={it.flag} onClick={() => patch(it.id, { flag: !it.flag })}>
+        {it.flag ? <span className="bg-ring size-1.5 rounded-full" /> : <Flag className="size-3.5" />}
         {it.flag ? 'Flagged' : 'Flag'}
       </Button>
 
@@ -449,12 +451,11 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
   return (
     <aside
       aria-label="Selection details"
-      className="bg-background flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
+      className="flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
     >
-      {/* h-14 header + border-b to line up with the main content header */}
-      <div className="flex h-14 shrink-0 items-center border-b px-4">
+      <div className="flex shrink-0 items-center px-5 pt-5">
         <div>
-          <p className="font-heading text-sm tracking-wide uppercase">{picked.length} selected</p>
+          <p className="text-lg font-semibold tracking-tight">{picked.length} selected</p>
           <p className="text-muted-foreground text-xs">
             {tasks.length === picked.length ? 'All tasks' : `${tasks.length} of them tasks`}
           </p>
@@ -463,7 +464,7 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
 
       {/* labels name their fields and no more, as in the single-row panel above */}
       <div
-        className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0"
+        className="[&_label]:text-muted-foreground flex flex-1 flex-col gap-5 overflow-y-auto p-5 *:shrink-0 [&_label]:font-mono [&_label]:text-xs [&_label]:font-normal"
         onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
       >
       <div className="grid grid-cols-3 gap-1.5">
@@ -500,7 +501,7 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
             <SelectValue placeholder="Mixed" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={QUICK}>Quick notes</SelectItem>
+            <SelectItem value={QUICK}>Inbox</SelectItem>
             {s.projects.map((p) => (
               <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
             ))}
@@ -546,8 +547,8 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
       </div>
 
       {/* one of them unflagged means the button flags, so it takes two presses to clear a mix */}
-      <Button variant={flagged ? 'default' : 'outline'} size="sm" onClick={() => each({ flag: !flagged })}>
-        <Flag className={cn('size-3.5', flagged && 'fill-current')} />
+      <Button variant="outline" size="sm" aria-pressed={flagged} onClick={() => each({ flag: !flagged })}>
+        {flagged ? <span className="bg-ring size-1.5 rounded-full" /> : <Flag className="size-3.5" />}
         {flagged ? 'Flagged' : 'Flag all'}
       </Button>
 

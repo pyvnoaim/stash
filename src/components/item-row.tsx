@@ -174,12 +174,12 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
             moveBefore(e.dataTransfer.getData('text/plain'), it.id, over === 'below')
           }}
           className={cn(
-            'group flex items-start gap-2.5 rounded-md px-2.5 py-2',
+            'group flex min-h-10 items-start gap-3 rounded-lg px-3 py-2.5',
             'transition-[opacity,background-color] duration-100 ease-out',
             // the whole row is the handle, so the closed hand only shows once you take hold of it
-            'hover:bg-muted/60 active:cursor-grabbing',
-            marked && 'bg-accent/50 hover:bg-accent/50',
-            selected && 'bg-accent hover:bg-accent',
+            'hover:bg-muted/70 active:cursor-grabbing',
+            marked && 'bg-muted hover:bg-muted',
+            selected && 'bg-muted hover:bg-muted',
             lifting && 'cursor-grabbing opacity-40',
             over === 'above' && 'shadow-[inset_0_2px_0_-0.5px_var(--foreground)]',
             over === 'below' && 'shadow-[inset_0_-2px_0_-0.5px_var(--foreground)]',
@@ -194,6 +194,8 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
             {it.type === 'task' && !onRestore ? (
               <Checkbox
                 checked={it.done}
+                // a circle: a box is a form control, and this is the one mark a task wears
+                className="border-muted-foreground/60 size-[18px] rounded-full after:rounded-full"
                 aria-label="Done"
                 onClick={(e) => e.stopPropagation()}
                 onCheckedChange={() => toggleDone(it.id)}
@@ -212,7 +214,7 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           <div className="flex min-w-0 flex-1 flex-col">
             {/* the strike lifts under the cursor: it is what says "finished" across a whole list at
                 a glance, and the one thing it cannot do is let you read the row it is drawn on */}
-            <span className={cn('truncate text-sm', it.done && 'text-muted-foreground line-through group-hover:no-underline')}>
+            <span className={cn('truncate text-sm', selected && 'font-medium', it.done && 'text-muted-foreground line-through group-hover:no-underline')}>
               {it.text}
             </span>
             {/* the note itself, not a marker for one — first line is usually the whole point, and
@@ -243,7 +245,8 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                     ? { backgroundImage: `linear-gradient(90deg, ${end(up)}, ${end(own)})` }
                     : own ? { color: own } : undefined}
                   className={cn(
-                    'max-w-40 cursor-pointer truncate font-mono text-xs',
+                    // a phone's row has room for the title and the day, and the rest is one tap away
+                    'hidden max-w-40 cursor-pointer truncate font-mono text-xs sm:inline',
                     // a gradient is painted through the letters, so the text has no colour of its own
                     grad ? 'bg-clip-text text-transparent hover:opacity-80'
                       : own ? 'hover:opacity-80' : 'text-muted-foreground hover:text-foreground',
@@ -260,7 +263,7 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                   type="button"
                   // a BUTTON is also what stops the list's space shortcut firing while it has focus
                   onClick={(e) => { e.stopPropagation(); onTag(t) }}
-                  className="text-muted-foreground hover:text-foreground cursor-pointer font-mono text-xs"
+                  className="text-muted-foreground hover:text-foreground hidden cursor-pointer font-mono text-xs sm:inline"
                 >
                   #{t}
                 </button>
@@ -308,7 +311,8 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
 
             {/* an icon, like the repeat beside it — a bare “!” reads as a typo in the middle of a row */}
             {it.flag && (
-              <Flag className="text-foreground size-3 fill-current" aria-label="Flagged" />
+              // the accent's one job on a row
+              <span role="img" aria-label="Flagged" className="bg-ring size-1.5 shrink-0 rounded-full" />
             )}
 
             {it.repeat && (
@@ -320,10 +324,18 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 className={cn(
                   'text-muted-foreground font-mono text-xs tabular-nums',
                   it.due === t && 'text-foreground',
-                  it.due < t && 'text-foreground font-medium',
+                  // late is a thing an open row is: finished or deleted, a past date is only a date
+                  it.due < t && !it.done && !onRestore && 'text-destructive',
                 )}
               >
-                {dayLabel(it.due)}
+                {/* a late row says which day it slipped from: "Overdue" is already the heading over it,
+                    and the colour */}
+                {it.due < t
+                  ? new Date(it.due + 'T00:00').toLocaleDateString(undefined, {
+                    weekday: 'short', day: 'numeric', month: 'short',
+                    ...(it.due.slice(0, 4) !== t.slice(0, 4) && { year: 'numeric' }),
+                  })
+                  : dayLabel(it.due)}
                 {/* the hour rides on the day rather than beside it: "Today 18:00" is one fact */}
                 {it.at && <span className="ml-1">{it.at}</span>}
               </span>
@@ -417,7 +429,7 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
             ))}
             {projects.length > 0 && <ContextMenuSeparator />}
             <ContextMenuItem disabled={!it.pid} onSelect={() => patch(it.id, { pid: null })}>
-              Quick notes
+              Inbox
             </ContextMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>

@@ -28,7 +28,7 @@ globalThis.fetch = (async (path: any, init?: RequestInit) => {
   return r
 }) as typeof fetch
 
-const { addItem, getState, setChart, uid } = await import('./store.ts')
+const { addItem, getState, setSubSort, uid } = await import('./store.ts')
 const { getSync, login, logout, signup, startSync, syncNow } = await import('./sync.ts')
 startSync()  // wires onPersist, asks /api/me (nobody yet — 'out')
 await new Promise((r) => setTimeout(r, 50))   // let that first answer land before asserting on it
@@ -48,14 +48,14 @@ assert.equal(getSync().status, 'ok')
 add('second')
 // a setting, not just a row: the whole document travels, and a preference is the half of it that
 // used to be asserted through the Twelve Data key
-setChart('candles')
+setSubSort('cost')
 await flush()
 await syncNow()
 const onServer = async () => (await (await fetch('/state')).json()).state
 assert.deepEqual((await onServer()).items.map((i: any) => i.text), ['second', 'first'])
 
 // ...and so does the setting beside them
-assert.equal((await onServer()).chart, 'candles')
+assert.equal((await onServer()).subSort, 'cost')
 
 // a second device: empty local, pulls what the first pushed — the setting included
 disk.clear()
@@ -63,7 +63,7 @@ cookie = ''
 assert.equal(await login('leon', 'longenough'), null)
 assert.equal(getSync().status, 'ok')
 assert.deepEqual(getState().items.map((i) => i.text), ['second', 'first'])
-assert.equal(getState().chart, 'candles')
+assert.equal(getState().subSort, 'cost')
 
 /* Both edit while apart: this device pushes into a 409. It used to re-send its own document over
    theirs, which is the whole of "a note typed on the phone vanished" — anything at all marks a

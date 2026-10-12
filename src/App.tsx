@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Loader2, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, Loader2, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AppSidebar } from '@/components/app-sidebar'
 import { MobileTabs } from '@/components/mobile-tabs'
@@ -13,21 +13,18 @@ import { Inspector, Selection } from '@/components/inspector'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { ItemRow } from '@/components/item-row'
 import { NotePage } from '@/components/note-page'
-import CalendarPage from '@/components/calendar-page'
-import Overview from '@/components/overview'
 import SubsPage from '@/components/subs-page'
-import MarketPage from '@/components/market-page'
+import { FileDialog } from '@/components/file-dialog'
 import { ProjectDialog } from '@/components/project-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { dayLabel, today, tomorrow } from '@/lib/parse'
-import { hit } from '@/lib/keys'
+import { hit, pretty } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, CALENDAR, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, MARKET, moveBefore, OVERVIEW, patch, PDF, SUBS,
+  addProject, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, moveBefore, patch, PDF, SUBS,
   openIn, readHash, redo, removeItem, restoreItem, restoreTrash, select, tagCounts, toggleDone,
   TRASH, TRASH_DAYS, undo, useStash, viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
@@ -65,21 +62,22 @@ export default function App() {
   const [searching, setSearching] = useState(false)
   // on a phone the search field is not permanently in the header; this is whether it is open
   const [phoneSearch, setPhoneSearch] = useState(false)
-  // the capture bar's overlay on a phone, where the header has no room to keep it open
-  const [phoneCapture, setPhoneCapture] = useState(false)
+  // the rows F is filing, while its picker is open
+  const [filing, setFiling] = useState<string[] | null>(null)
   // an item opened to fill the main area; navigating away or deleting it drops back to the list
   const [pageItem, setPageItem] = useState<string | null>(null)
   // scrollbars are hidden, so a chevron says the list runs on past the bottom edge
   const [moreBelow, setMoreBelow] = useState(false)
 
   const boxRef = useRef<HTMLInputElement>(null)
-  /** Puts the cursor in the capture bar — opening its overlay first on a phone, where it is folded
-   *  away behind the header's + and an input with no layout cannot take focus. */
+  /** Puts the cursor in the capture bar. A tool page and a note open full-page have none, so from
+   *  there it lands in the Inbox first — a thought arrives wherever you are, and unfiled is where
+   *  a line with no list to belong to goes anyway. */
   const openCapture = () => {
-    if (boxRef.current?.offsetParent) { boxRef.current.focus(); return }
-    setPhoneSearch(false) // one overlay across the header at a time
-    setPhoneCapture(true)
-    requestAnimationFrame(() => boxRef.current?.focus())
+    if (boxRef.current) { boxRef.current.focus(); return }
+    setPageItem(null)
+    goTo('inbox')
+    setTimeout(() => boxRef.current?.focus(), 50)
   }
   const searchRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -165,7 +163,7 @@ export default function App() {
   const openPage = (id: string) => { pageFrom.current = s.sel; setPageItem(id) }
 
   /* The marks name rows in the list you were looking at, and this is no longer that list.
-     The open page is different: Overview and the PDF tab are a detour rather than a destination,
+     The open page is different: a tool page is a detour rather than a destination,
      so leaving for one and coming back to the list you left finds the note still open — the point
      of glancing at a PDF mid-note is that you get to come back to the note. Landing anywhere else,
      another list or a search, is leaving it for good. */
@@ -187,7 +185,7 @@ export default function App() {
     paged ? pageItem : (selected?.pid === openProject?.id ? s.focus : null),
   )
 
-  /* a view was picked — the sidebar, ⌘K, an Overview tile, the back button. A search overlays
+  /* a view was picked — the sidebar, ⌘K, the back button. A search overlays
      every list and both pages, so leaving it up makes the new view look like it never took.
      Only when the view really changed, never on the run that mounts: the view the app opened on
      came out of the hash and so did the search on it, so clearing there would open every
@@ -316,7 +314,7 @@ export default function App() {
       const k = (id: string) => hit(e, hotkey(s, id))
 
       if (k('palette') && !e.repeat) { e.preventDefault(); setPalette((v) => !v); return }
-      if (palette) return               // the dialog owns every other key while it is open, esc included
+      if (palette || filing) return     // the dialog owns every other key while it is open, esc included
 
       if (k('search')) { e.preventDefault(); searchRef.current?.select(); return }
       if (k('capture')) { e.preventDefault(); openCapture(); return }
@@ -356,7 +354,7 @@ export default function App() {
          wanted most: fourteen days of deletions and one ⌘⌫ to be done with them. It used to select
          the *text* of the rows, which is the browser's answer to a question nobody asks of a list.
 
-         Where there is no list — Overview, Markets, the PDF tab, a note open full-page — the text
+         Where there is no list — Subscriptions, the PDF tab, a note open full-page — the text
          selection is still the right answer, scoped to the content pane: the document is the sidebar
          and the header too, so a note in preview used to select the whole app.
 
@@ -375,7 +373,7 @@ export default function App() {
       // no other list shortcut wants a modifier, and ⌘S belongs to the browser
       if (cmd) return
       // the list shortcuts would act on a row you cannot see from here, delete included — and the
-      // full-page editor hides the list just as completely as Overview or Markets does, so J and K
+      // full-page editor hides the list just as completely as a tool page does, so J and K
       // were walking a focus you couldn't see and T was dating a row behind the page
       if (pageItem || (!query && isPage(s.sel))) return
 
@@ -440,6 +438,13 @@ export default function App() {
         chosen.forEach((id) => {
           if (s.items.find((i) => i.id === id)?.type === 'task') toggleDone(id)
         })
+        return
+      }
+      /* Into a project, on the lot — the picker takes it from here. Last, so a key somebody had
+         already given to one of the three above keeps meaning what they set it to. */
+      if (k('file')) {
+        e.preventDefault()
+        if (!inTrash) setFiling(chosen)
       }
     }
     document.addEventListener('keydown', onKey)
@@ -460,41 +465,35 @@ export default function App() {
         onSearch={() => setPalette(true)}
       />
 
-      <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden">
+      {/* the sheet: inset from the desk on every side but the sidebar's, inside a hairline */}
+      <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden md:h-[calc(100svh-1rem)] md:border md:shadow-none">
         <div className="flex min-w-0 flex-1 flex-col">
           {/* the full-page editor brings its own header (back + title), so the search bar steps aside */}
           {!paged && (
-          <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-            <SidebarTrigger className="-ml-1" />
-            {/* it ships as data-vertical:self-stretch, so match the variant or it runs header-tall */}
-            <Separator orientation="vertical" className="mr-1 data-vertical:h-4 data-vertical:self-center" />
-            <h1 className="font-heading truncate text-sm font-normal tracking-wide uppercase">
+          <header className="flex shrink-0 flex-col gap-5 px-4 pt-3 pb-2 md:px-8 md:pt-6">
+            <div className="relative flex min-h-9 items-center gap-3">
+            <SidebarTrigger className="text-muted-foreground -ml-2" />
+            {/* the project's own colour beside its name — the same dot the sidebar row wears */}
+            {!query && openProject && (
+              <span className="bg-muted-foreground size-2.5 shrink-0 rounded-full"
+                style={openProject.color ? { backgroundColor: openProject.color } : undefined} />
+            )}
+            <h1 className="truncate text-2xl font-semibold tracking-tight">
               {query ? `Search “${query}”` : viewName(s)}
             </h1>
             {/* whose company this project is in, next to the name of it */}
             {!query && openProject && <Faces p={openProject} />}
             {/* how many, or — in a project, where the fraction is the more useful number — how
-                many of how many, with the bar that draws it */}
-            <span className="text-muted-foreground flex items-center gap-2 font-mono text-xs tabular-nums">
+                many of how many, with the bar that draws it. Today says which day it is. */}
+            <span className="text-muted-foreground flex shrink-0 items-center gap-2 font-mono text-xs tabular-nums">
               {!query && openProject
                 ? <ProjectProgress p={openProject} />
-                : (page ? '' : items.length || '')}
+                : page ? ''
+                  : !query && s.sel === 'today'
+                    ? new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+                    : items.length || ''}
             </span>
-            {/* The capture bar, in the header of every page rather than over the lists alone: a
-                thought arrives wherever you are, and a line typed on the chart lands in Quick notes
-                (or the project you are in) the same as one typed over a list. On a phone the header
-                has no room for it, so + opens it across the whole row. */}
-            <div className={cn('min-w-0 flex-1', phoneCapture
-              ? 'bg-background absolute inset-x-2 z-20 md:static md:inset-auto md:bg-transparent'
-              : 'hidden md:block')}>
-              <Capture inputRef={boxRef} className="mx-auto max-w-2xl" announce={isPage(s.sel) || !!query}
-                onDone={() => setPhoneCapture(false)} />
-            </div>
-            {!phoneCapture && <span className="flex-1 md:hidden" />}
-            <Button variant="ghost" size="icon" aria-label="Add to Stash" className="size-8 md:hidden" onClick={openCapture}>
-              <Plus />
-            </Button>
-            <ThemeToggle />
+            <span className="flex-1" />
             {/* a phone has no room for a permanent field: the icon opens it, and it takes the
                 whole row while it is open, which is also where the results are read */}
             {/* The header's field filters the rows — so only where there are rows. On a tool page
@@ -505,7 +504,7 @@ export default function App() {
               size="icon"
               aria-label="Filter items"
               className="size-8 sm:hidden"
-              onClick={() => { setPhoneCapture(false); setPhoneSearch(true); requestAnimationFrame(() => searchRef.current?.focus()) }}
+              onClick={() => { setPhoneSearch(true); requestAnimationFrame(() => searchRef.current?.focus()) }}
             >
               <Search />
             </Button>
@@ -548,16 +547,17 @@ export default function App() {
               )}
             </div>
             </>)}
+            <ThemeToggle />
+            </div>
+            {/* Capture is the first thing on a list, not a bar in a header: it is what the page is
+                for. A tool page has no list to add to, so it has none — ⌘N from there lands in
+                the Inbox. */}
+            {/* under a search the new row may well not match it, so the add says where it went */}
+            {!page && <Capture inputRef={boxRef} announce={!!query} />}
           </header>
           )}
 
-          {/* it draws its own bars now, so there is nothing heavy left to split off */}
-          {page === OVERVIEW && <Overview onNavigate={goTo} onOpen={jumpTo} />}
-
-          {page === CALENDAR && <CalendarPage onOpen={jumpTo} />}
-
           {page === SUBS && <SubsPage />}
-          {page === MARKET && <MarketPage />}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would
@@ -595,7 +595,7 @@ export default function App() {
                 buttons appear once there is something in hand — a selection here means restore or
                 delete, and there is nothing else to do with a deleted row. */}
             {inTrash && items.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 px-3 pb-1">
+              <div className="flex flex-wrap items-center gap-2 px-4 pb-1 md:px-8">
                 <p className="text-muted-foreground mr-auto text-xs">
                   Deleted items are cleared after {TRASH_DAYS} days.
                 </p>
@@ -632,18 +632,21 @@ export default function App() {
             <div
               ref={listRef}
               onScroll={checkMore}
-              className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pt-2 pb-16"
+              className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pt-1 pb-16 md:px-5"
               // scrollbars are hidden, so also fade the bottom edge. The pb-16 padding means at the
               // true bottom the fade lands on empty space and vanishes.
               style={{ maskImage: 'linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)' }}
             >
               {items.length === 0 ? (
-                <EmptyState view={s.sel} query={query} onCapture={openCapture} />
+                <EmptyState view={s.sel} query={query} onOpen={jumpTo} />
               ) : (
                 items.map((it) => {
                   // every type-sorted list reads as sections by kind; the dated views keep their
                   // day headers, and Done stays a flat run of what finished last
+                  const late = !query && isGrouped(s) && !!it.due && it.due < today()
                   const label = query ? null
+                    // everything past its day is one group: which day it slipped from is on the row
+                    : late ? 'Overdue'
                     : isGrouped(s) ? (it.due ? dayLabel(it.due) : null)
                     : s.sel === 'done' ? null
                     // finished rows sink below every kind, so they head as what they are rather
@@ -655,9 +658,9 @@ export default function App() {
                   return (
                     <div key={it.id} data-selected={it.id === s.focus} className="item-row">
                       {head && (
-                        <h2 className="text-muted-foreground font-heading mt-5 mb-1.5 flex items-center gap-2.5 px-2.5 text-[11px] tracking-wider uppercase">
+                        <h2 className={cn('mt-6 mb-1.5 px-3 font-mono text-[11px] font-medium tracking-[0.06em] uppercase',
+                          late ? 'text-destructive' : 'text-muted-foreground')}>
                           {head}
-                          <span className="bg-border h-px flex-1" />
                         </h2>
                       )}
                       <ItemRow
@@ -688,6 +691,23 @@ export default function App() {
                 })
               )}
             </div>
+
+            {/* The Inbox is the one list whose job is to be emptied, so it says how: the keys that
+                file, date and drop the row in hand. Desktop only — a phone has no keys to name. */}
+            {!query && s.sel === 'inbox' && items.length > 0 && (
+              <footer className="text-muted-foreground bg-muted/50 hidden shrink-0 flex-wrap gap-x-5 gap-y-1.5 border-t px-8 py-3 text-[13px] md:flex">
+                {([['file', 'File to project'], ['today', 'Today'], ['tomorrow', 'Tomorrow'], ['remove', 'Delete']] as const).map(([id, what]) => (
+                  <span key={id} className="flex items-center gap-1.5">
+                    <kbd className="bg-background rounded-[5px] border px-1.5 py-px font-mono text-[11px] font-medium">{pretty(hotkey(s, id))}</kbd>
+                    {what}
+                  </span>
+                ))}
+                <span className="flex items-center gap-1.5">
+                  <kbd className="bg-background rounded-[5px] border px-1.5 py-px font-mono text-[11px] font-medium">J K</kbd>
+                  Next, previous
+                </span>
+              </footer>
+            )}
           </div>
           )}
           {/* a phone's tab bar, under whatever page is up — see MobileTabs */}
@@ -728,7 +748,7 @@ export default function App() {
               </div>
 
               <div className={cn(
-                'hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out md:flex',
+                'bg-muted/40 hidden shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out md:flex',
                 open ? 'w-75' : 'w-0',
               )}>
                 {!phone && panelRef.current}
@@ -745,6 +765,18 @@ export default function App() {
         onNewProject={() => setNewProject(true)}
         onImport={() => fileRef.current?.click()}
         onJump={jumpTo}
+      />
+
+      <FileDialog
+        ids={filing}
+        onOpenChange={(v) => { if (!v) setFiling(null) }}
+        /* The rows have usually just left this list, so the selection moves on to the first one
+           still in it — which is what makes emptying an Inbox F, F, F rather than F, click, F. */
+        onFiled={(ids) => {
+          setMarked([])
+          const at = items.findIndex((i) => ids.includes(i.id))
+          focus((items.slice(at + 1).find((i) => !ids.includes(i.id)) ?? items.find((i) => !ids.includes(i.id)))?.id ?? null)
+        }}
       />
 
       <ProjectDialog

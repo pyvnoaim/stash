@@ -19,10 +19,11 @@ export const HOTKEYS: Hotkey[] = [
   { id: 'today', what: 'Due today', def: 't' },
   { id: 'tomorrow', what: 'Push to tomorrow', def: 's' },
   { id: 'done', what: 'Finish or reopen a task', def: ' ' },
+  { id: 'file', what: 'File to a project', def: 'f' },
 ]
 
-/** The three that act on the rows themselves, rather than opening something. */
-export const ON_ROWS = ['today', 'tomorrow', 'done']
+/** The ones that act on the rows themselves, rather than opening something. */
+export const ON_ROWS = ['today', 'tomorrow', 'done', 'file']
 
 /** Written into the handler and not rebindable, listed so the panel can still show them. */
 export const FIXED: [string, string][] = [

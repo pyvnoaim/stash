@@ -7,18 +7,17 @@ import { readdirSync, readFileSync } from 'node:fs'
 const csp = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 const allowed = csp.match(/connect-src ([^;]+);/)?.[1].split(/\s+/) ?? []
 assert.ok(allowed.length, 'connect-src not found in server/index.ts')
+// the app talks to its own origin and nothing else — a host added here is a host to justify
+assert.deepEqual(allowed, ["'self'"])
 
 const src = new URL('../src/', import.meta.url)
 const files = readdirSync(src, { recursive: true, encoding: 'utf8' })
   .filter((f) => /\.tsx?$/.test(f) && !f.endsWith('.test.ts'))
-let seen = 0
 for (const f of files) {
   const code = readFileSync(new URL(f, src), 'utf8')
   // a socket literal anywhere, or a URL literal handed straight to fetch — comments name hosts too
   const hosts = [...code.matchAll(/['`](wss:\/\/[^/'`]+)/g), ...code.matchAll(/fetch\(\s*['`](https:\/\/[^/'`]+)/g)]
   for (const [, origin] of hosts) {
-    seen++
     assert.ok(allowed.includes(origin), `${f} reaches ${origin}, which connect-src does not allow`)
   }
 }
-assert.ok(seen > 0, 'found no browser hosts at all — the pattern above has stopped matching')

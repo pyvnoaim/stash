@@ -3,21 +3,30 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
-/* Geist Pixel, self-hosted from the official release (OFL-1.1, see src/fonts/OFL.txt). */
+/* Geist Pixel is the wordmark's face and nothing else's now; Geist Mono carries counts, dates and
+   tags. Both self-hosted from the official releases (OFL-1.1, see src/fonts/OFL.txt). */
 @font-face {
     font-family: 'Geist Pixel Square';
     src: url('./fonts/GeistPixel-Square.woff2') format('woff2');
     font-weight: 400;
     font-display: swap;
 }
+@font-face {
+    font-family: 'Geist Mono';
+    src: url('./fonts/GeistMono-Variable.woff2') format('woff2');
+    font-weight: 100 900;
+    font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    /* Geist Variable stays in the stack to cover glyphs Pixel does not carry. */
-    --font-sans: 'Geist Pixel Square', 'Geist Variable', sans-serif;
-    --font-heading: 'Geist Pixel Square', monospace;
-    --font-mono: 'Geist Pixel Square', ui-monospace, monospace;
+    --font-sans: 'Geist Variable', system-ui, sans-serif;
+    --font-heading: 'Geist Variable', system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, monospace;
+    --font-pixel: 'Geist Pixel Square', 'Geist Mono', monospace;
+    --color-tint-foreground: var(--tint-foreground);
+    --color-tint: var(--tint);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -26,11 +35,6 @@
     --color-sidebar-primary: var(--sidebar-primary);
     --color-sidebar-foreground: var(--sidebar-foreground);
     --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
@@ -58,73 +62,73 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* A white sheet on a warm-grey desk, one accent. The desk is `--sidebar`: the sidebar sits on it
+   and the content is the sheet. `--primary` is the accent, so the one filled button on a page is
+   the one that commits. `--tint` is the accent as a wash, for a link or a chip that points
+   somewhere. Project dots are the only other colour in the app. */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    --background: #ffffff;
+    --foreground: #17181b;
+    --card: #ffffff;
+    --card-foreground: #17181b;
+    --popover: #ffffff;
+    --popover-foreground: #17181b;
+    --primary: #2f4bff;
+    --primary-foreground: #ffffff;
+    --secondary: #f1f1ee;
+    --secondary-foreground: #17181b;
+    --muted: #f6f6f4;
+    --muted-foreground: #62656d;
+    --accent: #f1f1ee;
+    --accent-foreground: #17181b;
+    --destructive: #b42318;
+    --border: #e6e6e2;
+    --input: #dcdcd7;
+    --ring: #2f4bff;
+    --tint: #eceeff;
+    --tint-foreground: #2337c6;
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar: #efefec;
+    --sidebar-foreground: #17181b;
+    --sidebar-primary: #2f4bff;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #ffffff;
+    --sidebar-accent-foreground: #17181b;
+    --sidebar-border: #dcdcd7;
+    --sidebar-ring: #2f4bff;
 }
 
+/* The accent lightens where it is a mark or text and stays solid where it is a fill, so both hold
+   their contrast on the dark sheet. */
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --background: #1a1b1e;
+    --foreground: #edede9;
+    --card: #1a1b1e;
+    --card-foreground: #edede9;
+    --popover: #222327;
+    --popover-foreground: #edede9;
+    --primary: #4a62ff;
+    --primary-foreground: #ffffff;
+    --secondary: #26282c;
+    --secondary-foreground: #edede9;
+    --muted: #222327;
+    --muted-foreground: #9a9da5;
+    --accent: #26282c;
+    --accent-foreground: #edede9;
+    --destructive: #ff8a7a;
+    --border: #2a2c31;
+    --input: #363940;
+    --ring: #8c9bff;
+    --tint: #23284a;
+    --tint-foreground: #b4beff;
+    --sidebar: #111214;
+    --sidebar-foreground: #edede9;
+    --sidebar-primary: #4a62ff;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #1a1b1e;
+    --sidebar-accent-foreground: #edede9;
+    --sidebar-border: #2a2c31;
+    --sidebar-ring: #8c9bff;
 }
 
 @layer base {
@@ -148,11 +152,12 @@
     }
   html {
     @apply font-sans;
-    /* Geist Pixel ships a single weight, so font-bold would only get the browser's synthetic
-       smear. Stroking the outlines thickens them evenly, which is what a pixel face wants.
-       ponytail: one dial for the whole app — raise it to 0.5px for heavier, drop it to 0 for stock. */
-    -webkit-text-stroke: 0.35px currentColor;
     }
+}
+
+/* The row you are on in the sidebar is a piece of the sheet: its colour, inside a hairline. */
+[data-sidebar="menu-button"][data-active="true"] {
+  box-shadow: 0 0 0 1px var(--sidebar-border);
 }
 
 /* the item list can hold thousands of rows, each a full context-menu tree. content-visibility lets

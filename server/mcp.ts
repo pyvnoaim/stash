@@ -9,12 +9,8 @@
  *
  *   STASH_URL=https://stash.example STASH_USER=leon STASH_PASS=… \
  *     node --experimental-strip-types server/mcp.ts
- *
- * Every asset here is a USDT perpetual off a keyless public book, so there is nothing to configure
- * beyond the three variables above.
  */
 import { realpathSync } from 'node:fs'
-import type { Interval, Signal } from '../src/lib/market.ts'
 import type { Item, ItemType, State } from '../src/lib/store.ts'
 
 /* store.ts is browser code: it reads localStorage and starts listening for another window's writes
@@ -26,9 +22,6 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 const store = await import('../src/lib/store.ts')
-const market = await import('../src/lib/market.ts')
-// the market feed, installed on import — this process reads the venue straight, not through the relay
-await import('./hyperliquid.ts')
 const { parseCapture } = await import('../src/lib/parse.ts')
 
 const UA = 'stash-mcp'   // names this client in the sessions list, so it can be revoked on sight
@@ -145,14 +138,6 @@ const asProject = (s: State, name: unknown) => {
   return p
 }
 
-const asset = (id: unknown) => {
-  const want = String(id).toLowerCase()
-  const a = market.ASSETS.find((x) => x.id.toLowerCase() === want)
-    ?? market.ASSETS.find((x) => x.label.toLowerCase() === want)
-  if (!a) throw new Error(`no asset "${id}" — have: ${market.ASSETS.map((x) => `${x.id} (${x.label})`).join(', ')}`)
-  return a
-}
-
 /* ---------- the tools ---------- */
 
 /** The revision this server actually implements — the handshake one, which 2026-07-28 still keeps
@@ -241,7 +226,7 @@ const tools: Record<string, {
     // both can take a row away — the two calls a client should be asking about
     annotations: { destructiveHint: true },
     description: 'Change one item by id, or remove it. `done` runs the app\'s own toggle, so '
-      + 'finishing a repeating task opens the next occurrence. `project: null` moves it to Quick notes.',
+      + 'finishing a repeating task opens the next occurrence. `project: null` moves it to Inbox.',
     schema: {
       type: 'object',
       properties: {
@@ -394,204 +379,6 @@ const tools: Record<string, {
     },
   },
 
-  market_read: {
-    annotations: READS,
-    description: 'The Markets desk\'s read on one asset: price, every signal it computes, the '
-      + 'bull/bear tally and the setup that falls out of it — the same numbers the page shows. '
-      + 'Not advice, and nothing here is a position.',
-    schema: {
-      type: 'object',
-      properties: {
-        asset: { type: 'string', description: 'an id or label, e.g. BTCUSDT or Bitcoin. Defaults to whatever the desk is on.' },
-        horizon: { type: 'string', enum: ['long', 'short'], description: 'long = Investing (50/200, daily), short = Trading (9/21, hourly)' },
-        interval: { type: 'string', enum: [...market.INTERVALS] },
-      },
-    },
-    run: async (a) => {
-      const s = await pull()
-      const h = (a.horizon ?? s.marketHorizon) as 'long' | 'short'
-      if (!market.HORIZONS[h]) throw new Error(`no such horizon: ${a.horizon}`)
-      const cfg = market.HORIZONS[h]
-      const want = asset(a.asset ?? s.marketAsset)
-      const interval = (a.interval ?? cfg.interval) as Interval
-      if (!market.INTERVALS.includes(interval)) throw new Error(`no such interval: ${interval}`)
-
-      // the timeframe one step up votes too — "don't fight the bigger picture", the same card the
-      // desk leads with. Its own fetch: the slow MA wants 200 of its bars, which this window has
-      // not. Both at once, since waiting for the first before starting the second was two round
-      // trips of latency for one answer. It fails quietly: a filter, not the feed.
-      const up = market.HIGHER[interval]
-      const [candles, higher] = await Promise.all([
-        market.fetchCandles(want, interval),
-        up ? market.fetchCandles(want, up).then((c) => market.trendFilter(c, cfg.slow, up)).catch(() => null) : null,
-      ])
-      if (!candles.length) throw new Error('the feed returned no bars')
-      const view = market.signals(candles, cfg)
-      /* The same list the page counts, assembled by the same function — this used to build its own
-         and left the VWAP card out, so a 1h read here counted one fewer vote than the screen and
-         could answer with a side, an entry and a stop the desk would not have given. No range: that
-         card belongs to the opening-range preset and this tool has no preset. */
-      const vwap = market.sessionVwap(candles)
-      const list: Signal[] = market.deskSignals(higher, null, vwap, view.signals)
-      const { bulls, bears, dir } = market.tally(list)
-      const price = candles.at(-1)!.c
-      /* Through the horizon's own strategy, for the same reason deskSignals exists: an answer here
-         that disagreed with the screen would be worse than no answer. The two horizons run different
-         rules now — accumulation on long, a fixed-2R VWAP pull-back on short — so reading the plan
-         off one of them would make this tool confidently describe a setup the desk never offered.
-         The fee dial rides along because "does this pay" is the part it disagrees on. */
-      const { plan, block } = market.strategyPlan(h, {
-        dir, price, fast: view.smaFast.at(-1) ?? null, slow: view.smaSlow.at(-1) ?? null,
-        levels: view.levels, atr: view.atr, vwap: vwap?.vwap ?? null,
-        toll: market.toll(candles, s.dials.fee), fee: s.dials.fee,
-      })
-      const holding = h === 'long'
-      // accumulation is long-only and gated on the 200-MA already, so the higher timeframe is not a
-      // second filter over it — same call the card makes
-      const fights = !holding && higher && ((dir === 'long' && higher.tone === 'bear') || (dir === 'short' && higher.tone === 'bull'))
-      const NOTHING: Record<string, string> = {
-        flat: 'No side to take — the readings are split',
-        chase: `No clean setup — price is already past the ${cfg.fast}-MA, and entering there is chasing`,
-        vwap: `Wrong side of the session VWAP for a ${dir} — this rule will not take one against the average paid since the open`,
-        quiet: 'No ATR off these bars yet, so there is no stop to size',
-        warmup: `Too few ${interval} bars came back to warm the ${cfg.slow}-MA — the read would be decided by whichever cards had enough bars, which is not this rule`,
-        toll: `A normal ${interval} bar is small enough that crossing the book twice at ${s.dials.fee}% a side costs over a quarter of the risk — this rule stops one ATR away, so the fee would be most of the trade. Walked, these came out break-even gross and −0.30R net`,
-        below: `Out — price is under the ${cfg.slow}-MA, and below that line there is nothing to hold`,
-        geometry: 'The levels do not make a trade — the stop or the target lands the wrong side of the entry',
-      }
-
-      return {
-        asset: want.label, id: want.id, horizon: cfg.label, interval,
-        price, asOf: new Date(candles.at(-1)!.t).toISOString(), bars: candles.length,
-        support: view.support, resistance: view.resistance, atr: view.atr,
-        tally: { bulls, bears, bias: dir },
-        signals: list.map((x) => ({ label: x.label, tone: x.tone, detail: x.detail })),
-        strategy: cfg.strategy, rule: cfg.rule,
-        /* Beside the plan, not below it. An agent reading this over MCP will otherwise relay an
-           entry, a stop and a target as advice, which is the one reading the walk says is wrong. */
-        measured: cfg.measured,
-        plan: plan && {
-          ...plan,
-          side: holding ? 'long' : dir,
-          how: holding
-            ? `buy it here while price holds the ${cfg.slow}-MA; out on a daily close back under that line as it stands then, and nothing else — no pull-back to wait for, no target, and no intraday stop. The wide high is a trim if you want one`
-            : `${dir === 'long' ? 'buy the pull-back down to' : 'sell the bounce up into'} the ${cfg.fast}-MA, stop one ATR past it and target two`,
-          // a list, because a setup can be both thin and against the tide, and dropping either one
-          // of those on the floor is dropping the half of the answer that says don't. `thin` is not
-          // a warning on the accumulation side — see holdPlan; it is computed there, never enforced
-          warnings: [
-            ...(plan.thin && !holding ? [`more than half of these have to win just to break even (${(plan.breakEven * 100).toFixed(0)}%, net of the ${s.dials.fee}%-a-side fee) — it pays less than it costs when wrong`] : []),
-            ...(fights ? [`the ${up} chart is going the other way, and that is the bigger tide`] : []),
-          ],
-        },
-        // the honest answer is often that there is nothing to do, so it is said rather than left blank
-        ...(plan ? {} : { verdict: (block && NOTHING[block]) ?? 'Nothing to do here' }),
-      }
-    },
-  },
-
-  market_trending: {
-    annotations: READS,
-    description: 'The other market, off GeckoTerminal: Solana pools trending on the last hour, or '
-      + 'the ones that just opened. None of this is in the asset list and none of it gets a chart — '
-      + 'a moving average over a six-hour pool is a line through noise. Liquidity is the honest '
-      + 'column: a 300% hour on $4k of pool is not a market.',
-    schema: {
-      type: 'object',
-      properties: {
-        mode: { type: 'string', enum: ['trending', 'new'], description: 'new is filtered by your own liquidity floor from Settings → Markets' },
-        limit: { type: 'integer' },
-      },
-    },
-    run: async (a) => {
-      const mode = String(a.mode ?? 'trending')
-      if (mode !== 'trending' && mode !== 'new') throw new Error(`no such mode: ${mode}`)
-      const rows = mode === 'new' ? await market.fetchNew() : await market.fetchTrending()
-      /* A constant now, not a dial. It was the same floor the Markets panel filtered its New list
-         by; the panel is gone and this tool is the last reader, and a number only an MCP client
-         ever sees has no business being a field in Settings. */
-      const floor = mode === 'new' ? market.NEW_POOL_LIQ : 0
-      const kept = rows.filter((t) => t.liq >= floor)
-      // a dozen, the shortlist the panel shows — `count` says what was left off rather than
-      // letting a cut list read as the whole feed
-      const shown = kept.slice(0, Number(a.limit ?? 12))
-      return {
-        network: market.TREND_NETWORK, mode, count: kept.length,
-        ...(mode === 'new' && { floor }),
-        pools: shown.map((t) => ({
-          symbol: t.symbol, price: t.price, h1: t.h1, h24: t.h24,
-          liquidity: Math.round(t.liq), volume24: Math.round(t.vol24),
-          // hours, and null for a pool whose opening date the feed didn't give — old, the quiet answer
-          ageHours: isFinite(t.age) ? Number(t.age.toFixed(1)) : null,
-          url: t.url,
-        })),
-      }
-    },
-  },
-
-  market_setups: {
-    annotations: READS,
-    description: 'What is open at the exchange right now, the saved setups the bell is watching, '
-      + 'and the record of the ones that finished — scored in R off the price actually seen when '
-      + 'they ended. A row carrying size and leverage is a position that was really taken and has '
-      + 'money on it; every other row is a plan nobody was in, and says its R alone.',
-    schema: { type: 'object', properties: {} },
-    run: async () => {
-      const s = await pull()
-      /* The exchange's word on what is actually held. It is deliberately not in the document — a
-         live position rides the feed and only files itself into `results` when it closes — so a
-         tool reading `pull()` alone answered "your setups" with the resting plans and the closed
-         history and none of the open money, which is the half a question about positions is about.
-         Degrades the way the market page does: no key on the account (501) or a venue that would
-         not answer (502) is a reply with no `open`, not a call that fails. */
-      const held = await api('/api/positions')
-        .then((r) => (r.ok ? r.json() as Promise<{ positions: any[] }> : null))
-        .catch(() => null)
-      /* One R in euros, per row: a taken position off its own notional. A plan has no size and so
-         no euros. The same arithmetic as stakeOf in src/lib/notify.ts — see the note there. */
-      const per = (w: { entry: number, stop: number, size?: number, lev?: number }) => {
-        const own = w.size && w.lev ? (w.size * w.lev * Math.abs(w.entry - w.stop)) / w.entry : 0
-        // a stored entry of zero divides to Infinity, and an answer of Infinity euros is worse
-        // than the honest absence of one
-        return isFinite(own) && own > 0 ? own : 0
-      }
-      const money = (r: number, at: number) =>
-        (at > 0 && isFinite(at * r) ? Number((r * at).toFixed(2)) : undefined)
-      const total = s.results.reduce((n, r) => n + r.r, 0)
-      /* Row by row rather than R-times-one-figure: the rows are no longer the same size of money,
-         and the ones with none at all are left out rather than counted as zero. Absent only when
-         not a single row had a figure — a set of trades that all scratched really did pay €0, and
-         `paid || undefined` would have reported that as "no money here at all". Rounded after the
-         sum, because a dozen two-decimal figures added up do not stay at two decimals. */
-      const each = s.results.map((r) => money(r.r, per(r))).filter((m) => m !== undefined)
-      const paid = each.length ? Number(each.reduce((n, m) => n + m, 0).toFixed(2)) : undefined
-      return {
-        open: (held?.positions ?? []).map((p) => ({
-          // the desk's own word for the symbol where it lists one, the exchange's where it doesn't
-          asset: market.ASSETS.find((x) => x.id === p.symbol)?.label ?? p.symbol,
-          venue: p.venue, dir: p.side, size: p.size, leverage: p.lev,
-          entry: p.entry, now: p.mark, stop: p.stop, target: p.target, liq: p.liq,
-          pnl: p.pnl, pct: p.pct, worth: p.value, funding: p.funding,
-          opened: p.openedAt,
-        })),
-        watching: s.watches.map((w) => ({
-          asset: w.label, dir: w.dir, horizon: w.horizon,
-          entry: w.entry, stop: w.stop, target: w.target,
-          saved: new Date(w.ts).toISOString(),
-          // an entry never reached is not a trade that lost, it is one nobody was ever in
-          started: w.entryAt ? new Date(w.entryAt).toISOString() : null,
-          // present only on the ones with money actually on them
-          ...(w.size && w.lev ? { position: { size: w.size, leverage: w.lev, atRisk: Number(per(w).toFixed(2)) } } : {}),
-        })),
-        finished: s.results.map((r) => ({
-          asset: r.label, dir: r.dir, horizon: r.horizon, ended: r.level, exit: r.exit,
-          r: Number(r.r.toFixed(2)), money: money(r.r, per(r)), taken: !!(r.size && r.lev),
-          started: new Date(r.entryAt).toISOString(), closedAt: new Date(r.closedAt).toISOString(),
-        })),
-        total: { r: Number(total.toFixed(2)), money: paid },
-      }
-    },
-  },
 }
 
 return async function rpc(m: any): Promise<any> {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  CalendarDays, CandlestickChart, ChartLine, Copy, Database, Download, Eraser,
-  History, Info, Keyboard, Link2, Lock, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen,
+  Copy, Database, Download, Eraser,
+  History, Info, Keyboard, Link2, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen,
   Users, Wrench,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -25,20 +25,14 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  addItem, CALENDAR, CANDLE_PAIRS, candlePair, clearDone, hotkey, MARKET, readOnly,
-  resetHotkeys, setCandles, setChart, setDesk, setHotkey, setTool, TOOLS, toolOn, useStash,
-  type ChartStyle,
+  addItem, clearDone, hotkey, readOnly,
+  resetHotkeys, setHotkey, setTool, TOOLS, toolOn, useStash,
 } from '@/lib/store'
 import {
-  calendar, changePassword, deleteAccount, devices, dropCalendar, dropFeed, dropLink, feed, getSync,
-  links, linkUrl, logout, lost, newFeed, restore, setCalendar, subscribeSync, updateAccount,
+  changePassword, deleteAccount, devices, dropLink, getSync,
+  links, linkUrl, logout, lost, restore, subscribeSync, updateAccount,
   versions, type Device, type Link, type Version,
 } from '@/lib/sync'
-
-const CHARTS: { id: ChartStyle; label: string; icon: React.ElementType }[] = [
-  { id: 'line', label: 'Line', icon: ChartLine },
-  { id: 'candles', label: 'Candles', icon: CandlestickChart },
-]
 
 /** The picture, or the first letter where there is none yet. */
 export function Avatar({ name, avatar, className }: {
@@ -68,7 +62,6 @@ export function SettingsDialog({ open, onOpenChange }: {
   onOpenChange: (v: boolean) => void
 }) {
   const { user } = useSyncExternalStore(subscribeSync, getSync)
-  const s = useStash()
   const [at, setAt] = useState('account')
   // every open starts at the top of the list, rather than wherever the last one wandered to
   useEffect(() => { if (open) setAt('account') }, [open])
@@ -81,15 +74,10 @@ export function SettingsDialog({ open, onOpenChange }: {
     { id: 'tools', label: 'Tools', icon: Wrench },
     ...(user
       ? [
-          ...(toolOn(s, CALENDAR) ? [{ id: 'calendar', label: 'Calendar', icon: CalendarDays }] : []),
           { id: 'links', label: 'Sharing', icon: Link2 },
           ...(user.admin ? [{ id: 'people', label: 'People', icon: Users }] : []),
         ]
       : []),
-    /* A tool that is switched off takes its own settings with it: a feed to subscribe to a
-       calendar you cannot open, or the fee your venue charges on a desk that is not there, is
-       exactly the reading-past this whole switch exists to stop. */
-    ...(toolOn(s, MARKET) ? [{ id: 'markets', label: 'Markets', icon: CandlestickChart }] : []),
     { id: 'data', label: 'Data', icon: Database },
     { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
@@ -145,11 +133,9 @@ export function SettingsDialog({ open, onOpenChange }: {
                   stash", and it sat under Links only because Links was where the other copyable
                   URL lived */}
               {here === 'tools' && <><ToolsPanel /><McpSection /></>}
-              {here === 'calendar' && <><CalendarFeed /><CalendarSub /></>}
               {here === 'links' && <LinksPanel />}
               {here === 'people' && user && <PeoplePanel me={user.name} />}
               {here === 'data' && <DataPanel onDone={() => onOpenChange(false)} />}
-              {here === 'markets' && <MarketsPanel />}
               {here === 'hotkeys' && <HotkeysPanel />}
               {here === 'about' && <AboutPanel />}
             </div>
@@ -289,14 +275,14 @@ function DataPanel({ onDone }: { onDone: () => void }) {
 /**
  * Which of the four tools are in the sidebar at all.
  *
- * A stash kept for the shopping does not want a candlestick chart in the corner of it. Switching
+ * A stash kept for the shopping does not want a PDF editor in the corner of it. Switching
  * one off takes it out of the sidebar, out of ⌘K, and out of Settings where it had a page of its
- * own — and off the list of things `sel` may be, so a bookmark to it lands on Overview rather
+ * own — and off the list of things `sel` may be, so a bookmark to it lands on Today rather
  * than on a page with no way back.
  *
  * Nothing is deleted. A subscription, a saved setup, a calendar feed all sit where they were and
  * come back the moment the switch goes on again: this hides a tool, it does not throw anything
- * out. Stored with the document, so switching Markets off on the laptop switches it off on the
+ * out. Stored with the document, so switching one off on the laptop switches it off on the
  * phone — which is the point, and the opposite of the theme.
  */
 function ToolsPanel() {
@@ -370,160 +356,6 @@ function AboutPanel() {
           <dd>{when(Date.parse(__BUILT_AT__))}</dd>
         </div>
       </dl>
-    </Section>
-  )
-}
-
-function MarketsPanel() {
-  const s = useStash()
-  return (
-    <>
-      <Section title="Chart" hint="How the desk draws a price it has bars for.">
-        <div className="grid grid-cols-2 gap-1.5">
-          {CHARTS.map(({ id, label, icon: Icon }) => (
-            <Button
-              key={id}
-              size="sm"
-              variant={s.chart === id ? 'default' : 'outline'}
-              onClick={() => setChart(id)}
-            >
-              <Icon className="size-3.5" />
-              {label}
-            </Button>
-          ))}
-        </div>
-
-        {/* The swatch is the setting: two dots say what the chart will look like better than the
-            name beside them does. Emerald against red is the pair the commonest colourblindness
-            cannot separate, which is the whole reason this row exists — and it paints the volume
-            bars and the open gaps too, not only the candles. */}
-        <div className="grid gap-1.5">
-          <p className="text-muted-foreground text-xs">Up and down</p>
-          <div className="grid grid-cols-2 gap-1.5">
-            {CANDLE_PAIRS.map((p) => (
-              <Button
-                key={p.id}
-                size="sm"
-                variant={candlePair(s).id === p.id ? 'default' : 'outline'}
-                onClick={() => setCandles(p.id)}
-              >
-                {/* ring-current so a dot the colour of the button's own text — Mono's up dot on a
-                    selected button — still reads as a dot rather than as nothing. */}
-                <span className="flex gap-0.5">
-                  <span className="size-2.5 rounded-full ring-1 ring-current/25" style={{ background: p.up }} />
-                  <span className="size-2.5 rounded-full ring-1 ring-current/25" style={{ background: p.down }} />
-                </span>
-                {p.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-      </Section>
-
-      {/* A "What a setup is worth" field stood here: euros at risk on one hypothetical setup, which
-          priced every watched plan as if it had been taken. Nothing that reads money shows those
-          rows any more — the Log and the calendar both gate on isReal — so the only thing the
-          number still did was invent euros for a trade nobody was in. A position carries its own
-          size and leverage and prices itself. */}
-
-      <Section
-        title="The others"
-        hint="Puts your setups on everyone else's Markets page, the way theirs land on yours.
-          Open trades go over whole; finished ones stay in R."
-      >
-        <div className="grid grid-cols-2 gap-1.5">
-          {([[false, 'Private', Lock], [true, 'On the desk', Users]] as const).map(([on, label, Icon]) => (
-            <Button
-              key={label}
-              size="sm"
-              variant={s.desk === on ? 'default' : 'outline'}
-              onClick={() => setDesk(on)}
-            >
-              <Icon className="size-3.5" />
-              {label}
-            </Button>
-          ))}
-        </div>
-      </Section>
-
-      {/* A "Stock data key" field stood here, shown only while some asset still rode Twelve Data —
-          which none has for a while, so it was already invisible. The feed is gone now and so is
-          the key: it was the one secret this app kept in the synced document. */}
-
-      <WalletSection />
-    </>
-  )
-}
-
-type Wallet = { address: string, chain: 'evm' | 'solana', label: string | null }
-
-/**
- * The wallets this account watches — addresses, never keys. Paste one and the server reads its
- * chain off its shape, looks it up, and says what it found there, so a wrong address is found out
- * here rather than as a panel that stays empty. Kept on the server, each account its own; nothing
- * here can sign, so nothing here can move a cent. Fomo uses one 0x address on every EVM chain —
- * that one is Hyperliquid perps — and one Solana address.
- */
-function WalletSection() {
-  const { user } = useSyncExternalStore(subscribeSync, getSync)
-  const [wallets, setWallets] = useState<Wallet[]>([])
-  const [address, setAddress] = useState('')
-  const [label, setLabel] = useState('')
-  const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    if (!user) return
-    void fetch('/api/wallets').then((r) => r.json()).then((j) => setWallets(j.wallets ?? [])).catch(() => {})
-  }, [user])
-  // no account, no server to keep an address on — the section is simply not there
-  if (!user) return null
-
-  const send = async (method: 'POST' | 'DELETE', body: Record<string, string>) => {
-    setBusy(true)
-    try {
-      const r = await fetch('/api/wallets', { method, body: JSON.stringify(body) })
-      const j = await r.json()
-      if (!r.ok) throw new Error(j.error ?? r.status)
-      setWallets(j.wallets ?? [])
-      return j as { found?: string }
-    } catch (e) {
-      toast(String((e as Error).message))
-      return null
-    } finally {
-      setBusy(false)
-    }
-  }
-  const add = async () => {
-    const j = await send('POST', { address: address.trim(), label: label.trim() })
-    if (!j) return
-    setAddress(''); setLabel('')
-    toast(j.found ? `Wallet added — ${j.found}` : 'Wallet added')
-  }
-  const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
-
-  return (
-    <Section
-      title="Wallets"
-      hint="In Fomo: your profile → the 0x address (Hyperliquid perps, Base) and the Solana address. Watch-only — Stash never holds a key, so it can see and never trade."
-      action={
-        <Button size="sm" disabled={busy || !address.trim()} onClick={() => void add()}>Add</Button>
-      }
-    >
-      {wallets.map((w) => (
-        <div key={w.address} className="flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-xs">
-            <span className="text-muted-foreground">{w.chain === 'evm' ? 'EVM · Hyperliquid' : 'Solana'}</span>{' '}
-            <span className="font-mono">{short(w.address)}</span>
-            {w.label && <span className="text-muted-foreground"> · {w.label}</span>}
-          </p>
-          <Button size="sm" variant="outline" disabled={busy}
-            onClick={() => void send('DELETE', { address: w.address })}>Remove</Button>
-        </div>
-      ))}
-      <Input placeholder="0x… or a Solana address" autoComplete="off" spellCheck={false} value={address}
-        onChange={(e) => setAddress(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && address.trim() && !busy) void add() }} />
-      <Input placeholder="Label (optional) — e.g. Fomo" autoComplete="off" value={label} maxLength={40}
-        onChange={(e) => setLabel(e.target.value)} />
     </Section>
   )
 }
@@ -716,136 +548,6 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
 
       <DeleteAccount />
     </>
-  )
-}
-
-/**
- * What is due and what is about to be charged, as a calendar anything can subscribe to — the
- * phone's own calendar, its lock screen and its alarms, without a line of this app running.
- * The link is the whole of the authorisation, so it is treated as one: shown, copied, replaced.
- */
-function CalendarFeed() {
-  // undefined while it is being asked for, null when there is none
-  const [token, setToken] = useState<string | null | undefined>(undefined)
-  const [busy, setBusy] = useState(false)
-  useEffect(() => { void feed().then(setToken) }, [])
-
-  const url = token ? `${location.origin}/ics/${token}` : ''
-  const act = async (fn: () => Promise<string | null | void>) => {
-    setBusy(true)
-    const next = await fn()
-    setToken(next ?? null)
-    setBusy(false)
-  }
-
-  return (
-    <Section
-      title="Calendar feed"
-      hint="A read-only link your calendar can subscribe to: every dated item and charge for a
-        year ahead. A new link takes an old one back."
-      action={(
-        <div className="flex flex-wrap gap-2">
-          {token && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => act(async () => { await dropFeed(); return null })}
-            >
-              <Trash2 /> Turn off
-            </Button>
-          )}
-          <Button
-            variant={token ? 'outline' : 'default'}
-            size="sm"
-            disabled={token === undefined || busy}
-            onClick={() => act(newFeed)}
-          >
-            <RefreshCw /> {token ? 'New link' : 'Create link'}
-          </Button>
-        </div>
-      )}
-    >
-      {token
-        ? (
-            <div className="flex items-center gap-2">
-              <Input readOnly value={url} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { void navigator.clipboard?.writeText(url); toast('Link copied') }}
-              >
-                <Copy /> Copy
-              </Button>
-            </div>
-          )
-        : (
-            <p className="text-muted-foreground text-sm">
-              {token === undefined ? 'Asking the server…' : 'No link yet.'}
-            </p>
-          )}
-    </Section>
-  )
-}
-
-/**
- * The other direction: your real calendar, shown on the Calendar page beside the work. Read-only
- * and one-way — nothing here writes to it, and nothing it holds becomes an item. The link is the
- * "secret address" every provider offers (Google calls it the private ICS address); it is fetched
- * by this server, since none of them answer a browser asking from another origin.
- */
-function CalendarSub() {
-  const [url, setUrl] = useState<string | null | undefined>(undefined)
-  const [busy, setBusy] = useState(false)
-  const field = useRef<HTMLInputElement>(null)
-  // the window does not matter here, only the URL that comes back with it
-  useEffect(() => { void calendar('2000-01-01', '2000-01-02').then((r) => setUrl(r.url)) }, [])
-
-  const save = async () => {
-    const next = field.current?.value.trim() ?? ''
-    if (!next) return
-    setBusy(true)
-    const err = await setCalendar(next)
-    setBusy(false)
-    if (err) return toast(err)
-    setUrl(next)
-    toast('Calendar subscribed')
-  }
-
-  return (
-    <Section
-      title="Subscribed calendar"
-      hint="One read-only .ics link — the private address out of Google or Apple. Its events sit
-        on the Calendar page; nothing is written back."
-      action={url
-        ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={async () => { setBusy(true); await dropCalendar(); setUrl(null); setBusy(false) }}
-            >
-              <Trash2 /> Unsubscribe
-            </Button>
-          )
-        : undefined}
-    >
-      <div className="flex items-center gap-2">
-        <Input
-          ref={field}
-          // keyed on what came back, so the field repaints when the answer lands and after a drop
-          key={url ?? 'none'}
-          defaultValue={url ?? ''}
-          placeholder={url === undefined ? 'Asking the server…' : 'https://…/basic.ics'}
-          disabled={url === undefined || busy}
-          onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
-          className="font-mono text-xs"
-        />
-        <Button variant="outline" size="sm" disabled={url === undefined || busy} onClick={() => void save()}>
-          {url ? 'Replace' : 'Subscribe'}
-        </Button>
-      </div>
-    </Section>
   )
 }
 
@@ -1112,7 +814,7 @@ const when = (ts: number) => new Date(ts).toLocaleString(undefined, {
  *
  * Putting one back is an ordinary edit made here — it goes up on the next sync like any other, so
  * a row recovered on the laptop is on the phone a moment later. Its project may not have survived
- * it, in which case it lands in Quick notes, where an unfiled row belongs.
+ * it, in which case it lands in Inbox, where an unfiled row belongs.
  */
 function LostPanel() {
   const s = useStash()

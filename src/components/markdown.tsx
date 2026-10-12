@@ -67,8 +67,9 @@ function inline(text: string, links?: WikiLinks) {
           onClick={() => links!.open(target)}
           title={target.done ? `${target.text} — finished` : target.text}
           className={cn(
-            'hover:text-foreground underline underline-offset-2',
-            target.done && 'text-muted-foreground line-through',
+            // the accent as a wash: the one thing in a note that goes somewhere else in the stash
+            'bg-tint text-tint-foreground cursor-pointer rounded-[5px] px-1.5 py-px font-medium',
+            target.done && 'bg-secondary text-muted-foreground line-through',
           )}
         >
           {label}
@@ -122,9 +123,11 @@ const softLines = (lines: string[], links?: WikiLinks) => inline(lines.join('\n'
  * that line in the note itself, so a checklist needs no model of its own. Without `onToggle` —
  * anywhere the note is only being read — they stay as glyphs.
  */
-export function Markdown({ text, onToggle, links }: {
+export function Markdown({ text, onToggle, onPromote, links }: {
   text: string
   onToggle?: (line: number) => void
+  /** Turn an open box into a task of its own — offered on the line, where the note is editable. */
+  onPromote?: (line: number) => void
   /** absent where a link has nowhere to go — see WikiLinks */
   links?: WikiLinks
 }) {
@@ -148,18 +151,27 @@ export function Markdown({ text, onToggle, links }: {
       it.box === undefined
         ? <li key={i}>{marker(list!.ordered ? `${i + 1}. ` : '- ')}{inline(it.text, links)}</li>
         : (
-            <li key={i} className="-ml-5 flex list-none items-start gap-2">
+            <li key={i} className="group/box -ml-5 flex list-none items-start gap-2">
               {marker(it.box ? '- [x] ' : '- [ ] ')}
               <input
                 type="checkbox"
                 checked={it.box}
                 disabled={!onToggle}
                 onChange={() => onToggle?.(it.line)}
-                className="accent-foreground mt-[0.28em] size-3.5 shrink-0"
+                className="accent-primary mt-[calc((1lh-0.875rem)/2)] size-3.5 shrink-0"
               />
               <span className={it.box ? 'text-muted-foreground line-through' : undefined}>
                 {inline(it.text, links)}
               </span>
+              {/* a line that has outgrown the note it was jotted in. Not on one that is already a
+                  link: that is what a promoted line looks like. Shown on hover, and always where
+                  there is no hover — a control you cannot see must not be one you can tap. */}
+              {onPromote && !it.box && !/[[\]]/.test(it.text) && (
+                <button type="button" onClick={(e) => { e.stopPropagation(); onPromote(it.line) }}
+                  className="bg-background text-foreground ml-auto shrink-0 cursor-pointer rounded-md border px-2 py-0.5 text-xs font-medium pointer-events-none opacity-0 group-hover/box:pointer-events-auto group-hover/box:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+                  Make task
+                </button>
+              )}
             </li>
           )
     ))

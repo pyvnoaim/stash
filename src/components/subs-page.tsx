@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -79,16 +78,15 @@ const CyclePicker = ({ value, onChange, quiet }: { value: Cycle; onChange: (c: C
   </Select>
 )
 
-const Stat = ({ label, value, sub, strong, valueClass }: {
-  label: string; value: string; sub: string; strong?: boolean; valueClass?: string
-}) => (
-  <Card className={cn('gap-0 py-4', strong && 'border-foreground/30')}>
-    <CardContent className="px-4">
-      <p className="text-muted-foreground font-heading text-[11px] tracking-wider uppercase">{label}</p>
-      <p className={cn('mt-1 text-2xl tabular-nums', valueClass)}>{value}</p>
-      <p className="text-muted-foreground mt-0.5 text-xs">{sub}</p>
-    </CardContent>
-  </Card>
+/** One figure off the top of the page. The first is the answer the page exists for, so it is the
+ *  one that is large; the rest are what it was worked out from. */
+const Stat = ({ label, value, big, valueClass }: { label: string; value: string; big?: boolean; valueClass?: string }) => (
+  <div className="flex flex-col justify-end gap-1">
+    <span className="text-muted-foreground font-mono text-xs">{label}</span>
+    <span className={cn('tabular-nums', big ? 'text-[44px] leading-none font-semibold tracking-[-0.03em]' : 'text-xl font-medium', valueClass)}>
+      {value}
+    </span>
+  </div>
 )
 
 export default function SubsPage() {
@@ -138,6 +136,16 @@ export default function SubsPage() {
 
   const switchView = (v: Kind) => { setView(v); setFilter('all') }
 
+  /* What a price was before it was changed. The cost field writes on every keystroke, so the old
+     price is the one the field held when it took the caret, and it is filed when the caret leaves —
+     a "was €1" from the first digit of a retyped number would be noise, not a price. */
+  const before = useRef(0)
+  const repriced = (sub: Sub) => {
+    const old = before.current
+    // the stored cost against the stored cost: the field's text is rounded to cents, the cost need not be
+    if (old > 0 && sub.cost !== old) patchSub(sub.id, { was: old })
+  }
+
   // delete with an undo toast — the same landing every other delete in the app gives
   const del = (sub: Sub) => {
     const undo = removeSub(sub.id)
@@ -147,15 +155,13 @@ export default function SubsPage() {
   }
 
   return (
-    <div className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto p-4 *:shrink-0">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Income / month" value={money(totals.incomeM)} sub={`${money(totals.incomeY)} / year`}
-          valueClass={MONEY_IN} />
-        <Stat label="Expenses / month" value={money(totals.expenseM)} sub={`${money(totals.expenseY)} / year`} />
-        <Stat label="Net / month" value={money(totals.netM)} sub={`${money(totals.netM * 12)} / year`} strong
-          valueClass={totals.netM >= 0 ? MONEY_IN : 'text-destructive'} />
-        <Stat label="Set aside / month" value={money(totals.reserve)}
-          sub={`covers ${money(totals.reserve * 12)} / year in yearly & quarterly bills`} />
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-6 overflow-y-auto px-4 pt-3 pb-8 *:shrink-0 md:px-8">
+      <div className="flex flex-wrap gap-x-14 gap-y-6 border-b pb-7">
+        <Stat big label="Left each month" value={money(totals.netM)}
+          valueClass={totals.netM < 0 ? 'text-destructive' : undefined} />
+        <Stat label="In" value={money(totals.incomeM)} />
+        <Stat label="Out" value={money(totals.expenseM)} />
+        <Stat label="Set aside for yearly and quarterly bills" value={money(totals.reserve)} />
       </div>
 
       {/* One line for what is on screen: which side you are editing, which cycles of it, what that
@@ -165,16 +171,18 @@ export default function SubsPage() {
       <div className="flex flex-wrap items-center gap-1.5">
         {/* p-0.5 around h-7 buttons is 32px of tray — the same height as the chips and the sort
             beside it. At p-1 it stood 4px taller than everything on the row. */}
-        <div className="bg-muted/50 flex w-fit gap-1 rounded-lg p-0.5">
+        <div className="bg-secondary flex w-fit gap-0.5 rounded-[9px] p-[3px]">
           {(['expense', 'income'] as const).map((k) => (
             <Button
               key={k}
               size="sm"
-              variant={view === k ? 'secondary' : 'ghost'}
-              className={cn('h-7', view !== k && 'text-muted-foreground')}
+              variant="ghost"
+              className={cn('h-[26px] rounded-md', view === k
+                ? 'bg-background ring-border hover:bg-background ring-1'
+                : 'text-muted-foreground hover:bg-transparent')}
               onClick={() => switchView(k)}
             >
-              {k === 'expense' ? 'Expenses' : 'Income'}
+              {k === 'expense' ? 'Out' : 'In'}
               <span className="ml-1 tabular-nums opacity-60">{counts[k]}</span>
             </Button>
           ))}
@@ -221,16 +229,17 @@ export default function SubsPage() {
       </div>
 
       {/* add row — name, cost, cycle. Enter anywhere in it commits. Date is set per row afterwards. */}
-      <Card className="py-3">
-        <CardContent className="flex flex-wrap items-center gap-2 px-3">
+      <div className="bg-muted rounded-[10px] p-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Input
             placeholder={income ? 'Salary, freelance, rent-in…' : 'Netflix, gym, iCloud…'}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') add() }}
-            className="min-w-40 flex-1"
+            className="bg-background dark:bg-background min-w-40 flex-1"
           />
           <Cost
+            className="bg-background dark:bg-background"
             placeholder="0,00"
             value={cost}
             onChange={(e) => setCost(e.target.value)}
@@ -241,8 +250,8 @@ export default function SubsPage() {
             <Plus />
             Add
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {list.length === 0 ? (
         <p className="text-muted-foreground px-1 py-8 text-center text-sm">
@@ -257,12 +266,12 @@ export default function SubsPage() {
            "these are the same kind of thing" in the way the cards were only pretending to.
            Still flex rows rather than a table element: the fields wrap onto a second line on a
            narrow screen, which is the one thing table layout cannot do. */
-        <Card className="gap-0 overflow-hidden py-0">
+        <div className="border-t">
           {shown.map((sub) => {
             const per = monthlyCost(sub)
             return (
-              <div key={sub.id} className="group border-b last:border-0">
-                <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+              <div key={sub.id} className="group border-b">
+                <div className="flex flex-wrap items-center gap-2 py-2">
                   {/* uncontrolled name/cost: keyed by id, so editing never fights the store's own value.
                       ponytail: a cross-tab edit won't refresh these fields; reopen the tab if it matters */}
                   <Input
@@ -270,8 +279,20 @@ export default function SubsPage() {
                     onChange={(e) => patchSub(sub.id, { name: e.target.value })}
                     className={cn('min-w-40 flex-1 font-medium', QUIET)}
                   />
+                  {/* It went up, or down: the row says what it was. Clicking it forgets the old
+                      price — a note about a change is not something to keep for ever. */}
+                  {sub.was != null && sub.was !== sub.cost && (
+                    <Hint label="Forget the old price">
+                      <button type="button" onClick={() => patchSub(sub.id, { was: undefined })}
+                        className="text-muted-foreground hover:text-foreground shrink-0 cursor-pointer font-mono text-xs tabular-nums">
+                        was {money(sub.was)}
+                      </button>
+                    </Hint>
+                  )}
                   <Cost quiet
                     defaultValue={costStr(sub.cost)}
+                    onFocus={() => { before.current = sub.cost }}
+                    onBlur={() => repriced(sub)}
                     onChange={(e) => patchSub(sub.id, { cost: num(e.target.value) })}
                   />
                   <CyclePicker quiet value={sub.cycle} onChange={(c) => patchSub(sub.id, { cycle: c })} />
@@ -320,7 +341,7 @@ export default function SubsPage() {
               </div>
             )
           })}
-        </Card>
+        </div>
       )}
     </div>
   )

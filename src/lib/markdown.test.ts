@@ -1,11 +1,19 @@
 // npm test
 import assert from 'node:assert/strict'
-import { toggleBox } from './markdown.ts'
+import { promoteBox, toggleBox } from './markdown.ts'
 
 // ticking a box rewrites that line and nothing else
 const note = '# plan\n- [ ] one\n- [x] two\n- plain\n\ntext'
 assert.equal(toggleBox(note, 1), '# plan\n- [x] one\n- [x] two\n- plain\n\ntext')
 assert.equal(toggleBox(note, 2), '# plan\n- [ ] one\n- [ ] two\n- plain\n\ntext')
+
+// an open box becomes a link to a task of the same words; nothing else is one to promote
+assert.deepEqual(promoteBox(note, 1), { note: '# plan\n- [ ] [[one]]\n- [x] two\n- plain\n\ntext', title: 'one' })
+assert.equal(promoteBox(note, 2), null)                           // already ticked
+assert.equal(promoteBox(note, 3), null)                           // a bullet, not a box
+assert.equal(promoteBox('- [ ] [[one]]', 0), null)                // already points somewhere
+assert.equal(promoteBox('- [ ] read [the docs](https://x.y)', 0), null)   // a label cannot hold a bracket
+assert.equal(promoteBox(note, 99), null)
 // a line that is not a box, and a line that is not there, come back unchanged
 assert.equal(toggleBox(note, 3), note)
 assert.equal(toggleBox(note, 0), note)

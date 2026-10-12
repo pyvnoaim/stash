@@ -61,48 +61,11 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         // never serve the app shell where the sync API was asked for
         navigateFallbackDenylist: [/^\/(api|state)/],
-        /* Candle history, kept so the Markets tool still draws with no network: the signals are
-           maths over bars that already closed, and they read the same on a plane as at a desk.
-           Network first, so a live reading is never the cache's to give — it answers only once the
-           feed has failed. Bars only. The ticker is deliberately absent: a stale price shown as
-           a live one is worse than no price, and missing is the honest answer offline. */
         runtimeCaching: [{
-          /* The bars, through this app's own relay: the candles route only, never the mids beside
-             it. Same-origin, so a regex on the path is the whole match. */
-          urlPattern: /\/api\/hl\/candles\?/,
-          handler: 'NetworkFirst',
-          options: {
-            cacheName: 'candles-hyperliquid',
-            networkTimeoutSeconds: 10,
-            cacheableResponse: { statuses: [200] },
-            expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
-          },
-        }, {
-          /* Twelve Data reports its own errors with 200 OK, so a rate-limited reply caches like a
-             good one and is what you get offline until the next success replaces it. Living with
-             it: generateSW takes serialisable config only, so filtering the body would mean owning
-             the whole service worker. The app already renders that body as the error it is. */
-          /* The history call and nothing else: outputsize=5000 is what fetchCandles asks for, and
-             the mover sweep asks the same endpoint for the last eight hourly bars. That one is a
-             live reading in the same way the ticker is — served from cache it announces an hour
-             that is over, to someone offline who cannot check. Matched on the size so the two
-             cannot be confused, and sw-routes.test.ts holds both halves of that against the
-             worker that actually shipped. */
-          urlPattern: /^https:\/\/api\.twelvedata\.com\/time_series\?.*outputsize=5000/,
-          handler: 'NetworkFirst',
-          options: {
-            cacheName: 'candles-twelvedata',
-            networkTimeoutSeconds: 10,
-            cacheableResponse: { statuses: [200] },
-            expiration: { maxEntries: 60, maxAgeSeconds: 30 * 86400, purgeOnQuotaError: true },
-          },
-        }, {
           /* The pictures in notes. CacheFirst, not NetworkFirst, and it is the one thing here that
              earns it: a blob id is 128 bits of randomness and the bytes behind it never change, so
              a cached copy cannot be stale — there is no newer version of that id to miss. Which
-             makes a note read the same offline as on, the way the rest of the app does.
-             The market feeds above are the opposite case and stay NetworkFirst: a candle has a
-             newer version, and serving yesterday's as today's is the failure worth avoiding. */
+             makes a note read the same offline as on, the way the rest of the app does. */
           urlPattern: /\/api\/blob\/[0-9a-f]{32}$/,
           handler: 'CacheFirst',
           options: {

@@ -1,8 +1,5 @@
 /* npm test — what the service worker is allowed to answer from cache, checked against the routes
    that actually shipped rather than against the config they were written in.
-   Candle history offline is the point of the cache. The ticker is the line: notification-bell fires
-   alerts on those prices, and it is written so a price it could not get fires nothing at all. Serve
-   that one from a cache and a stale number becomes an alert about a level the market never reached.
    Needs a build to have something to read; skips rather than fails when there isn't one, since a
    fresh clone runs the tests before it runs anything else. */
 import assert from 'node:assert/strict'
@@ -19,61 +16,13 @@ const sw = readFileSync('dist/sw.js', 'utf8')
    clientsClaim and skipWaiting in here and there is nothing left to offer, so the prompt would go
    quiet without a line of it changing. */
 assert(!sw.includes('clientsClaim'), 'worker claims clients — registerType is back to autoUpdate')
-const cachedBy = [...sw.matchAll(/registerRoute\((\/(?:[^/\\]|\\.)+\/),new e\.NetworkFirst/g)]
-  .map((m) => new RegExp(m[1].slice(1, -1)))
-assert.equal(cachedBy.length, 2, 'expected the two candle routes in the built worker')
+// nothing the server answers may be NetworkFirst-cached: the document is synced, not cached
+assert(!sw.includes('NetworkFirst'), 'a NetworkFirst route is back in the built worker')
 
 /* The pictures in notes are the one CacheFirst route, and the only thing here that may be: a blob
    id is random and its bytes never change, so a cached copy cannot be a stale answer to anything.
    If this stops shipping, notes stop rendering their pictures offline. */
 assert(/registerRoute\(\/[^,]*blob[^,]*\/,new e\.CacheFirst/.test(sw),
   'the note-pictures route is not in the built worker — notes would lose their pictures offline')
-
-// every URL the app asks for, taken from the module that builds them
-const seen: string[] = []
-globalThis.fetch = ((url: string) => {
-  seen.push(url)
-  return Promise.resolve({ json: () => Promise.resolve([]) })
-}) as typeof fetch
-const { ASSETS, fetchCandles, fetchPrices, fetchTrending } = await import('./market.ts')
-const { rateOf } = await import('./card.ts')
-const asked = async (fn: () => Promise<unknown>) => {
-  seen.length = 0
-  await fn().catch(() => {})
-  return [...seen]
-}
-const cached = (url: string) => cachedBy.some((re) => re.test(url))
-const crypto = ASSETS.find((a) => a.id === 'BTCUSDT')!
-const gold = ASSETS.find((a) => a.id === 'XAUUSDT')!
-
-/* Bars are cached, so the chart and every signal over it survive with no network. */
-for (const url of [
-  ...(await asked(() => fetchCandles(crypto, '1d'))),
-  ...(await asked(() => fetchCandles(gold, '1d'))),
-]) assert.ok(cached(url), `candles should be cached: ${url}`)
-
-// prices are not, on either feed, and must never quietly become so
-const priceUrls = [
-  ...(await asked(() => fetchPrices([crypto.id]))),
-  ...(await asked(() => fetchPrices([gold.id]))),
-]
-assert.ok(priceUrls.length >= 2, 'fetchPrices asked for nothing on one of the feeds')
-for (const url of priceUrls) assert.ok(!cached(url), `prices must never be served from cache: ${url}`)
-
-/* Trending pools are on the same footing as the ticker. The bell that alerted off this list is
-   gone and only the MCP tool reads it now, which does not go through a service worker at all — but
-   the fetcher still ships in the client bundle, and a route that started caching it would answer an
-   agent with a list of pools that have since died. Asserted non-empty, or a fetcher that quietly
-   stopped asking would pass this by saying nothing. */
-const trendUrls = await asked(() => fetchTrending())
-assert.ok(trendUrls.length, 'fetchTrending asked for nothing')
-for (const url of trendUrls) assert.ok(!cached(url), `trending must never be served from cache: ${url}`)
-
-/* The rate a card converts its money at is a price like the ticker is, and the card is the one
-   thing here that leaves the app: served from a month-old cache, a figure goes out to strangers in
-   euros nobody could have sold it for. */
-const rateUrls = await asked(() => rateOf('€'))
-assert.ok(rateUrls.length, 'rateOf asked for nothing')
-for (const url of rateUrls) assert.ok(!cached(url), `the card's rate must never be served from cache: ${url}`)
 
 console.log('sw routes ok')
