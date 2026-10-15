@@ -127,10 +127,23 @@ export interface Parsed {
   repeat: Repeat | null
 }
 
+/** A tag or a project name, in any script: `#größe` and `@büro` are words too, and so are the
+ *  vowel signs of Hindi or Thai (`\p{M}`). */
+export const WORD = /^[\p{L}\p{M}\p{N}_-]+$/u
+
+/** The clock, 'HH:MM' local — what an hour with no day is weighed against. */
+const clock = () => new Date().toTimeString().slice(0, 5)
+
+/** A date that exists: `2026-02-30` has the right shape and is no day at all. */
+const realDate = (w: string) =>
+  /^\d{4}-\d{2}-\d{2}$/.test(w) && new Date(w + 'T00:00').toLocaleDateString('sv') === w
+
 export function parseCapture(
   input: string,
   projects: { id: string; name: string }[] = [],
   now: string = today(),
+  // the time of day `now` is at — only meaningful on today, so another day is read from its start
+  time: string = now === today() ? clock() : '00:00',
 ): Parsed {
   const shift = (n: number) => addDays(now, n)
 
@@ -142,12 +155,13 @@ export function parseCapture(
   let at: string | null = null
   let repeat: Repeat | null = null
 
-  const words = input.split(/\s+/)
+  // composed: a `ö` pasted as `o` and a combining mark is the same word as one typed
+  const words = input.normalize('NFC').split(/\s+/)
   for (let n = 0; n < words.length; n++) {
     const word = words[n]
     const low = word.toLowerCase()
 
-    if (/^#[\w-]+$/.test(word)) {
+    if (word[0] === '#' && WORD.test(word.slice(1))) {
       tags.push(low.slice(1))
       continue
     }
@@ -159,7 +173,7 @@ export function parseCapture(
       if (unit) { repeat = unit; n++; continue }
     }
 
-    if (/^@[\w-]+$/.test(word)) {
+    if (word[0] === '@' && WORD.test(word.slice(1))) {
       const p = projects.find((p) => p.name.toLowerCase().startsWith(low.slice(1)))
       if (p) {
         pid = p.id
@@ -173,13 +187,15 @@ export function parseCapture(
       const t = timeWord(words[n + 1]?.toLowerCase())
       if (t) { at = t; n++; continue }
     }
-    const time = timeWord(low)
-    if (time) { at = time; continue }
+    const hour = timeWord(low)
+    if (hour) { at = hour; continue }
 
     if (word === '!') { flag = true; continue }
     if (low === 'today') { due = now; continue }
     if (low === 'tomorrow') { due = shift(1); continue }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(word)) { due = word; continue }
+    // a date that does not exist stays in the text, where it can be seen and fixed, rather than
+    // being kept until the next load quietly drops it and the task is never due
+    if (realDate(word)) { due = word; continue }
 
     // ponytail: bare weekday words only — "sat down" would be read as Saturday.
     // Add a leading marker (on/due) if that ever bites.
@@ -193,11 +209,12 @@ export function parseCapture(
     kept.push(word)
   }
 
-  // a repeat with no date of its own starts now — except a weekday, which starts on that weekday
-  if (repeat && !due) due = weekday(repeat) >= 0 ? nextDue(now, repeat) : now
-  // an hour with no day means today: "gym at 18:00" is about tonight, and an hour hanging off no
-  // date at all sorts nowhere and is never due
-  if (at && !due) due = now
+  // an hour with no day means the next time that hour comes round: "gym at 18:00" is about tonight,
+  // and "gym 9am" typed in the afternoon is about tomorrow — not a task overdue the moment it exists
+  const first = at && at < time ? shift(1) : now
+  // a repeat with no date of its own starts then too — except a weekday, which starts on that weekday
+  if (repeat && !due) due = weekday(repeat) >= 0 ? nextDue(now, repeat) : first
+  if (at && !due) due = first
 
   return { text: kept.join(' ').trim(), tags, pid, flag, due, at, repeat }
 }

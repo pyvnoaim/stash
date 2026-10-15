@@ -51,7 +51,7 @@ export function Capture({ inputRef, className, announce }: {
      Tags come from `tagsFor`, so the ones this project's family already uses are offered first. */
   const [at, setAt] = useState(0)
   const hints = useMemo(() => {
-    const word = raw.toLowerCase().split(/\s+/).at(-1) ?? ''
+    const word = raw.normalize('NFC').toLowerCase().split(/\s+/).at(-1) ?? ''
     const rest = word.slice(1)
     if (word[0] === '#') {
       return tagsFor(s, pidOf(parsed), parsed.tags).filter((t) => t.startsWith(rest) && t !== rest)
@@ -92,8 +92,11 @@ export function Capture({ inputRef, className, announce }: {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!parsed.text) return
-    const it = make(parsed)
+    // read again now: the preview was worked out when the line was typed, and "9am" or "today"
+    // can mean something else by the time Enter is pressed
+    const now = parseCapture(raw, s.projects)
+    if (!now.text) return
+    const it = make(now)
     addItem(it)
     setRaw('')
     if (announce) toast(`Added to ${it.pid ? project(s, it.pid)?.name ?? 'Stash' : it.due ? 'your lists' : 'Inbox'}`)

@@ -12,7 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge,
-  setOnPersist, flush, focus, mergeRemote, adoptRemote, addSub, removeSub, restoreSub,
+  setOnPersist, flush, focus, mergeRemote, adoptRemote, addSub, removeSub, restoreSub, revive,
   tagsFor,
   readHash, emptyTrash, restoreTrash, restoreItem,
   replaceAll,
@@ -226,8 +226,8 @@ assert.equal(fresh?.repeat, 'day')
 assert.equal(fresh?.due, nextDue(today(), 'day'))
 assert.equal(after[0].id, fresh?.id)   // and it takes the old one's place in the order
 
-toggleDone('r')                        // reopening the finished one spawns nothing more
-assert.equal(getState().items.length, 2)
+toggleDone('r')                        // reopening it takes back the untouched one it spawned
+assert.deepEqual(getState().items.map((i) => i.id), ['r'])
 
 wipe()
 addItem(item({ id: 'once' }))
@@ -362,6 +362,174 @@ assert.ok((getState().items.find((i) => i.id === 'e1')?.editedAt ?? 0) > 0)
 
   // and the record ages out rather than growing for ever
   assert.deepEqual(load({ deletes: [{ id: 'x', at: 1 }, { id: 'y', at: Date.now() }] }).deletes.map((d) => d.id), ['y'])
+}
+
+/* ---------- reopening a finished repeating task takes its untouched next one back out ---------- */
+
+{
+  wipe()
+  addItem(item({ id: 'rep', text: 'water plants', repeat: 'week', due: '2026-01-05' }))
+  toggleDone('rep')
+  assert.equal(getState().items.filter((i) => i.text === 'water plants').length, 2)
+  toggleDone('rep')                                   // reopened: the copy it made goes again
+  assert.deepEqual(getState().items.map((i) => i.id), ['rep'])
+  assert.equal(getState().items[0].done, false)
+
+  // ...but not once it has been worked on: that is a task of its own now
+  toggleDone('rep')
+  const next = getState().items.find((i) => i.id !== 'rep')!
+  patch(next.id, { note: 'bought a new can' })
+  toggleDone('rep')
+  assert.ok(getState().items.some((i) => i.id === next.id))
+}
+
+/* ---------- emptied out of the trash stays gone through a merge ---------- */
+
+{
+  wipe(); emptyTrash()
+  addItem(item({ id: 'binned' }))
+  removeItem('binned')
+  const behind = structuredClone(getState())          // still has it, in its trash
+  emptyTrash()
+  assert.ok(!mergeRemote(getState(), behind).trash.some((i) => i.id === 'binned'), 'emptied, then merged back')
+  // and deleting past the trash the same
+  addItem(item({ id: 'hard' }))
+  const had = structuredClone(getState())
+  removeItem('hard', true)
+  assert.ok(!mergeRemote(getState(), had).items.some((i) => i.id === 'hard'))
+}
+
+/* ---------- undoing a project's delete after it synced puts its items back under it ---------- */
+
+{
+  wipe()
+  const pr = addProject('Back again')
+  addItem(item({ id: 'under', pid: pr.id }))
+  await new Promise((r) => setTimeout(r, 600))
+  removeProject(pr.id)
+  const synced = structuredClone(getState())          // the other device: project gone, item in Inbox
+  undo()
+  const merged = mergeRemote(getState(), synced)
+  assert.ok(merged.projects.some((x) => x.id === pr.id))
+  assert.equal(merged.items.find((i) => i.id === 'under')!.pid, pr.id, 'the item stayed in Inbox')
+}
+
+/* ---------- undoing an add that already synced does not come back ---------- */
+
+{
+  wipe()
+  await new Promise((r) => setTimeout(r, 600))
+  const pr = addProject('Changed my mind')
+  const synced = structuredClone(getState())
+  undo()
+  assert.ok(!mergeRemote(getState(), synced).projects.some((x) => x.id === pr.id))
+}
+
+/* ---------- an old version restored, or a backup imported, wants what it holds back ---------- */
+
+{
+  wipe()
+  const pr = addProject('In the backup')
+  const backup = structuredClone(getState())
+  removeProject(pr.id)
+  const remembers = structuredClone(getState())       // a device that has the delete
+  // restored: the old document adopted, then revived against what this device knew
+  const before = getState().deletes
+  adoptRemote(backup)
+  revive(before)
+  assert.ok(mergeRemote(getState(), remembers).projects.some((x) => x.id === pr.id), 'the restore lost to the delete')
+  // imported on a device that never heard of the delete at all still wins against one that has it
+  const fresh = structuredClone(backup)
+  replaceAll(fresh)
+  assert.ok(mergeRemote(getState(), remembers).projects.some((x) => x.id === pr.id), 'the import lost to the delete')
+}
+
+/* ---------- redo, reopen and the later edit, through a merge ---------- */
+
+{
+  // a redone delete is a delete made now: the merge with a device holding the undo's copy keeps it binned
+  wipe(); emptyTrash()
+  addItem(item({ id: 'redo' }))
+  await new Promise((r) => setTimeout(r, 600))
+  removeItem('redo')
+  await new Promise((r) => setTimeout(r, 600))
+  undo()
+  const undone = structuredClone(getState())         // pushed: back on the list, stamped
+  await new Promise((r) => setTimeout(r, 5))
+  redo()
+  const m = mergeRemote(getState(), undone)
+  assert.ok(m.trash.some((i) => i.id === 'redo') && !m.items.some((i) => i.id === 'redo'), 'the redo was undone by a merge')
+
+  // emptied here, then edited later on a device that had not heard: the later edit wins
+  wipe(); emptyTrash()
+  addItem(item({ id: 'later' }))
+  const other = structuredClone(getState())
+  removeItem('later'); emptyTrash()
+  await new Promise((r) => setTimeout(r, 5))
+  other.items = other.items.map((i) => (i.id === 'later' ? { ...i, text: 'edited after', editedAt: Date.now() } : i))
+  assert.ok(mergeRemote(getState(), other).items.some((i) => i.id === 'later'), 'a later edit lost to an older delete')
+
+  // reopening after an undo and redo of the tick still takes the untouched copy back out
+  wipe()
+  addItem(item({ id: 'rep2', text: 'stretch', repeat: 'day', due: '2026-01-05' }))
+  await new Promise((r) => setTimeout(r, 600))
+  toggleDone('rep2')
+  undo(); redo()
+  toggleDone('rep2')
+  assert.deepEqual(getState().items.map((i) => i.id), ['rep2'])
+}
+
+/* ---------- brought back from the trash wins against a device still holding it there ---------- */
+
+{
+  wipe(); emptyTrash()
+  addItem(item({ id: 'toast' }))
+  const undo1 = removeItem('toast')
+  const binned = structuredClone(getState())        // the other device, with it in the trash
+  await new Promise((r) => setTimeout(r, 5))
+  restoreItem(undo1)
+  assert.ok(mergeRemote(getState(), binned).items.some((i) => i.id === 'toast'), 'the toast Undo lost to the trash')
+
+  addItem(item({ id: 'bin2' }))
+  removeItem('bin2')
+  const binned2 = structuredClone(getState())
+  await new Promise((r) => setTimeout(r, 5))
+  restoreTrash(['bin2'])
+  assert.ok(mergeRemote(getState(), binned2).items.some((i) => i.id === 'bin2'), 'Restore lost to the trash')
+}
+
+/* ---------- ⌘Z after emptying the trash keeps each row's own fortnight ---------- */
+
+{
+  wipe(); emptyTrash()
+  const old = Date.now() - 13 * 864e5
+  replaceAll({ ...structuredClone(getState()), trash: [{ ...item({ id: 'aged' }), delAt: old }] })
+  await new Promise((r) => setTimeout(r, 600))
+  emptyTrash()
+  undo()
+  assert.equal(getState().trash.find((i) => i.id === 'aged')!.delAt, old)
+}
+
+/* ---------- a search pasted decomposed still finds the tag the parser stored composed ---------- */
+
+{
+  wipe()
+  addItem(item({ id: 'de', tags: ['größe'] }))
+  assert.deepEqual(visible({ ...getState(), sel: 'all' }, '#gro\u0308ße').map((i) => i.id), ['de'])
+}
+
+/* ---------- a repeat reopened on another day than it was ticked ---------- */
+
+{
+  wipe()
+  addItem(item({ id: 'daily', text: 'meds', repeat: 'day', due: '2026-01-05' }))
+  toggleDone('daily')
+  // the copy's date was worked out on the day of the tick; reopening tomorrow must still find it
+  const copy = getState().items.find((i) => i.id !== 'daily')!
+  patch(copy.id, { due: '2099-01-01' })                // stand-in for "the day has moved on"
+  patch(copy.id, { editedAt: null } as never)
+  toggleDone('daily')
+  assert.deepEqual(getState().items.map((i) => i.id), ['daily'])
 }
 
 /* ---------- a document from another device keeps what is this machine's ---------- */

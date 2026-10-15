@@ -80,11 +80,18 @@ const CyclePicker = ({ value, onChange, quiet }: { value: Cycle; onChange: (c: C
 
 /** One figure off the top of the page. The first is the answer the page exists for, so it is the
  *  one that is large; the rest are what it was worked out from. */
-export const Stat = ({ label, value, big, valueClass }: { label: string; value: string; big?: boolean; valueClass?: string }) => (
+export const Stat = ({ label, value, big, valueClass, delta }: {
+  label: string; value: string; big?: boolean; valueClass?: string
+  /** what moved it, set beside it in the accent's wash — Disk's "+28 GB" from what is ticked */
+  delta?: string
+}) => (
   <div className="flex flex-col justify-end gap-1">
     <span className="text-muted-foreground font-mono text-xs">{label}</span>
-    <span className={cn('tabular-nums', big ? 'text-[44px] leading-none font-semibold tracking-[-0.03em]' : 'text-xl font-medium', valueClass)}>
-      {value}
+    <span className="flex items-baseline gap-2.5">
+      <span className={cn('tabular-nums', big ? 'text-[44px] leading-none font-semibold tracking-[-0.03em]' : 'text-xl font-medium', valueClass)}>
+        {value}
+      </span>
+      {delta && <span className="text-tint-foreground font-mono text-sm tabular-nums">{delta}</span>}
     </span>
   </div>
 )

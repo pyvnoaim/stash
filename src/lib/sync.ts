@@ -13,7 +13,7 @@
  * The version-and-dirty record lives in localStorage too, beside the data, so tabs share it and
  * a closed tab's unpushed edit is pushed by whoever opens the app next.
  */
-import { adoptRemote, flush, getState, KEY, mergeRemote, setOnPersist, uid, type Item } from './store.ts'
+import { adoptRemote, flush, getState, KEY, mergeRemote, revive, setOnPersist, uid, type Item } from './store.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
 export type SyncStatus = 'init' | 'off' | 'out' | 'busy' | 'ok'
@@ -283,8 +283,11 @@ export const versions = (): Promise<Version[]> =>
 export async function restore(v: number): Promise<string | null> {
   try {
     const j = await call('/api/restore', { method: 'POST', body: JSON.stringify({ version: v }) })
+    const before = getState().deletes
     adoptRemote(j.state)
     setMeta({ v: j.version, dirty: false })
+    // what the old version holds is wanted back, deleted since or not — which is an edit, and pushes
+    revive(before)
     setSnap({ status: 'ok' })
     return null
   } catch (e) {

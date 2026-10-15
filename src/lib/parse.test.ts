@@ -159,3 +159,35 @@ assert.deepEqual(hourWindow(['00:00', '23:00']).length, 24)
 assert.deepEqual(hourWindow(['nope', null, '18']), hourWindow([]))
 
 console.log('parse: ok')
+
+/* Tags and projects in any script: `\w` is ASCII, so `#größe @büro` used to stay plain text. */
+{
+  const ps = [{ id: 'b', name: 'Büro' }]
+  const r = parseCapture('neue Regale #größe @büro', ps, FRI)
+  assert.deepEqual([r.text, r.tags, r.pid], ['neue Regale', ['größe'], 'b'])
+}
+
+/* A date that does not exist is not a due date: it used to be taken, then dropped by the next load,
+   and the task was simply never due. Left in the text instead, where it shows. */
+{
+  const r = parseCapture('pay rent 2026-02-30', [], FRI)
+  assert.equal(r.due, null)
+  assert.equal(r.text, 'pay rent 2026-02-30')
+  assert.equal(parseCapture('pay rent 2028-02-29', [], FRI).due, '2028-02-29')   // a leap day is real
+}
+
+/* An hour with no day is the next time that hour comes round: "gym 9am" typed at three in the
+   afternoon is about tomorrow, not a task overdue the moment it is made. */
+{
+  assert.equal(parseCapture('gym 9am', [], FRI, '15:00').due, '2026-08-01')
+  assert.equal(parseCapture('gym 6pm', [], FRI, '15:00').due, FRI)
+  assert.equal(parseCapture('gym 9am today', [], FRI, '15:00').due, FRI)   // a day said is a day kept
+}
+
+/* ...and a repeat with an hour starts the same way: "standup every day 9am" typed at three. */
+assert.equal(parseCapture('standup every day 9am', [], FRI, '15:00').due, '2026-08-01')
+assert.equal(parseCapture('standup every day 6pm', [], FRI, '15:00').due, FRI)
+
+/* Scripts with combining marks are words too, and an `ö` pasted as `o` + a mark is the same tag. */
+assert.deepEqual(parseCapture('पाठ #हिंदी', [], FRI).tags, ['हिंदी'])
+assert.deepEqual(parseCapture('x #größe', [], FRI).tags, ['größe'])

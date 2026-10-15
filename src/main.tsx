@@ -10,7 +10,7 @@ import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 import { addShared, focus, getState, select } from './lib/store.ts'
 import { applyTheme } from './lib/utils.ts'
-import { holdRegistration } from './lib/update.ts'
+import { holdRegistration, servedBuild } from './lib/update.ts'
 import { startMac } from './lib/mac.ts'
 
 /* A new build is live, downloaded and waiting, while this tab still runs the old one. It says so
@@ -68,6 +68,12 @@ async function hardReload() {
   // can be hours later on a train: offline the caches are the only copy of the app there is, and
   // emptying them leaves a white screen. The new worker is already downloaded — just let it in.
   if (!navigator.onLine) return void updateSW(true)
+  /* ...and `onLine` only knows about this machine's network. Behind a captive portal, or with the
+     server mid-redeploy — which is exactly when this toast appears — it still says yes, and the
+     caches went with nothing to fetch the app back from: a blank page. The server has to answer
+     first; if it does not, the new worker is let in instead, which needs nothing from the network. */
+  // the build it names, not merely a 200: a captive portal answers every URL with its own page
+  if ((await servedBuild()) === null) return void updateSW(true)
   await Promise.all((await caches.keys()).map((k) => caches.delete(k)))
   await (await navigator.serviceWorker?.getRegistration())?.unregister()
   location.reload()

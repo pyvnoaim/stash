@@ -6,6 +6,10 @@ services:
     # root, and Docker never re-stamps one it did not just create. Once, on an existing deployment:
     #   docker compose run --rm --user root --entrypoint chown stash -R node:node /data
     volumes: ['stash:/data']
+    # The server reads "9am" and "today" for Claude's captures, so it needs your clock, not UTC:
+    # at 10:00 in Berlin "standup 9am" was still ahead by the container's, and filed overdue.
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
     # /healthz reads the database: up and answering, or Docker restarts it. uptime-kuma watches the domain.
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
