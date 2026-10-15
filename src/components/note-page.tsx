@@ -8,8 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { Backlinks } from '@/components/inspector'
-import { blocksOf, headingClass, promoteBox, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
-import { addItem, itemOf, patch, select, useStash, type Item } from '@/lib/store'
+import { around, blocksOf, headingClass, locate, promoteBox, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
+import { addItem, getState, itemOf, patch, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 
 /**
@@ -31,7 +31,45 @@ export function NotePage({ it, onBack, onOpen }: {
      up again on every keystroke: typing a blank line into a paragraph splits it in two, and a
      block found afresh each time would be yanked out from under the cursor mid-sentence. */
   const [edit, setEdit] = useState<Block | null>(null)
+  // bumped on every open, so the textarea remounts for a new block but not when one only moved
+  const [opened, setOpened] = useState(0)
   const blocks = blocksOf(it.note)
+
+  /* Not "on another device": an undo of your own rewinds the note under the open block too, and from
+     in here the two look the same. */
+  const changedElsewhere = () =>
+    toast('That part of the note changed', { id: 'note-moved', description: 'Its new text is what is there now.' })
+
+  /* The open block as of the last write, which can be newer than `edit`: a write sets both, and the
+     store re-renders this page before the state update lands. Read by every write rather than the
+     `edit` a handler closed over — a picture pasted mid-sentence is written after its upload, and by
+     then the block it was pasted into has had more typed into it. Set only through `setOpen`. */
+  const editRef = useRef(edit)
+  // the note the open block's line numbers were worked out against — by opening, writing or moving
+  const base = useRef(it.note)
+  const setOpen = (b: Block | null) => setEdit(editRef.current = b)
+  const lost = () => { setOpen(null); changedElsewhere() }
+  const write = (note: string) => { base.current = note; patch(it.id, { note }) }
+
+  /* The note changed under the open block — another device's edit, adopted while you were in it.
+     Its line numbers are stale: follow it to where its lines are now, or close it when they are gone
+     (the other device changed this very block), rather than write over whatever moved in. After the
+     render and before the paint, so nothing stale is ever on screen and a discarded render cannot
+     have moved it. */
+  useLayoutEffect(() => {
+    const open = editRef.current
+    if (!open || it.note === base.current) return
+    const here = locate(it.note, open)
+    if (!here) return lost()
+    base.current = it.note
+    if (here.from !== open.from) setOpen(here)
+  })
+  // what is drawn: every block, cut around the open range (see `around`)
+  const view = edit ? around(blocks, edit) : blocks
+
+  /** The note as the store holds it this instant — read at the moment of writing, so a change that
+   *  landed since the last render cannot be painted over. */
+  const fresh = () => getState().items.find((i) => i.id === it.id)?.note ?? it.note
   const taRef = useRef<HTMLTextAreaElement>(null)
   // the selection toolbar, placed where the drag ended (relative to the editor wrapper)
   const [bar, setBar] = useState<{ top: number; left: number } | null>(null)
@@ -53,26 +91,39 @@ export function NotePage({ it, onBack, onOpen }: {
   }, 0)
 
   /** What every edit on this page goes through: the open block's new text, put back where it came
-   *  from. The range moves with it, since what was typed may be more lines than were there. */
+   *  from. The range moves with it, since what was typed may be more lines than were there. False
+   *  when the open block is gone — changed on another device — and nothing was written. */
   const writeBlock = (text: string) => {
-    if (!edit) return
-    patch(it.id, { note: replaceBlock(it.note, edit, text) })
-    setEdit({ from: edit.from, to: edit.from + text.split('\n').length - 1, text })
+    const open = editRef.current
+    if (!open) return false
+    const note = fresh()
+    const here = locate(note, open)
+    if (!here) { lost(); return false }
+    write(replaceBlock(note, here, text))
+    setOpen({ from: here.from, to: here.from + text.split('\n').length - 1, text })
+    return true
   }
 
   /** Open one for editing — the cursor lands at its end, not where the click did: the rendered
    *  text and its source share no offsets, and mapping between them is a parser's worth of work
    *  for a caret that is one arrow key away.
    *  ponytail: end of the block. `caretPositionFromPoint` against a source map is the upgrade. */
-  const open = (b: Block) => setEdit(b)
+  const open = (b: Block) => { base.current = it.note; setOpen(b); setOpened((n) => n + 1) }
 
   /** Two neighbouring blocks made one: the line break between them goes and the caret sits at the
    *  seam, which is what Backspace at the start of a block means everywhere else. The pair opens as
    *  the single block it now is, so what was two textareas is the one the cursor is already in. */
   const join = (a: Block, b: Block) => {
+    const note = fresh()
+    const first = locate(note, a), second = locate(note, b)
+    // still side by side, or joining them would take whatever now sits between with them
+    if (!first || !second || second.from !== first.to + 1) { lost(); return }
     const text = a.text + b.text
-    patch(it.id, { note: replaceBlock(it.note, { ...a, to: b.to }, text) })
-    setEdit({ from: a.from, to: a.from + text.split('\n').length - 1, text })
+    write(replaceBlock(note, { ...first, to: second.to }, text))
+    // a new textarea only when the block starts somewhere else: Delete at the end keeps this one,
+    // and with it the browser's own undo for what was typed into it
+    if (first.from !== editRef.current?.from) setOpened((n) => n + 1)
+    setOpen({ from: first.from, to: first.from + text.split('\n').length - 1, text })
     put(a.text.length)
   }
 
@@ -116,13 +167,16 @@ export function NotePage({ it, onBack, onOpen }: {
    *  a paste onto the page itself — it goes on the end, which is where a picture belongs when
    *  nobody has said otherwise. */
   const insert = (text: string) => {
-    const ta = taRef.current
-    if (!ta || !edit) {
-      patch(it.id, { note: it.note + (it.note.endsWith('\n') || !it.note ? '' : '\n') + text })
-      return
+    // at the end of the note as it is now — after an upload's wait, not as it was at the paste
+    const append = () => {
+      const note = fresh()
+      write(note + (note.endsWith('\n') || !note ? '' : '\n') + text)
     }
+    const ta = taRef.current
+    if (!ta || !editRef.current) return append()
     const { selectionStart: a, selectionEnd: b, value } = ta
-    writeBlock(value.slice(0, a) + text + value.slice(b))
+    // the block went while a picture uploaded: the picture still lands, at the end, not nowhere
+    if (!writeBlock(value.slice(0, a) + text + value.slice(b))) return append()
     put(a + text.length)
   }
 
@@ -214,7 +268,7 @@ export function NotePage({ it, onBack, onOpen }: {
   useLayoutEffect(() => {
     const el = taRef.current
     if (el) el.setSelectionRange(el.value.length, el.value.length)
-  }, [edit?.from])
+  }, [opened])
 
   /** Finish the `[[` being typed with a whole title, and put the caret past the closing brackets. */
   const pickWiki = (target: { text: string }) => {
@@ -239,8 +293,9 @@ export function NotePage({ it, onBack, onOpen }: {
     { icon: Link2, label: 'Link', run: linkUp },
   ]
 
-  /* The open block, as a plain textarea holding only its own lines. Keyed on where it starts, so
-     moving to another block mounts a fresh one — which is what puts the cursor in it.
+  /* The open block, as a plain textarea holding only its own lines. Keyed on each opening, so moving
+     to another block mounts a fresh one — which is what puts the cursor in it — while a block that
+     only moved, because lines were added above it elsewhere, keeps its textarea and its caret.
 
      It wears the shape of what it renders into, so clicking a line moves nothing under it. A
      heading was the loud half: 20px semibold became 14px regular and the rest of the note jumped up
@@ -249,7 +304,7 @@ export function NotePage({ it, onBack, onOpen }: {
      pixels of downward shift. Hence `block` below, which is the whole of that fix. */
   const level = edit?.text.match(/^(#{1,3})\s/)?.[1].length ?? 0
   const editor = edit && (
-    <div key={`edit-${edit.from}`} className="relative">
+    <div key={`edit-${opened}`} className="relative">
       <textarea
         ref={taRef}
         autoFocus
@@ -260,10 +315,11 @@ export function NotePage({ it, onBack, onOpen }: {
         onKeyUp={(e) => readCaret(e.currentTarget)}
         onMouseUp={(e) => { onSelect(e); readCaret(e.currentTarget) }}
         onKeyDown={(e) => {
-          if (e.key === 'Escape') { e.preventDefault(); setEdit(null); setWikiQ(null); return }
+          if (e.key === 'Escape') { e.preventDefault(); setOpen(null); setWikiQ(null); return }
           const ta = e.currentTarget
-          const prev = () => blocks.filter((b) => b.to < edit.from).at(-1)
-          const after = () => blocks.find((b) => b.from > edit.to)
+          // the neighbours as drawn: a paragraph the open line has run into is cut around it
+          const prev = () => view.filter((b) => b.to < edit.from).at(-1)
+          const after = () => view.find((b) => b.from > edit.to)
           /* Backspace at the very start and Delete at the very end reach out of this block and into
              the one beside it, joining the two. A textarea holds only its own lines, so without
              this both keys simply do nothing there — and a blank line, which is nothing but a start
@@ -300,7 +356,7 @@ export function NotePage({ it, onBack, onOpen }: {
            the sidebar, to another window — sat there in its own source while everything around it
            was drawn, which is the one thing this page is not supposed to do. The toolbar and the
            [[ strip both hold focus with `preventDefault` on mousedown, so neither trips it. */
-        onBlur={() => { setBar(null); setWikiQ(null); setEdit(null) }}
+        onBlur={() => { setBar(null); setWikiQ(null); setOpen(null) }}
         aria-label="Note"
         /* A heading takes its whole shape from the rendered one, line-height included, and needs no
            iOS guard: every heading size here is already at or above 16px. Body text keeps the guard
@@ -359,16 +415,13 @@ export function NotePage({ it, onBack, onOpen }: {
     </div>
   )
 
-  /* Every block drawn, with the editor standing where the open one is. Blocks inside that range
-     are the pieces typing has just split off — they are in the editor already, so drawing them
-     here as well would show the same sentence twice. */
+  /* Every block drawn, with the editor standing where the open one is: before the first block
+     that starts past it. `view` has already cut the open range out — the pieces typing has split
+     off, and the parts of a paragraph the open line has run into, either side of it. */
   const pieces: React.ReactNode[] = []
   let placed = false
-  for (const b of blocks) {
-    if (edit && b.from >= edit.from && b.to <= edit.to) {
-      if (!placed) { pieces.push(editor); placed = true }
-      continue
-    }
+  for (const b of view) {
+    if (edit && !placed && b.from > edit.to) { pieces.push(editor); placed = true }
     pieces.push(
       <div
         key={b.from}
@@ -378,6 +431,13 @@ export function NotePage({ it, onBack, onOpen }: {
           if ((e.target as HTMLElement).closest('a, input, button')) return
           open(b)
         }}
+        /* With a block open, a press here would blur the editor and close it before the click
+           lands — redrawing a paragraph it had been cut out of, so the piece under the pointer is
+           gone and the click opens nothing. Kept open instead, and the click moves it. */
+        onMouseDown={(e) => {
+          // a checkbox and a link too: preventing the press keeps focus, and their click still fires
+          if (edit) e.preventDefault()
+        }}
         /* A blank line renders as nothing, and nothing is not something you can click into. It
            stands exactly as tall as the textarea that opens in its place — 1.2em was shorter than
            a line of text, so the gap you saw was part blank line and part the leading of the
@@ -386,16 +446,22 @@ export function NotePage({ it, onBack, onOpen }: {
       >
         <Markdown
           text={b.text}
-          onToggle={(l) => patch(it.id, { note: toggleBox(it.note, b.from + l) })}
+          onToggle={(l) => {
+            const note = fresh(), here = locate(note, b)
+            if (here) write(toggleBox(note, here.from + l))
+            else changedElsewhere()
+          }}
           /* The line becomes a link and a task of the same words lands beside the note, in its
              project — so the two point at each other from the start.
              ponytail: ticking one does not tick the other; they are a note and a task, not one row. */
           // not in a project you may only read: both writes would be refused, and said to have worked
           onPromote={(l) => {
-            const made = promoteBox(it.note, b.from + l)
+            const note = fresh(), here = locate(note, b)
+            if (!here) return changedElsewhere()
+            const made = promoteBox(note, here.from + l)
             if (!made) return
             addItem(itemOf({ text: made.title, tags: [], pid: it.pid, flag: false, due: null, at: null, repeat: null }))
-            patch(it.id, { note: made.note })
+            write(made.note)
             toast(`Task added${filed ? ` to ${filed.name}` : ''}`)
           }}
           /* A link lands on whichever it named: a row opens its own page, a project is simply

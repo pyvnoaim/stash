@@ -169,3 +169,42 @@ console.log('markdown: ok')
   const head = blocksOf('# H\nbody')
   assert.equal(join('# H\nbody', head[0], head[1]), '# Hbody')
 }
+
+/* An open block's line numbers go stale when the note changes underneath it — another device's
+   edit, adopted while the block was open. Writing by them overwrote the lines that had moved in
+   and left the block's old text behind as a duplicate. */
+import { locate } from './markdown.ts'
+{
+  const note = 'one\n\nmine\nstill mine\n\nlast'
+  const open = blocksOf(note).find((b) => b.text.startsWith('mine'))!
+  assert.deepEqual(locate(note, open), open)                       // nothing moved: where it was
+
+  // two lines added at the top on the phone: the block is found two lines down
+  const moved = 'new\nlines\n' + note
+  const here = locate(moved, open)!
+  assert.deepEqual([here.from, here.to], [open.from + 2, open.to + 2])
+  assert.equal(replaceBlock(moved, here, 'mine, typed'), 'new\nlines\none\n\nmine, typed\n\nlast')
+
+  // the block itself was changed there: nothing safe to write over
+  assert.equal(locate(note.replace('still mine', 'theirs now'), open), null)
+
+  // the same text twice: the copy nearest to where it was
+  const twice = 'x\n\nsame\n\ny\n\nsame'
+  const second = blocksOf(twice).at(-1)!
+  assert.equal(locate('top\n' + twice, second)!.from, second.from + 1)
+}
+
+/* Typing into the blank line between two paragraphs makes one paragraph of the three lines. Drawn
+   whole it hid the paragraphs around the editor; it is cut around the open line instead. */
+import { around } from './markdown.ts'
+{
+  const merged = blocksOf('p1\nx\np2')
+  assert.equal(merged.length, 1)
+  assert.deepEqual(around(merged, { from: 1, to: 1 }), [
+    { from: 0, to: 0, text: 'p1' },
+    { from: 2, to: 2, text: 'p2' },
+  ])
+  // blocks clear of the range pass through untouched, and the range itself is never drawn
+  const plain = blocksOf('a\n\nb\n\nc')
+  assert.deepEqual(around(plain, { from: 2, to: 2 }).map((b) => b.text), ['a', '', '', 'c'])
+}

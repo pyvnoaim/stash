@@ -177,7 +177,28 @@ export interface State {
   subSort: SubSort
   /** Which side of Subscriptions is open — expenses or income. */
   subView: 'expense' | 'income'
+  /**
+   * The last thing done to each deleted project or subscription: deleted, or brought back (`undone`),
+   * and when. A merge keeps a row only one side has, so without this the device that had not heard
+   * of a delete brought the project straight back; and an undo is an act of its own, stamped later,
+   * or the record other devices already hold would delete it again. Kept DELETES_DAYS — a device away
+   * longer than that can still bring one back.
+   */
+  deletes: Delete[]
 }
+
+export type Delete = { id: string, at: number, undone?: true }
+export const DELETES_DAYS = 90
+
+/** Say, as of now, that `id` was deleted or brought back — replacing whatever was said before, and
+ *  always later than it: an undo in the same millisecond as its delete would otherwise tie, and a
+ *  tie keeps whichever copy is doing the merging. */
+const mark = (list: Delete[], id: string, deleted: boolean): Delete[] => {
+  const was = list.find((d) => d.id === id)?.at ?? 0
+  return [...list.filter((d) => d.id !== id),
+    { id, at: Math.max(Date.now(), was + 1), ...(!deleted && { undone: true as const }) }]
+}
+const isDeleted = (list: Delete[], id: string) => list.some((d) => d.id === id && !d.undone)
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
@@ -264,7 +285,7 @@ export const uid = () => Math.random().toString(36).slice(2, 9)
 
 const blank = (): State => ({
   v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
-  projectSort: 'manual', collapsed: [], hidden: [], hotkeys: {},
+  projectSort: 'manual', collapsed: [], hidden: [], hotkeys: {}, deletes: [],
   subSort: 'recent', subView: 'expense',
 })
 
@@ -376,6 +397,10 @@ export function load(data: unknown): State {
   st.hidden = Array.isArray(st.hidden)
     ? st.hidden.map(String).filter((h) => TOOLS.some((t) => t.id === h))
     : []
+  const since = Date.now() - DELETES_DAYS * 864e5
+  st.deletes = (Array.isArray(st.deletes) ? st.deletes : [])
+    .filter((d) => d && typeof d.id === 'string' && typeof d.at === 'number' && d.at > since)
+    .map((d) => ({ id: d.id, at: d.at, ...(d.undone === true && { undone: true as const }) }))
   if (!isRoute(st, st.sel)) st.sel = 'today'
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   if (!PROJECT_SORTS.includes(st.projectSort)) st.projectSort = 'manual'
@@ -517,8 +542,16 @@ export function set(next: State | ((s: State) => State)) {
 
 // only the two data fields travel — a snapshot also holds the theme and the view, and walking
 // those back would undo a setting you changed after the edit
-const rewind = (to: State) =>
-  ({ ...state, items: to.items, projects: to.projects, subs: to.subs, trash: to.trash })
+const rewind = (to: State) => {
+  /* A delete walked back — or walked forward again — is an act of its own, stamped now. Restoring the
+     old record instead would lose to the one the other devices already hold, and the next merge
+     would delete it again. */
+  let deletes = state.deletes
+  for (const id of new Set([...state.deletes, ...to.deletes].map((d) => d.id))) {
+    if (isDeleted(state.deletes, id) !== isDeleted(to.deletes, id)) deletes = mark(deletes, id, isDeleted(to.deletes, id))
+  }
+  return { ...state, items: to.items, projects: to.projects, subs: to.subs, trash: to.trash, deletes }
+}
 
 /** Both return false when there is nothing left to walk back to, so the caller can stay quiet. */
 export function undo() {
@@ -563,33 +596,38 @@ const byId = <T extends { id: string }>(mine: T[], theirs: T[], when?: (r: T) =>
  * Everything that is not a row stays ours: the view, the settings, the dials. We are the device
  * doing the merging, and ours is the edit that just happened.
  *
- * ponytail: projects, subs, watches and results carry no edit time, so a row both sides hold keeps
- * our copy rather than the newer one — union by id, which can lose a rename and never a row. Give
- * them an `editedAt` and they join the items above.
+ * ponytail: projects and subs carry no edit time, so a row both sides hold keeps our copy rather
+ * than the newer one — which can lose a rename, never a row. Give them an `editedAt` and they join
+ * the items above. A deleted one stays deleted, and an undone delete stays undone: `deletes` holds
+ * the last act on each, and the later one wins.
  *
- * ponytail: the trash is the only record that a row was deleted, so emptying it throws the
- * tombstone away — a device that had not pulled the delete yet brings the row back on the next
- * merge. It needs a deleted-id list with a life of its own to close, and the window is one device
- * being behind at the moment the other empties its trash.
+ * ponytail: an item emptied out of the trash is not in `deletes`, so a device that had not pulled the
+ * delete yet brings the row back on the next merge. Recording `emptyTrash` and the fortnight's sweep
+ * there, and filtering items and trash the way projects are below, would close it.
  */
 export function mergeRemote(mine: State, theirs: unknown): State {
   const t = load(theirs)
   const items = byId(mine.items, t.items, liveAt)
   const trash = byId(mine.trash, t.trash, (r) => r.delAt)
   // deleted on one device, edited on the other: the later act decides which list it ends up on
-  for (const [id, gone] of trash) {
-    const live = items.get(id)
-    if (!live) continue
-    if (liveAt(live) > gone.delAt) trash.delete(id)
+  for (const [id, binned] of trash) {
+    const row = items.get(id)
+    if (!row) continue
+    if (liveAt(row) > binned.delAt) trash.delete(id)
     else items.delete(id)
   }
+  // the later act on each id, from either side; a deleted one is kept out even if the other has it
+  const deletes = byId(mine.deletes, t.deletes, (d) => d.at)
+  const dead = new Set([...deletes.values()].filter((d) => !d.undone).map((d) => d.id))
+  const keep = <T extends { id: string }>(rows: Map<string, T>) => [...rows.values()].filter((r) => !dead.has(r.id))
   return {
     // `t` first: a field this build no longer names (a retired tool's data) rides through from
     // their side when ours never had it, so merging on a fresh device cannot drop it from the server
     ...t,
     ...mine,
-    projects: [...byId(mine.projects, t.projects).values()],
-    subs: [...byId(mine.subs, t.subs).values()],
+    projects: keep(byId(mine.projects, t.projects)),
+    subs: keep(byId(mine.subs, t.subs)),
+    deletes: [...deletes.values()],
     items: [...items.values()],
     trash: [...trash.values()],
   }
@@ -1130,6 +1168,7 @@ export const removeProject = (id: string) =>
     items: s.items.map((i) => (i.pid === id ? { ...i, pid: null, editedAt: Date.now() } : i)),
     sel: s.sel === id ? 'today' : s.sel,
     collapsed: s.collapsed.filter((c) => c !== id),
+    deletes: mark(s.deletes, id, true),
   }))
 
 export const toggleCollapsed = (id: string) => set((s) => ({
@@ -1151,7 +1190,7 @@ export function removeSub(id: string) {
   const at = state.subs.findIndex((x) => x.id === id)
   if (at < 0) return null
   const sub = state.subs[at]
-  set((s) => ({ ...s, subs: s.subs.filter((x) => x.id !== id) }))
+  set((s) => ({ ...s, subs: s.subs.filter((x) => x.id !== id), deletes: mark(s.deletes, id, true) }))
   return { sub, at }
 }
 
@@ -1160,11 +1199,21 @@ export function restoreSub(undo: { sub: Sub; at: number } | null) {
   set((s) => {
     const subs = [...s.subs]
     subs.splice(undo.at, 0, undo.sub)
-    return { ...s, subs }
+    // brought back, stamped later than the delete, so it wins on every device it merges with
+    return { ...s, subs, deletes: mark(s.deletes, undo.sub.id, false) }
   })
 }
 
 /* Nothing to carry over any more: the Twelve Data key was the one field an import had to preserve
    rather than replace, because backups deliberately omitted it and a missing one must not wipe the
    key already on the device. The stocks feed is gone and so is the key. */
-export const replaceAll = (data: unknown) => set(() => load(data))
+export const replaceAll = (data: unknown) => set(() => {
+  const next = load(data)
+  /* What the backup holds is wanted back, even a project deleted since it was taken: said so now,
+     or the first merge with a device that remembers the delete drops it again. */
+  let deletes = next.deletes
+  for (const r of [...next.projects, ...next.subs]) {
+    if (isDeleted(state.deletes, r.id) || isDeleted(deletes, r.id)) deletes = mark(deletes, r.id, false)
+  }
+  return { ...next, deletes }
+})
