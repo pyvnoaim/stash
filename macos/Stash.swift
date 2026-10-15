@@ -76,6 +76,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     window.setFrameAutosaveName("main")
     window.makeKeyAndOrderFront(nil)
     placeButtons()
+    watchButtons()
 
     NSApp.mainMenu = menu()
     // the system's own Window menu: Move & Resize, tiling, the open-window list
@@ -244,7 +245,9 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
   }
 
   /// Where the three buttons go: centred in a 52-point band, 20 points in. macOS lays them out again
-  /// on every resize and on leaving full screen, so they are put back each time.
+  /// whenever it likes — on every resize, leaving full screen, and once more after the window first
+  /// appears, which is why they sat in the corner at launch until the window was dragged. So each
+  /// button is watched, and put back the moment macOS moves it (`watchButtons`).
   func placeButtons() {
     // in full screen the title area is macOS's own, drawn apart from the window: leave it be
     guard !window.styleMask.contains(.fullScreen),
@@ -256,6 +259,21 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     for (i, kind) in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].enumerated() {
       guard let b = window.standardWindowButton(kind) else { continue }
       b.setFrameOrigin(NSPoint(x: 20 + CGFloat(i) * 20, y: (DragStrip.height - b.frame.height) / 2))
+    }
+  }
+  func watchButtons() {
+    for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+      guard let b = window.standardWindowButton(kind) else { continue }
+      b.postsFrameChangedNotifications = true
+      NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: b, queue: .main) { [weak self] _ in
+        MainActor.assumeIsolated {
+          // only when it is not where it belongs — the band shrunk back, or the button moved —
+          // or placing it would set this off again for ever
+          guard let self else { return }
+          let at = NSPoint(x: 20 + CGFloat(kind.rawValue) * 20, y: (DragStrip.height - b.frame.height) / 2)
+          if b.frame.origin != at || b.superview?.superview?.frame.height != DragStrip.height { self.placeButtons() }
+        }
+      }
     }
   }
   func windowDidResize(_ note: Notification) { if (note.object as? NSWindow) === window { placeButtons() } }
