@@ -52,10 +52,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
        moves by its top edge: a thin native strip over the page does what a title bar would. */
     window.titlebarAppearsTransparent = true
     window.titleVisibility = .hidden
-    // an empty unified toolbar is only there for its height: the buttons sit inset and lower, as in
-    // Notes or Mail, rather than tight in the corner of a 28-point bar
-    window.toolbar = NSToolbar(identifier: "stash")
-    window.toolbarStyle = .unified
+    /* The buttons sit inset and lower, as in Notes or Mail, rather than tight in the corner of a
+       28-point bar — placed by hand (`placeButtons`), not by an empty toolbar: with a toolbar on the
+       window, Rectangle could no longer find it. */
+    window.delegate = self
     // light or dark follows the page's own theme (the "theme" op, and `didFinish`), not the Mac's
     window.backgroundColor = sheet
     window.isReleasedWhenClosed = false
@@ -75,6 +75,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     window.center()
     window.setFrameAutosaveName("main")
     window.makeKeyAndOrderFront(nil)
+    placeButtons()
 
     NSApp.mainMenu = menu()
     // the system's own Window menu: Move & Resize, tiling, the open-window list
@@ -241,6 +242,25 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     panel.orderOut(nil)
     return true
   }
+
+  /// Where the three buttons go: centred in a 52-point band, 20 points in. macOS lays them out again
+  /// on every resize and on leaving full screen, so they are put back each time.
+  func placeButtons() {
+    // in full screen the title area is macOS's own, drawn apart from the window: leave it be
+    guard !window.styleMask.contains(.fullScreen),
+          let close = window.standardWindowButton(.closeButton), let band = close.superview?.superview else { return }
+    var f = band.frame
+    f.size.height = DragStrip.height
+    f.origin.y = window.frame.height - DragStrip.height
+    band.frame = f
+    for (i, kind) in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].enumerated() {
+      guard let b = window.standardWindowButton(kind) else { continue }
+      b.setFrameOrigin(NSPoint(x: 20 + CGFloat(i) * 20, y: (DragStrip.height - b.frame.height) / 2))
+    }
+  }
+  func windowDidResize(_ note: Notification) { if (note.object as? NSWindow) === window { placeButtons() } }
+  func windowDidExitFullScreen(_ note: Notification) { if (note.object as? NSWindow) === window { placeButtons() } }
+  func windowDidBecomeKey(_ note: Notification) { if (note.object as? NSWindow) === window { placeButtons() } }
 
   func windowDidResignKey(_ note: Notification) {
     if (note.object as? NSWindow) === panel { panel.orderOut(nil) }
@@ -489,7 +509,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
 /// Where a title bar would be: drag the window by it, double-click to zoom it, as the system would.
 /// Over the page, which keeps nothing clickable beneath one — the sidebar's first row, and the margin
-/// above the sheet. `height` is the unified toolbar's.
+/// above the sheet. `height` is the band the window's buttons are centred in (`placeButtons`).
 final class DragStrip: NSView {
   static let height: CGFloat = 52
   override func mouseDown(with event: NSEvent) {
