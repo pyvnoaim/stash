@@ -2,8 +2,8 @@
 
 Tasks, ideas and notes across projects, with a page for subscriptions and a PDF editor beside
 them. React + Vite + Tailwind + shadcn/ui: a white sheet on a warm-grey desk, one accent, light and
-dark. Everything lives in your browser's localStorage and works with no server at all; an account —
-optional, invite-only, self-hosted — syncs that same data between your devices.
+dark. Everything lives in your browser's localStorage and works with no server at all; an account on
+your own server syncs that same data between your devices. It is built for one person.
 
 Type is Geist for reading and Geist Mono for counts, dates and tags. Geist Pixel **Square** is the
 wordmark and nothing else. Mono and Pixel are self-hosted in `src/fonts/` under OFL-1.1.
@@ -77,7 +77,6 @@ included. Everything else is searched across text, notes and tags.
 | `@kova add fonts` | *add fonts* inside Kova only |
 | `#wartung #wsh` | tagged both, not either |
 | `fonts @kova` | the same as the first — order does not matter |
-| `+mia` | what is assigned to Mia, in every project you share with her |
 
 Click a `#tag` on a row to add it to the search, or pick one out of **Tags** in the sidebar, which
 lists every tag in use with how much is still open under it — a tag whose work is all finished
@@ -135,7 +134,7 @@ the ⌘K commands then act on all of them at once, and one undo puts a whole del
 right-click is the row's own menu, so it takes just that row. The panel on the right follows: one
 row shows its details, several show only what they have in common, and setting a field there sets
 it on the lot — a due date they disagree about reads *Mixed* rather than picking a side, and the
-tag field only ever adds, since a shared list would wipe whatever each row had of its own. The
+tag field only ever adds, since replacing would wipe whatever each row had of its own. The
 count in the header is the list; the one in the window title is what is due, since the dock icon
 carries no badge of its own.
 
@@ -196,8 +195,8 @@ an SVG is a document that can carry script. It is served `nosniff`, never framed
 any other site even by somebody holding the id.
 
 An image is held to a tighter rule than a link when it renders, too. A link waits to be clicked; an
-image fetches itself the moment the note is drawn — so an `http://` one in a note somebody shared
-with you would report your address to their server before you had read a word. Only this app's own
+image fetches itself the moment the note is drawn — so an `http://` one pasted in from somewhere
+else would report your address to its server before you had read a word. Only this app's own
 paths load, and anything else shows its alt text rather than a broken frame.
 
 The service worker keeps them, so a note reads the same offline as on. It is the only CacheFirst
@@ -232,9 +231,7 @@ reason on hover. That is what renaming the far end looks like from this one: not
 nothing pretends to work either.
 
 **Linked from** in the details panel is the other half — every note pointing at the row you are
-looking at, which is the half you cannot see from the note that was linked to. On the public share
-link a `[[link]]` is just its words: there is no app around that page and nothing to open, and a
-dead control is worse than plain text.
+looking at, which is the half you cannot see from the note that was linked to.
 
 A checklist line that has outgrown its note becomes a task: hover an open `- [ ]` line on the note
 page and press **Make task**. The line turns into a `[[link]]` and a task of the same words lands
@@ -327,11 +324,8 @@ lands in **Inbox**, the same place `load` puts any orphan.
 toast is one reload from gone — the fortnight is exactly the promise that press wants behind it.
 
 The trash rides in the synced document, so deleting on the phone fills the trash on the desktop
-too, and the fortnight is counted wherever the document is next read. A shared project's slice
-never carries it: what you deleted is out of everyone else's copy the moment it leaves your list,
-and your trash is yours. It is also out of Claude's reach — `stash_read` refuses the view, so a
-note deleted to stop being read stops being read. A project that stops being shared with you takes
-its rows out of your trash on the way out, the same as it takes them off your lists.
+too, and the fortnight is counted wherever the document is next read. It is also out of Claude's
+reach — `stash_read` refuses the view, so a note deleted to stop being read stops being read.
 
 Drag a row onto a project in the sidebar to move it, onto **Inbox** to unfile it, or onto
 **Today** to make it due today. The target you are over is outlined.
@@ -453,6 +447,10 @@ as long as the tab is open; none of it is being kept.
 `⌘K → Export a backup` writes a JSON file; **Import a backup** replaces the current data with it.
 Nothing is stripped on the way out any more: the Twelve Data key was the one credential the
 document held, and the feed that wanted it is gone.
+The server keeps its own: once a day it copies the database to `/data/backup-YYYY-MM-DD.db` beside
+itself and keeps the newest seven. Those survive a redeploy, but they live on the same volume —
+copy them off the box (see Hosting it) or a dead disk takes both.
+
 Backups from the original pre-React version import fine. It stored a project's
 colour as an HSL hue rather than a hex, so those are dropped and the projects come in uncoloured;
 nothing else is.
@@ -473,15 +471,17 @@ without an account, so a copy with no server behind it never reaches for one. St
 while the server is unreachable opens your own data rather than the sign-in screen; only a real
 *signed out* answer, or a device holding nothing of its own yet, shows the gate.
 
-One rule decides every conflict: the device that edited last wins, and the fifty versions the
-server keeps per user are the undo for the day that rule picks wrong. There is no merge engine —
-recovery over prevention, at a fraction of the code. Nothing secret rides the sync: the document
-is your rows and your settings.
+Two devices that both edited while apart are merged row by row: a row only one of them has is kept,
+and where both have it the later edit wins — a tick and a move count as edits, so finishing a task
+on the phone is not undone by the laptop's older copy. The fifty versions the server keeps are the
+undo for the day that picks wrong. Moving around is not an edit: changing view, opening a row or
+switching the theme never pushes anything, so one device browsing never disturbs another. Nothing
+secret rides the sync: the document is your rows and your settings.
 
 Signup wants an invite code: sixteen hex characters out of `randomBytes`, good once and dead after
-a week, so a code that leaks somewhere is a code that stops working. Wrong codes from one address
-cool off after ten tries. There is no open signup and no way to ask for an invite — the only way
-to get one is for an admin to hand it to you.
+a week. A fresh server logs its first one, and `node server/index.ts invite` cuts another — which is
+also the way back in if the account is ever lost. Wrong codes and wrong passwords cool off after ten
+tries, per address and name, so a stranger guessing at yours locks out only themselves.
 
  **Account** in the footer menu holds the three things a person owns:
 a name and a picture — shrunk to a 128px square before it ever leaves the browser — a password
@@ -490,70 +490,19 @@ Restoring one writes it forward as a new version rather than deleting what came 
 a snapshot back is itself undoable, which is the only reason the list is safe to put in front of
 anyone. **Sign out everywhere** is there for a lost device.
 
-The first account through the door is the admin, and gets **People**: who has an account, how many
-devices each is signed in on and when they last synced, a code cut for one more, the codes still
-outstanding, and the two blunt instruments — sign every device of theirs out, or delete the account
-and its versions with it. Deleting yourself is refused, since the last admin closing the door
-behind them is not a state anyone recovers from. There is no email anywhere in the system — a forgotten password is the admin deleting the
-row and cutting a new invite. Sessions live in an `HttpOnly` cookie for 180 days, idle out after
-30 unused, and are stored hashed, so a copied database file logs nobody in.
+There is no email anywhere in the system: a forgotten password is deleting the row and cutting a
+new invite. Sessions live in an `HttpOnly` cookie for 180 days, idle out after 30 unused, and are
+stored hashed, so a copied database file logs nobody in.
 
-The server is `server/index.ts`: Node and SQLite, both from the runtime, zero dependencies — at
-ten users the whole story is one blob per person and three routes, and the smallest possible
-surface is the security strategy. `npm test` runs the sync engine against it over real HTTP.
-
-## Sharing a project
-
-Right-click a project → **Edit**. Who is on it sits under the colour, in the same window as its
-name — one of the project's settings rather than a second dialog to find. Name someone with an
-account on this server and choose **Can view** or **Can edit**; the field completes against the
-other accounts as you type, minus whoever is already on it. Everything there takes effect as you
-do it — the **Save** below is for the name and the colour. A project someone shared with *you*
-has **Leave project** on the menu instead: it is not yours to share on. They get the project and the items filed under it — nothing else of yours.
-A project holding sub-projects offers to include them; that is the project's own setting rather
-than each invitation's, so everyone on it sees the same thing, and turning it off takes the
-children back off their sidebars along with everything filed under them. The chip on a member's
-row flips between view and edit at any time, and removing someone takes the project off their
-sidebar on their next sync.
-
-Once somebody else is on a project, its rows can say whose they are: **Assigned** in the details
-panel lists the people on it, and the mark on the row is their initials, ringed to tell it from the
-one that says who last touched it. Clicking it searches `+name`, which is how you get to *what is
-mine* without a view for it — and it stacks with every other term, so `+mia @kova #audio` is a
-sentence. Only where there is somebody to pick: in a stash of your own every row is yours, and a
-field whose only answer is *you* is not a field. It is a name, not an account — someone who leaves
-the project still names the row they were given, rather than the row quietly losing it.
-
-A shared project moves into a document of its own that everyone on it syncs against, versioned
-exactly like a personal one and kept fifty deep. That makes the blast radius one project rather
-than one person: two people working in different projects never meet, and two people in the same
-project overwrite each other only if they write inside the same few seconds — where the last write
-wins and the one it replaced is still in that project's history. Proper character-by-character
-merging is a different data layer, and this is the seam it would replace.
-
-For the times a link is the whole answer, **Copy share link** sits on a project's right-click menu:
-one press, a `/?link=…` on the clipboard, readable by anyone holding it without an account. It
-reads back the link the project already has rather than cutting a second one — re-cutting would
-quietly turn a link that lets people join into one that does not — and a link that was just made
-says so in the message, with **Undo** to take it back. Everything that is a decision stays in
-**Edit**: who is on it, view or edit, whether the link lets a signed-in person join, and revoking.
-
-A single row shares as words rather than as a link. Right-click a note, task or idea → **Share…**
-hands its line, its day and its note to the machine's own share sheet — Mail, Messages, WhatsApp,
-AirDrop, whatever is installed — where the browser has one, next to the **Copy text** that has
-always been there. Nothing is published, no token is cut, and the person receiving it needs no
-account: a note sent this way is a snapshot, not a window.
-
-Read-only means read-only in three places, not one: the capture field says whose project it is
-instead of taking dictation, the store refuses every edit that reaches it, and the server refuses
-the write even if something got past both. A project shared with you carries an eye or a pair of
-people in the sidebar, and **Leave project** in its menu — leaving takes nothing with it.
+The server is `server/index.ts`: Node and SQLite, both from the runtime, zero dependencies — the
+whole story is one versioned document and a handful of routes, and the smallest possible surface
+is the security strategy. `npm test` runs the sync engine against it over real HTTP.
 
 ## From Claude
 
 `server/mcp.ts` is an MCP server: it signs into your account like any other device and hands
 Claude seven tools. The server hosts it at `/mcp`, so installing needs no clone, no node and no
-path — one command, which **Settings → Links → Claude** shows pre-filled with your own domain and
+path — one command, which **Settings → Tools → Claude** shows pre-filled with your own domain and
 name, next to a copy button:
 
 ```sh
@@ -572,15 +521,16 @@ claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e ST
 
 | Tool | What it does |
 | --- | --- |
-| `stash_read` | every project, and one view's items — `query` takes the app's own `#tag`, `@project`, `+person` search |
+| `stash_read` | every project, and one view's items — `query` takes the app's own `#tag`, `@project` search |
 | `stash_capture` | adds lines through the same parser the capture bar uses, so `@kova #audio tomorrow !` all mean what they mean when typed |
 | `stash_edit` | one item by id: text, note, date, hour, flag, tags, type, project, done, or gone |
 | `stash_project` | adds one, or renames, recolours and renests an existing one |
 | `stash_subs` | the recurring money in and out — lists with the monthly and yearly totals, adds, changes and removes |
 
 Nothing is reimplemented out there. The parser, the repeat that opens the next occurrence when a
-task is ticked, and the guard that refuses a write to a project shared read-only are `store.ts`'s, reached rather
-than copied.
+task is ticked, and the search syntax are `store.ts`'s, reached rather than copied. A write that
+meets another device's newer one is merged with it, the same way the app merges, rather than sent
+over the top.
 
 Each call pulls `/state`, runs the store's actions over it and pushes the result back with
 `If-Match`, so a capture from Claude is the write the capture bar makes and reaches every device on
@@ -599,18 +549,16 @@ device's document comes in by: a date that cannot exist is dropped there rather 
 as set and then quietly thrown away by the next reader.
 
 Two limits worth knowing. This only runs while Claude is calling it: no
-watching, no alerts, nothing in the background. And some of what comes back is other people's
-writing — rows out of a project shared with you, and token symbols off GeckoTerminal, which are
-whoever-minted-it's text arriving in a model's context. It is data, not instruction, and none of
-these tools do anything a sentence could talk them into: they read, and they write your own stash.
+watching, no alerts, nothing in the background. And what comes back is data, not instruction —
+a note can hold text pasted from anywhere — and none of these tools do anything a sentence could
+talk them into: they read, and they write your own stash.
 
 ## Settings
 
 One window, reached from your name in the sidebar footer, opening on **Account**: the name and
 picture, the password, the devices this account is
-signed in on with one button to end all of them, and deleting the account — which asks for the password and refuses if you are the last admin, since
-nobody could ever cut an invite again. **History** is the fifty versions the server keeps.
-**People** is there for an admin. **Data** is the backup out and back in, clearing what is finished,
+signed in on with one button to end all of them, and deleting the account, which asks for the
+password. **History** is the fifty versions the server keeps. **Data** is the backup out and back in, clearing what is finished,
 and what the browser will admit about keeping any of it. **About** says which build this is and
 looks for a newer one. **Hotkeys** is kept on this machine and never travels.
 
@@ -641,7 +589,8 @@ the app's own responses, so nothing else needs configuring in the proxy.
 
 ```sh
 docker compose up -d --build                            # PROXY_NET names the proxy's network if not npm_default
-docker compose logs stash                               # the first invite code is in the logs; the rest come from the menu
+docker compose logs stash                               # the first invite code is in the logs
+docker compose exec stash node server/index.ts invite   # another, any time
 ```
 
 No proxy network to join? `compose.standalone.yml` publishes the port on loopback instead — the
@@ -652,9 +601,12 @@ it out:
 docker compose -f compose.standalone.yml up -d --build
 ```
 
-Every push to `main` here lands as a versioned GitHub release, so pin a tag if you would rather
-not track `main` live. Updating is `git pull && docker compose up -d --build` — schema migrations
-run on boot, and a tab that is already open offers **Reload** when the new bundle is waiting.
+Updating is `git pull && docker compose up -d --build` — schema migrations run on boot, the old
+container stops cleanly rather than being killed, and a tab that is already open offers **Reload**
+when the new bundle is waiting. Docker's healthcheck asks `/healthz`, which reads the database.
+
+The daily copies sit in the `stash` volume. To keep them off the box, a host cron along the lines of
+`docker cp <the stash container>:/data/. /srv/backups/stash/` followed by your own off-site sync is enough.
 
 ## License
 

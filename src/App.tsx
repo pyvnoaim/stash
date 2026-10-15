@@ -7,8 +7,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { Capture } from '@/components/capture'
 import { CommandPalette, exportBackup, importBackup } from '@/components/command-palette'
 import { EmptyState } from '@/components/empty-state'
-import { Faces, useHere } from '@/components/faces'
-import { ProjectHeader, ProjectProgress } from '@/components/project-header'
+import { ProjectProgress } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { ItemRow } from '@/components/item-row'
@@ -176,16 +175,6 @@ export default function App() {
   // the open page is an item; if it's gone (deleted, filtered out) fall back to the list
   const paged = pageItem ? s.items.find((i) => i.id === pageItem) : undefined
 
-  /* Where we are, for everyone else on the project. A note open full page names its own project —
-     that page is reached from a search or from Everything as often as from the project itself, and
-     "reading the list" is not what is happening on it.
-     Otherwise it is whatever the side panel is showing, and only while that row is in the project
-     being reported: `focus` is a stored field, so it survives the view changing and a reload both,
-     and reporting it unchecked puts your face on a row in a project you walked out of. */
-  useHere(
-    paged ? s.projects.find((p) => p.id === paged.pid) : openProject,
-    paged ? pageItem : (selected?.pid === openProject?.id ? s.focus : null),
-  )
 
   /* a view was picked — the sidebar, ⌘K, the back button. A search overlays
      every list and both pages, so leaving it up makes the new view look like it never took.
@@ -260,11 +249,11 @@ export default function App() {
   const putBack = (ids: string[]) => {
     const n = restoreTrash(ids)
     setMarked([])
-    /* What actually went back, not what was asked for: a row whose project has since been shared
-       with you read-only cannot be restored, and a silent nothing reads as a broken button. */
+    /* What actually went back, not what was asked for: a row a merge has already put back on the
+       list is not restored a second time, and a silent nothing reads as a broken button. */
     if (n === ids.length) toast(n > 1 ? `${n} items restored` : 'Item restored')
-    else if (n) toast(`${n} of ${ids.length} restored — the rest are in projects you can only read`)
-    else toast(ids.length > 1 ? 'Those are in projects you can only read' : 'That is in a project you can only read')
+    else if (n) toast(`${n} of ${ids.length} restored — the rest are already back on the list`)
+    else toast(ids.length > 1 ? 'Those are already back on the list' : 'That is already back on the list')
   }
   const purge = (ids?: string[]) => {
     const gone = emptyTrash(ids)
@@ -490,8 +479,6 @@ export default function App() {
             <h1 className="truncate text-2xl font-semibold tracking-tight">
               {query ? `Search “${query}”` : viewName(s)}
             </h1>
-            {/* whose company this project is in, next to the name of it */}
-            {!query && openProject && <Faces p={openProject} />}
             {/* how many, or — in a project, where the fraction is the more useful number — how
                 many of how many, with the bar that draws it. Today says which day it is. */}
             <span className="text-muted-foreground flex shrink-0 items-center gap-2 font-mono text-xs tabular-nums">
@@ -597,10 +584,6 @@ export default function App() {
               focus(null)
             }}
           >
-            {/* only a shared project has anything left to say down here — the progress moved up
-                beside the name, where it has something to sit next to */}
-            {!query && openProject && <ProjectHeader p={openProject} />}
-
             {/* The trash says its own rule, since a list that empties itself has to. The two row
                 buttons appear once there is something in hand — a selection here means restore or
                 delete, and there is nothing else to do with a deleted row. */}
@@ -687,7 +670,6 @@ export default function App() {
                         // would open nothing and leave every list shortcut behind a phantom page
                         onOpen={() => { focus(it.id); setMarked([]); if (!inTrash) openPage(it.id) }}
                         onTag={(t) => addTerm('#' + t)}
-                        onWho={(w) => addTerm('+' + w)}
                         // the same landing the palette does: drop the search, or the project you
                         // just opened would still be showing search results
                         onProject={(pid) => { setQuery(''); select(pid) }}

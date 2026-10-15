@@ -1,4 +1,4 @@
-import { StrictMode, useState, useSyncExternalStore } from 'react'
+import { StrictMode, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import { toast } from 'sonner'
 import { registerSW } from 'virtual:pwa-register'
@@ -6,7 +6,6 @@ import './index.css'
 import App from './App.tsx'
 import { Toaster } from './components/ui/sonner.tsx'
 import { LoginGate } from './components/login-gate.tsx'
-import { LinkPage } from './components/link-page.tsx'
 import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 import { addShared, focus, getState, select } from './lib/store.ts'
@@ -91,8 +90,7 @@ async function hardReload() {
 
 /* A link to one row — `/?item=<id>`, what Copy link on a row puts on the clipboard. It opens the
    list the row is in and selects it, which is the whole of it: the row has to already be here,
-   because a link carries an id and not the row itself. Someone who is not on the project sees
-   their own stash, unmoved.
+   because a link carries an id and not the row itself.
    ponytail: read once, at boot. A link opened while the project is still syncing in finds nothing
    — re-select once the row lands if that ever bites. */
 {
@@ -128,24 +126,6 @@ startSync()
  */
 function Root() {
   const { status, user } = useSyncExternalStore(subscribeSync, getSync)
-  /* A public link: ?link=<token>, read once, before the gate gets a say. It answers to the token
-     rather than to a session, so it is checked ahead of everything below — a stranger holding one
-     must not be shown the sign-in page, and someone already on the project must not be stopped by
-     it either. Read into state, so entering the app is a re-render rather than a reload. */
-  const [link, setLink] = useState(() => new URLSearchParams(location.search).get('link'))
-  if (link) {
-    return (
-      <LinkPage
-        token={link}
-        onEnter={(pid) => {
-          // the token off the URL before anything can reload it and open the page again
-          history.replaceState(null, '', '/')
-          select(pid)
-          setLink(null)
-        }}
-      />
-    )
-  }
   if (status === 'init') return null
   /* The opener belongs to the app, not to the page. Signing in is when the app opens for you, so
      the sheet plays there — mounted alongside App, whether that is a fresh session answering 401

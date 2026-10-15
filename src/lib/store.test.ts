@@ -10,8 +10,9 @@ Object.assign(globalThis, {
 
 const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
-  flatProjects, patchProject, removeItem, removeProject, select, setMe, setProjectSort, setTheme,
-  toggleDone, undo, visible, monthlyCost, adoptShared, sliceOf, yearlyCost, chargesBetween, nextCharge,
+  flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
+  toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge,
+  setOnPersist, flush, focus, mergeRemote, adoptRemote,
   tagsFor,
   readHash, emptyTrash, restoreTrash, restoreItem,
   replaceAll,
@@ -253,50 +254,79 @@ addItem(item({ id: 'h3', repeat: 'day', due: '2026-08-04', at: '07:30' }))
 toggleDone('h3')
 assert.deepEqual(getState().items.map((i) => i.at), ['07:30', '07:30'])
 
-// an edit stamps the item; capturing one and finishing it are not edits
+// an edit stamps the item, and so does finishing it — a merge has to see the tick as the newer
+// copy; capturing one is not an edit
 wipe()
 addItem(item({ id: 'e1', repeat: 'day', due: '2026-01-01' }))
 assert.equal(getState().items[0].editedAt, null)
 toggleDone('e1')
-// the occurrence toggleDone opened is new, so it starts unedited too
-assert.deepEqual(getState().items.map((i) => i.editedAt), [null, null])
+// the occurrence toggleDone opened is new, so it starts unedited
+assert.equal(getState().items.find((i) => i.id !== 'e1')!.editedAt, null)
+assert.ok((getState().items.find((i) => i.id === 'e1')!.editedAt ?? 0) > 0)
 patch('e1', { text: 'renamed' })
 assert.ok((getState().items.find((i) => i.id === 'e1')?.editedAt ?? 0) > 0)
 
-/* ---------- whose row it is, and whose hand was on it last ---------- */
+/* ---------- names from when projects could be shared are taken off ---------- */
 
-wipe()
-setMe('ada')
-addItem(item({ id: 'w1', repeat: 'day', due: '2026-01-01' }))
-assert.equal(getState().items[0].by, 'ada')
-assert.equal(getState().items[0].editedBy, undefined)   // written is not edited
+{
+  const old = load({
+    items: [{ id: 'n', by: 'ada', editedBy: 'bo', who: 'mia' }],
+    projects: [{ id: 'p', name: 'P', share: { by: 'ada', edit: false } }],
+  })
+  assert.equal(JSON.stringify(old).includes('ada'), false)
+  assert.equal(JSON.stringify(old).includes('mia'), false)
+}
 
-setMe('bo')
-patch('w1', { text: 'theirs now' })
-const w1 = () => getState().items.find((i) => i.id === 'w1')!
-assert.equal(w1().by, 'ada')          // who wrote it does not change hands
-assert.equal(w1().editedBy, 'bo')
-toggleDone('w1')                      // ticking someone's task is working on it
-assert.equal(w1().editedBy, 'bo')
-// the occurrence that opens in its place is the series', not the last hand's
-assert.equal(getState().items.find((i) => i.id !== 'w1' && !i.done)!.editedBy, undefined)
+/* ---------- moving around is not an edit; editing is ---------- */
 
-// signed out there is nobody to name, and an old row keeps whatever it came with
-setMe(null)
-patch('w1', { text: 'offline edit' })
-assert.equal(w1().editedBy, 'bo')
-wipe()
-addItem(item({ id: 'w2' }))
-assert.equal(getState().items[0].by, undefined)
+{
+  wipe()
+  let pushes = 0
+  setOnPersist(() => { pushes++ })
+  addItem(item({ id: 'nav' }))
+  flush()
+  assert.equal(pushes, 1)                  // a new row: the other devices need it
+  select('upcoming'); focus('nav'); setTheme('dark')
+  flush()
+  assert.equal(pushes, 1)                  // a view, a focus, a theme: this machine's own business
+  patch('nav', { text: 'edited' })
+  flush()
+  assert.equal(pushes, 2)
+  setOnPersist(null)
+}
 
-// a name is a name or it is nothing — someone else's document cannot smuggle an object, or a
-// novel, into the tooltip on your row
-const named = load({ items: [{ id: 'n', by: 'x'.repeat(500), editedBy: 7, who: 'y'.repeat(500) }] }).items[0]
-assert.equal(named.by, 'x'.repeat(32))
-assert.equal(named.editedBy, undefined)
-assert.equal(named.who, 'y'.repeat(32))
-// an empty string is nobody, not somebody with no name
-assert.equal(load({ items: [{ id: 'n', who: '' }] }).items[0].who, undefined)
+/* ---------- a tick, a move and a deleted project are edits a merge can see ---------- */
+
+{
+  wipe()
+  addItem(item({ id: 'tick', text: 'a task' }))
+  const before = structuredClone(getState())         // the other device, which has not seen the tick
+  toggleDone('tick')
+  assert.ok((getState().items[0].editedAt ?? 0) > 0)
+  const merged = mergeRemote(getState(), before)
+  assert.equal(merged.items.find((i) => i.id === 'tick')!.done, true)   // the tick survives
+
+  const p = addProject('Gone soon')
+  addItem(item({ id: 'filed', pid: p.id }))
+  const stale = structuredClone(getState())
+  removeProject(p.id)
+  assert.equal(mergeRemote(getState(), stale).items.find((i) => i.id === 'filed')!.pid, null)
+}
+
+/* ---------- a document from another device keeps what is this machine's ---------- */
+
+{
+  wipe()
+  addItem(item({ id: 'open1' }))
+  focus('open1')
+  setTheme('dark')
+  adoptRemote({ ...structuredClone(getState()), theme: 'light', focus: null, items: [
+    ...structuredClone(getState()).items, item({ id: 'fromPhone' })] })
+  assert.equal(getState().focus, 'open1')   // still open: it is still there
+  assert.equal(getState().theme, 'dark')
+  adoptRemote({ ...structuredClone(getState()), items: [] })
+  assert.equal(getState().focus, null)      // gone on the other device, so closed here
+}
 
 /* An hour is only ever an hour of a day: one on an item with no date, or one no clock could show,
    is not kept — it would sort a row into a day it does not belong to and knock a phone at it. */
@@ -353,18 +383,6 @@ addItem(item({ id: 'tagged', tags: ['audio'] }))
 assert.deepEqual(visible(getState(), 'audio').map((i) => i.id).sort(), ['tagged', 'text'])
 assert.deepEqual(visible(getState(), '#audio').map((i) => i.id), ['tagged'])
 assert.deepEqual(visible(getState(), '#aud').map((i) => i.id), [])
-
-/* ---------- +name is whose it is to do, matched whole ---------- */
-
-patch('text', { who: 'Bo' })
-assert.deepEqual(visible(getState(), '+bo').map((i) => i.id), ['text'])
-// the whole name, not the start of one: half a name matching puts someone else's work in your list
-assert.deepEqual(visible(getState(), '+b').map((i) => i.id), [])
-assert.deepEqual(visible(getState(), '+nobody').map((i) => i.id), [])
-// and it narrows like every other term, rather than replacing the search
-assert.deepEqual(visible(getState(), '+bo audio').map((i) => i.id), ['text'])
-assert.deepEqual(visible(getState(), '+bo #audio').map((i) => i.id), [])
-patch('text', { who: undefined })
 
 /* ---------- @project search matches the name's start, the way capture does ---------- */
 
@@ -572,89 +590,6 @@ assert.equal('was' in load({ subs: [{ id: 'p', name: 'Music', cost: 10.99, cycle
 
 console.log('store: ok')
 
-/* ---------- sharing: what a read-only project refuses ---------- */
-{
-  const mine = addProject('Mine')
-  const theirs = addProject('Theirs')
-  const yours = addProject('Yours')
-
-  // the items arrive with the project still writable — a share that lands later freezes them
-  addItem(item({ id: 'ro', pid: theirs.id, text: 'read only' }))
-  addItem(item({ id: 'rodone', pid: theirs.id, text: 'their finished work', done: true }))
-  addItem(item({ id: 'rw', pid: yours.id, text: 'writable' }))
-  addItem(item({ id: 'own', pid: mine.id, text: 'mine' }))
-  patchProject(theirs.id, { share: { by: 'ada', edit: false } })
-  patchProject(yours.id, { share: { by: 'ada', edit: true } })
-
-  // the guard is on the path every edit takes, so one check covers all of them
-  patch('ro', { text: 'changed' })
-  assert.equal(getState().items.find((i) => i.id === 'ro')!.text, 'read only')
-  toggleDone('ro')
-  assert.equal(getState().items.find((i) => i.id === 'ro')!.done, false)
-  assert.equal(removeItem('ro'), null)
-  assert.ok(getState().items.some((i) => i.id === 'ro'))
-
-  // ...and nowhere else: an editable share and your own project behave normally
-  patch('rw', { text: 'changed' })
-  assert.equal(getState().items.find((i) => i.id === 'rw')!.text, 'changed')
-  toggleDone('own')
-  assert.equal(getState().items.find((i) => i.id === 'own')!.done, true)
-
-  // nothing new lands in a read-only project either
-  addItem(item({ id: 'nope', pid: theirs.id }))
-  assert.ok(!getState().items.some((i) => i.id === 'nope'))
-
-  // the project itself is not yours to rename
-  patchProject(theirs.id, { name: 'Renamed' })
-  assert.equal(getState().projects.find((p) => p.id === theirs.id)!.name, 'Theirs')
-
-  // clearing finished work leaves theirs alone: it is not yours to throw away, and the undo it
-  // hands back only knows about what it collected — anything cleared past that is gone for good
-  const swept = clearDone()        // 'own' was finished above; it is the only row that may go
-  assert.equal(swept?.n, 1)
-  assert.ok(getState().items.some((i) => i.id === 'rodone'))
-  assert.ok(!getState().items.some((i) => i.id === 'own'))
-  swept?.undo()
-
-  // and a row cannot be dragged into a project you may not write to
-  moveBefore('rw', 'ro')
-  assert.equal(getState().items.find((i) => i.id === 'rw')!.pid, yours.id)
-
-  // a slice travels without the permission on it — that is this device's view, not their data
-  const slice = sliceOf(getState(), yours.id)!
-  assert.equal('share' in slice.projects[0], false)
-  assert.deepEqual(slice.items.map((i) => i.id), ['rw'])
-
-  // sub-projects only travel when the share says so
-  const kid = addProject('Under yours', null, yours.id)
-  addItem(item({ id: 'kidItem', pid: kid.id }))
-  assert.deepEqual(sliceOf(getState(), yours.id)!.projects.map((p) => p.id), [yours.id])
-  assert.deepEqual(sliceOf(getState(), yours.id)!.items.map((i) => i.id), ['rw'])
-  const wide = sliceOf(getState(), yours.id, true)!
-  assert.deepEqual(wide.projects.map((p) => p.id).sort(), [kid.id, yours.id].sort())
-  assert.deepEqual(wide.items.map((i) => i.id).sort(), ['kidItem', 'rw'])
-
-  // a child dropped out of the share leaves with its items, and the permission covers the rest
-  adoptShared(yours.id, wide, { by: 'ada', edit: true })
-  assert.ok(getState().projects.find((p) => p.id === kid.id)?.share)
-  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null }], items: [] })
-  assert.ok(!getState().projects.some((p) => p.id === kid.id))
-  assert.ok(!getState().items.some((i) => i.id === 'kidItem'))
-
-  // adopting a slice replaces what was filed under that project and keeps the permission
-  adoptShared(yours.id, { projects: [{ id: yours.id, name: 'Yours', color: null, parent: null }],
-    items: [item({ id: 'fromThem', pid: yours.id, text: 'theirs now' })] })
-  const after = getState()
-  assert.deepEqual(after.items.filter((i) => i.pid === yours.id).map((i) => i.id), ['fromThem'])
-  assert.deepEqual(after.projects.find((p) => p.id === yours.id)!.share, { by: 'ada', edit: true })
-
-  // unshared: the project and its items leave with it, and nothing of yours goes with them
-  adoptShared(yours.id, null, null)
-  assert.ok(!getState().projects.some((p) => p.id === yours.id))
-  assert.ok(!getState().items.some((i) => i.id === 'fromThem'))
-  assert.ok(getState().items.some((i) => i.id === 'own'))
-}
-
 /* Hotkeys. `refuse` is what stands between a rebind and a key that quietly does nothing: the
    handler drops every ⌘ press before the row shortcuts, and answers the arrows itself. */
 {
@@ -803,31 +738,11 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   wipe()
   emptyTrash()
 
-  // a share that is revoked takes its deleted rows with it, or somebody else's writing lives on
-  // in this document — and a Restore would file work you can no longer read into your own list
-  adoptShared('p',
-    { projects: [{ id: 'p', name: 'Kova', parent: null }], items: [item({ id: 'theirs', pid: 'p' })] },
-    { by: 'mia', edit: true })
-  removeItem('theirs')
-  assert.deepEqual(getState().trash.map((i) => i.id), ['theirs'])
-  adoptShared('p', null, null)
-  assert.deepEqual(getState().trash, [], 'leaving took it with it')
-  assert.deepEqual(getState().items, [])
-
-  // and a row the owner still has comes back as a live item, so our copy stops being trash:
-  // restoring it would otherwise put a second row with the same id on the list
-  const slice = { projects: [{ id: 'q', name: 'Site', parent: null }], items: [item({ id: 'x', pid: 'q' })] }
-  adoptShared('q', slice, { by: 'mia', edit: true })
-  removeItem('x')
-  adoptShared('q', slice, { by: 'mia', edit: true })   // they had not pulled our delete yet
-  assert.deepEqual(getState().items.map((i) => i.id), ['x'])
-  assert.deepEqual(getState().trash, [], 'the trash copy went when the live one came back')
-
   // restore refuses a row that is already on the list, whatever put it there
   wipe(); emptyTrash()
   addItem(item({ id: 'dup' }))
   removeItem('dup')
-  addItem(item({ id: 'dup' }))                  // as an adopted slice would
+  addItem(item({ id: 'dup' }))                  // as a merge could
   assert.equal(restoreTrash(['dup']), 0)
   assert.equal(getState().items.filter((i) => i.id === 'dup').length, 1, 'one row, one id')
 

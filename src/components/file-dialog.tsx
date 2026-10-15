@@ -1,7 +1,7 @@
 import {
   Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from '@/components/ui/command'
-import { flatProjects, patch, project, readOnly, useStash } from '@/lib/store'
+import { flatProjects, patch, project, useStash } from '@/lib/store'
 
 /**
  * F on a row: a few letters of a project's name and ⏎, and every row in hand is filed there. It is
@@ -30,7 +30,7 @@ export function FileDialog({ ids, onOpenChange, onFiled }: {
           <CommandEmpty>No project by that name.</CommandEmpty>
           <CommandGroup>
             {/* a project you may only read takes nothing, so it is not offered */}
-            {flatProjects(s).filter((p) => !readOnly(s, p.id)).map((p) => {
+            {flatProjects(s).map((p) => {
               const path = p.parent ? `${project(s, p.parent)?.name} / ${p.name}` : p.name
               return (
                 <CommandItem key={p.id} value={`${path} ${p.id}`} onSelect={() => to(p.id)}>

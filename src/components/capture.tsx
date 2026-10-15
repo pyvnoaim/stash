@@ -111,14 +111,10 @@ export function Capture({ inputRef, className, announce }: {
   }
 
   const here = project(s, s.sel)
-  // a project shared with you read-only takes nothing new — the field says so rather than
-  // swallowing what you type and dropping it at the store's guard
-  const readOnly = !!here?.share && !here.share.edit
-  /* And the trash is not a list at all. `pid` falls back to the view you are standing in, which
+  /* The trash is not a list at all. `pid` falls back to the view you are standing in, which
      the trash is not, so a line typed here was filed with no project and landed in a list the
-     trash does not show — the field took what you typed, said "added", and nothing appeared. The
-     same lock the read-only case already uses, for the same reason. */
-  const locked = readOnly || s.sel === TRASH
+     trash does not show — the field took what you typed, said "added", and nothing appeared. */
+  const locked = s.sel === TRASH
 
   return (
     <form onSubmit={submit} autoComplete="off" className={cn('relative', className)}>
@@ -166,9 +162,7 @@ export function Capture({ inputRef, className, announce }: {
           onPaste={paste}
           aria-label="Add an item"
           disabled={locked}
-          placeholder={readOnly
-            ? `${here!.share!.by} shared this to read`
-            : locked ? 'The trash takes nothing new'
+          placeholder={locked ? 'The trash takes nothing new'
               : here ? `Add to ${here.name}` : s.sel === 'inbox' ? 'Add anything — sort it later' : 'Add to Stash'}
           className="pl-3! text-[15px]"   // beats the group's own [&>input]:pl-1.5
         />

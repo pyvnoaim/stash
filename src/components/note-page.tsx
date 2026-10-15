@@ -3,14 +3,13 @@ import {
   ArrowLeft, Bold, Code, FolderOpen, Heading, Italic, Link2, Quote, Strikethrough, Underline,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { Faces } from '@/components/faces'
 import { Markdown } from '@/components/markdown'
 import { Button } from '@/components/ui/button'
 import { Hint } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { Backlinks } from '@/components/inspector'
 import { blocksOf, headingClass, promoteBox, replaceBlock, resolveWiki, toggleBox, wikiKey, type Block } from '@/lib/markdown'
-import { addItem, itemOf, patch, readOnly, select, useStash, type Item } from '@/lib/store'
+import { addItem, itemOf, patch, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 
 /**
@@ -392,7 +391,7 @@ export function NotePage({ it, onBack, onOpen }: {
              project — so the two point at each other from the start.
              ponytail: ticking one does not tick the other; they are a note and a task, not one row. */
           // not in a project you may only read: both writes would be refused, and said to have worked
-          onPromote={readOnly(s, it.pid) ? undefined : (l) => {
+          onPromote={(l) => {
             const made = promoteBox(it.note, b.from + l)
             if (!made) return
             addItem(itemOf({ text: made.title, tags: [], pid: it.pid, flag: false, due: null, at: null, repeat: null }))
@@ -421,10 +420,6 @@ export function NotePage({ it, onBack, onOpen }: {
           {filed && <span className="bg-muted-foreground size-2 rounded-full" style={filed.color ? { backgroundColor: filed.color } : undefined} />}
           {filed?.name ?? 'Back'}
         </Button>
-        {/* Who else is in the project this note is filed under — and lit, if they are in it now.
-            The list header has carried these since sharing existed; this page is where a document
-            is actually read and written, which makes it the one place the question is urgent. */}
-        {filed && <Faces p={filed} />}
         <span className="flex-1" />
         {it.editedAt && (
           <span className="text-muted-foreground font-mono text-[11px]">

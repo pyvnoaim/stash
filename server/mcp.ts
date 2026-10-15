@@ -4,8 +4,8 @@
  * Every call pulls `/state`, runs the store's own actions over it and pushes the result back with
  * `If-Match` — so a line captured here is the write the capture bar makes, parser and all, and two
  * devices editing at once resolve exactly the way `sync.ts` decides it. Nothing here reimplements
- * a rule: the repeat that opens the next occurrence, the read-only guard on a shared project and
- * the search syntax are the ones in `store.ts`, reached rather than copied.
+ * a rule: the repeat that opens the next occurrence and the search syntax are the ones in
+ * `store.ts`, reached rather than copied.
  *
  *   STASH_URL=https://stash.example STASH_USER=leon STASH_PASS=… \
  *     node --experimental-strip-types server/mcp.ts
@@ -56,14 +56,15 @@ const serial = <T>(fn: () => Promise<T>): Promise<T> => {
  * one of these built from the environment, and the hosted /mcp route builds one per user. The
  * session cookie and document version live here; the store and the queue stay shared above.
  */
-export function createStash({ url, user, pass }: { url: string, user: string, pass: string }) {
+export function createStash({ url, user, pass, via }: { url: string, user: string, pass: string, via?: string }) {
 
 let cookie = ''
 
 async function login() {
   if (!user || !pass) throw new Error('STASH_USER and STASH_PASS are not set')
   const r = await fetch(`${url}/api/login`, {
-    method: 'POST', headers: { 'user-agent': UA }, body: JSON.stringify({ user, pass }),
+    // `via`: the address the hosted /mcp route was called from, for the server's login limiter
+    method: 'POST', headers: { 'user-agent': UA, ...(via && { 'x-real-ip': via }) }, body: JSON.stringify({ user, pass }),
   })
   const j: any = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(`login to ${url} failed: ${j.error ?? r.status}`)
@@ -94,22 +95,28 @@ async function pull() {
   const { version: v, state } = await r.json() as { version: number, state: unknown }
   version = v
   store.adoptRemote(state)
-  store.setMe(user || null)   // so a row written here is signed, the way the app signs one
   return store.getState()
 }
 
-/** Back to the server, the same body and the same 409 rule as `sync.ts`: another device wrote
- *  while we were thinking, ours is the newer edit, and theirs is a snapshot rather than a loss. */
+/** Back to the server, with the same 409 rule as `sync.ts`: another device wrote while we were
+ *  thinking, so the two documents are merged row by row and the merge is what goes up. Sending ours
+ *  again at their version, which this used to do, painted over whatever the phone had just saved. */
 async function push() {
   /* Out through the same door every document comes in by. `load` is where an impossible date, a
      junk colour and an illegal nesting are cleaned off, and a tool that reported the ask rather
      than what survived it would be telling the one lie that matters: `due: '2026-13-45'` reads as
      set, is dropped by the next reader, and the task is simply never due. */
   store.adoptRemote(store.getState())
-  const body = JSON.stringify({ state: store.getState(), device: UA })
-  const put = (v: number) => api('/state', { method: 'PUT', headers: { 'if-match': String(v) }, body })
+  const put = (v: number) => api('/state', {
+    method: 'PUT', headers: { 'if-match': String(v) },
+    body: JSON.stringify({ state: store.getState(), device: UA }),
+  })
   let r = await put(version)
-  if (r.status === 409) r = await put((await r.json() as { version: number }).version)
+  if (r.status === 409) {
+    const cur = await r.json() as { version: number, state: unknown }
+    if (cur.state) store.adoptRemote(store.mergeRemote(store.getState(), cur.state))
+    r = await put(cur.version)
+  }
   if (!r.ok) throw new Error(`PUT /state: ${r.status}`)
   version = (await r.json() as { version: number }).version
 }
@@ -128,7 +135,6 @@ const shape = (s: State) => (i: Item) => ({
   ...(i.flag && { flag: true }),
   ...(i.tags.length && { tags: i.tags }),
   ...(i.done && { done: true }),
-  ...(i.who && { who: i.who }),
 })
 
 const asProject = (s: State, name: unknown) => {
@@ -162,7 +168,7 @@ const tools: Record<string, {
   stash_read: {
     annotations: READS,
     description: 'Read the stash: every project, and the items in one view. `query` takes the app\'s '
-      + 'own search syntax — `#tag`, `@project` (which reaches its sub-projects), `+person`, and '
+      + 'own search syntax — `#tag`, `@project` (which reaches its sub-projects), and '
       + 'free text — and searches everything rather than the view when it is given.',
     schema: {
       type: 'object',
@@ -187,7 +193,6 @@ const tools: Record<string, {
         projects: store.flatProjects(s).map((p) => ({
           name: p.name, open: store.openIn(s, p.id),
           ...(p.parent && { under: store.project(s, p.parent)?.name }),
-          ...(p.share && { sharedBy: p.share.by, canEdit: p.share.edit }),
         })),
         count: items.length,
         items: items.slice(0, limit).map(shape(s)),
@@ -215,8 +220,7 @@ const tools: Record<string, {
       store.addItems(made)
       await push()
       const now = store.getState()
-      // read back rather than echo: a project shared read-only drops the row on the way in, and
-      // saying "added" about something the store refused is the one lie this must not tell
+      // read back rather than echo: what the store kept, not what was asked for
       const ids = new Set(made.map((i) => i.id))
       return { added: now.items.filter((i) => ids.has(i.id)).map(shape(now)) }
     },
@@ -249,7 +253,7 @@ const tools: Record<string, {
       const it = s.items.find((i) => i.id === a.id)
       if (!it) throw new Error(`no item ${a.id}`)
       if (a.remove) {
-        if (!store.removeItem(a.id)) throw new Error('that project is shared with you read-only')
+        store.removeItem(a.id)
         await push()
         return { removed: a.id, was: shape(s)(it) }
       }

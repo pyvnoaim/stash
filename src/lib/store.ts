@@ -28,19 +28,6 @@ export interface Item {
   ts: number
   /** Last time an edit went through `patch`. Null until something is actually changed. */
   editedAt: number | null
-  /**
-   * Who wrote it and who has touched it since — the two names a shared project needs, so a row
-   * that appeared overnight says whose it is. Absent on anything made while signed out, and on
-   * everything from before this existed: unattributed reads as "yours", which is what it was.
-   */
-  by?: string
-  editedBy?: string
-  /**
-   * Whose it is to do, in a project shared with other people — a name, the same one they sign in
-   * with. Absent everywhere else: a stash of your own has one person in it, and a field that
-   * always says "you" is not a field. Search `+name` reads it.
-   */
-  who?: string
 }
 
 /**
@@ -55,11 +42,6 @@ export interface Trashed extends Item {
   delAt: number
 }
 
-/* Who is signed in, as far as the store is concerned. sync.ts owns the session and pushes the
-   name in — the store cannot import it back without a cycle, the same reason setOnPersist exists. */
-let me: string | null = null
-export const setMe = (name: string | null) => { me = name }
-export const getMe = () => me
 
 export interface Project {
   id: string
@@ -71,12 +53,6 @@ export interface Project {
    * a parent cannot be given children. Two levels is a sidebar; more is a file tree.
    */
   parent: string | null
-  /**
-   * Set when the project is someone else's, shared with you: who owns it and whether you may
-   * write. Absent on your own projects, shared or not — what you own, you may always edit.
-   * sync.ts writes it on every pull; the store's actions read it and refuse where they must.
-   */
-  share?: { by: string, edit: boolean }
 }
 
 /** How often a subscription bills. */
@@ -305,7 +281,9 @@ function cleanItems(list: unknown, projects: Project[]): Item[] {
   const seen = new Set<string>()
   return (Array.isArray(list) ? list : [])
     .filter((i) => i && i.id)
-    .map((i) => {
+    // who wrote it, who touched it, whose it was: names from when projects could be shared, left
+    // in older documents. Taken off here so `...i` cannot carry them on
+    .map(({ by: _by, editedBy: _editedBy, who: _who, ...i }) => {
       const type = (['task', 'idea', 'note'] as const).includes(i.type) ? i.type : 'task'
       return {
         ...i,
@@ -329,14 +307,6 @@ function cleanItems(list: unknown, projects: Project[]): Item[] {
         ts: typeof i.ts === 'number' ? i.ts : Date.now(),
         // a backup from before this existed has never been edited as far as anyone can tell
         editedAt: typeof i.editedAt === 'number' ? i.editedAt : null,
-        // undefined rather than kept: `...i` is what a hand-edited backup arrives through, and a
-        // name is a name or it is nothing. JSON drops it again on the way back to disk. Cut to the
-        // length the server lets a name be — these arrive in someone else's shared document, and
-        // a novel in one would go straight into a tooltip.
-        by: typeof i.by === 'string' ? i.by.slice(0, 32) : undefined,
-        editedBy: typeof i.editedBy === 'string' ? i.editedBy.slice(0, 32) : undefined,
-        // a name, cut to the length the server lets one be — the same reason as the two above
-        who: typeof i.who === 'string' && i.who ? i.who.slice(0, 32) : undefined,
         // orphans land in Inbox rather than becoming invisible
         pid: projects.some((p) => p.id === i.pid) ? i.pid : null,
       }
@@ -359,8 +329,6 @@ export function load(data: unknown): State {
       name: String(p.name || 'Project'),
       color: cleanColor(p.color),
       parent: typeof p.parent === 'string' ? p.parent : null,
-      ...(p.share && typeof p.share === 'object' && typeof p.share.by === 'string'
-        && { share: { by: String(p.share.by), edit: !!p.share.edit } }),
     }))
 
   /* A parent has to exist, cannot be the project itself, and cannot have a parent of its own.
@@ -463,11 +431,21 @@ let onPersist: (() => void) | null = null
 export const setOnPersist = (fn: (() => void) | null) => { onPersist = fn }
 let adopting = false
 
+/* This device's own: where you are and how it looks. Saved, but not edits. Counting them marked the
+   document dirty on every j/k and view change, which pushed the whole of it, spent one of the
+   server's fifty versions, and woke every other device to adopt it — closing whatever they had
+   open and wiping their ⌘Z. */
+const LOCAL = new Set<string>(['sel', 'focus', 'theme', 'hotkeys', 'collapsed', 'subView'])
+const edits = (a: State, b: State) =>
+  Object.keys(b).some((k) => !LOCAL.has(k) && a[k as keyof State] !== b[k as keyof State])
+let changed = false   // an edit since the last save, as against only a move
+
 function save() {
   pending = undefined
   try {
     localStorage.setItem(KEY, JSON.stringify(state))
-    if (!adopting) onPersist?.()
+    if (!adopting && changed) onPersist?.()
+    changed = false
   } catch {
     // quota exceeded, or Safari private mode. The session keeps working and the disk doesn't,
     // which is the one failure worth interrupting for — App turns this into a toast, once.
@@ -490,17 +468,25 @@ function commit(next: State) {
      every closed trade it sees once a minute and finds them all already filed, was enough to make a
      window left open overwrite a note just typed on somebody's phone. */
   if (next === state) return
+  if (edits(state, next)) changed = true
   state = next
   listeners.forEach((fn) => fn())
   if (pending === undefined) pending = setTimeout(save, 200)
 }
 
-// ...but a tab closing inside that window must not take the last edit with it
-addEventListener('pagehide', () => {
+/**
+ * The edit still waiting out its 200ms, saved now. A pull asks this first: otherwise a letter typed
+ * just before the server answered had not reached `onPersist` yet, the device looked clean, and
+ * adopting the server's document painted over it — a line captured at boot went the same way.
+ */
+export function flush() {
   if (pending === undefined) return
   clearTimeout(pending)
   save()
-})
+}
+
+// ...but a tab closing inside that window must not take the last edit with it
+addEventListener('pagehide', () => flush())
 
 /* ---------- undo: fifty steps, the same as the PDF tab's ---------- */
 
@@ -551,103 +537,6 @@ export function redo() {
   edited = 0
   commit(rewind(next))
   return true
-}
-
-/**
- * What travels for a shared project: the project, its sub-projects when the share includes them,
- * and every item filed under any of those.
- */
-export interface Slice { projects: Project[], items: Item[] }
-
-/** `share` is this device's view of the permission, not the project's data — it never travels. */
-const bare = ({ share: _drop, ...p }: Project) => p
-
-export const sliceOf = (s: State, pid: string, subs = false): Slice | null => {
-  const project = s.projects.find((p) => p.id === pid)
-  if (!project) return null
-  const kids = subs ? childProjects(s, pid) : []
-  const ids = new Set([pid, ...kids.map((k) => k.id)])
-  return {
-    projects: [bare(project), ...kids.map(bare)],
-    items: s.items.filter((i) => i.pid && ids.has(i.pid)),
-  }
-}
-
-/**
- * A shared project's slice lands in the local document: the project's own fields come from the
- * slice, its items replace whatever was filed under it here, and `share` records whose it is and
- * whether this device may write. Passing `null` for the slice keeps the project and only sets the
- * permission; `null` for both takes the project out — it stopped being shared with you.
- */
-export function adoptShared(pid: string, slice: unknown, share?: { by: string, edit: boolean } | null) {
-  set((s) => {
-    /* This share's footprint on this device: the project, and the sub-projects that are here
-       because of it — the ones carrying a share of their own, which is what an adopted slice
-       marks them with. A sub-project of your own is not part of anybody's share, only filed
-       under a project that is, and sweeping it out with one took every row in it: a project
-       shared without its sub-projects has none of them in the slice, so all of them read as
-       dropped from the share, and the first pull that differed deleted the lot. */
-    const localIds = new Set([
-      pid, ...s.projects.filter((p) => p.parent === pid && p.share).map((p) => p.id),
-    ])
-
-    if (slice === null && share === null) {
-      /* It stopped being shared with you, so it leaves this device — the trash included. Their
-         rows sitting in your trash would otherwise be their writing in your synced document for
-         the rest of the fortnight, and a Restore would file work you can no longer read into your
-         own Inbox. "Leaving takes nothing with it" has to mean nothing. */
-      return {
-        ...s,
-        projects: s.projects.filter((p) => !localIds.has(p.id)),
-        items: s.items.filter((i) => !(i.pid && localIds.has(i.pid))),
-        trash: s.trash.filter((i) => !(i.pid && localIds.has(i.pid))),
-        sel: localIds.has(s.sel) ? 'today' : s.sel,
-      }
-    }
-
-    // the slice is someone else's document: through load(), like every other untrusted input
-    const raw = slice as { projects?: Project[], items?: Item[] } | null
-    const clean = raw?.projects ? load({ projects: raw.projects, items: raw.items ?? [] }) : null
-    const kept = s.projects.find((p) => p.id === pid)
-    const mark = share === undefined ? kept?.share : (share ?? undefined)
-
-    if (!clean) {
-      // no document yet: keep the placeholder, only set whose it is and what may be done in it
-      const blank: Project = { id: pid, name: 'Shared project', color: null, parent: null }
-      const next = { ...(kept ?? blank), ...(mark ? { share: mark } : {}) }
-      return {
-        ...s,
-        projects: kept ? s.projects.map((p) => (p.id === pid ? next : p)) : [...s.projects, next],
-      }
-    }
-
-    // the shared set replaces what was here: sub-projects dropped from the share go with it
-    const incoming = clean.projects.map((p) => ({ ...p, ...(mark ? { share: mark } : {}) }))
-    const ids = new Set(incoming.map((p) => p.id))
-    const gone = [...localIds].filter((id) => !ids.has(id))
-    const projects = [
-      ...s.projects
-        .filter((p) => !localIds.has(p.id) && !ids.has(p.id))
-        .map((p) => p),
-      ...incoming,
-    ]
-    /* The trash follows the same two rules the items above do, because `load`'s guard against a
-       row being in both lists does not run on an adopted slice: a sub-project dropped from the
-       share takes its deleted rows with it, and a row the owner still has — because they had not
-       pulled our delete yet — comes back as a live item, so our copy of it stops being trash.
-       Without that second rule, restoring it would put a second row with the same id on the list. */
-    const back = new Set(clean.items.map((i) => i.id))
-    return {
-      ...s,
-      projects,
-      items: [
-        ...clean.items,
-        ...s.items.filter((i) => !(i.pid && (ids.has(i.pid) || gone.includes(i.pid)))),
-      ],
-      trash: s.trash.filter((i) => !back.has(i.id) && !(i.pid && gone.includes(i.pid))),
-      sel: gone.includes(s.sel) ? 'today' : s.sel,
-    }
-  })
 }
 
 /* ---------- two documents that both moved since they last agreed ---------- */
@@ -706,16 +595,6 @@ export function mergeRemote(mine: State, theirs: unknown): State {
   }
 }
 
-/** The same rule, on the slice a shared project travels as — which carries no trash of its own. */
-export function mergeSlice(mine: Slice, theirs: unknown): Slice {
-  const raw = theirs as Partial<Slice> | null
-  const t = load({ projects: raw?.projects ?? [], items: raw?.items ?? [] })
-  return {
-    projects: [...byId(mine.projects, t.projects).values()],
-    items: [...byId(mine.items, t.items, liveAt).values()],
-  }
-}
-
 /**
  * The server's document takes the place of ours — the same rules as another window writing:
  * the undo history goes with it, and the view, the focus and this machine's API key stay put.
@@ -728,7 +607,13 @@ export function adoptRemote(data: unknown) {
   state = {
     ...next,
     sel: isRoute(next, state.sel) ? state.sel : 'today',
-    focus: null,
+    // what you have open stays open, unless the other device took it away
+    focus: next.items.some((i) => i.id === state.focus) ? state.focus : null,
+    // a keyboard, a light preference and what is folded belong to the machine, not to the stash
+    theme: state.theme,
+    hotkeys: state.hotkeys,
+    collapsed: state.collapsed,
+    subView: state.subView,
   }
   listeners.forEach((fn) => fn())
   adopting = true
@@ -899,12 +784,6 @@ export function visible(s: State, query: string): Item[] {
         list = list.filter((i) => i.tags.includes(w.slice(1)))
         continue
       }
-      // a + is the person it is assigned to — `+leon` is the whole name, the way #tag is the
-      // whole tag: half a name matching is how you get someone else's work in your own list
-      if (w.length > 1 && w.startsWith('+')) {
-        list = list.filter((i) => i.who?.toLowerCase() === w.slice(1))
-        continue
-      }
       // and an @ is the project, matched on the name's start the same way capture matches it
       if (w.length > 1 && w.startsWith('@')) {
         const p = s.projects.find((p) => p.name.toLowerCase().startsWith(w.slice(1)))
@@ -938,26 +817,13 @@ export function visible(s: State, query: string): Item[] {
 
 /* ---------- actions ---------- */
 
-/**
- * A project shared with you read-only is read-only everywhere, not only where the buttons are
- * hidden — so the guard sits here, on the path every edit already takes, rather than in each of
- * the thirty places that can start one. The server refuses the write as well; this is what keeps
- * the screen honest in between.
- */
-export const readOnly = (s: State, pid: string | null | undefined): boolean => {
-  if (!pid) return false
-  const p = s.projects.find((x) => x.id === pid)
-  return !!p?.share && !p.share.edit
-}
-const frozen = (s: State, id: string) => readOnly(s, s.items.find((i) => i.id === id)?.pid)
-
 /* An id that names no row is not an edit. Without the `some` check this still handed back a fresh
    `items` array, which `set` reads as a change: it pushed an undo step over nothing and marked the
    document dirty, so a key pressed on a row the store does not have — every row in the trash, or
    one a sync adopted away mid-keystroke — quietly ate the 50-step history and pushed a document
    identical to the one already on the server. One guard here rather than at each of the callers. */
 const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => (
-  frozen(s, id) || !s.items.some((i) => i.id === id)
+  !s.items.some((i) => i.id === id)
     ? s
     : { ...s, items: s.items.map((i) => (i.id === id ? fn(i) : i)) }
 )
@@ -967,7 +833,7 @@ const mapItem = (id: string, fn: (i: Item) => Item) => (s: State): State => (
 // marker for a thing that will never come round — and being here at all is what "edited" means,
 // so a bulk command across twenty rows stamps all twenty
 export const patch = (id: string, p: Partial<Item>) => set(mapItem(id, (i) => {
-  const at = { ...i, ...p, editedAt: Date.now(), ...(me && { editedBy: me }) }
+  const at = { ...i, ...p, editedAt: Date.now() }
   // and an hour needs a day to sit in: clearing the date clears the time with it, wherever the
   // clearing came from — the field's X, the context menu, a bulk edit across twenty rows
   const next = at.due ? at : { ...at, at: null }
@@ -1010,8 +876,7 @@ export function itemOf(line: Parsed, extra: Partial<Item> = {}): Item {
 export const addItems = (list: Item[]) =>
   set((s) => ({
     ...s,
-    // whose it is, decided here rather than at each of the places that can start a row
-    items: [...list.filter((i) => !readOnly(s, i.pid)).map((i) => (me ? { ...i, by: me } : i)), ...s.items],
+    items: [...list, ...s.items],
   }))
 
 export const addItem = (it: Item) => addItems([it])
@@ -1040,14 +905,14 @@ export function addShared(search: string): string | null {
 export function toggleDone(id: string) {
   set((s) => {
     const at = s.items.findIndex((i) => i.id === id)
-    if (at < 0 || frozen(s, id)) return s
+    if (at < 0) return s
     const it = s.items[at]
     const closing = !it.done
-    // ticking someone else's task is working on it, so it counts as a touch like any other edit
+    // stamped like any edit: a merge with a device that has not seen the tick keeps the newer copy,
+    // and without the stamp that was the old, open one
+    const now = Date.now()
     const items = s.items.map((i) =>
-      (i.id === id
-        ? { ...i, done: closing, doneAt: closing ? Date.now() : null, ...(me && { editedBy: me }) }
-        : i))
+      (i.id === id ? { ...i, done: closing, doneAt: closing ? now : null, editedAt: now } : i))
 
     // A repeating task doesn't end when you finish it: the one you ticked stays finished, so it
     // still counts as finished, and a fresh one takes its place at the same spot in the list.
@@ -1056,12 +921,8 @@ export function toggleDone(id: string) {
       // step from the finished one's own date so the anchor day survives a late completion, but
       // never come back already overdue — nextAfter clears today either way
       const due = nextAfter(it.due ?? today(), it.repeat)
-      // a fresh occurrence, so it carries none of the finished one's history — including who
-      // had been at the last one. Whoever set the repeat going still owns the series.
-      items.splice(at, 0, {
-        ...it, id: uid(), due, done: false, doneAt: null, ts: Date.now(), editedAt: null,
-        editedBy: undefined,
-      })
+      // a fresh occurrence, so it carries none of the finished one's history
+      items.splice(at, 0, { ...it, id: uid(), due, done: false, doneAt: null, ts: now, editedAt: null })
     }
     return { ...s, items }
   })
@@ -1077,7 +938,7 @@ export function toggleDone(id: string) {
  */
 export function removeItem(id: string, hard = false) {
   const at = state.items.findIndex((i) => i.id === id)
-  if (at < 0 || frozen(state, id)) return null
+  if (at < 0) return null
   const it = state.items[at]
   set((s) => ({
     ...s,
@@ -1103,14 +964,14 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
  * Put deleted rows back on the list. They go to the end — the trash keeps the index nothing else
  * does, and after a fortnight the row it sat above may not be there any more. A project that was
  * deleted in the meantime is not one to file into, so those land in Inbox, the same landing
- * `load` gives an orphan. Read-only shares are refused the same way every other write is.
+ * `load` gives an orphan.
  */
 export function restoreTrash(ids: string[]) {
   // never onto a row that is already on the list: two rows with one id make patch and removeItem
   // act on both at once, and the one you delete leaves its twin behind. `restoreItem` refuses the
-  // same thing, and an adopted slice can put a deleted row back in `items` behind our backs.
+  // same thing, and a merge can put a deleted row back in `items` behind our backs.
   const live = new Set(state.items.map((i) => i.id))
-  const back = state.trash.filter((i) => ids.includes(i.id) && !live.has(i.id) && !readOnly(state, i.pid))
+  const back = state.trash.filter((i) => ids.includes(i.id) && !live.has(i.id))
   if (!back.length) return 0
   const taken = new Set(back.map((i) => i.id))
   set((s) => ({
@@ -1145,12 +1006,11 @@ export function emptyTrash(ids?: string[]) {
 }
 
 /** Every row wearing the old tag wears the new one instead — and one already wearing both keeps a
- *  single copy, which is what merging two tags is. Rows in projects shared read-only keep theirs:
- *  this device may not write them, and a rename that half-took would leave one tag split in two. */
+ *  single copy, which is what merging two tags is. */
 export const renameTag = (from: string, to: string) => set((s) => ({
   ...s,
-  items: s.items.map((i) => (i.tags.includes(from) && !readOnly(s, i.pid)
-    ? { ...i, tags: [...new Set(i.tags.map((x) => (x === from ? to : x)))], editedAt: Date.now(), ...(me && { editedBy: me }) }
+  items: s.items.map((i) => (i.tags.includes(from)
+    ? { ...i, tags: [...new Set(i.tags.map((x) => (x === from ? to : x)))], editedAt: Date.now() }
     : i)),
 }))
 
@@ -1162,11 +1022,10 @@ export const renameTag = (from: string, to: string) => set((s) => ({
  * of a hundred finished rows is exactly the press you would want that promise to cover.
  */
 export function clearDone() {
-  const gone = state.items.filter((i) => i.done && !readOnly(state, i.pid))
+  const gone = state.items.filter((i) => i.done)
   if (!gone.length) return null
-  // by id, not by `done` again: the two have to name the same rows, or finished work in a project
-  // shared read-only is swept off this device by a broom that never picked it up — and the undo,
-  // which only holds what `gone` collected, cannot put it back
+  // by id, not by `done` again: the two have to name the same rows, or the undo, which only holds
+  // what `gone` collected, could not put back what the broom took
   const ids = new Set(gone.map((i) => i.id))
   const at = Date.now()
   set((s) => ({
@@ -1205,10 +1064,8 @@ export function moveBefore(dragId: string, targetId: string, after = false) {
     const done = reorder(s.items, dragId, targetId, after)
     const target = s.items.find((i) => i.id === targetId)
     if (!done || !target) return s
-    // a drop is a write to two projects: the one the row lands in, and the one it is leaving.
-    // Neither may be a share you only read — dropping into one files work where you cannot push it
-    if (readOnly(s, target.pid) || frozen(s, dragId)) return s
-    done.next[done.at] = { ...done.moving, pid: target.pid }
+    // stamped: a move is an edit, and a merge has to know this copy is the newer one
+    done.next[done.at] = { ...done.moving, pid: target.pid, editedAt: Date.now() }
     return { ...s, items: done.next }
   })
 }
@@ -1253,7 +1110,7 @@ export const addProject = (name: string, color: string | null = null, parent: st
 
 /** Name and colour are the whole of a project, so one function edits it. */
 export const patchProject = (id: string, p: Partial<Project>) =>
-  set((s) => (readOnly(s, id) ? s : {
+  set((s) => ({
     ...s,
     projects: s.projects.map((x) => (x.id === id
       // 'color' in p, not p.color: clearing it is passing null, which a truthiness check would skip
@@ -1269,7 +1126,8 @@ export const removeProject = (id: string) =>
   set((s) => ({
     ...s,
     projects: s.projects.filter((p) => p.id !== id).map((p) => (p.parent === id ? { ...p, parent: null } : p)),
-    items: s.items.map((i) => (i.pid === id ? { ...i, pid: null } : i)),
+    // stamped, so a merge keeps them in Inbox rather than filed under a project that is gone
+    items: s.items.map((i) => (i.pid === id ? { ...i, pid: null, editedAt: Date.now() } : i)),
     sel: s.sel === id ? 'today' : s.sel,
     collapsed: s.collapsed.filter((c) => c !== id),
   }))
