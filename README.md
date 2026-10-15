@@ -15,12 +15,17 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. In Safari, **File → Add to Dock** launches it like a native macOS
-app, in its own window with its own icon. For that, build once and serve `dist/`:
+Open <http://localhost:5173>.
 
-```sh
-npm run build && npm run preview
-```
+`macos/build.sh --install` builds a native **Stash.app** — one window around the deployed app,
+with a real menu bar, file pickers, save panels for downloads, and links that open in your
+browser — and copies it to `/Applications`. Needs only the Xcode command line tools. It also writes
+`public/Stash.zip`, which the site offers Mac browsers as **Get the Mac app** in the account menu.
+`defaults write xyz.pyvno.stash url http://localhost:5173` points it at a dev server instead.
+
+The app adds one tool a browser cannot have: **Disk**, a map of your home folder sized by what it
+holds, with the caches and build output worth clearing listed beside it. It only reads. Tick what
+should go and **Copy script** puts a shell script on the clipboard for you to read and run.
 
 | | |
 | --- | --- |

@@ -24,13 +24,15 @@ import { dayLabel, today, tomorrow } from '@/lib/parse'
 import { hit, pretty } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, moveBefore, patch, PDF, SUBS,
+  addProject, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, moveBefore, patch, DISK, PDF, SUBS,
   openIn, readHash, redo, removeItem, restoreItem, restoreTrash, select, tagCounts, toggleDone,
   TRASH, TRASH_DAYS, undo, useStash, viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
 
 // the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
 const PdfEditor = lazy(() => import('@/pdf/editor'))
+// only the macOS app ever opens it, so a browser never downloads it
+const DiskPage = lazy(() => import('@/components/disk-page'))
 
 const Waiting = ({ name }: { name: string }) => (
   <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
@@ -451,6 +453,13 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   })
 
+  // the Mac app's menu bar: its ⌘K is taken before the page sees the key, so it says so instead
+  useEffect(() => {
+    const onMenu = (e: Event) => { if ((e as CustomEvent).detail === 'palette') setPalette((v) => !v) }
+    addEventListener('stash:menu', onMenu)
+    return () => removeEventListener('stash:menu', onMenu)
+  }, [])
+
   let group: string | null = null
 
   return (
@@ -558,6 +567,7 @@ export default function App() {
           )}
 
           {page === SUBS && <SubsPage />}
+          {page === DISK && <Suspense fallback={<Waiting name="Disk" />}><DiskPage /></Suspense>}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would

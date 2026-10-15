@@ -50,3 +50,10 @@ git checkout -- package-lock.json
 ```
 
 The version-field change from `npm version` is the one legitimate exception.
+
+## The Mac app ships as `public/Stash.zip`
+
+The site's "Get the Mac app" serves `public/Stash.zip`, which `macos/build.sh` writes. The Docker
+build is Linux and cannot compile Swift, so the zip is built here and committed. Any change to
+`macos/` means rerunning `macos/build.sh` and committing the new zip with it — otherwise the
+download is the previous app.

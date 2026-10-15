@@ -26,7 +26,7 @@ import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
   addItem, clearDone, hotkey, readOnly,
-  resetHotkeys, setHotkey, setTool, TOOLS, toolOn, useStash,
+  resetHotkeys, setHotkey, setTool, TOOLS, toolHere, toolOn, useStash,
 } from '@/lib/store'
 import {
   changePassword, deleteAccount, devices, dropLink, getSync,
@@ -295,7 +295,7 @@ function ToolsPanel() {
       {/* the same box the task list uses, rather than a bare input painted with accent-color: that
           one drew four grey ticks that read as switched off and unswitchable, on a panel whose
           whole job is saying which of the four are on */}
-      {TOOLS.map(({ id, name }) => (
+      {TOOLS.filter((t) => toolHere(t.id)).map(({ id, name }) => (
         <div key={id} className="flex items-center gap-2 text-sm">
           <Checkbox
             id={`tool-${id}`}

@@ -67,6 +67,7 @@ const MIME: Record<string, string> = {
   ico: 'image/x-icon',
   woff2: 'font/woff2',
   webmanifest: 'application/manifest+json',
+  zip: 'application/zip',
 }
 
 function send(res: ServerResponse, code: number, body: unknown, headers?: Record<string, string>) {

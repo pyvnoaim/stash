@@ -82,6 +82,12 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [settings, setSettings] = useState(false)
+  // ⌘, from the Mac app's menu bar
+  useEffect(() => {
+    const onMenu = (e: Event) => { if ((e as CustomEvent).detail === 'settings') setSettings(true) }
+    addEventListener('stash:menu', onMenu)
+    return () => removeEventListener('stash:menu', onMenu)
+  }, [])
   const [tagEdit, setTagEdit] = useState<{ from: string; to: string } | null>(null)
 
   /** The new name, held to the same shape addTags writes: lowercase, no #, no spaces. Renaming
