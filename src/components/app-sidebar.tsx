@@ -30,11 +30,12 @@ import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
+import { native } from '@/lib/mac'
 import { today } from '@/lib/parse'
 import {
   addProject, moveProject, patch, patchProject, project, removeProject,
   canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, TOOLS,
-  toolOn, TRASH, useStash, VIEWS, type Item, type Project, type ProjectSort,
+  desktop, toolOn, TRASH, useStash, VIEWS, type Item, type Project, type ProjectSort,
 } from '@/lib/store'
 
 const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
@@ -72,7 +73,16 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
   onSearch: () => void
 }) {
   const s = useStash()
-  const { setOpenMobile } = useSidebar()
+  const { setOpenMobile, state } = useSidebar()
+  /* The Mac app drags its window by this sidebar's first row, so it is told how wide that is — and
+     that it is 0 when the sidebar is folded away, or the page's own header would stop taking clicks. */
+  const headRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!desktop) return
+    document.documentElement.classList.toggle('mac-folded', state === 'collapsed')
+    const w = state === 'expanded' ? headRef.current?.parentElement?.getBoundingClientRect().width ?? 0 : 0
+    void native({ op: 'chrome', sidebar: Math.round(w) }).catch(() => {})
+  }, [state])
   const [dialog, setDialog] =
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -296,7 +306,10 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
        rather than folding to icons — the rows are words, and a column of them with the words taken
        away is not a way to find anything. */
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="px-4 pt-4 pb-1">
+      {/* In the Mac app the window has no title bar, and its three buttons sit in this row: the
+          wordmark moves in beside them, on their centre line, and the row is exactly the strip that
+          drags the window (Stash.swift, DragStrip) — nothing in it is there to be clicked. */}
+      <SidebarHeader ref={headRef} className={desktop ? '-mt-2 h-[52px] justify-center pt-0 pr-4 pb-0 pl-[84px]' : 'px-4 pt-4 pb-1'}>
         <span className="font-pixel text-xl tracking-[0.02em]">stash</span>
       </SidebarHeader>
 

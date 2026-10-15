@@ -479,7 +479,7 @@ export function NotePage({ it, onBack, onOpen }: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b px-3 md:px-5">
+      <div className="room-for-buttons flex h-14 shrink-0 items-center gap-2 border-b px-3 md:px-5">
         {/* back says where back is: the project this is filed under, wearing its dot */}
         <Button variant="ghost" size="sm" onClick={onBack} aria-label="Back to list" className="text-muted-foreground">
           <ArrowLeft />

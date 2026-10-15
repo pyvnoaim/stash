@@ -319,3 +319,9 @@
     transition-duration: 1ms !important;
   }
 }
+/* The Mac app has no title bar: its three buttons sit at the top left of the window. With the sidebar
+   folded away they would sit on a page's top bar, so each one (`room-for-buttons`) makes room for
+   them. `mac-folded` is set by the sidebar (app-sidebar.tsx). */
+.mac-folded .room-for-buttons {
+  padding-left: 96px;
+}
