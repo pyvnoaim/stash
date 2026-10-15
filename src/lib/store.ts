@@ -178,8 +178,9 @@ export interface State {
   /** Which side of Subscriptions is open — expenses or income. */
   subView: 'expense' | 'income'
   /**
-   * The last thing done to each deleted project or subscription: deleted, or brought back (`undone`),
-   * and when. A merge keeps a row only one side has, so without this the device that had not heard
+   * The last thing done to each deleted project, subscription or purged item: deleted, or brought
+   * back (`undone`), and when. An item in the trash is not deleted yet — it is still in the document;
+   * only emptying the trash, or deleting past it, records one here. A merge keeps a row only one side has, so without this the device that had not heard
    * of a delete brought the project straight back; and an undo is an act of its own, stamped later,
    * or the record other devices already hold would delete it again. Kept DELETES_DAYS — a device away
    * longer than that can still bring one back.
@@ -199,6 +200,13 @@ const mark = (list: Delete[], id: string, deleted: boolean): Delete[] => {
     { id, at: Math.max(Date.now(), was + 1), ...(!deleted && { undone: true as const }) }]
 }
 const isDeleted = (list: Delete[], id: string) => list.some((d) => d.id === id && !d.undone)
+/** `mark` for many at once, in one pass — emptying a full trash is hundreds of them. */
+const markAll = (list: Delete[], ids: Set<string>, deleted: boolean): Delete[] => {
+  const was = new Map(list.map((d) => [d.id, d.at]))
+  const now = Date.now()
+  return [...list.filter((d) => !ids.has(d.id)),
+    ...[...ids].map((id) => ({ id, at: Math.max(now, (was.get(id) ?? 0) + 1), ...(!deleted && { undone: true as const }) }))]
+}
 
 /* The order things are worked in, which is also the order the sidebar and ⌘K list them: what
    just came in, what is due now, what is due next, the shortlist you keep by hand, the catch-all,
@@ -542,15 +550,32 @@ export function set(next: State | ((s: State) => State)) {
 
 // only the two data fields travel — a snapshot also holds the theme and the view, and walking
 // those back would undo a setting you changed after the edit
+/** Every id the document holds a row for: projects, subscriptions, and items on the list or in the trash. */
+const held = (s: State) =>
+  new Set([...s.projects, ...s.subs, ...s.items, ...s.trash].map((r) => r.id))
+
 const rewind = (to: State) => {
-  /* A delete walked back — or walked forward again — is an act of its own, stamped now. Restoring the
-     old record instead would lose to the one the other devices already hold, and the next merge
-     would delete it again. */
-  let deletes = state.deletes
-  for (const id of new Set([...state.deletes, ...to.deletes].map((d) => d.id))) {
-    if (isDeleted(state.deletes, id) !== isDeleted(to.deletes, id)) deletes = mark(deletes, id, isDeleted(to.deletes, id))
-  }
-  return { ...state, items: to.items, projects: to.projects, subs: to.subs, trash: to.trash, deletes }
+  /* Walking back or forward is an edit of its own, made now, and has to say so — the other devices
+     already hold what is being walked away from, and a merge keeps the newer:
+     - a row that comes back (an undone delete, a redone add) is recorded as brought back, and one
+       that goes (an undone add, a redone delete) as deleted, stamped now; restoring the old record
+       instead would lose to the copy the other devices hold
+     - an item that changes is stamped too: undoing a project's delete puts its items back under it,
+       and with their old stamps the other device's newer Inbox copies would win the merge */
+  const now = Date.now()
+  const here = held(state), there = held(to)
+  const dead = new Set(state.deletes.filter((d) => !d.undone).map((d) => d.id))
+  const went = new Set([...here].filter((id) => !there.has(id)))
+  const back = new Set([...there].filter((id) => !here.has(id) && dead.has(id)))
+  const deletes = markAll(markAll(state.deletes, went, true), back, false)
+  const was = new Map(state.items.map((i) => [i.id, i]))
+  const items = to.items.map((i) => (was.get(i.id) === i ? i : { ...i, editedAt: now }))
+  // and a row walked from the list back into the trash was deleted now, not when it was first: a
+  // redone delete with its old `delAt` loses to the stamp the undo before it gave the row. Only those:
+  // rows an undone empty puts back keep their own date, and with it what is left of their fortnight
+  const listed = new Set(state.items.map((i) => i.id))
+  const trash = to.trash.map((i) => (listed.has(i.id) ? { ...i, delAt: now } : i))
+  return { ...state, items, projects: to.projects, subs: to.subs, trash, deletes }
 }
 
 /** Both return false when there is nothing left to walk back to, so the caller can stay quiet. */
@@ -601,9 +626,9 @@ const byId = <T extends { id: string }>(mine: T[], theirs: T[], when?: (r: T) =>
  * the items above. A deleted one stays deleted, and an undone delete stays undone: `deletes` holds
  * the last act on each, and the later one wins.
  *
- * ponytail: an item emptied out of the trash is not in `deletes`, so a device that had not pulled the
- * delete yet brings the row back on the next merge. Recording `emptyTrash` and the fortnight's sweep
- * there, and filtering items and trash the way projects are below, would close it.
+ * An item emptied out of the trash, or deleted past it, is recorded in `deletes` too, so a device
+ * behind on the delete does not bring it back. The fortnight's own sweep is not recorded: every
+ * device runs it on the same `delAt`, so they all drop the row by themselves.
  */
 export function mergeRemote(mine: State, theirs: unknown): State {
   const t = load(theirs)
@@ -620,6 +645,16 @@ export function mergeRemote(mine: State, theirs: unknown): State {
   const deletes = byId(mine.deletes, t.deletes, (d) => d.at)
   const dead = new Set([...deletes.values()].filter((d) => !d.undone).map((d) => d.id))
   const keep = <T extends { id: string }>(rows: Map<string, T>) => [...rows.values()].filter((r) => !dead.has(r.id))
+  /* An item gone past the trash stays gone — unless it was edited after, on a device that had not
+     heard: the later act decides, the same rule as the trash above. Projects and subscriptions carry
+     no edit time, so for them the delete simply holds. */
+  for (const d of deletes.values()) {
+    if (d.undone) continue
+    const row = items.get(d.id)
+    if (row && d.at >= liveAt(row)) items.delete(d.id)
+    const bin = trash.get(d.id)
+    if (bin && d.at >= bin.delAt) trash.delete(d.id)
+  }
   return {
     // `t` first: a field this build no longer names (a retired tool's data) rides through from
     // their side when ours never had it, so merging on a fresh device cannot drop it from the server
@@ -800,7 +835,8 @@ export const isSorted = (s: State) => isGrouped(s) || s.sel === 'done' || s.sel 
  * is matched once over what survives them.
  */
 export function visible(s: State, query: string): Item[] {
-  const q = query.trim().toLowerCase()
+  // composed, as the parser stores tags: a `#größe` pasted as `o` and a mark still finds them
+  const q = query.normalize('NFC').trim().toLowerCase()
   /* The trash first: what is deleted is out of every other list and out of every search, so this
      view answers out of its own array. A search typed while you are in it still narrows what is
      drawn — plain text over the words, since a #tag or an @project search means "find me this
@@ -954,7 +990,22 @@ export function toggleDone(id: string) {
 
     // A repeating task doesn't end when you finish it: the one you ticked stays finished, so it
     // still counts as finished, and a fresh one takes its place at the same spot in the list.
-    // ponytail: reopening the finished one leaves the new one behind — untick, then delete it.
+    // Reopening it takes that fresh one back out, as long as nothing was done to it: it is the one
+    // created the moment this was ticked, and still says exactly what it was made saying. Judged by
+    // what it holds rather than by `editedAt`, which an undo and redo of the tick stamps regardless.
+    if (!closing && it.repeat && it.doneAt) {
+      // not by its due date: that was worked out from the day of the tick, which reopening need not be
+      const spawned = items.find((i) => i.id !== id && !i.done && i.ts === it.doneAt
+        && i.repeat === it.repeat && i.text === it.text && i.note === it.note
+        && i.pid === it.pid && i.at === it.at && i.flag === it.flag && i.tags.join() === it.tags.join())
+      if (spawned) {
+        return {
+          ...s,
+          items: items.filter((i) => i !== spawned),
+          deletes: mark(s.deletes, spawned.id, true),   // or a device that has it brings it back
+        }
+      }
+    }
     if (closing && it.repeat) {
       // step from the finished one's own date so the anchor day survives a late completion, but
       // never come back already overdue — nextAfter clears today either way
@@ -983,6 +1034,8 @@ export function removeItem(id: string, hard = false) {
     items: s.items.filter((i) => i.id !== id),
     // newest first, which is the order the view reads in
     trash: hard ? s.trash : [{ ...it, delAt: Date.now() }, ...s.trash],
+    // past the trash is gone for good, and has to be said, or a merge brings it back
+    deletes: hard ? mark(s.deletes, id, true) : s.deletes,
     focus: s.focus === id ? null : s.focus,
   }))
   return { it, at }
@@ -993,8 +1046,12 @@ export function restoreItem(undo: { it: Item; at: number } | null) {
   if (!undo || state.items.some((i) => i.id === undo.it.id)) return
   set((s) => {
     const items = [...s.items]
-    items.splice(undo.at, 0, undo.it)
-    return { ...s, items, trash: s.trash.filter((i) => i.id !== undo.it.id) }
+    // stamped: brought back now, so a device still holding it in the trash does not bin it again
+    items.splice(undo.at, 0, { ...undo.it, editedAt: Date.now() })
+    return {
+      ...s, items, trash: s.trash.filter((i) => i.id !== undo.it.id),
+      deletes: isDeleted(s.deletes, undo.it.id) ? mark(s.deletes, undo.it.id, false) : s.deletes,
+    }
   })
 }
 
@@ -1016,6 +1073,7 @@ export function restoreTrash(ids: string[]) {
     ...s,
     items: [...s.items, ...back.map(({ delAt: _delAt, ...it }) => ({
       ...it,
+      editedAt: Date.now(),   // restored now — later than the delete any other device holds
       pid: s.projects.some((p) => p.id === it.pid) ? it.pid : null,
     }))],
     trash: s.trash.filter((i) => !taken.has(i.id)),
@@ -1028,7 +1086,11 @@ export function emptyTrash(ids?: string[]) {
   const gone = ids ? state.trash.filter((i) => ids.includes(i.id)) : state.trash
   if (!gone.length) return null
   const taken = new Set(gone.map((i) => i.id))
-  set((s) => ({ ...s, trash: s.trash.filter((i) => !taken.has(i.id)) }))
+  set((s) => ({
+    ...s,
+    trash: s.trash.filter((i) => !taken.has(i.id)),
+    deletes: markAll(s.deletes, taken, true),
+  }))
   /* Back in at the front: the trash sorts itself by when each row was deleted, so where they sat
      in the array was never what put them in order. Only the ones that are not already back —
      ⌘Z rewinds the trash too now, so undoing the empty and then pressing the toast's Undo would
@@ -1038,7 +1100,9 @@ export function emptyTrash(ids?: string[]) {
     undo: () => set((s) => {
       const here = new Set(s.trash.map((i) => i.id))
       const missing = gone.filter((i) => !here.has(i.id))
-      return missing.length ? { ...s, trash: [...missing, ...s.trash] } : s
+      return missing.length
+        ? { ...s, trash: [...missing, ...s.trash], deletes: markAll(s.deletes, new Set(missing.map((i) => i.id)), false) }
+        : s
     }),
   }
 }
@@ -1207,13 +1271,26 @@ export function restoreSub(undo: { sub: Sub; at: number } | null) {
 /* Nothing to carry over any more: the Twelve Data key was the one field an import had to preserve
    rather than replace, because backups deliberately omitted it and a missing one must not wipe the
    key already on the device. The stocks feed is gone and so is the key. */
-export const replaceAll = (data: unknown) => set(() => {
-  const next = load(data)
-  /* What the backup holds is wanted back, even a project deleted since it was taken: said so now,
-     or the first merge with a device that remembers the delete drops it again. */
-  let deletes = next.deletes
-  for (const r of [...next.projects, ...next.subs]) {
-    if (isDeleted(state.deletes, r.id) || isDeleted(deletes, r.id)) deletes = mark(deletes, r.id, false)
-  }
-  return { ...next, deletes }
-})
+export const replaceAll = (data: unknown) => {
+  const before = state.deletes
+  set(() => load(data))
+  revive(before)
+}
+
+/**
+ * A whole document taken back — a backup imported, an old version restored — is wanted whole, even
+ * what was deleted since it was saved. Said so now, or the first merge with a device that remembers
+ * the delete drops it again. Projects and subscriptions always, since the delete may have been made
+ * on a device this one has not heard from yet; items only where a delete is known, there being
+ * thousands. `before` is what this device knew of deletes until now: each answer is stamped after
+ * the delete it answers.
+ */
+export function revive(before: Delete[]) {
+  set((s) => {
+    const known = [...byId(s.deletes, before, (d) => d.at).values()]
+    const dead = new Set(known.filter((d) => !d.undone).map((d) => d.id))
+    const ids = new Set([...s.projects, ...s.subs].map((r) => r.id))
+    for (const r of [...s.items, ...s.trash]) if (dead.has(r.id)) ids.add(r.id)
+    return { ...s, deletes: markAll(known, ids, false) }
+  })
+}

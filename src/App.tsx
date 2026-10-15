@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { dayLabel, today, tomorrow } from '@/lib/parse'
+import { dayLabel, today, tomorrow, WORD } from '@/lib/parse'
 import { hit, pretty } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
@@ -95,7 +95,20 @@ export default function App() {
   // a search pulls you back to the list from whichever page you were on
   const page = !query && isPage(s.sel) ? s.sel : null
   const openProject = s.projects.find((p) => p.id === s.sel)
-  const items = useMemo(() => visible(s, query), [s, query])
+  /* Today, Overdue and the title's count are all worked out against today's date as they render —
+     so a window left open over midnight kept showing yesterday's until something else changed.
+     It turns over on its own now: at midnight, and on coming back to a machine that slept through it. */
+  const [day, setDay] = useState(today)
+  useEffect(() => {
+    const turn = () => setDay(today())
+    const next = new Date()
+    next.setHours(24, 0, 1, 0)
+    const t = setTimeout(turn, +next - Date.now())
+    addEventListener('focus', turn)
+    addEventListener('visibilitychange', turn)
+    return () => { clearTimeout(t); removeEventListener('focus', turn); removeEventListener('visibilitychange', turn) }
+  }, [day])
+  const items = useMemo(() => visible(s, query), [s, query, day])   // eslint-disable-line react-hooks/exhaustive-deps
   /* The sidebar's own order, parents each followed by what sits under them — the raw array is
      insertion order, which scatters a sub-project away from the project it belongs to.
      ponytail: not re-derived when `edited` sort would reshuffle it on a keystroke. Every row holds
@@ -111,7 +124,7 @@ export default function App() {
      you to type at it blind. Live: every keystroke narrows it, and nothing is a dead end. */
   const hints = useMemo((): [string, number][] => {
     // the word still being typed, not the whole query — `@kova #wa` completes the tag
-    const word = query.toLowerCase().split(/\s+/).at(-1) ?? ''
+    const word = query.normalize('NFC').toLowerCase().split(/\s+/).at(-1) ?? ''
     const rest = word.slice(1)
     if (word[0] === '#') return tagCounts(s).filter(([t]) => t.startsWith(rest)).map(([t, n]) => ['#' + t, n])
     if (word[0] === '@') {
@@ -157,7 +170,7 @@ export default function App() {
   useEffect(() => {
     const n = s.items.filter(VIEWS.today.filter).length
     document.title = n ? `(${n}) Stash` : 'Stash'
-  }, [s.items])
+  }, [s.items, day])   // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Which list the open page was opened from — see the effect below. */
   const pageFrom = useRef<string | null>(null)
@@ -457,7 +470,10 @@ export default function App() {
     <SidebarProvider>
       {/* the sidebar tag is lit only while the search is that one tag and nothing else */}
       <AppSidebar
-        tag={/^#[\w-]+$/.test(query.trim()) ? query.trim().slice(1) : ''}
+        tag={(() => {
+          const t = query.normalize('NFC').trim()
+          return t[0] === '#' && WORD.test(t.slice(1)) ? t.slice(1) : ''
+        })()}
         onTag={(t) => addTerm('#' + t)}
         onNavigate={goTo}
         onSearch={() => setPalette(true)}

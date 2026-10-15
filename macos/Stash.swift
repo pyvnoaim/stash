@@ -273,6 +273,39 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     return .allow
   }
 
+  /// The site could not be reached and nothing was cached to open instead — first launch offline,
+  /// the server down, a captive portal. A blank window says nothing; this says what happened, and
+  /// tries again by itself as well as on the button.
+  func webView(_ web: WKWebView, didFailProvisionalNavigation nav: WKNavigation!, withError error: Error) {
+    // only the network failing: a download, a redirect or a cancelled load ends here too, under
+    // WebKit's own error domain or as a cancel, and must not swap the running app for this page
+    let e = error as NSError
+    guard e.domain == NSURLErrorDomain, e.code != NSURLErrorCancelled else { return }
+    let target = home.absoluteString.replacingOccurrences(of: "'", with: "%27")
+    let why = e.localizedDescription.replacingOccurrences(of: "<", with: "&lt;")
+    web.loadHTMLString("""
+      <!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+      <style>
+        :root { --bg: #fff; --fg: #17181b; --muted: #62656d; --line: #e6e6e2 }
+        @media (prefers-color-scheme: dark) { :root { --bg: #1a1b1e; --fg: #edede9; --muted: #9a9da5; --line: #2a2c31 } }
+        html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+          font: 14px/1.5 -apple-system, system-ui, sans-serif; -webkit-user-select: none }
+        body { display: grid; place-items: center }
+        main { max-width: 320px; text-align: center }
+        h1 { font-size: 17px; font-weight: 600; margin: 0 0 4px }
+        p { color: var(--muted); margin: 0 0 16px }
+        button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line);
+          border-radius: 8px; padding: 6px 14px; cursor: pointer }
+      </style>
+      <main>
+        <h1>Can’t reach Stash</h1>
+        <p>\(why)<br>Trying again by itself.</p>
+        <button onclick="location.href='\(target)'">Try again</button>
+      </main>
+      <script>setTimeout(() => location.href = '\(target)', 15000)</script>
+      """, baseURL: nil)
+  }
+
   func webView(_ web: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
     response.canShowMIMEType ? .allow : .download
   }

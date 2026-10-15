@@ -12,9 +12,10 @@ export const holdRegistration = (r?: ServiceWorkerRegistration) => { reg = r }
  * build (see vite.config.ts) and is not precached, so this is a real request every time — and a
  * failed one where there is no network, which is why the answer may be null.
  */
-async function servedBuild(): Promise<string | null> {
+export async function servedBuild(): Promise<string | null> {
   try {
-    const r = await fetch('/version.json', { cache: 'no-store' })
+    // bounded: a proxy holding the connection through a redeploy is an answer of "not now"
+    const r = await fetch('/version.json', { cache: 'no-store', signal: AbortSignal.timeout(5000) })
     if (!r.ok) return null
     const j: unknown = await r.json()
     const b = (j as { build?: unknown })?.build

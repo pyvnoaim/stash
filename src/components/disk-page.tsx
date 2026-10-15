@@ -49,6 +49,7 @@ export default function DiskPage() {
   const chosenIds = picked ?? new Set(found.filter((f) => f.safe).map((f) => f.id))
   const chosen = found.filter((f) => chosenIds.has(f.id))
   const sum = (l: Found[]) => l.reduce((n, f) => n + f.size, 0)
+  const gain = sum(chosen)
   const safe = found.filter((f) => f.safe), review = found.filter((f) => !f.safe)
 
   const toggle = (id: string, on: boolean) => {
@@ -71,16 +72,17 @@ export default function DiskPage() {
   return (
     <div className="flex min-h-0 w-full flex-1 flex-col gap-6 overflow-y-auto px-4 pt-3 pb-8 *:shrink-0 md:px-8">
       <div className="flex flex-wrap items-end gap-x-14 gap-y-6 border-b pb-7">
-        <Stat big label="Free after cleanup" value={bytes(scan.free + sum(chosen))} />
-        <Stat label="Free now" value={bytes(scan.free)} />
+        {/* the answer, and what the ticked rows buy towards it, side by side */}
+        <Stat big label="Free after cleanup" value={bytes(scan.free + gain)} delta={gain > 0 ? `+${bytes(gain)}` : undefined} />
         <Stat label={`Safe to remove · ${safe.length}`} value={bytes(sum(safe))} />
         <Stat label={`Needs review · ${review.length}`} value={bytes(sum(review))} />
-        <Stat label="Outside home · system & apps" value={bytes(Math.max(0, scan.total - scan.free - scan.tree.s))} />
         <Button variant="ghost" size="sm" className="text-muted-foreground ml-auto" disabled={busy} onClick={() => run(true)}>
           {busy ? <Loader2 className="animate-spin" /> : <RotateCw />}
           Rescan
         </Button>
       </div>
+
+      <DiskBar scan={scan} chosen={gain} />
 
       {scan.unreadable > 0 && (
         <p className="text-muted-foreground -mt-2 text-sm">
@@ -92,7 +94,7 @@ export default function DiskPage() {
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <section className="flex flex-col gap-3">
           <Crumbs at={at} onGo={setAt} size={nodeAt(scan.tree, at).s} />
           <Treemap scan={scan} found={found} at={at} onZoom={setAt} />
@@ -134,7 +136,7 @@ export default function DiskPage() {
 
           {found.length > 0 && (<>
             <div className="text-muted-foreground mt-auto pt-2 font-mono text-xs">
-              <span className="text-foreground text-sm font-medium tabular-nums">{bytes(sum(chosen))}</span> selected · {chosen.length} items
+              <span className="text-foreground text-sm font-medium tabular-nums">{bytes(gain)}</span> selected · {chosen.length} items
             </div>
             <div className="mt-2 flex gap-2">
               <Button variant="outline" onClick={() => setPicked(null)}>Select safe</Button>
@@ -151,6 +153,46 @@ export default function DiskPage() {
             )}
           </>)}
         </section>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The whole disk as one bar: what the system and apps hold, what your files hold, what the ticked
+ * rows would give back, and what is free — how the figures above sit against the disk they are
+ * parts of.
+ */
+function DiskBar({ scan, chosen }: { scan: Scan, chosen: number }) {
+  const total = scan.total || 1
+  /* Held to what the disk says is used: on APFS a clone or a hard link is counted once by the disk
+     and once per path by the walk, so home can measure more than all of it — and the parts then add
+     past the bar's end, which hid Free. */
+  const used = Math.max(0, scan.total - scan.free)
+  const home = Math.min(scan.tree.s, used)
+  const clear = Math.min(chosen, home)
+  const parts = [
+    { label: 'System & apps', n: used - home, cls: 'bg-foreground/55' },
+    { label: 'Your files', n: home - clear, cls: 'bg-foreground/20' },
+    { label: 'Ticked to clear', n: clear, cls: cn('border-y border-primary/30', HATCH.safe) },
+    { label: 'Free', n: scan.free, cls: 'bg-muted' },
+  ]
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex h-3 w-full overflow-hidden rounded-full border">
+        {parts.map((p) => p.n > 0 && (
+          <div key={p.label} className={cn('h-full transition-[width] duration-300', p.cls)} style={{ width: `${(p.n / total) * 100}%` }} />
+        ))}
+      </div>
+      <div className="text-muted-foreground flex flex-wrap gap-x-5 gap-y-1 font-mono text-xs">
+        {parts.map((p) => (
+          <span key={p.label} className="flex items-center gap-1.5">
+            <i className={cn('size-2.5 rounded-[3px] border', p.cls)} />
+            {p.label}
+            <span className="text-foreground tabular-nums">{bytes(p.n)}</span>
+          </span>
+        ))}
+        <span className="ml-auto tabular-nums">{bytes(scan.total)} disk</span>
       </div>
     </div>
   )
@@ -209,7 +251,8 @@ function Treemap({ scan, found, at, onZoom }: { scan: Scan, found: Found[], at: 
     n.k?.length ? onZoom(path) : native({ op: 'reveal', path: ['~', ...path].join('/') })
 
   return (
-    <div ref={ref} className="relative h-[clamp(320px,62vh,640px)] select-none">
+    // the rest of the window, not a fixed slice of it: the map is the page
+    <div ref={ref} className="relative h-[max(420px,calc(100svh-420px))] select-none">
       {squarify(withRest(node), { x: 0, y: 0, ...box }).map(({ x, y, w, h, it }) => {
         const path = `${base}/${it.n}`
         const k = it.n ? kind(path) : null
@@ -238,11 +281,12 @@ function Treemap({ scan, found, at, onZoom }: { scan: Scan, found: Found[], at: 
                     ? cn('hover:border-foreground/40', ck ? HATCH[ck] : 'bg-background')
                     : 'border-dashed')}
                   style={{ left: 7 + c.x + 1, top: 26 + c.y + 1, width: Math.max(0, c.w - 2), height: Math.max(0, c.h - 2) }}>
+                  {/* name and size together, top left: read as one thing rather than from opposite corners */}
                   {c.w > 44 && c.h > 18 && (
                     <div className="text-muted-foreground truncate text-[11px] leading-4">{c.it.n || 'Other'}</div>
                   )}
-                  {c.w > 60 && c.h > 40 && (
-                    <div className="absolute bottom-1 left-1 font-mono text-[11px] tabular-nums">{bytes(c.it.s)}</div>
+                  {c.w > 52 && c.h > 34 && (
+                    <div className="font-mono text-[11px] leading-4 tabular-nums">{bytes(c.it.s)}</div>
                   )}
                 </div>
               )
