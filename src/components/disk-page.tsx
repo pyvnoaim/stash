@@ -6,14 +6,11 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
 import { Stat } from '@/components/subs-page'
 import { cn } from '@/lib/utils'
+import { native } from '@/lib/mac'
 import { bytes, findings, script, squarify, wanted, type DiskNode, type Found, type Scan } from '@/lib/disk'
 
 /* The macOS app's side of it (macos/Stash.swift). Every op is read-only: it measures, shows a
    folder in Finder, or puts text on the clipboard. Deleting is the script's job, and you run that. */
-type Op = { op: 'scan', paths: string[], names: string[] } | { op: 'reveal', path: string } | { op: 'copy', text: string } | { op: 'fda' }
-const native = (m: Op) =>
-  (window as unknown as { webkit: { messageHandlers: { disk: { postMessage(m: Op): Promise<unknown> } } } })
-    .webkit.messageHandlers.disk.postMessage(m)
 
 /* A scan of a full home folder takes a while, so it outlives the page: leaving for Today and
    coming back shows the same map, and only Rescan walks the disk again. */

@@ -59,6 +59,7 @@ export interface Trashed extends Item {
    name in — the store cannot import it back without a cycle, the same reason setOnPersist exists. */
 let me: string | null = null
 export const setMe = (name: string | null) => { me = name }
+export const getMe = () => me
 
 export interface Project {
   id: string
@@ -230,9 +231,9 @@ export const SUBS = 'subs'
 export const DISK = 'disk'
 const PAGES: string[] = [SUBS, PDF, DISK]
 
-/** Inside the macOS app, which answers on this handler; a browser has no disk to show. */
+/** Inside the macOS app, which answers on this handler (see lib/mac.ts); a browser has no disk to show. */
 export const desktop = typeof window !== 'undefined'
-  && !!(window as { webkit?: { messageHandlers?: { disk?: unknown } } }).webkit?.messageHandlers?.disk
+  && !!(window as { webkit?: { messageHandlers?: { stash?: unknown } } }).webkit?.messageHandlers?.stash
 /** Whether a tool exists here at all, before whether it is switched on. */
 export const toolHere = (id: string) => id !== DISK || desktop
 export const isPage = (id: string) => PAGES.includes(id)
@@ -449,7 +450,7 @@ state = { ...state, sel: isRoute(state, booted) ? booted : 'today' }
 
 const listeners = new Set<() => void>()
 
-const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
+export const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } }
 
 export const getState = () => state
 

@@ -23,7 +23,11 @@ browser — and copies it to `/Applications`. Needs only the Xcode command line 
 `public/Stash.zip`, which the site offers Mac browsers as **Get the Mac app** in the account menu.
 `defaults write xyz.pyvno.stash url http://localhost:5173` points it at a dev server instead.
 
-The app adds one tool a browser cannot have: **Disk**, a map of your home folder sized by what it
+It lives in the menu bar too: **⌃⌥Space** from any app opens a capture field that files the line
+the way the capture bar would, and anything with a due date comes up in Notification Center — at
+its hour, or at nine on a day with none. Clicking one opens the row.
+
+The app also adds one tool a browser cannot have: **Disk**, a map of your home folder sized by what it
 holds, with the caches and build output worth clearing listed beside it. It only reads. Tick what
 should go and **Copy script** puts a shell script on the clipboard for you to read and run.
 

@@ -12,6 +12,7 @@ import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
 import { addShared, focus, getState, select } from './lib/store.ts'
 import { applyTheme } from './lib/utils.ts'
 import { holdRegistration } from './lib/update.ts'
+import { startMac } from './lib/mac.ts'
 
 /* A new build is live, downloaded and waiting, while this tab still runs the old one. It says so
    and leaves the moment to you: reloading on its own would take an unsaved line with it. The
@@ -52,6 +53,8 @@ const updateSW = registerSW({
     addEventListener('focus', check)
   },
 })
+
+startMac()
 
 /* The chart's offline bars, left in every browser that ever opened Markets. The routes that filled
    and expired them are gone, so nothing else would ever clear them. */

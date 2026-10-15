@@ -1,5 +1,16 @@
 # Stash
 
+A personal tool for one person: the owner, on their own server (stash.pyvno.xyz) and their own
+Macs. Build for that. No onboarding for other users, no self-hosting guidance for anyone else, no
+notarization or App Store concerns.
+
+- Web app: React + Vite + Tailwind + shadcn in `src/`, sync server and MCP in `server/`.
+- Mac app: `macos/Stash.swift`, a WKWebView around the live site, plus what a tab cannot do (Disk
+  tool, ⌃⌥Space capture, notifications, self-update). The page's half is `src/lib/mac.ts`.
+- How it should look and read: **`DESIGN.md`**. Follow it for any UI or copy change.
+
+Checks before any push: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
+
 ## Bump the version on every push
 
 `main` is what deploys. A push to `origin/main` fires a GitHub webhook at Portainer, which
@@ -53,7 +64,14 @@ The version-field change from `npm version` is the one legitimate exception.
 
 ## The Mac app ships as `public/Stash.zip`
 
-The site's "Get the Mac app" serves `public/Stash.zip`, which `macos/build.sh` writes. The Docker
-build is Linux and cannot compile Swift, so the zip is built here and committed. Any change to
-`macos/` means rerunning `macos/build.sh` and committing the new zip with it — otherwise the
-download is the previous app.
+The site's "Get the Mac app" serves `public/Stash.zip`, and installed apps update themselves from it
+(`update()` in `macos/Stash.swift`), so a new zip is a release to every Mac the app is on. The
+Docker build is Linux and cannot compile Swift, so `macos/build.sh` builds it here and writes three
+files to commit together: the zip, `Stash.zip.sig`, and `mac.json`. Any change to `macos/` means
+bumping the version first, then rerunning `macos/build.sh` — the zip carries the version, and an
+app only updates when `mac.json` names a newer one.
+
+The signature is made with `~/.config/stash/mac-update.key`, which is not in the repo. Installed apps
+accept only zips signed with it, and only a newer version than they run. Lose the key and
+`sign.swift` makes a new one, and each Mac's app has to be replaced by hand once, because it
+still trusts the old key.
