@@ -38,6 +38,9 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast: "cn-toast",
+          /* sonner colours the second line from the system's light or dark, not the app's: a Mac in
+             dark mode put dark-mode grey on the app's white card, and the line all but vanished */
+          description: "text-muted-foreground!",
         },
       }}
       {...props}
