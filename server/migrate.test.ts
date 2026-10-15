@@ -1,6 +1,6 @@
 // A server that cannot open yesterday's database is a server that 502s until someone notices.
-// This boots against every shape the sharing tables have had, and asserts the data that matters
-// survives — documents and accounts always, the share settings only where the shape still fits.
+// This boots against a database from when projects could be shared, and asserts the sharing tables
+// are gone and the data that matters — the account and its documents — came through untouched.
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,8 +13,7 @@ const { start } = await import('./index.ts')
 const dir = mkdtempSync(join(tmpdir(), 'stash-mig-'))
 const dbPath = join(dir, 'old.db')
 
-/* The first shipped shape: shares keyed on the id alone, pdocs with no owner. Exactly what is on
-   a server that took the first sharing deploy and not the two that followed. */
+/* The first shipped shape of sharing: shares keyed on the id alone, pdocs with no owner, links. */
 const old = new DatabaseSync(dbPath)
 old.exec(`
   pragma foreign_keys = on;
@@ -44,6 +43,7 @@ old.exec(`
     v integer primary key autoincrement,
     pid text not null, ts integer not null, device text, json text not null
   );
+  create table links (token text primary key, owner integer not null, pid text not null, ts integer not null);
 `)
 old.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)')
   .run('leon', Buffer.from('salt'), Buffer.from('hash'), 32768, 1, Date.now())
@@ -62,9 +62,8 @@ const now = new DatabaseSync(dbPath)
 const cols = (t: string) =>
   (now.prepare(`pragma table_info(${t})`).all() as { name: string }[]).map((c) => c.name)
 
-// the tables that had to be reshaped are the new shape
-assert.ok(cols('shares').includes('subs'))
-assert.ok(cols('pdocs').includes('owner'))
+// sharing is gone from the file, not left in it unread
+for (const t of ['shares', 'pdocs', 'links']) assert.deepEqual(cols(t), [], `${t} is still there`)
 
 // ...and the account and its documents came through untouched, which is the whole point
 assert.equal((now.prepare('select count(*) as n from users').get() as any).n, 1)

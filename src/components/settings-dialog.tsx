@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Copy, Database, Download, Eraser,
-  History, Info, Keyboard, Link2, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen,
-  Users, Wrench,
+  History, Info, Keyboard, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Wrench,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
 import { PasswordInput } from '@/components/password-input'
 import { Section } from '@/components/section'
-import { PeoplePanel } from '@/components/people-panel'
 import {
   AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
@@ -25,13 +23,12 @@ import { comboOf, FIXED, HOTKEYS, pretty, refuse } from '@/lib/keys'
 import { checkUpdate } from '@/lib/update'
 import { cn } from '@/lib/utils'
 import {
-  addItem, clearDone, hotkey, readOnly,
+  addItem, clearDone, hotkey,
   resetHotkeys, setHotkey, setTool, TOOLS, toolHere, toolOn, useStash,
 } from '@/lib/store'
 import {
-  changePassword, deleteAccount, devices, dropLink, getSync,
-  links, linkUrl, logout, lost, restore, subscribeSync, updateAccount,
-  versions, type Device, type Link, type Version,
+  changePassword, deleteAccount, devices, getSync, logout, lost, restore, subscribeSync,
+  updateAccount, versions, type Device, type Version,
 } from '@/lib/sync'
 
 /** The picture, or the first letter where there is none yet. */
@@ -49,13 +46,13 @@ export function Avatar({ name, avatar, className }: {
 
 /**
  * One window for everything about this machine and this account. It used to be a Settings dialog
- * beside an Account dialog beside a People dialog, each reached from its own line of the same
- * menu; they are sections of one thing, so they are sections now. The menu keeps only what acts
+ * beside an Account dialog, each reached from its own line of the same menu; they are sections of
+ * one thing, so they are sections now. The menu keeps only what acts
  * on the spot — a sync and a sign-out.
  *
  * The list of sections is the state; nothing else is. Each panel mounts when its section is chosen
- * and unmounts when you leave, which is what loads the history, the roster and the invites at the
- * moment they are looked at rather than every time the window opens.
+ * and unmounts when you leave, which is what loads the history and the devices at the moment they
+ * are looked at rather than every time the window opens.
  */
 export function SettingsDialog({ open, onOpenChange }: {
   open: boolean
@@ -72,17 +69,11 @@ export function SettingsDialog({ open, onOpenChange }: {
   const SECTIONS = [
     ...(user ? [{ id: 'account', label: 'Account', icon: UserPen }] : []),
     { id: 'tools', label: 'Tools', icon: Wrench },
-    ...(user
-      ? [
-          { id: 'links', label: 'Sharing', icon: Link2 },
-          ...(user.admin ? [{ id: 'people', label: 'People', icon: Users }] : []),
-        ]
-      : []),
     { id: 'data', label: 'Data', icon: Database },
     { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
     { id: 'about', label: 'About', icon: Info },
   ]
-  // whatever you were on last time may not exist this time: signed out, or no longer an admin
+  // whatever you were on last time may not exist this time: signed out
   const here = SECTIONS.some((x) => x.id === at) ? at : SECTIONS[0].id
   const title = SECTIONS.find((x) => x.id === here)!.label
 
@@ -130,11 +121,8 @@ export function SettingsDialog({ open, onOpenChange }: {
               <h2 className="font-heading text-lg tracking-wide">{title}</h2>
               {here === 'account' && user && <AccountPanel name={user.name} avatar={user.avatar} />}
               {/* the MCP line belongs beside the tool switches: both answer "what can reach this
-                  stash", and it sat under Links only because Links was where the other copyable
-                  URL lived */}
+                  stash" */}
               {here === 'tools' && <><ToolsPanel /><McpSection /></>}
-              {here === 'links' && <LinksPanel />}
-              {here === 'people' && user && <PeoplePanel me={user.name} />}
               {here === 'data' && <DataPanel onDone={() => onOpenChange(false)} />}
               {here === 'hotkeys' && <HotkeysPanel />}
               {here === 'about' && <AboutPanel />}
@@ -552,14 +540,6 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
 }
 
 /**
- * Every public link you have handed out, in one place — because a link is the one kind of sharing
- * you cannot see from inside the project you shared: it names nobody, it makes no row in a member
- * list, and the person holding it never appears anywhere. This is where they are counted and where
- * they are taken back. Revoking is immediate and total: the URL stops resolving for everyone.
- *
- * The links themselves are cut in Edit project, beside the people. This list only ever removes.
- */
-/**
  * The one-line install for the MCP server this same origin hosts at /mcp — Claude Code speaks to
  * the stash with the tools the app itself uses. The password is deliberately a placeholder: this
  * dialog does not know it and would not print it if it did.
@@ -584,71 +564,6 @@ function McpSection() {
           <Copy /> Copy
         </Button>
       </div>
-    </Section>
-  )
-}
-
-function LinksPanel() {
-  const s = useStash()
-  const [list, setList] = useState<Link[] | null>(null)
-  useEffect(() => { void links().then(setList) }, [])
-
-  return (
-    <Section
-      title="Shared links"
-      hint="Anyone holding one can read that project — or that one row — without an account. A join
-        link lets anyone signed in here add themselves."
-    >
-      {!list && <p className="text-muted-foreground text-sm">Asking the server…</p>}
-      {list?.length === 0 && (
-        <p className="text-muted-foreground text-sm">
-          No links out. You make one in a project's Edit dialog, under Share — or on a row, with
-          Copy public link.
-        </p>
-      )}
-      {list?.map((l) => {
-        // the name is in the local document; a link to something since deleted still lists
-        const name = l.item
-          ? s.items.find((i) => i.id === l.pid)?.text ?? 'Deleted item'
-          : s.projects.find((p) => p.id === l.pid)?.name ?? 'Deleted project'
-        const url = linkUrl(l.token)
-        return (
-          <div key={l.token} className="grid gap-1.5 rounded-md border px-3 py-2">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-sm">{name}</span>
-              {/* a row's text and a project's name read alike in a list — this says which it is */}
-              {!!l.item && (
-                <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase">
-                  one row
-                </span>
-              )}
-              {!!l.joinable && (
-                <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-[10px] uppercase">
-                  can join
-                </span>
-              )}
-              <Button
-                variant="ghost" size="sm" className="ml-auto"
-                onClick={() => { void navigator.clipboard?.writeText(url); toast('Link copied') }}
-              >
-                <Copy /> Copy
-              </Button>
-              <Button
-                variant="ghost" size="icon" className="size-7"
-                aria-label={`Revoke the link to ${name}`}
-                onClick={async () => {
-                  const err = await dropLink(l.pid, !!l.item)
-                  toast(err ?? 'Link revoked')
-                  void links().then(setList)
-                }}
-              >
-                <Trash2 />
-              </Button>
-            </div>
-            <span className="text-muted-foreground truncate font-mono text-xs">{url}</span>
-          </div>
-        )
-      })}
     </Section>
   )
 }
@@ -712,8 +627,8 @@ function DeleteAccount() {
     <Section
       danger
       title="Delete account"
-      hint="Account, devices, synced history and every project you shared — gone from this
-        server, not recoverable. What is on this machine stays."
+      hint="Account, devices, synced history and pictures — gone from this server. Its daily
+        backups still hold them for up to a week. What is on this machine stays."
     >
       <AlertDialog
         open={open}
@@ -728,8 +643,8 @@ function DeleteAccount() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete your account?</AlertDialogTitle>
             <AlertDialogDescription>
-              There is no undoing this and no copy kept. Anyone you shared a project with loses it
-              at their next sync.
+              There is no undoing this from here. The server's daily backups hold a copy for up to a
+              week, then that is gone too. What is on this machine stays.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid gap-2">
@@ -866,7 +781,7 @@ function LostPanel() {
                           /* its project may be gone too — or be one somebody shares with you
                              read-only, where the store refuses the write and the row would land
                              nowhere at all. Unfiled is a row you can still find. */
-                          const filed = s.projects.some((p) => p.id === row.pid) && !readOnly(s, row.pid)
+                          const filed = s.projects.some((p) => p.id === row.pid) 
                           addItem({ ...row, pid: filed ? row.pid : null })
                           // and it leaves this list on the spot, being on the other one now
                           toast(`Back: ${i.text || 'Untitled'}`)

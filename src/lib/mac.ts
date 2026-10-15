@@ -4,7 +4,7 @@
  * handler, `stash`. In a browser none of it exists and startMac does nothing.
  */
 import { toast } from 'sonner'
-import { addShared, desktop, focus, getMe, getState, select, subscribe, type State } from './store.ts'
+import { addShared, desktop, focus, getState, select, subscribe, type State } from './store.ts'
 
 export type Reminder = { id: string, title: string, body: string, when: number }
 
@@ -25,13 +25,10 @@ const MORNING = '09:00'
 /** macOS keeps 64 pending per app; the soonest are the ones that matter. */
 const MAX = 60
 
-/**
- * What Notification Center should have scheduled: open rows with a day on them, still ahead,
- * that are yours to do — a row in a shared project assigned to someone else is theirs to hear about.
- */
-export function reminders(s: Pick<State, 'items'>, now: number, me: string | null): Reminder[] {
+/** What Notification Center should have scheduled: open rows with a day on them, still ahead. */
+export function reminders(s: Pick<State, 'items'>, now: number): Reminder[] {
   return s.items
-    .filter((i) => !i.done && i.due && (!i.who || i.who === me))
+    .filter((i) => !i.done && i.due)
     .map((i) => ({
       id: i.id,
       title: i.text.split('\n')[0].trim() || 'Untitled',
@@ -65,7 +62,7 @@ export function startMac() {
      the app forgets nothing it was given but the page cannot know what it was given last. */
   let sent = ''
   const sync = () => {
-    const list = reminders(getState(), Date.now(), getMe())
+    const list = reminders(getState(), Date.now())
     const json = JSON.stringify(list)
     if (json === sent) return
     sent = json

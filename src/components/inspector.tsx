@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, Flag, Lightbulb, ListTodo, Maximize2, StickyNote, Trash2, X } from 'lucide-react'
 import { DueField } from '@/components/due-field'
-import { useMembers } from '@/components/faces'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -28,7 +27,6 @@ const TYPES = [
 ]
 const QUICK = '__inbox__'   // Select can't hold "" as a value
 const ONCE = '__once__'
-const NOBODY = '__nobody__'
 
 // a textarea holds text and nothing else, so whatever links are in there turn up under it instead
 const LINK = /https?:\/\/[^\s<>"')\]]+/g
@@ -156,9 +154,6 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
   onOpenItem: (id: string) => void
 }) {
   const s = useStash()
-  /* Who it is for. Only where there is somebody else to pick: in a stash of your own every row is
-     yours, and a field whose only answer is "you" is not a field. */
-  const members = useMembers(s.projects.find((p) => p.id === it.pid))
 
   /* Ready to type. Opening a row is nearly always the prelude to renaming it, and the caret used to
      land nowhere at all — you clicked once to open the panel and again to write in it.
@@ -330,32 +325,6 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
           </SelectContent>
         </Select>
       </div>
-
-      {/* a shared project has hands in it; whose row this is is the one thing the list cannot
-          derive, so it is the one thing worth storing. Nobody is a real answer and the default. */}
-      {members.length > 1 && (
-        <div className="grid gap-2">
-          <Label htmlFor="i-who">Assigned</Label>
-          <Select
-            value={it.who ?? NOBODY}
-            onValueChange={(v) => patch(it.id, { who: v === NOBODY ? undefined : v })}
-          >
-            <SelectTrigger id="i-who" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NOBODY}>Nobody</SelectItem>
-              {members.map((m) => (
-                <SelectItem key={m.name} value={m.name}>{m.name}</SelectItem>
-              ))}
-              {/* someone who has since left the project still names the row they were given */}
-              {it.who && !members.some((m) => m.name === it.who) && (
-                <SelectItem value={it.who}>{it.who}</SelectItem>
-              )}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
 
       <div className="grid gap-2">
         <Label htmlFor="i-tags">Tags</Label>

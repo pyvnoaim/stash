@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, ClockArrowDown, ClockArrowUp, GripVertical,
-  ChevronRight, Eye, Link2, PencilLine, Plus, Trash2, UserMinus, Users,
+  ChevronRight, PencilLine, Plus, Trash2,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -29,8 +29,6 @@ import { Kbd } from '@/components/ui/kbd'
 import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
-import { dropLink, getSync, links, linkUrl, makeLink, subscribeSync, syncFresh, syncNow, unshare } from '@/lib/sync'
-import { toast } from 'sonner'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { today } from '@/lib/parse'
 import {
@@ -75,9 +73,6 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
 }) {
   const s = useStash()
   const { setOpenMobile } = useSidebar()
-  // sharing is the server's half of the app: signed out there is nothing to share with, and the
-  // menu says so by not offering it
-  const { user } = useSyncExternalStore(subscribeSync, getSync)
   const [dialog, setDialog] =
     useState<{ id?: string; name?: string; color?: string | null; parent?: string | null } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -193,34 +188,6 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
     ),
   })
 
-  /**
-   * The link for a project, on the clipboard, from one press. An existing link is read rather than
-   * re-cut: `makeLink` sets `joinable` to whatever it is asked for, so cutting again to "just copy
-   * it" would quietly turn a join link into a read-only one.
-   *
-   * A link that did not exist a second ago is a new thing anyone holding it can read, so the toast
-   * says so and offers to take it back rather than leaving that to be discovered in Settings.
-   */
-  const shareLink = async (pid: string) => {
-    const here = (await links()).find((l) => l.pid === pid)
-    const token = here?.token ?? await makeLink(pid, false)
-    if (!token) return void toast('Could not make the link')
-    if (!here) void syncFresh()   // publish the project, or the link opens on nothing
-    try {
-      await navigator.clipboard.writeText(linkUrl(token))
-    } catch {
-      /* Safari hands the clipboard to a gesture, and the two calls above have spent it. Rather
-         than a dead end, open the dialog where the link sits in a field to be copied by hand. */
-      const p = project(s, pid)
-      if (p) setDialog({ id: p.id, name: p.name, color: p.color, parent: p.parent })
-      return void toast('Copy it from the link field')
-    }
-    if (here) return void toast('Link copied')
-    toast('Link copied — anyone holding it can read this project', {
-      action: { label: 'Undo', onClick: () => { void dropLink(pid).then(() => toast('Link revoked')) } },
-    })
-  }
-
   const doomed = project(s, confirmDelete)
 
   const tags = tagCounts(s)
@@ -277,14 +244,6 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
                 : <GripVertical className="absolute size-3.5 opacity-0 transition-opacity group-hover/menu-item:opacity-100" />}
             </span>
             <span className="truncate">{p.name}</span>
-            {/* shared either way: an eye when you may only read it, people when you may write */}
-            {p.share && (
-              <Hint label={p.share.edit ? `Shared by ${p.share.by}` : `Shared by ${p.share.by} — view only`}>
-                {p.share.edit
-                  ? <Users className="text-muted-foreground size-3 shrink-0" />
-                  : <Eye className="text-muted-foreground size-3 shrink-0" />}
-              </Hint>
-            )}
           </SidebarMenuButton>
           {/* a shut parent says how much is folded under it — same badge as the tag counts,
               faded on hover so it doesn't sit behind the edit/delete actions that appear there */}
@@ -303,13 +262,11 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
               <PencilLine />
             </SidebarMenuAction>
           </Hint>
-          {!p.share && (
-            <Hint label="Delete project">
-              <SidebarMenuAction aria-label="Delete project" showOnHover onClick={() => setConfirmDelete(p.id)}>
-                <Trash2 />
-              </SidebarMenuAction>
-            </Hint>
-          )}
+          <Hint label="Delete project">
+            <SidebarMenuAction aria-label="Delete project" showOnHover onClick={() => setConfirmDelete(p.id)}>
+              <Trash2 />
+            </SidebarMenuAction>
+          </Hint>
         </SidebarMenuItem>
       </ContextMenuTrigger>
       {/* the colour lived behind a double-click and nothing said so */}
@@ -318,24 +275,6 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
           <PencilLine />
           Edit
         </ContextMenuItem>
-        {/* One press, one link on the clipboard — the whole of fast sharing. Who is on the project,
-            read or edit, whether the link lets anyone join, and taking it back all stay in Edit:
-            those are decisions, and a decision does not belong on a menu item that fires instantly.
-            Only your own projects: someone else's is theirs to hand out. */}
-        {user && !p.share && (
-          <ContextMenuItem onSelect={() => void shareLink(p.id)}>
-            <Link2 />
-            Copy share link
-          </ContextMenuItem>
-        )}
-        {/* no Open: the row itself is the way in. Leaving someone else's stays: that is not a
-            setting of theirs to find, and nothing else on the row does it. */}
-        {p.share && (
-          <ContextMenuItem onSelect={async () => { await unshare(p.id, undefined, p.share?.by); void syncNow() }}>
-            <UserMinus />
-            Leave project
-          </ContextMenuItem>
-        )}
         {/* one level deep, so only a top-level project can take a subproject */}
         {!p.parent && (
           <ContextMenuItem onSelect={() => setDialog({ parent: p.id })}>
@@ -582,11 +521,10 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
         initialColor={dialog?.color}
         initialParent={dialog?.parent}
         onSubmit={(name, color, parent) => {
-          if (dialog?.id) { patchProject(dialog.id, { name, color, parent }); return undefined }
-          const made = addProject(name, color, parent)
+          if (dialog?.id) return patchProject(dialog.id, { name, color, parent })
+          addProject(name, color, parent)
           // unfold the parent so the freshly added child is visible, not hidden under a shut fold
           if (parent && s.collapsed.includes(parent)) toggleCollapsed(parent)
-          return made.id
         }}
       />
 

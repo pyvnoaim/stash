@@ -13,16 +13,13 @@
  * The version-and-dirty record lives in localStorage too, beside the data, so tabs share it and
  * a closed tab's unpushed edit is pushed by whoever opens the app next.
  */
-import {
-  adoptRemote, adoptShared, getState, KEY, mergeRemote, mergeSlice, setMe, setOnPersist, sliceOf,
-  uid, type Item, type Project, type Slice,
-} from './store.ts'
+import { adoptRemote, flush, getState, KEY, mergeRemote, setOnPersist, uid, type Item } from './store.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
 export type SyncStatus = 'init' | 'off' | 'out' | 'busy' | 'ok'
 export interface Sync {
   status: SyncStatus
-  user: { name: string, admin: boolean, avatar: string | null } | null
+  user: { name: string, avatar: string | null } | null
 }
 
 const META = 'stash.sync.v1'
@@ -57,7 +54,6 @@ let snap: Sync = { status: 'init', user: null }
 const listeners = new Set<() => void>()
 const setSnap = (s: Partial<Sync>) => {
   snap = { ...snap, ...s }
-  setMe(snap.user?.name ?? null)   // the store signs what you write with it
   /* The stream follows the session: opened by whichever of the three ways in got us a user — boot,
      sign-in, or a sign-up — and closed on the way out, where one left open would only 401 in a
      retry loop of its own making. */
@@ -125,12 +121,8 @@ export function syncNow(): Promise<void> {
 }
 
 /**
- * An exchange guaranteed to have begun after this call. For the few places that have just changed
- * something on the *server* — taking a link's invitation, sharing a project, cutting a link — where
- * joining the one already going is the wrong answer: it read /api/shares before the change existed,
- * so it comes back without it, and the poll in `startSync` would not look again for a minute.
- * Waking on focus deliberately does not use this; catching up is what the joining above is
- * for, and a wake that fired two exchanges is the thing that rule exists to prevent.
+ * An exchange guaranteed to have begun after this call — for the stream saying the server's
+ * document moved, where joining an exchange already going would read the version before the move.
  */
 export function syncFresh(): Promise<void> {
   if (!inflight) return syncNow()
@@ -169,7 +161,6 @@ async function run(): Promise<void> {
     setMeta({ v: (await r.json()).version, dirty: meta().rev !== at })
     settled()
     setSnap({ status: 'ok' })
-    await syncShares()
   } catch {
     setSnap({ status: 'off' })  // still dirty — a retry, the next edit, focus or reconnect gets it
     retry()
@@ -177,6 +168,7 @@ async function run(): Promise<void> {
 }
 
 async function pull(): Promise<void> {
+  flush()   // an edit still in its 200ms makes this device dirty, and then it is a push
   const m = meta()
   // `run`, not `syncNow`: we are already inside the in-flight one, and joining it would be a cycle
   if (m.dirty) return run()
@@ -187,6 +179,7 @@ async function pull(): Promise<void> {
     if (r.status === 401) return setSnap({ status: 'out', user: null })
     if (!r.ok) { setSnap({ status: 'off' }); return retry() }
     const { version, state } = await r.json()
+    flush()
     // typed into while the answer was on its way: adopting now would paint over it. The version is
     // still recorded, so the push that follows carries our edit forward — ours is the newer one
     const raced = meta().rev !== at
@@ -194,7 +187,6 @@ async function pull(): Promise<void> {
     setMeta({ v: version, dirty: raced })
     settled()
     setSnap({ status: 'ok' })
-    await syncShares()
   } catch {
     setSnap({ status: 'off' })
     retry()
@@ -204,7 +196,7 @@ async function pull(): Promise<void> {
 /* ---------- the account ---------- */
 
 const asUser = (j: any) =>
-  ({ name: String(j.user), admin: !!j.admin, avatar: typeof j.avatar === 'string' ? j.avatar : null })
+  ({ name: String(j.user), avatar: typeof j.avatar === 'string' ? j.avatar : null })
 
 /** Returns an error to show, or null on success — after which the first sync has already run. */
 async function account(path: string, body: object): Promise<string | null> {
@@ -239,16 +231,6 @@ export const signup = (user: string, pass: string, invite: string) =>
 export async function logout(everywhere = false) {
   try { await fetch(everywhere ? '/api/logout-all' : '/api/logout', { method: 'POST' }) } catch { /* gone is gone */ }
   setSnap({ user: null, status: 'out' })
-}
-
-/** Admin only — a one-use signup code, or null if the server refuses. */
-export async function invite(): Promise<string | null> {
-  try {
-    const r = await fetch('/api/admin/invite', { method: 'POST' })
-    return r.ok ? String((await r.json()).code) : null
-  } catch {
-    return null
-  }
 }
 
 /** Every call below returns an error string to show, or null. One shape, one way to handle it. */
@@ -336,305 +318,13 @@ export async function uploadImage(file: File): Promise<string> {
   }
 }
 
-/* ---------- admin ---------- */
-
-export interface AdminUser {
-  id: number, name: string, admin: number, ts: number, sessions: number, synced: number | null
-  avatar: string | null
-}
-
-export const adminUsers = (): Promise<AdminUser[]> =>
-  call('/api/admin/users').then((j) => j.users as AdminUser[]).catch(() => [])
-
-export const adminInvites = (): Promise<string[]> =>
-  call('/api/admin/invites').then((j) => (j.invites as { code: string }[]).map((i) => i.code)).catch(() => [])
-
-const adminPost = (path: string, body: object, method = 'POST') =>
-  call(path, { method, body: JSON.stringify(body) }).then(() => null).catch(errorOf)
-
-export const adminDelete = (user: string) => adminPost('/api/admin/user', { user }, 'DELETE')
-export const adminPromote = (user: string) => adminPost('/api/admin/promote', { user })
-export const adminRevoke = (user: string) => adminPost('/api/admin/revoke', { user })
-export const adminDropInvite = (code: string) => adminPost('/api/admin/invite', { code }, 'DELETE')
-
-/* ---------- sharing ---------- */
-
-export interface Member { pid: string, name: string, avatar: string | null, edit: number, subs: number }
-export interface SharedWithMe { pid: string, edit: number, subs: number, owner: string }
-/** One person on one project — the owner included, since they are working on it too. */
-export interface Face { pid: string, owner: string, name: string, avatar: string | null, subs: number }
-
-export const shares = (): Promise<{ mine: Member[], with_me: SharedWithMe[], links: Link[] }> =>
-  call('/api/shares').catch(() => ({ mine: [], with_me: [], links: [] }))
-
-/* ---------- public links ---------- */
-
-/** `item` set means `pid` holds a row's id rather than a project's — one note, task or idea. */
-export interface Link { pid: string, token: string, joinable: number, ts: number, item?: number }
-
-/** What a link looks like from the outside — the project, and what this visitor may do with it. */
-export interface LinkView {
-  pid: string
-  owner: string
-  /** The one row, on an item link. Read out of the owner's document as it stands, so it is current. */
-  item?: unknown
-  /* The rest is a project link's answer, and an item link carries none of it: there is nothing to
-     join, nobody is a member of one row, and the document it came out of stays private. */
-  joinable?: boolean
-  /** Already on the project: the link is a fast way in, and their own rights apply. */
-  member?: boolean
-  edit?: boolean
-  signedIn?: boolean
-  state?: { projects: Project[], items: unknown[] } | null
-}
-
-/** The URL to hand out. A query rather than a path: the server has no SPA fallback, so `/l/xyz`
- *  would be a 404 from the static handler, and this needs no route at all. */
-export const linkUrl = (token: string) => `${location.origin}/?link=${token}`
-
-export const links = (): Promise<Link[]> =>
-  call('/api/links').then((j) => j.links as Link[]).catch(() => [])
-
-/** Cuts the link, or returns the one already cut with `joinable` set to what was asked for. */
-export const makeLink = (pid: string, joinable: boolean): Promise<string | null> =>
-  call('/api/link', { method: 'POST', body: JSON.stringify({ pid, joinable }) })
-    .then((j) => j.token as string).catch(() => null)
-
-export const dropLink = (pid: string, item = false) =>
-  call('/api/link', { method: 'DELETE', body: JSON.stringify({ pid, item }) })
-    .then(() => null).catch(errorOf)
+/* ---------- the stream ---------- */
 
 /**
- * The same link, pointed at one row instead of a project — what Share publicly on a note, task or
- * idea hands out. Read-only and account-free, like the project one, and it reads the row out of
- * this account's document each time it is opened, so it is never a stale copy.
- *
- * Asking twice returns the string already handed out; revoking is `dropLink(id, true)`.
- *
- * The server's word for a refusal comes back rather than a bare null: "sync this device first" and
- * "not yours to share" are both things the person clicking can act on.
- */
-export const makeItemLink = (id: string): Promise<{ token?: string, error?: string }> =>
-  call('/api/link', { method: 'POST', body: JSON.stringify({ pid: id, item: true }) })
-    .then((j) => ({ token: j.token as string })).catch((e) => ({ error: errorOf(e) }))
-
-/** Open one, signed in or not. Throws with the server's word for it when the link is dead. */
-export const openLink = (t: string): Promise<LinkView> =>
-  call(`/api/link?t=${encodeURIComponent(t)}`)
-
-/** Put yourself on the project — needs an account, and a link that allows it. */
-export const joinLink = (t: string): Promise<string | null> =>
-  call('/api/link/join', { method: 'POST', body: JSON.stringify({ t }) })
-    .then(() => null).catch(errorOf)
-
-/** Everyone on every project you are on. Its own request: the sync loop never wants the pictures. */
-export const roster = (): Promise<Face[]> =>
-  call('/api/roster').then((j) => j.roster as Face[]).catch(() => [])
-
-/** Everyone else with an account here, for a share field to complete against. Empty when offline.
- *  Name and face both: every place that offers this list draws the face beside the name. */
-export interface Person { name: string, avatar: string | null }
-export const people = (): Promise<Person[]> =>
-  call('/api/users').then((j) => j.users as Person[]).catch(() => [])
-
-export const share = (pid: string, user: string, edit: boolean, subs?: boolean) =>
-  call('/api/share', { method: 'POST', body: JSON.stringify({ pid, user, edit, subs }) })
-    .then(() => null).catch(errorOf)
-
-/** The owner drops a member (or the whole share); a member names whose project they are leaving. */
-export const unshare = (pid: string, user?: string, owner?: string) =>
-  call('/api/share', { method: 'DELETE', body: JSON.stringify({ pid, user, owner }) })
-    .then(() => null).catch(errorOf)
-
-/**
- * What this device last agreed with the server about each shared project, keyed by owner and
- * project: the document version — the same If-Match ledger — and a fingerprint of the slice that
- * version stood for. Between them they say which of the two documents has moved since, which is
- * the whole of deciding what to do with the one that comes back.
- *
- * In localStorage, beside the personal document's own version and for the same reason. Held only
- * in memory, every page load began knowing nothing, and a first exchange that knows nothing has to
- * treat the server as newer — so the first pull of every session adopted the server's slice over
- * whatever this device was holding. A row typed into a shared project and pushed to `/state` but
- * not yet to its project document — the tab closed before its turn came round, or the network went
- * — was deleted by that pull, and the deletion pushed after it. The task was simply gone.
- */
-const PDOCS = 'stash.pdoc.v1'
-interface Agreed { v: number, sig: number }
-const pv = ((): Map<string, Agreed> => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(PDOCS) || '') as Record<string, Agreed>
-    return new Map(Object.entries(raw).filter(([, a]) =>
-      a && typeof a.v === 'number' && typeof a.sig === 'number'))
-  } catch { return new Map() }
-})()
-const savePv = () => localStorage.setItem(PDOCS, JSON.stringify(Object.fromEntries(pv)))
-
-/** A slice as one number, so what was agreed to costs a field rather than a second copy of it.
- *  ponytail: djb2. A collision reads as "we did not touch it" and lets the server's copy win —
- *  one in four billion, against holding every shared project's rows twice on the device. */
-const sig = (s: unknown) => {
-  const j = JSON.stringify(s) ?? ''
-  let h = 5381
-  for (let i = 0; i < j.length; i++) h = Math.imul(h, 33) ^ j.charCodeAt(i)
-  return h | 0
-}
-/* A project id belongs to whoever owns it: the same string under two people is two projects, so
-   every request names both. Nobody can reach a document by guessing an id alone. */
-const docUrl = (pid: string, owner?: string) =>
-  `/api/pdoc?pid=${encodeURIComponent(pid)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`
-
-/**
- * One shared project, both ways. The owner and every editor push the project and its items as a
- * slice; everyone pulls the newest and merges it in. Last writer wins per project — a smaller
- * blast radius than per user, and the server keeps fifty of these too.
- */
-async function syncProject(pid: string, mine: boolean, edit: boolean, subs: boolean, owner?: string) {
-  const key = `${owner ?? ''}:${pid}`
-  try {
-    const r = await fetch(docUrl(pid, owner))
-    if (!r.ok) return                       // unshared while we were away; the next /api/shares says so
-    const { version, state } = await r.json()
-
-    const local = sliceOf(getState(), pid, subs)
-    /* The same document, whichever way it is about to travel. Both sides are `sliceOf` output, so
-       the comparison is on the same key order and a match means there is genuinely nothing to do. */
-    const same = JSON.stringify(state) === JSON.stringify(local)
-    const mark = mine ? undefined : { by: owner ?? '', edit }
-    /** This device and the server agree again, on whatever is held here now. */
-    const agree = (v: number) => {
-      pv.set(key, { v, sig: sig(sliceOf(getState(), pid, subs)) })
-      savePv()
-    }
-    /* Which of the two documents moved since the last time they agreed. Theirs by the version,
-       ours by the fingerprint. A project never exchanged before knows neither and counts both as
-       moved, which keeps the rows on both sides rather than picking one to lose. */
-    const was = pv.get(key)
-    const theirs = !was || version > was.v
-    const ours = !was || sig(local) !== was.sig
-    /* Only they moved, so there is nothing of ours to protect and their document is simply the
-       newer one. Taken whole, deliberately: a row they deleted is a row missing from the slice and
-       nothing else — no tombstone travels with it — so merging here would carry it straight back.
-       A project of your own carries no permission, so an identical slice is not news: adopting it
-       would rewrite the store and mark this device dirty over nothing. One shared with you is
-       adopted either way, because an unchanged document is still how a permission that changed
-       reaches this device. */
-    if (theirs && !ours) {
-      if (state && (!same || !mine)) adoptShared(pid, state, mark)
-      agree(version)
-      return
-    }
-    if (!edit && !mine) return              // read-only: never push, only ever take
-    if (!local) return
-    /* The server already holds this exact slice. Pushing it anyway spends one of the fifty
-       snapshots on a document that did not change, and moves the version — which is the only
-       signal the other devices have. They adopt, which marks their own document dirty, which
-       pushes a /state version and their pdoc, which moves the version again. A loop with no edit
-       anywhere behind it, and it is what fills the version list on a quiet day. */
-    if (same) { agree(version); return }
-    /* Both moved. The same answer the 409 below gives, reached before the push rather than after
-       it: the two sets of rows are merged, this device takes the result, and the result is what
-       goes up — so neither side's work is painted over by the other's. */
-    if (theirs && state) {
-      adoptShared(pid, { ...(state as Slice), items: mergeSlice(local, state).items }, mark)
-    }
-    let body = JSON.stringify({ state: sliceOf(getState(), pid, subs) ?? local, device })
-    let w = await fetch(docUrl(pid, owner), {
-      method: 'PUT', headers: { 'if-match': String(version) }, body,
-    })
-    if (w.status === 409) {
-      // two editors on one project, same as /state above: both sets of rows go up, neither is lost
-      const cur = await w.json()
-      if (cur.state) {
-        // what this device holds now, which is not `local` any more if the two were merged above
-        const merged = mergeSlice(sliceOf(getState(), pid, subs) ?? local, cur.state)
-        adoptShared(pid, merged, mark)
-        body = JSON.stringify({ state: sliceOf(getState(), pid, subs) ?? merged, device })
-      }
-      w = await fetch(docUrl(pid, owner), {
-        method: 'PUT', headers: { 'if-match': String(cur.version) }, body,
-      })
-    }
-    if (w.ok) agree((await w.json()).version)
-  } catch { /* offline: the next sync tries again */ }
-}
-
-/** Every project either shared by you or with you, exchanged after the personal document. */
-async function syncShares() {
-  /* Asked for here rather than through `shares()`, which answers a failure with an empty list —
-     right for the panel that draws it, and the wrong answer entirely for the sweep at the bottom:
-     "nobody shares anything with you" reads as every shared project having gone, so it takes each
-     one off this device — its items and its trash with it — and the dirty flag that leaves behind
-     pushes the deletion to the server. One 502 from a proxy mid-redeploy, and the work is gone
-     everywhere. No answer means nothing to reconcile, so this exchange sits the round out. */
-  const got = await call('/api/shares').catch(() => null)
-  if (!got) return
-  const { mine, with_me, links } = got as { mine: Member[], with_me: SharedWithMe[], links: Link[] }
-  // one row per member: the project's own settings are the same on each, so the first will do
-  const owned = new Map(mine.map((m) => [m.pid, !!m.subs]))
-  /* A project whose only reader is a public link is still a published one — without this it would
-     have a link pointing at a document nobody ever pushed. Set only where a member has not already
-     answered: they carry the project's sub-project setting and a link does not.
-     A link to one row is not one of these: it names an item, publishes nothing, and asking for the
-     project of that id would only ever come back empty. */
-  for (const l of links) if (!l.item && !owned.has(l.pid)) owned.set(l.pid, false)
-  // a project someone shared with you must exist locally before its slice can land in it
-  for (const s of with_me) {
-    if (!getState().projects.some((p) => p.id === s.pid)) {
-      adoptShared(s.pid, null, { by: s.owner, edit: !!s.edit })
-    }
-  }
-  await Promise.all([
-    ...[...owned].map(([pid, subs]) => syncProject(pid, true, true, subs)),
-    ...with_me.map((s) => syncProject(s.pid, false, !!s.edit, !!s.subs, s.owner)),
-  ])
-  // one left behind: a project that says it is shared but no longer is, dropped from the sidebar
-  const live = new Set([...owned.keys(), ...with_me.map((s) => s.pid)])
-  for (const p of getState().projects) {
-    // a sub-project of a shared one is covered by its parent's slice, so only the roots are checked
-    if (p.share && !p.parent && !live.has(p.id)) adoptShared(p.id, null, null)
-  }
-}
-
-/* ---------- who is here ---------- */
-
-/** One person and where they are looking: the project, and the item inside it if they opened one. */
-export interface Here { name: string, avatar: string | null, owner: string, pid: string, id: string }
-
-/* A store of its own rather than a field on `snap`. Every row in a list wants to know whether
-   somebody is standing on it, and `snap` changes on every status flicker — one shared store and
-   each would re-render on a sync going busy. This one changes when the room does. */
-let room: Here[] = []
-const inRoom = new Set<() => void>()
-export const subscribeHere = (fn: () => void) => { inRoom.add(fn); return () => { inRoom.delete(fn) } }
-export const getHere = () => room
-const setRoom = (next: Here[]) => {
-  // same room, same array: an event that changes nothing must not re-render everyone in it
-  const same = next.length === room.length
-    && next.every((h, i) => h.name === room[i].name && h.pid === room[i].pid && h.id === room[i].id)
-  if (same) return
-  room = next
-  inRoom.forEach((fn) => fn())
-}
-
-/* Where this device is. `root` is the project that carries the share — a sub-project's is its
-   parent's — and an empty one means nowhere anybody else can see, which is most of the app. */
-let spot = { owner: '', root: '', pid: '', id: '' }
-const say = () => void call('/api/here', { method: 'POST', body: JSON.stringify(spot) }).catch(() => {})
-
-/**
- * The stream: who else is in this project, and word that a document has moved — both the moment
- * they are true. Nothing polls for either. One idle socket for the session replaces a request
- * every few seconds, and an edit made anywhere arrives here rather than waiting to be asked for.
- *
- * Open for as long as somebody is signed in, not only on a shared project: it carries your own
- * document between your own devices too, which is what the minute-long poll used to be for. A
- * browser allows six connections to one origin over HTTP/1.1 — which is what this is until a TLS
- * proxy puts HTTP/2 in front — so it is one per tab and no more.
- *
- * `EventSource` reconnects on its own, which is the whole reason for it over a socket of our own:
- * no backoff to write, no retry to get wrong. The server forgets us when the connection goes, so
- * every `open` — the first and every reconnection after — says where we are again.
+ * Word that the server's document moved — written on another of your devices, or by the MCP
+ * server, which has none — the moment it is true, so nothing polls for it. One idle socket for the
+ * session. `EventSource` reconnects on its own, which is the whole reason for it over a socket of
+ * our own: no backoff to write, no retry to get wrong.
  */
 let stream: EventSource | undefined
 function join() {
@@ -642,53 +332,24 @@ function join() {
      and node has no `EventSource` — without this the throw lands inside `setSnap`, and signing in
      fails with "no connection" from a browser API rather than from the network. */
   if (stream || !snap.user || typeof EventSource === 'undefined') return
-  // named, so our own writes are not sent back to us as somebody's news
+  // named, so our own writes are not sent back to us as news
   const es = stream = new EventSource(`/api/live?device=${encodeURIComponent(device)}`)
-  es.addEventListener('open', () => { if (spot.root) say() })
   /* An `EventSource` retries a dropped connection on its own, but a refused one — a 401 on a
      session that expired while the laptop was shut, a 429 — it fails for good and never tries
-     again. Left as it is, `stream` stays set and nothing here would ever open another: the tab
-     goes quiet for the rest of its life. Cleared instead, so the next sign of life reopens it. */
+     again. Cleared instead, so the next sign of life reopens it. */
   es.addEventListener('error', () => {
-    if (es.readyState === EventSource.CLOSED) { stream = undefined; setRoom([]) }
+    if (es.readyState === EventSource.CLOSED) stream = undefined
   })
-  es.addEventListener('here', (e) => setRoom(JSON.parse(e.data)))
-  /* Their number against ours, on the same key the exchange files them under. The document itself
-     is fetched by the sync this starts, and only for the project that actually moved — the device
-     that wrote it already holds that number and stays where it is. */
-  es.addEventListener('moved', (e) => {
-    const r = JSON.parse(e.data) as { owner: string, pid: string, v: number }
-    if (r.v > (pv.get(`${r.owner === snap.user?.name ? '' : r.owner}:${r.pid}`)?.v ?? 0)) void syncFresh()
-  })
-  // your own document, written on another of your devices — or by the MCP server, which has none
   es.addEventListener('state', (e) => {
     if ((JSON.parse(e.data) as { v: number }).v > meta().v) void syncFresh()
   })
 }
 
-/** Signing out: the socket goes, and the server drops the room entry that was hanging off it. */
+/** Signing out: the socket goes with the session. */
 function leave() {
   stream?.close()
   stream = undefined
-  setRoom([])
 }
-
-/**
- * Called on every move. A tab that is merely hidden stays in the room — an open tab on a project
- * is a fair account of where somebody is, and it is the connection dying that ends it, not a
- * guess about attention.
- */
-export function lookingAt(owner: string, root: string, pid: string, id: string) {
-  if (owner === spot.owner && root === spot.root && pid === spot.pid && id === spot.id) return
-  spot = { owner, root, pid, id }
-  /* Walking out of every shared project empties the room here rather than waiting to be told: the
-     server has just been asked to forget us, and its answer is a message we would only be drawing
-     stale faces until. The stream stays open — it is the session's, not this project's. */
-  if (!root) setRoom([])
-  say()
-}
-
-export type { Project }
 
 /** Who does the server think we are? Only an explicit 401 means "nobody" — that raises the gate. */
 async function me() {

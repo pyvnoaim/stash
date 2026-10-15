@@ -1,14 +1,11 @@
 import { memo, useState } from 'react'
 import { toast } from 'sonner'
 import {
-  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Globe, Inbox, Lightbulb, ListTodo,
+  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo,
   Maximize2, PencilLine, Repeat, RotateCcw, Share2, StickyNote, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
-import { Avatar } from '@/components/settings-dialog'
-import { useWhoIsOn } from '@/components/faces'
-import { getSync, linkUrl, makeItemLink, syncFresh } from '@/lib/sync'
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
   ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger,
@@ -29,29 +26,9 @@ const TYPE_ICONS: Record<ItemType, React.ElementType> = {
 /**
  * A link straight to the row — `/?item=<id>`, read in main.tsx — on the clipboard, rather than the
  * machine's own share sheet standing between the click and the thing it was for. It opens the row
- * for whoever already has it: your own stash on another device, or a project shared with the
- * person you sent it to.
+ * on any of your own devices.
  */
 const shareItem = (it: Item) => copy(`${location.origin}/?item=${it.id}`)
-
-/**
- * The other kind: a URL that opens the row itself, for anyone at all. No account, no sign-in page,
- * nothing else of yours — the server reads this one row out of your document when the link is
- * opened, so what they see is what it says now rather than a copy taken when you sent it.
- *
- * Revoked in Settings → Shared links, beside the project ones. Asking twice hands back the same
- * URL rather than cutting a second.
- */
-const publishItem = async (it: Item) => {
-  /* The server reads the row out of the document it holds, so a row typed a moment ago has to land
-     there first — otherwise it answers, correctly, that there is no such row. `syncFresh` and not
-     `syncNow`: an exchange already in the air began before this row existed and would push a
-     document without it. */
-  await syncFresh()
-  const { token, error } = await makeItemLink(it.id)
-  if (!token) return void toast(error ?? 'Could not make the link')
-  copy(linkUrl(token), 'Public link copied')
-}
 
 // no clipboard outside a secure context, and a toast saying "copied" over nothing is a lie — the
 // link itself instead, to take by hand.
@@ -62,7 +39,7 @@ const copy = (url: string, said = 'Link copied') => {
   void navigator.clipboard.writeText(url).then(() => toast(said), () => toast(url))
 }
 
-function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onWho, onProject, onDelete, onRestore }: {
+function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, onOpen, onTag, onProject, onDelete, onRestore }: {
   it: Item
   selected: boolean
   /** part of a multi-row selection — the keys and ⌘K act on all of them at once */
@@ -78,8 +55,6 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
    *  panel — two steps and a hunt, for the thing a note row exists to hold. */
   onOpen: () => void
   onTag: (tag: string) => void
-  /** the assignee's mark searches for them, the same way a #tag on a row searches for the tag */
-  onWho: (name: string) => void
   onProject: (pid: string) => void
   onDelete: () => void
   /** Only in the trash, and its presence is what says so: a deleted row is put back or it is
@@ -88,10 +63,6 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
 }) {
   const [over, setOver] = useState<'above' | 'below' | null>(null)
   const [lifting, setLifting] = useState(false)
-  /* Somebody standing on this row right now. Every row asks, which is why the store behind it only
-     wakes them when the room actually changes — a beat that finds the same people re-renders none
-     of this. */
-  const on = useWhoIsOn(it.id)
   const filed = projects.find((p) => p.id === it.pid)
   // a sub-project shows its parent too, the same path the sidebar reads: parent/child
   const upper = filed?.parent ? projects.find((p) => p.id === filed.parent) : undefined
@@ -115,17 +86,6 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   // blank lines are spacing, not content — they must not inflate the "there is more" count
   const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
   const t = today()
-
-  /* Someone else's hand on this row: the last one to touch it, or whoever wrote it. Your own work
-     stays unmarked — in a shared list the question is never which of these are mine. With no
-     session there is no "someone else" to be: an offline start knows no name, and marking every
-     row you ever wrote as another person's is worse than saying nothing. Read without subscribing:
-     the name only changes when you rename yourself, which re-renders the app anyway.
-     ponytail: the last hand, not a history — a row three people edited names the most recent. */
-  const me = getSync().user?.name
-  const hand = !me ? null
-    : it.editedBy && it.editedBy !== me ? { name: it.editedBy, did: 'Edited' }
-      : it.by && it.by !== me ? { name: it.by, did: 'Added' } : null
 
   return (
     /* the menu is this row's own, so opening it drops any multi-row selection and takes just this one */
@@ -269,45 +229,6 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 </button>
               </Hint>
             ))}
-
-            {/* Someone has this open this second. Its own mark rather than a third case of the
-                two below: who a row is for and who last touched it are both things that stay
-                true, and this one stops being true in a few seconds. */}
-            {on && (
-              <Hint label={`${on.name} is on this now`}>
-                <span tabIndex={0} role="img" aria-label={`${on.name} is on this now`}
-                  className="ring-foreground focus-visible:ring-ring inline-flex rounded-md ring-1 outline-none focus-visible:ring-2"
-                >
-                  <Avatar name={on.name} avatar={on.avatar} className="size-5 text-[10px]" />
-                </span>
-              </Hint>
-            )}
-
-            {/* who it is for beats who last touched it: one says what happens next, the other
-                what already happened. Shown even when it is you — "assigned to me" is the case
-                you most want to spot — and ringed, which is what tells the two marks apart. */}
-            {it.who ? (
-              <Hint label={`Find everything for ${it.who}`}>
-                <button
-                  type="button"
-                  aria-label={`For ${it.who}`}
-                  onClick={(e) => { e.stopPropagation(); onWho(it.who!) }}
-                  className="ring-foreground/25 focus-visible:ring-ring inline-flex cursor-pointer rounded-md ring-1 outline-none focus-visible:ring-2"
-                >
-                  <Avatar name={it.who} avatar={null} className="size-5 text-[10px]" />
-                </button>
-              </Hint>
-            ) : hand && (
-              <Hint label={`${hand.did} by ${hand.name}`}>
-                {/* focusable, or the name is a thing only a mouse can read.
-                    ponytail: initials, not their picture — the row has no roster to look one up in */}
-                <span tabIndex={0} role="img" aria-label={`${hand.did} by ${hand.name}`}
-                  className="focus-visible:ring-ring inline-flex rounded-md outline-none focus-visible:ring-2"
-                >
-                  <Avatar name={hand.name} avatar={null} className="size-5 text-[10px]" />
-                </span>
-              </Hint>
-            )}
 
             {/* an icon, like the repeat beside it — a bare “!” reads as a typo in the middle of a row */}
             {it.flag && (
@@ -468,15 +389,6 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           Copy link
         </ContextMenuItem>
 
-        {/* Only with a session behind it: the link is cut on the server, and there is nothing to
-            cut one against on a device working offline on its own data. And not on a row of
-            somebody else's project — theirs to hand out, not yours, which the server says too. */}
-        {getSync().user && !filed?.share && !upper?.share && (
-          <ContextMenuItem onSelect={() => void publishItem(it)}>
-            <Globe />
-            Copy public link
-          </ContextMenuItem>
-        )}
 
         <ContextMenuItem variant="destructive" onSelect={onDelete}>
           <Trash2 />

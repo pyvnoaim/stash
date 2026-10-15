@@ -6,10 +6,9 @@ services:
     # root, and Docker never re-stamps one it did not just create. Once, on an existing deployment:
     #   docker compose run --rm --user root --entrypoint chown stash -R node:node /data
     volumes: ['stash:/data']
-    # 401 is the healthy answer from /api/me without a cookie: the process is up and the database
-    # is answering. Docker restarts it if that stops being true; uptime-kuma watches the domain.
+    # /healthz reads the database: up and answering, or Docker restarts it. uptime-kuma watches the domain.
     healthcheck:
-      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/api/me').then(r=>process.exit(r.status===401?0:1),()=>process.exit(1))"]
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 60s
       timeout: 5s
       retries: 3

@@ -23,6 +23,7 @@ assert.equal(signup.status, 200)
 // the env is read at import, so it goes in first — this is also the whole of the configuration
 Object.assign(process.env, { STASH_URL: url, STASH_USER: 'leon', STASH_PASS: 'longenough' })
 const { rpc } = await import('./mcp.ts')
+const jar = (r: Response) => /stash_s=[a-f0-9]{64}/.exec(r.headers.get('set-cookie') ?? '')?.[0] ?? ''
 
 const send = (method: string, params?: unknown) => rpc({ jsonrpc: '2.0', id: 1, method, params })
 const call = async (name: string, args: unknown = {}) => {
@@ -130,6 +131,35 @@ const hands = ['one hand', 'two hand', 'three hand', 'four hand', 'five hand', '
 await Promise.all(hands.map((text) => call('stash_capture', { text })))
 for (const text of hands) assert.equal((await call('stash_read', { query: text })).count, 1, `lost ${text}`)
 
+/* Another device writes between Claude's pull and its push. The push meets a 409, and it used to
+   send its own document again at the new version — painting over whatever the phone had just
+   saved. The two are merged now, and both rows come out the other side. */
+{
+  const phone = jar(await fetch(`${url}/api/login`, {
+    method: 'POST', body: JSON.stringify({ user: 'leon', pass: 'longenough' }),
+  }))
+  const real = globalThis.fetch
+  let raced = false
+  globalThis.fetch = (async (input: any, init?: RequestInit) => {
+    if (!raced && init?.method === 'PUT' && String(input).endsWith('/state')) {
+      raced = true
+      const cur = await (await real(`${url}/state`, { headers: { cookie: phone } })).json()
+      const row = { ...cur.state.items[0], id: 'from-the-phone', text: 'saved on the phone meanwhile', editedAt: Date.now() }
+      await real(`${url}/state`, {
+        method: 'PUT', headers: { cookie: phone, 'if-match': String(cur.version) },
+        body: JSON.stringify({ state: { ...cur.state, items: [row, ...cur.state.items] }, device: 'phone' }),
+      })
+    }
+    return real(input, init)
+  }) as typeof fetch
+  await call('stash_capture', { text: 'captured by claude' })
+  globalThis.fetch = real
+  assert.ok(raced)
+  const texts = (await call('stash_read', { view: 'all' })).items.map((i: any) => i.text)
+  assert.ok(texts.includes('captured by claude'))
+  assert.ok(texts.includes('saved on the phone meanwhile'), 'the MCP push painted over the phone')
+}
+
 // an impossible date is dropped on the way out, and the answer says so rather than reporting the
 // ask: a due date every reader will throw away must not read as set
 const junk = await call('stash_capture', { text: 'dated wrong' })
@@ -177,6 +207,17 @@ const spy: any = await (await http({
 }, 'Basic leon:wrongpass')).json()
 assert.equal(spy.result.isError, true)
 assert.match(spy.result.content[0].text, /login .* failed/)
+
+/* Wrong passwords sent to /mcp from somewhere on the internet. The logins they cause come from this
+   process itself, at 127.0.0.1 — and keyed on that, ten of them cooled off every real MCP login
+   too, forever, for anyone who cared to keep sending them. Keyed on the caller instead. */
+const from = (ip: string, auth: string) => fetch(`${url}/mcp`, {
+  method: 'POST', headers: { authorization: auth, 'x-real-ip': ip },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'stash_read', arguments: {} } }),
+})
+for (let i = 0; i < 12; i++) await from('203.0.113.7', 'Basic leon:not-the-password')
+const fresh = await fetch(`${url}/api/login`, { method: 'POST', body: JSON.stringify({ user: 'leon', pass: 'longenough' }) })
+assert.equal(fresh.status, 200, 'wrong passwords at /mcp locked out the logins that share 127.0.0.1')
 
 // a lone notification is accepted and answered with nothing, as the spec asks
 assert.equal((await http({ jsonrpc: '2.0', method: 'notifications/initialized' }, 'Basic leon:longenough')).status, 202)

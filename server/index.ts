@@ -1,9 +1,9 @@
 /**
- * Stash's sync server: accounts, sessions, and one versioned JSON document per user, plus the
- * built app in front of it.
+ * Stash's sync server: an account, its sessions, and one versioned JSON document, plus the built
+ * app in front of it.
  *
- * Zero dependencies — node:http, node:sqlite and node:crypto all ship with the runtime. At ten-ish
- * users the document is a few hundred KB of JSON per person, so a row per item would buy nothing a
+ * Zero dependencies — node:http, node:sqlite and node:crypto all ship with the runtime. The
+ * document is a few hundred KB of JSON per person, so a row per item would buy nothing a
  * blob doesn't already give, and SQLite in WAL mode has orders of magnitude more headroom than the
  * write rate a debounced save can produce.
  *
@@ -16,17 +16,17 @@
  * copied database file (a backup, a snapshot) contains nothing that logs anyone in. They idle out
  * after 30 days unused and die at 180 regardless.
  *
- * Signup is invite-only and the first account is the admin. A fresh boot with no users logs its
- * own first code, so setup is compose up and read the logs. Invites, the user list, deleting a
- * user and promotion are admin-gated; `node server/index.ts invite` still works from the CLI.
- * No email, no reset flow — at this scale a forgotten password is the admin
- * deleting the row and cutting a new invite.
+ * One person's server. Signup is invite-only: a fresh boot with no users logs its own first code,
+ * and `node server/index.ts invite` cuts another from the CLI. No email, no reset flow — a
+ * forgotten password is deleting the row and cutting a new invite.
+ *
+ * The database is copied to `/data/backup-YYYY-MM-DD.db` once a day, seven kept (see `backup`).
  */
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readFile } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
+import { readdir, readFile, rm } from 'node:fs/promises'
+import { dirname, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { GRACE, MAX_IMAGE, MAX_PER_USER, referenced, sniff } from './blob.ts'
 import { createStash } from './mcp.ts'
@@ -139,8 +139,8 @@ const DUMMY_SALT = randomBytes(16)
  * second of solid CPU, and this process has one thread for everybody: a script posting junk logins
  * ten times a second would otherwise hold the whole app still for as long as it kept going, with
  * nothing signed in and nothing exploited. The limiter cannot answer that one — it keys on the
- * name so that a flood at one account cannot lock out a proxy everyone shares an address behind,
- * which means a flood spread over names never trips it. Here it costs a worker, not the loop.
+ * address and the name, so a flood spread over names never trips it. Here it costs a worker, not
+ * the loop.
  */
 const scryptAsync = promisify(scrypt) as
   (pass: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>
@@ -171,59 +171,16 @@ const SCHEMA = `
     user integer not null references users(id) on delete cascade,
     ts integer not null, device text, json text not null
   );
-  /* "the newest one this account has" is the hottest question in the file — every sync asks it, and
-     so does every open of a link to one row. Without this it is a scan of every version of
-     everyone's document to answer. */
+  /* "the newest one this account has" is the hottest question in the file — every sync asks it.
+     Without this it is a scan of every version to answer. */
   create index if not exists docs_key on docs (user, v desc);
-  /* Who may reach a shared project, and whether they may write to it. The owner gets a row too,
-     with edit — so one query answers "may this person touch it" for everyone involved. */
-  create table if not exists shares (
-    pid text not null,
-    owner integer not null references users(id) on delete cascade,
-    member integer not null references users(id) on delete cascade,
-    edit integer not null default 0,
-    /* whether the sub-projects go with it. Set by the owner on the project, so it is the same
-       answer for everyone on it — a share where one member sees the children and another does
-       not would be two different projects wearing one name. */
-    subs integer not null default 0,
-    ts integer not null,
-    primary key (owner, pid, member)
-  );
-  /* A shared project's own document: the project and its items, versioned exactly like a user's,
-     so the conflict story and the snapshots are the ones already built rather than new ones. */
   /* The pictures in notes. The bytes are here rather than in the document because that document is
      pushed whole and kept fifty deep — see blob.ts. Owned by whoever uploaded, so deleting an
-     account takes its pictures with it; read by anyone signed in, because a note in a shared
-     project has to render for everyone on it and the 128-bit id is what stands in for the share. */
+     account takes its pictures with it. */
   create table if not exists blobs (
     id text primary key,
     owner integer not null references users(id) on delete cascade,
     mime text not null, bytes blob not null, ts integer not null
-  );
-  create table if not exists pdocs (
-    v integer primary key autoincrement,
-    owner integer not null references users(id) on delete cascade,
-    pid text not null, ts integer not null, device text, json text not null
-  );
-  create index if not exists pdocs_key on pdocs (owner, pid, v desc);
-  /* A public link to one project. The token is the whole credential — no account behind it — so it
-     is 128 bits of randomness and the row is the only thing that makes it work: deleting it is how
-     a link is revoked, and there is nothing else to rotate. What it grants is reading, always.
-     The joinable flag adds one thing on top: whoever opens it while signed in may put themselves on the
-     project, with edit — the only thing joining could usefully mean.
-     One per project: a second link to the same project is the same link, so there is one row to
-     revoke and one string to have leaked.
-     The item flag turns the same row into a link to one row of the document instead: pid then holds
-     the item's id, and the reader is served that item alone, read out of the owner's own document
-     at the moment they ask — nothing is published for it, and an edit is live on the next open. */
-  create table if not exists links (
-    token text primary key,
-    owner integer not null references users(id) on delete cascade,
-    pid text not null,
-    joinable integer not null default 0,
-    ts integer not null,
-    item integer not null default 0,
-    unique (owner, pid)
   );
 `
 
@@ -233,23 +190,6 @@ export function start({
   root = process.env.STASH_ROOT ?? 'dist',
 } = {}) {
   const db = new DatabaseSync(dbPath)
-
-  /* Sharing changed shape twice in its first day — ownership moved into both keys, and the
-     sub-project flag arrived. `create table if not exists` cannot reshape a table that is already
-     there, and the statements below would then fail to prepare and take the whole server down on
-     boot. These two tables hold who-may-see-what, never anyone's work, so a stale one is dropped
-     and rebuilt rather than migrated: the shares are set again in a dialog, and every document is
-     still in `docs`. */
-  const columns = (t: string) => {
-    try { return (db.prepare(`pragma table_info(${t})`).all() as { name: string }[]).map((c) => c.name) }
-    catch { return [] }
-  }
-  const stale = (t: string, needs: string) => {
-    const cols = columns(t)
-    return cols.length > 0 && !cols.includes(needs)
-  }
-  if (stale('shares', 'subs')) db.exec('drop table shares')
-  if (stale('pdocs', 'owner')) db.exec('drop table pdocs')
 
   db.exec(SCHEMA)
   // a database from before avatars existed grows the column; a fresh one already has it
@@ -273,38 +213,19 @@ export function start({
   // Kraken came off the desk; the column goes with it, so the credential it held goes too rather
   // than sitting in the file forever unread
   try { db.exec('alter table users drop column kraken') } catch { /* already gone */ }
-  // a link to one row rather than a project. Added rather than the table rebuilt: dropping this one
-  // would revoke every link already handed out.
-  try { db.exec('alter table links add column item integer not null default 0') } catch { /* already there */ }
+  /* Sharing came out. Who could see which project, the copies of shared projects, and the public
+     links: none of it is anyone's work — every row lives in its owner's own document in `docs` —
+     so the tables go rather than sit in the file unread, and every link handed out stops working. */
+  db.exec('drop table if exists shares; drop table if exists pdocs; drop table if exists links')
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
     addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
     anyUser: db.prepare('select 1 from users limit 1'),
-    delUser: db.prepare('delete from users where name = ? and id <> ?'),
     delUserById: db.prepare('delete from users where id = ?'),
-    admins: db.prepare('select count(*) as n from users where admin = 1'),
-    promote: db.prepare('update users set admin = 1 where name = ?'),
-    /* ponytail: the avatar is the stored data URI, up to 128 KB of it, so a server of ten accounts
-       makes this a megabyte the Accounts panel pulls each time it opens. Fine for the handful this
-       is built for; a thumbnail column written on upload is the lever if that stops being true. */
-    listUsers: db.prepare(`select u.id, u.name, u.admin, u.ts, u.avatar,
-      (select count(*) from sessions s where s.user = u.id) as sessions,
-      (select max(d.ts) from docs d where d.user = u.id) as synced
-      from users u order by u.id`),
-    /* everyone but you, for the share fields to complete against. Names only, and a name here is
-       already public to anyone you might share with — it is what they type to reach you. */
-    people: db.prepare('select name, avatar from users where id <> ? order by name'),
-    /* Everyone else's latest document, for the Desk. The one query that reads across accounts —
-       what it may hand out is decided row by row in the route, off what each document itself says.
-       The `like` is a pre-filter and not the decision: a document is a few hundred KB, and parsing
-       every one of them to find the two that opted in is the whole cost of this route. It matches
-       the exact shape JSON.stringify writes, and a note that happens to contain the same string
-       only buys itself a parse that then turns it down. */
     invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
     useInvite: db.prepare('update invites set used = ? where code = ?'),
     addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
     openInvites: db.prepare('select code, ts from invites where used is null and ts > ? order by ts desc'),
-    dropInvite: db.prepare('delete from invites where code = ? and used is null'),
     rename: db.prepare('update users set name = ? where id = ?'),
     addBlob: db.prepare('insert into blobs (id, owner, mime, bytes, ts) values (?, ?, ?, ?, ?)'),
     blob: db.prepare('select mime, bytes from blobs where id = ?'),
@@ -313,7 +234,7 @@ export function start({
        be written and pushed. Every document ever stored is what they are checked against — old
        versions included, or restoring one would come back with its pictures collected. */
     sweepable: db.prepare('select id from blobs where owner = ? and ts < ?'),
-    allDocs: db.prepare('select json from docs union all select json from pdocs'),
+    allDocs: db.prepare('select json from docs'),
     dropBlob: db.prepare('delete from blobs where id = ?'),
     setAvatar: db.prepare('update users set avatar = ? where id = ?'),
     setPass: db.prepare('update users set salt = ?, hash = ?, n = ? where id = ?'),
@@ -322,12 +243,6 @@ export function start({
       where user = ? order by v desc`),
     version: db.prepare('select v, json from docs where user = ? and v = ?'),
     everyVersion: db.prepare('select v, ts, json from docs where user = ? order by v desc'),
-    /* Every version of every project document this account may read — its own, and the ones shared
-       with it. Newest first, so the first row of each project is that project's document as it
-       stands and the rest are its history. */
-    everyPdocVersion: db.prepare(`select owner, pid, ts, json from pdocs p where p.owner = ?
-      or exists (select 1 from shares s where s.pid = p.pid and s.owner = p.owner and s.member = ?)
-      order by v desc`),
     session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
@@ -343,134 +258,20 @@ export function start({
     prune: db.prepare(`delete from docs where user = ? and v not in
       (select v from docs where user = ? order by v desc limit ?)`),
 
-    /* sharing */
-    addShare: db.prepare(`insert into shares (pid, owner, member, edit, subs, ts) values (?, ?, ?, ?, ?, ?)
-      on conflict (owner, pid, member) do update set edit = excluded.edit, subs = excluded.subs`),
-    /** One project, one answer: setting it on the share sets it for everyone on that project. */
-    setSubs: db.prepare('update shares set subs = ? where owner = ? and pid = ?'),
-    dropShare: db.prepare('delete from shares where pid = ? and member = ? and owner = ?'),
-    dropShares: db.prepare('delete from shares where pid = ? and owner = ?'),
-    leaveShare: db.prepare('delete from shares where pid = ? and member = ? and owner = ?'),
-    /** The one question every shared route asks: may this person touch this project, and how. */
-    access: db.prepare('select edit from shares where owner = ? and pid = ? and member = ?'),
-    /** Am I already on someone else's project under this id? Then it is not mine to hand out. */
-    notMine: db.prepare('select 1 from shares where pid = ? and member = ? and owner <> ?'),
-    /** Projects I own and have shared, with who is on them. */
-    myShares: db.prepare(`select s.pid, u.name, u.avatar, s.edit, s.subs from shares s
-      join users u on u.id = s.member where s.owner = ? and s.member <> ? order by u.name`),
-    /** Projects shared with me by someone else. */
-    sharedWithMe: db.prepare(`select s.pid, s.edit, s.subs, u.name as owner from shares s
-      join users u on u.id = s.owner where s.member = ? and s.owner <> ?`),
-    /* Everyone on every project I am on, mine or someone else's — the owner's own row is in the
-       table, so one query names the whole company of a project rather than half of it. */
-    roster: db.prepare(`select s.pid, o.name as owner, u.name, u.avatar, s.subs from shares s
-      join users u on u.id = s.member
-      join users o on o.id = s.owner
-      where exists (select 1 from shares x where x.pid = s.pid and x.owner = s.owner and x.member = ?)
-      order by u.name`),
-    pdoc: db.prepare('select v, json from pdocs where owner = ? and pid = ? order by v desc limit 1'),
-    addPdoc: db.prepare('insert into pdocs (owner, pid, ts, device, json) values (?, ?, ?, ?, ?)'),
-    prunePdoc: db.prepare(`delete from pdocs where owner = ? and pid = ? and v not in
-      (select v from pdocs where owner = ? and pid = ? order by v desc limit ?)`),
-    dropPdoc: db.prepare('delete from pdocs where owner = ? and pid = ?'),
-
-    /* links */
-    addLink: db.prepare(`insert into links (token, owner, pid, joinable, ts, item) values (?, ?, ?, ?, ?, ?)
-      on conflict (owner, pid) do update set joinable = excluded.joinable`),
-    /** The link for one project, if there is one — also what says "this project is still reachable".
-     *  A project's, only: an item link is keyed by the item's id, which no project answers to. */
-    linkOf: db.prepare('select token, joinable from links where owner = ? and pid = ? and item = 0'),
-    /** Every link you have handed out, for the list that revokes them. */
-    myLinks: db.prepare('select token, pid, joinable, ts, item from links where owner = ? order by ts desc'),
-    /** Whether this row already has a link, so a second Share publicly hands back the same string. */
-    itemLinkOf: db.prepare('select token from links where owner = ? and pid = ? and item = 1'),
-    /** Either kind, because one id may only wear one: the two share a `unique (owner, pid)`. */
-    anyLinkOf: db.prepare('select token, item from links where owner = ? and pid = ?'),
-    dropLink: db.prepare('delete from links where owner = ? and pid = ?'),
-    /** The token, which is the whole credential: one row, and the owner's name to show for it. */
-    byToken: db.prepare(`select l.owner, l.pid, l.joinable, l.item, u.name as owner_name
-      from links l join users u on u.id = l.owner where l.token = ?`),
-    /** The project's sub-project setting, taken off any row on it — it is the same on every one. */
-    shareSubs: db.prepare('select subs from shares where owner = ? and pid = ? limit 1'),
   }
-  /* A shared project's document lives on the server for exactly as long as something can reach it:
-     a member, or a live link. When the last of them goes it is a private project again and the copy
-     here goes with it — which is why every path that removes one of the two ends up in here rather
-     than dropping the document itself. */
-  const retire = (pid: string, owner: number) => {
-    const members = (q.myShares.all(owner, owner) as { pid: string }[]).some((m) => m.pid === pid)
-    if (members || q.linkOf.get(owner, pid)) return
-    q.dropShares.run(pid, owner)
-    q.dropPdoc.run(owner, pid)
-  }
+  /** The open streams — one per tab, for as long as it is open (see /api/live). */
+  const live = new Set<{ user: number, device: string, res: ServerResponse }>()
 
-  /**
-   * Who is looking at what, right now — and the open streams it is told down.
-   *
-   * In memory and nowhere else. A restart forgets the whole room, and every browser's `EventSource`
-   * reconnects on its own a second later and says where it is again. Presence lives exactly as long
-   * as the connection carrying it: no expiry to guess at, no beat from the client to keep an entry
-   * warm, and a closed laptop leaves the room when its socket goes rather than twenty seconds after.
-   *
-   * One entry per person, not per tab: two windows of your own are still one of you, and the later
-   * move wins. The streams are per tab, because a message has to be written to one of them.
-   *
-   * ponytail: one process holds both, which is what the deploy is — two of them and each would only
-   * ever see half the room; a shared table, or a channel between them, is the upgrade. And `stir`
-   * is every stream against every entry, which at a roster of ten is nothing.
-   */
-  const live = new Set<{ user: number, name: string, device: string, res: ServerResponse }>()
-  const present = new Map<string, { owner: string, root: string, pid: string, id: string }>()
-
-  /** Every project an account is on, keyed the way an entry names one, with the faces to draw. */
-  const reach = (user: number) => {
-    const rows = q.roster.all(user) as { pid: string, owner: string, name: string, avatar: string | null }[]
-    return { on: new Set(rows.map((r) => `${r.owner}:${r.pid}`)), face: new Map(rows.map((r) => [r.name, r.avatar])) }
-  }
-  /* The same account twice over is the same answer twice over, and two tabs and a phone are three
-     sockets on one of them. Held for the length of one fanout only — a share granted between two
-     events must still be seen by the next one. */
-  const reachOnce = () => {
-    const held = new Map<number, ReturnType<typeof reach>>()
-    return (user: number) => {
-      let r = held.get(user)
-      if (!r) held.set(user, r = reach(user))
-      return r
-    }
-  }
-
-  /* Everyone's view of the room, sent to everyone, because one person moving changes what every
-     other person on that project should see. Each stream is told its own answer: what you may know
-     about who is where is exactly the set of projects you are on.
-     Two tabs of one person are one entry, so a stream only ever hears a name once. */
-  const stir = () => {
-    const seen = reachOnce()
-    for (const l of live) {
-      const { on, face } = seen(l.user)
-      wire(l.res, 'here', [...present]
-        .filter(([name, e]) => name !== l.name && (on.has(`${e.owner}:${e.root}`) || on.has(`${e.owner}:${e.pid}`)))
-        .map(([name, e]) => ({ name, avatar: face.get(name) ?? null, owner: e.owner, pid: e.pid, id: e.id })))
-    }
-  }
-
-  /** A shared document moved: everyone on it hears the number, and fetches it only if it is news. */
-  const moved = (owner: string, pid: string, v: number) => {
-    const seen = reachOnce()
-    for (const l of live) if (seen(l.user).on.has(`${owner}:${pid}`)) wire(l.res, 'moved', { owner, pid, v })
-  }
-
-  /* Your own document moved, on another of your devices or through the MCP server — which writes
-     over HTTP and never touches a browser. The same word, sent only to you.
-     Not to the browser that wrote it: `pv` is what keeps a shared project from echoing back at its
-     own author, and a personal document has no such ledger — without the device named here, every
-     two-second debounced keystroke would come straight back as a pull. Two tabs of one browser
-     share the device, and already learn from each other through storage events. */
+  /* Your document moved, on another of your devices or through the MCP server — which writes over
+     HTTP and never touches a browser. Not to the browser that wrote it: without the device named
+     here, every two-second debounced keystroke would come straight back as a pull. Two tabs of one
+     browser share the device, and already learn from each other through storage events. */
   const own = (user: number, v: number, from: string) => {
     for (const l of live) if (l.user === user && l.device !== from) wire(l.res, 'state', { v })
   }
 
-  /* ponytail: in-memory, per-process — a restart forgives everyone, which at ten users is fine.
-     Keyed by address *and* name so one flooded account never locks the rest out. */
+  /* ponytail: in-memory, per-process — a restart forgives everyone.
+     Keyed by address *and* name, so a stranger guessing at your name locks out only themselves. */
   const tries = new Map<string, { n: number, t: number }>()
   const limited = (key: string) => {
     const now = Date.now()
@@ -486,10 +287,21 @@ export function start({
   // one line per auth event into docker logs — the audit trail this scale needs, and no more
   const log = (ev: string, who: string, ip: string) =>
     console.log(`${new Date().toISOString()} ${ev} ${who} ${ip}`)
-  /* The limiter keys on the socket address, never on x-forwarded-for — a header anyone can type
-     is a key anyone can rotate. Behind the proxy every request shares its address, and the name
-     in the key is what keeps one hammered account from cooling the rest off. */
-  const addr = (req: IncomingMessage) => String(req.socket.remoteAddress)
+  /* Who is asking, for the limiter. Behind the proxy every socket is the proxy's, so keying on it
+     made the limit per-name for the whole internet: ten wrong guesses at your name from anywhere
+     and you could not sign in — nor could Claude, whose /mcp logins come from 127.0.0.1.
+     X-Real-IP is the one nginx proxy manager writes itself (`$remote_addr`) and overwrites — but only
+     believed from a private address, which is where a proxy on the same docker network, or this
+     process calling itself for /mcp, connects from. Reached straight from the internet, a header the
+     client wrote would be a key it could rotate on every guess. Never the front of X-Forwarded-For:
+     that is whatever the client put there, appended to. */
+  const inside = (a: string) =>
+    /^(::ffff:)?(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a) || a === '::1' || /^f[cd]/i.test(a)
+  const addr = (req: IncomingMessage) => {
+    const sock = String(req.socket.remoteAddress)
+    const real = req.headers['x-real-ip']
+    return typeof real === 'string' && real && inside(sock) ? real : sock
+  }
   // the forwarded chain is still worth reading in the log — as a claim, not an identity
   const via = (req: IncomingMessage) =>
     String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress).split(',')[0].trim()
@@ -560,7 +372,7 @@ export function start({
   /** MCP contexts by user and password hash — built and bounded in the /mcp route. */
   const mcps = new Map<string, ReturnType<typeof createStash>>()
 
-  /** One-use signup code — the admin API and the CLI both come through here, tests too. */
+  /** One-use signup code — the first boot and the tests come through here. */
   const invite = () => {
     // 64 bits: not a code anyone guesses, and it is one-use and expiring on top of that
     const code = randomBytes(8).toString('hex')
@@ -575,6 +387,30 @@ export function start({
     console.log(`first invite: ${invite()}`)
   }
 
+  /* The database, copied beside itself once a day: `backup-YYYY-MM-DD.db`, the newest seven kept.
+     VACUUM INTO writes a consistent copy of a live WAL database without stopping anything. Beside
+     it, so on the same volume — which survives a redeploy, not `docker volume rm` or a dead disk:
+     copying these off the box is the host's job (see README, Hosting it).
+     Skipped in memory and in tests, where there is no directory to write into. */
+  const backup = async () => {
+    if (dbPath === ':memory:' || process.env.NODE_ENV === 'test') return
+    const dir = dirname(resolve(dbPath))
+    const name = `backup-${new Date().toISOString().slice(0, 10)}.db`
+    try {
+      const have = (await readdir(dir)).filter((f) => /^backup-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort()
+      if (!have.includes(name)) {
+        db.exec(`vacuum into '${join(dir, name).replaceAll("'", "''")}'`)
+        have.push(name)
+        console.log(`${new Date().toISOString()} backup ${name}`)
+      }
+      for (const old of have.sort().slice(0, -7)) await rm(join(dir, old), { force: true })
+    } catch (e) {
+      console.error(`${new Date().toISOString()} backup failed`, e)
+    }
+  }
+  void backup()
+  setInterval(() => void backup(), 3600_000).unref()   // hourly look, one copy a day
+
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0]
     const api = path === '/state' || path.startsWith('/api/')
@@ -585,6 +421,13 @@ export function start({
       const origin = req.headers.origin
       // URL.parse over new URL: a header anyone can type is not a thing to throw on
       if (origin && URL.parse(origin)?.host !== req.headers.host) return send(res, 403, { error: 'forbidden' })
+    }
+
+    /* For Docker's healthcheck: up, and the database answering. A 401 from /api/me said neither —
+       with no cookie it returns before touching the database, so a full disk still read healthy. */
+    if (path === '/healthz') {
+      try { q.anyUser.get() } catch { return send(res, 503, { error: 'database' }) }
+      return send(res, 200, { ok: true })
     }
 
     if (path === '/api/signup' && req.method === 'POST') {
@@ -694,60 +537,6 @@ export function start({
       return send(res, 200, { user: name, admin: user.admin, avatar })
     }
 
-    if (path.startsWith('/api/admin/')) {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      if (!user.admin) return send(res, 403, { error: 'admin only' })
-
-      if (path === '/api/admin/invite' && req.method === 'POST') {
-        log('invite', user.name, via(req))
-        return send(res, 200, { code: invite() })
-      }
-      if (path === '/api/admin/users' && req.method === 'GET') {
-        return send(res, 200, { users: q.listUsers.all() })
-      }
-      if (path === '/api/admin/user' && req.method === 'DELETE') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const name = String(b?.user ?? '').trim().toLowerCase()
-        // never yourself: deleting the only admin would weld the door shut
-        const gone = q.delUser.run(name, user.id).changes
-        if (!gone) return send(res, 400, { error: 'no such user, or it is you' })
-        log('delete-user', `${name} by ${user.name}`, via(req))
-        return send(res, 200, {})
-      }
-      if (path === '/api/admin/promote' && req.method === 'POST') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const name = String(b?.user ?? '').trim().toLowerCase()
-        if (!q.promote.run(name).changes) return send(res, 400, { error: 'no such user' })
-        log('promote', `${name} by ${user.name}`, via(req))
-        return send(res, 200, {})
-      }
-      // the codes cut but not yet spent, so an admin can see what is outstanding
-      if (path === '/api/admin/invites' && req.method === 'GET') {
-        return send(res, 200, { invites: q.openInvites.all(inviteFloor()) })
-      }
-      if (path === '/api/admin/invite' && req.method === 'DELETE') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        q.dropInvite.run(String(b?.code ?? ''))
-        return send(res, 200, {})
-      }
-      // every session of every user but yours — the button for the day something smells wrong
-      if (path === '/api/admin/revoke' && req.method === 'POST') {
-        let b: any
-        try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        const name = String(b?.user ?? '').trim().toLowerCase()
-        const target = q.userByName.get(name) as { id: number } | undefined
-        if (!target) return send(res, 400, { error: 'no such user' })
-        q.dropAllSessions.run(target.id)
-        log('revoke', `${name} by ${user.name}`, via(req))
-        return send(res, 200, {})
-      }
-      return send(res, 404, { error: 'not found' })
-    }
-
     /* The fifty snapshots, and the way back to one. Restoring writes the old document forward as
        a new version rather than deleting what came after — an undo you can undo. */
     if (path === '/api/versions' && req.method === 'GET') {
@@ -760,14 +549,10 @@ export function start({
      * Rows the history remembers and the document has forgotten. A row that was deleted is in the
      * trash for a fortnight — far longer than fifty versions last — so anything held by an older
      * snapshot and in neither list now went without anybody deleting it: a merge that dropped it,
-     * a share that took its project's sub-projects with it, a bug not yet found.
+     * a bug not yet found.
      *
      * Reading, not writing. What comes back is a list to look at; putting one back is an ordinary
      * edit made by the device that asked, and goes up the way every other edit does.
-     *
-     * ponytail: a project document carries no trash of its own, so a row somebody else deleted out
-     * of a project shared with you reads the same as one that went missing, until their deletion
-     * has reached your own trash. A list to look at rather than an alarm, which is why it is a list.
      */
     if (path === '/api/lost' && req.method === 'GET') {
       const user = auth(req)
@@ -775,20 +560,11 @@ export function start({
       const doc = (json: string) => {
         try { return JSON.parse(json) as { items?: unknown[], trash?: unknown[] } } catch { return null }
       }
-      /* Every history this account can read: its own document, and each project document it owns
-         or is on. A row lost out of a shared project is in that project's history whether or not
-         it ever reached this account's own — and a project's document moves less often than a
-         personal one, so its fifty versions usually reach further back.
-         Read a row at a time rather than a list at a time: fifty versions of each of a dozen
-         documents is more of this server's memory than one button press is worth holding, and
-         nothing here needs two of them at once. */
+      /* Read a row at a time rather than a list at a time: fifty whole documents is more of this
+         server's memory than one button press is worth holding, and nothing here needs two at once. */
       const each = function* () {
         for (const r of q.everyVersion.iterate(user.id) as Iterable<{ ts: number, json: string }>) {
           yield { key: 'me', ts: r.ts, json: r.json }
-        }
-        for (const r of q.everyPdocVersion.iterate(user.id, user.id) as
-          Iterable<{ owner: number, pid: string, ts: number, json: string }>) {
-          yield { key: `${r.owner}:${r.pid}`, ts: r.ts, json: r.json }
         }
       }
 
@@ -898,9 +674,10 @@ export function start({
 
          The candidates are asked for first, and almost always there are none, because the ordinary
          life of a picture is to be uploaded and then referenced forever. That order is the whole
-         performance of this: the scan below reads every stored version of every document — fifty
-         per person and fifty per shared project, each one a whole stash — and doing that on every
-         upload to usually delete nothing would be the most expensive thing the server does.
+         performance of this: the scan below reads every stored version of the document — fifty of
+         them, each one a whole stash — and doing that on every upload to usually delete nothing
+         would be the most expensive thing the server does. A row at a time, never all fifty in
+         memory at once.
 
          ponytail: every version is scanned rather than only the newest, so restoring an old one
          does not come back with its pictures collected. Index the ids out of the documents on
@@ -908,7 +685,7 @@ export function start({
       const stale = q.sweepable.all(user.id, Date.now() - GRACE) as { id: string }[]
       if (stale.length) {
         const live = new Set<string>()
-        for (const d of q.allDocs.all() as { json: string }[]) {
+        for (const d of q.allDocs.iterate() as Iterable<{ json: string }>) {
           for (const r of referenced(d.json)) live.add(r)
         }
         for (const b of stale) if (!live.has(b.id)) q.dropBlob.run(b.id)
@@ -916,10 +693,7 @@ export function start({
       return send(res, 200, { id })
     }
 
-    /* And back out again. Any signed-in account may read one: a note in a shared project has to
-       render for everyone on it, and working out which share a picture belongs to means knowing
-       which note holds it — which is the document's business, not this table's. The id is 128 bits
-       of randomness and is what stands in for that */
+    /* And back out again, to whoever is signed in. The id is 128 bits of randomness. */
     const pic = /^\/api\/blob\/([0-9a-f]{32})$/.exec(path)?.[1]
     if (pic && req.method === 'GET') {
       if (!auth(req)) return send(res, 401, { error: 'unauthorized' })
@@ -960,7 +734,7 @@ export function start({
       /* One context per user-and-password, kept so the session survives between calls. Keyed by
          the pass's hash, not the pass: this map lives as long as the process. A wrong password
          still builds one — it fails on its first login, rate-limited there like any other guess.
-         ponytail: clear-all past 32, an LRU for a server whose whole roster is ten people. */
+         ponytail: clear-all past 32 — one person has two or three of these at most. */
       const ck = `${mu}:${hashToken(mp)}`
       let mcp = mcps.get(ck)
       if (!mcp) {
@@ -969,6 +743,9 @@ export function start({
         mcp = createStash({
           url: `http://127.0.0.1:${typeof a === 'object' && a ? a.port : port}`,
           user: mu, pass: mp,
+          // its logins come from 127.0.0.1; without the caller's address on them, wrong passwords
+          // sent to /mcp from anywhere would cool off the one key every real MCP login shares
+          via: addr(req),
         })
         mcps.set(ck, mcp)
       }
@@ -980,10 +757,10 @@ export function start({
       return out == null || (Array.isArray(out) && !out.length) ? send(res, 202, {}) : send(res, 200, out)
     }
 
-    /* Your own account, gone: the sessions, the documents and every share go with it on the
-       cascade. The password again, for the reason changing one asks for it — and the last admin
-       is refused, since a server with nobody who can cut an invite can never let anyone back in.
-       What is already on your devices stays there; this server simply stops knowing you. */
+    /* Your own account, gone: the sessions, the documents and the pictures go with it on the
+       cascade. The password again, for the reason changing one asks for it. The daily backups
+       still hold it until they age out, a week on. What is already on your devices stays there;
+       this server simply stops knowing you, and the next boot logs a fresh invite to sign up with. */
     if (path === '/api/account' && req.method === 'DELETE') {
       const user = auth(req)
       if (!user) return send(res, 401, { error: 'unauthorized' })
@@ -994,52 +771,15 @@ export function start({
         log('delete-self-fail', user.name, via(req))
         return send(res, 401, { error: 'wrong password' })
       }
-      if (user.admin && (q.admins.get() as { n: number }).n < 2) {
-        return send(res, 400, { error: 'make someone else an admin first — this server would have none' })
-      }
       q.delUserById.run(user.id)
       log('delete-self', user.name, via(req))
       return send(res, 200, {}, { 'set-cookie': cookie('', 0) })
     }
 
-    /* ---------- sharing: a project of your own, opened to someone else ---------- */
-
-    // who there is to share with. Signed in only: the roster of a private server is not public.
-    if (path === '/api/users' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      // name and face, since every place that offers this list draws both
-      return send(res, 200, { users: q.people.all(user.id) })
-    }
-
-    if (path === '/api/shares' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      return send(res, 200, {
-        mine: q.myShares.all(user.id, user.id),
-        with_me: q.sharedWithMe.all(user.id, user.id),
-        /* A project with a link on it and nobody else on it is still published: the link is a
-           reader, and it has nothing to read unless this device pushes the document. */
-        links: q.myLinks.all(user.id),
-      })
-    }
-
-    /* Apart from /api/shares, which the sync loop asks for every time it runs: this one carries
-       pictures, and the loop has no use for them. */
-    if (path === '/api/roster' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      // asked again at every project you open, and half a minute stale is nobody's problem here
-      return send(res, 200, { roster: q.roster.all(user.id) }, { 'cache-control': 'private, max-age=30' })
-    }
-
     /**
-     * The stream, and the only thing here with a person on the other end of it.
-     *
-     * Held open for as long as the tab is on a shared project, and told two things: who else is in
-     * here, and that a document has moved. Nobody polls for either — the second is what makes
-     * somebody's edit land the moment they make it rather than at the next minute's sync, and it
-     * costs one idle connection instead of a request every few seconds forever.
+     * The stream: told that your document moved, the moment it does. Nobody polls for it — an edit
+     * on the phone lands on the laptop when it is made rather than at the next sync, and it costs
+     * one idle connection instead of a request every few seconds forever.
      *
      * `x-accel-buffering` is not decoration: nginx proxy manager terminates TLS in front of this,
      * and nginx buffers a proxied response by default — every event would sit in that buffer until
@@ -1065,7 +805,7 @@ export function start({
       })
       // which browser this is, so its own writes are not sent back to it as news
       const device = (new URL(req.url ?? '/', 'http://x').searchParams.get('device') ?? '').slice(0, 128)
-      const l = { user: user.id, name: user.name, device, res }
+      const l = { user: user.id, device, res }
       live.add(l)
       /* A comment line, now: it is what makes the browser call the connection open, and until it
          does an `EventSource` sits in CONNECTING with nothing to show for itself. */
@@ -1074,308 +814,12 @@ export function start({
          process stays up. The listening socket is what holds this server open. */
       const ping = setInterval(() => wire(res, '', ''), PING)
       ping.unref?.()
-      /* `close` fires on a tab closing, a navigation, a laptop sleeping long enough for the socket
-         to go, and on the reconnect that replaces this stream. The entry goes with the last stream
-         holding it up — another tab of the same person keeps them in the room. */
+      // a tab closing, a navigation, a laptop asleep long enough for the socket to go
       req.on('close', () => {
         clearInterval(ping)
         live.delete(l)
-        if (![...live].some((o) => o.name === user.name)) present.delete(user.name)
-        stir()
       })
-      stir()
       return
-    }
-
-    /**
-     * Where I am now. The one thing the stream cannot carry, since it only goes one way — and the
-     * only request in this feature, sent when somebody actually moves rather than on a timer.
-     */
-    if (path === '/api/here' && req.method === 'POST') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-
-      /* `root` is the project carrying the share, `pid` is where they actually are. The two differ
-         on a sub-project travelling inside its parent's slice, which has no share row of its own to
-         be checked against — the trap this codebase has now fallen into twice. Both travel, and
-         either one granting access is enough, so a sub-project shared in its own right works the
-         same way.
-         Checked against the same list that decides what goes out, and for the same reason. A place
-         someone names is not a place they are: reading is already filtered, so an unchecked claim
-         leaks nothing — it puts a face in a stranger's project header, which is a lie about who is
-         in the room and worth exactly as much care as a leak.
-         No root at all is stepping out of every room. */
-      const { on } = reach(user.id)
-      /* Held in memory until the socket goes, so the length is capped where it arrives rather
-         than trusted: an id is a `uid()`, and eight megabytes of one is not a place anybody is. */
-      const said = (v: unknown, fallback = '') => String(v ?? fallback).slice(0, 128)
-      const root = said(b?.root)
-      const owner = said(b?.owner, user.name)
-      const pid = said(b?.pid, root)
-      if (root && (on.has(`${owner}:${root}`) || on.has(`${owner}:${pid}`))) {
-        present.set(user.name, { owner, root, pid, id: said(b?.id) })
-      } else present.delete(user.name)
-      stir()
-      return send(res, 200, {})
-    }
-
-    if (path === '/api/share' && req.method === 'POST') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const pid = String(b?.pid ?? '')
-      const name = String(b?.user ?? '').trim().toLowerCase()
-      if (!pid) return send(res, 400, { error: 'which project' })
-      /* You always share under your own id — a project id is only ever yours plus the string, so
-         nobody can claim someone else's, or squat one before its owner gets to it. What is
-         refused is passing on a project you are merely a member of. */
-      if (q.notMine.get(pid, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
-      const target = q.userByName.get(name) as { id: number } | undefined
-      if (!target) return send(res, 404, { error: 'no such person' })
-      if (target.id === user.id) return send(res, 400, { error: 'it is already yours' })
-      const now = Date.now()
-      const subs = b?.subs ? 1 : 0
-      // the owner's own row goes in with it, so one table answers every permission question
-      q.addShare.run(pid, user.id, user.id, 1, subs, now)
-      q.addShare.run(pid, user.id, target.id, b?.edit ? 1 : 0, subs, now)
-      // it is a property of the project, not of this one invitation
-      if ('subs' in (b ?? {})) q.setSubs.run(subs, user.id, pid)
-      log('share', `${pid} ${user.name} -> ${name}${b?.edit ? ' (edit)' : ''}`, via(req))
-      return send(res, 200, { members: q.myShares.all(user.id, user.id) })
-    }
-
-    if (path === '/api/share' && req.method === 'DELETE') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const pid = String(b?.pid ?? '')
-      // an owner named nobody else is unsharing their own; a member names whose project they leave
-      const ownerName = String(b?.owner ?? '').trim().toLowerCase()
-
-      if (!ownerName || ownerName === user.name) {
-        if (b?.user) {
-          const target = q.userByName.get(String(b.user).trim().toLowerCase()) as { id: number } | undefined
-          if (target) q.dropShare.run(pid, target.id, user.id)
-          // the last member gone means it is a private project again — unless a link still reaches it
-          retire(pid, user.id)
-        } else {
-          // everyone off it at once, and the same question: is there still a way in?
-          for (const m of q.myShares.all(user.id, user.id) as { pid: string, name: string }[]) {
-            if (m.pid !== pid) continue
-            const t = q.userByName.get(m.name) as { id: number } | undefined
-            if (t) q.dropShare.run(pid, t.id, user.id)
-          }
-          retire(pid, user.id)
-        }
-        log('unshare', `${pid} by ${user.name}`, via(req))
-        return send(res, 200, { members: q.myShares.all(user.id, user.id) })
-      }
-      // a member: leaving is theirs to do, and takes nothing with it
-      const owner = q.userByName.get(ownerName) as { id: number } | undefined
-      if (!owner) return send(res, 404, { error: 'no such person' })
-      q.leaveShare.run(pid, user.id, owner.id)
-      log('leave-share', `${pid} of ${ownerName} by ${user.name}`, via(req))
-      return send(res, 200, {})
-    }
-
-    /* ---------- public links ---------- */
-
-    /* The one route here that answers to nobody: the token is the credential, so there is no
-       session to read and nothing to check but whether the row is still there. It is a read, and
-       only a read — the writing half of a link is joining, below, which needs an account.
-       ponytail: no rate limit on the token. It is 128 bits out of randomBytes; a guessing loop at
-       a thousand tries a second is still working on it long after the sun has gone. */
-    if (path === '/api/link' && req.method === 'GET') {
-      const token = new URL(req.url ?? '/', 'http://x').searchParams.get('t') ?? ''
-      const l = q.byToken.get(token) as
-        { owner: number, pid: string, joinable: number, item: number, owner_name: string } | undefined
-      if (!l) return send(res, 404, { error: 'this link is not live' })
-      /* One row: read straight out of the owner's own document, which is the copy their devices
-         keep pushing — so the reader gets what it says now rather than what it said when the link
-         was cut, and nothing had to be published to make that true.
-         ponytail: that is a parse of the whole document to hand back one row of it, on a route with
-         no session behind it. A few hundred KB and a handful of readers, so it is nothing; if a
-         link is ever hammered, the lever is a small cache keyed by the document's version. */
-      if (l.item) {
-        const mine = q.latest.get(l.owner) as { json: string } | undefined
-        const doc = mine ? JSON.parse(mine.json) : null
-        // a document is whatever was PUT into it — this route is public, and a hand-edited one
-        // must come back as "nothing here" rather than as a 500 for whoever holds the link
-        const it = (Array.isArray(doc?.items) ? doc.items : []).find((i: { id: string }) => i?.id === l.pid)
-        // deleted since — it left `items` for the trash, and there is nothing behind the link now
-        if (!it) return send(res, 404, { error: 'this link is not live' })
-        return send(res, 200, { pid: l.pid, owner: l.owner_name, item: it })
-      }
-      const row = q.pdoc.get(l.owner, l.pid) as { json: string } | undefined
-      /* Signed in and already on this project? Then the link is just a fast way in and their own
-         rights are what count — an editor opening a view-only link is still an editor, and being
-         shown a frozen copy of their own project would be the wrong answer twice over. */
-      const user = auth(req)
-      const may = user ? q.access.get(l.owner, l.pid, user.id) as { edit: number } | undefined : undefined
-      return send(res, 200, {
-        pid: l.pid,
-        owner: l.owner_name,
-        joinable: !!l.joinable,
-        member: !!may,
-        edit: !!may?.edit,
-        signedIn: !!user,
-        state: row ? JSON.parse(row.json) : null,
-      })
-    }
-
-    if (path === '/api/link' && req.method === 'POST') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const pid = String(b?.pid ?? '')
-      if (!pid) return send(res, 400, { error: 'which project' })
-      /* One row of your own document, read live out of it — so there is nothing to publish, nothing
-         to share, and no project involved. The id is checked against the document rather than taken
-         on trust: a token to a row that is not there is a link that only ever 404s. */
-      if (b?.item) {
-        const mine = q.latest.get(user.id) as { json: string } | undefined
-        const doc = mine ? JSON.parse(mine.json) : null
-        const it = (Array.isArray(doc?.items) ? doc.items : [])
-          .find((i: { id: string }) => i?.id === pid) as { pid?: unknown } | undefined
-        if (!it) return send(res, 404, { error: 'sync this device first' })
-        /* A row in a project someone shared with you is in your document too, and it is still
-           theirs — the same rule the named share follows, one row down. The walk goes up the
-           parents: a sub-project carries no share row of its own, it travels inside its parent's. */
-        const tree = (Array.isArray(doc?.projects) ? doc.projects : []) as { id?: unknown, parent?: unknown }[]
-        // `typeof` rather than a truth test: none of this is validated on the way in, and a pid that
-        // is not a string is not a project — it is a document somebody hand-edited
-        for (let up = it.pid, seen = new Set<unknown>(); typeof up === 'string' && up && !seen.has(up);) {
-          if (q.notMine.get(up, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
-          seen.add(up)
-          up = tree.find((p) => p?.id === up)?.parent ?? null
-        }
-        /* Both kinds live in one table under one `unique (owner, pid)`, and ids are seven random
-           characters — so a project of this account could, once in a very long while, wear the same
-           string as one of its rows. Said out loud rather than upserted over: the insert below would
-           keep the row that is there and hand back a token that was never stored. */
-        const held = q.anyLinkOf.get(user.id, pid) as { token: string, item: number } | undefined
-        if (held && !held.item) return send(res, 409, { error: 'a project here already has that id' })
-        const token = held?.token ?? randomBytes(16).toString('hex')
-        q.addLink.run(token, user.id, pid, 0, Date.now(), 1)
-        log('link', `item ${pid} by ${user.name}`, via(req))
-        return send(res, 200, { token, joinable: false })
-      }
-      // the same rule the named share follows: a project you are only a member of is not yours to hand on
-      if (q.notMine.get(pid, user.id, user.id)) return send(res, 403, { error: 'not yours to share' })
-      // the other side of the collision above, for the same reason
-      const held = q.anyLinkOf.get(user.id, pid) as { item: number } | undefined
-      if (held?.item) return send(res, 409, { error: 'a row here already has that id' })
-      const joinable = b?.joinable ? 1 : 0
-      const now = Date.now()
-      // the owner's own access row, so the document below has somewhere to be written from
-      q.addShare.run(pid, user.id, user.id, 1, (q.shareSubs.get(user.id, pid) as { subs: number } | undefined)?.subs ?? 0, now)
-      // 128 bits, and the row is only cut once: toggling joinable must not silently break the
-      // link someone already sent — revoking is the deliberate act that changes the string
-      const token = (q.linkOf.get(user.id, pid) as { token: string } | undefined)?.token
-        ?? randomBytes(16).toString('hex')
-      q.addLink.run(token, user.id, pid, joinable, now, 0)
-      log('link', `${pid} by ${user.name}${joinable ? ' (joinable)' : ''}`, via(req))
-      return send(res, 200, { token, joinable: !!joinable })
-    }
-
-    if (path === '/api/link' && req.method === 'DELETE') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const pid = String(b?.pid ?? '')
-      q.dropLink.run(user.id, pid)
-      // revoked, and with nobody else on it the project stops being published at all. An item link
-      // published nothing in the first place — there is no document of its own to retire.
-      if (!b?.item) retire(pid, user.id)
-      log('unlink', `${pid} by ${user.name}`, via(req))
-      return send(res, 200, { links: q.myLinks.all(user.id) })
-    }
-
-    if (path === '/api/links' && req.method === 'GET') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      return send(res, 200, { links: q.myLinks.all(user.id) })
-    }
-
-    /* Joining: the half of a link that writes anything. It needs an account — a share row names a
-       user, and there is no such thing as an anonymous member — so a stranger with the link reads,
-       and someone with the link and an account here can put themselves on it. */
-    if (path === '/api/link/join' && req.method === 'POST') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'sign in first' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const l = q.byToken.get(String(b?.t ?? '')) as
-        { owner: number, pid: string, joinable: number, owner_name: string } | undefined
-      if (!l) return send(res, 404, { error: 'this link is not live' })
-      if (l.owner === user.id) return send(res, 200, { pid: l.pid, owner: l.owner_name })
-      if (!l.joinable) return send(res, 403, { error: 'this link is view only' })
-      const subs = (q.shareSubs.get(l.owner, l.pid) as { subs: number } | undefined)?.subs ?? 0
-      // joining is joining: the point of the flag is that they can work on it
-      q.addShare.run(l.pid, l.owner, user.id, 1, subs, Date.now())
-      log('link-join', `${l.pid} of ${l.owner_name} by ${user.name}`, via(req))
-      return send(res, 200, { pid: l.pid, owner: l.owner_name })
-    }
-
-    // the shared project's document — the same versioned exchange /state runs, one project wide
-    if (path === '/api/pdoc') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      const qs = new URL(req.url ?? '/', 'http://x').searchParams
-      const pid = qs.get('pid') ?? ''
-      // whose project: your own unless you name someone, and the id alone never grants anything
-      const ownerName = (qs.get('owner') ?? '').trim().toLowerCase()
-      const owner = ownerName && ownerName !== user.name
-        ? (q.userByName.get(ownerName) as { id: number } | undefined)?.id
-        : user.id
-      if (!owner) return send(res, 404, { error: 'not shared with you' })
-      const may = q.access.get(owner, pid, user.id) as { edit: number } | undefined
-      if (!may) return send(res, 404, { error: 'not shared with you' })
-      const row = q.pdoc.get(owner, pid) as { v: number, json: string } | undefined
-
-      if (req.method === 'GET') {
-        return send(res, 200, {
-          version: row?.v ?? 0,
-          state: row ? JSON.parse(row.json) : null,
-          edit: !!may.edit,
-        })
-      }
-      if (req.method === 'PUT') {
-        // read-only is enforced here, not only in the interface that hides the buttons
-        if (!may.edit) return send(res, 403, { error: 'read-only' })
-        const have = Number(req.headers['if-match'])
-        if (!Number.isInteger(have)) return send(res, 428, { error: 'If-Match required' })
-        let body: any
-        try { body = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-        if (typeof body?.state !== 'object' || body.state === null) {
-          return send(res, 400, { error: 'state must be an object' })
-        }
-        // read again, with nothing awaited between here and the insert: two people editing one
-        // shared project both matched the version read above, then both wrote — and If-Match, the
-        // whole point of which is that the second one is told to look, let the first one vanish
-        const now = q.pdoc.get(owner, pid) as { v: number, json: string } | undefined
-        if (have !== (now?.v ?? 0)) {
-          return send(res, 409, { version: now?.v ?? 0, state: now ? JSON.parse(now.json) : null })
-        }
-        // the same rule as /state below: an identical write is not a version. sync.ts already
-        // declines to send one, but the guard belongs where every client meets it, not in one
-        const pjson = JSON.stringify(body.state)
-        if (now && now.json === pjson) return send(res, 200, { version: now.v })
-        const w = q.addPdoc.run(owner, pid, Date.now(), String(body.device ?? ''), pjson)
-        q.prunePdoc.run(owner, pid, owner, pid, KEEP)
-        /* Everyone on it hears the new number the moment it exists. The writer's own devices are
-           among them on purpose — the laptop that wrote it is not the phone that wants it — and
-           the one that did write compares the number against what it already holds and stays put. */
-        moved(ownerName || user.name, pid, Number(w.lastInsertRowid))
-        return send(res, 200, { version: Number(w.lastInsertRowid) })
-      }
-      return send(res, 405, { error: 'method not allowed' })
     }
 
     if (path === '/state') {
@@ -1469,8 +913,17 @@ export function start({
     }).catch(() => res.destroy())
   })
 
+  /* Stop taking new requests, let the ones in flight finish, end the streams (which never finish on
+     their own), and give anything still going five seconds before it is cut. */
+  const stop = () => new Promise<void>((done) => {
+    server.close(() => done())
+    for (const l of live) l.res.end()
+    server.closeIdleConnections()
+    setTimeout(() => server.closeAllConnections(), 5000).unref()
+  })
+
   server.listen(port)
-  return Object.assign(server, { invite })
+  return Object.assign(server, { invite, stop })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -1495,4 +948,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const a = s.address()
     console.log(`stash sync on ${typeof a === 'object' && a ? a.port : ''}`)
   })
+  /* Node as PID 1 has no default SIGTERM handler, so every deploy waited out Docker's ten seconds
+     and was then killed mid-request. */
+  process.on('SIGTERM', () => void s.stop().then(() => process.exit(0)))
 }

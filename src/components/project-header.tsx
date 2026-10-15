@@ -1,4 +1,3 @@
-import { Eye, Users } from 'lucide-react'
 import { childProjects, useStash, type Project } from '@/lib/store'
 
 /** A parent's list shows its children's items, so its progress has to count them too. */
@@ -32,21 +31,5 @@ export function ProjectProgress({ p }: { p: Project }) {
         />
       </span>
     </>
-  )
-}
-
-/** Whose project this is, and what you may do in it — said once, at the top of it. */
-export function ProjectHeader({ p }: { p: Project }) {
-  if (!p.share) return null
-  const locked = !p.share.edit
-
-  // the badge is all that is left in here, and it is desktop-only — so the strip goes with it
-  return (
-    <div className="hidden items-center gap-2 border-b px-3 py-2.5 sm:flex">
-      <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
-        {locked ? <Eye className="size-3.5" /> : <Users className="size-3.5" />}
-        {locked ? `${p.share.by}'s project — view only` : `Shared by ${p.share.by}`}
-      </span>
-    </div>
   )
 }

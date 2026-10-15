@@ -141,25 +141,8 @@ r = await post('/api/account', { avatar: '' }, leon)
 assert.equal((await r.json()).avatar, null)
 await post('/api/account', { name: 'leon' }, leon)                      // back, for the tests below
 
-// admin gating: mia may not, leon may
-assert.equal((await post('/api/admin/invite', {}, mia)).status, 403)
-assert.equal((await get('/api/admin/users', mia)).status, 403)
-r = await post('/api/admin/invite', {}, leon)
-const code = (await r.json()).code
-assert.match(code, /^[a-f0-9]{16}$/)
-const kim = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', invite: code }))
-const users = (await (await get('/api/admin/users', leon)).json()).users
-assert.deepEqual(users.map((u: any) => [u.name, u.admin]), [['leon', 1], ['mia', 0], ['kim', 0]])
-assert.ok(users[0].synced && users[1].synced && !users[2].synced)
-
-/* the roster the share fields complete against: everyone but yourself, and nothing about them
-   beyond the name you would have typed anyway and the face already shown beside it wherever they
-   are on a project with you. Never to someone who is not signed in. */
-assert.equal((await get('/api/users')).status, 401)
-assert.deepEqual(await (await get('/api/users', leon)).json(),
-  { users: [{ name: 'kim', avatar: null }, { name: 'mia', avatar: null }] })
-assert.deepEqual(await (await get('/api/users', mia)).json(),
-  { users: [{ name: 'kim', avatar: null }, { name: 'leon', avatar: null }] })
+// a third account, for the session and logout cases below
+const kim = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', invite: server.invite() }))
 
 /* where you are signed in: yours only, the one asking marked, and never the hash that proves it —
    a list that handed those out would be a list of working cookies. */
@@ -171,30 +154,23 @@ assert.ok(seats.every((d: any) => !('hash' in d)), 'a session hash left the serv
 assert.ok((await (await get('/api/sessions', mia)).json()).sessions.length >= 1)
 assert.equal(seats.length, db.prepare('select count(*) as n from sessions where user = 1').get()!.n)
 
-// deleting a user cascades: their session dies with the row — and never yourself
-const del = (name: string, cookie: string) => fetch(`${url}/api/admin/user`, {
-  method: 'DELETE', headers: { cookie }, body: JSON.stringify({ user: name }),
-})
-assert.equal((await del('leon', leon)).status, 400)
-assert.equal((await del('kim', leon)).status, 200)
-assert.equal((await get('/api/me', kim)).status, 401)
-
-// ...and their document went too: the name signed up fresh starts empty
-const kim2 = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', invite: server.invite() }))
-assert.deepEqual(await (await get('/state', kim2)).json(), { version: 0, state: null })
-
 // logout kills the session; logout-all sweeps every device at once
-await post('/api/logout', {}, kim2)
-assert.equal((await get('/state', kim2)).status, 401)
+await post('/api/logout', {}, kim)
+assert.equal((await get('/state', kim)).status, 401)
 const mia2 = jar(await post('/api/login', { user: 'mia', pass: 'longenough' }))
 await post('/api/logout-all', {}, mia)
 assert.equal((await get('/api/me', mia)).status, 401)
 assert.equal((await get('/api/me', mia2)).status, 401)
 
-// hammering a login cools off — and only for that name
-for (let i = 0; i < 10; i++) await post('/api/login', { user: 'mia', pass: 'wrong' })
-assert.equal((await post('/api/login', { user: 'mia', pass: 'longenough' })).status, 429)
-assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 200)
+// hammering a login cools off — only for that name, and only from where the hammering came from:
+// behind the proxy every socket is the proxy's, so keying on it let a stranger lock you out
+const from = (ip: string, body: unknown) => fetch(`${url}/api/login`, {
+  method: 'POST', headers: { 'x-real-ip': ip }, body: JSON.stringify(body),
+})
+for (let i = 0; i < 10; i++) await from('203.0.113.9', { user: 'mia', pass: 'wrong' })
+assert.equal((await from('203.0.113.9', { user: 'mia', pass: 'longenough' })).status, 429)
+assert.equal((await from('203.0.113.9', { user: 'leon', pass: 'longenough' })).status, 200)
+assert.equal((await from('198.51.100.4', { user: 'mia', pass: 'longenough' })).status, 200, 'a stranger locked mia out')
 
 // versions: every accepted write is one, and restoring writes the old document forward
 const versions = (c: string) => get('/api/versions', c).then((x) => x.json()).then((j) => j.versions)
@@ -239,99 +215,12 @@ assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).st
 assert.equal((await post('/api/login', { user: 'leon', pass: 'newlongenough' })).status, 200)
 assert.equal((await get('/api/me', leon)).status, 200)   // the session that changed it survives
 
-// admin: promote, revoke, and the open invites
-const kim3 = jar(await post('/api/signup', { user: 'kim3', pass: 'longenough', invite: server.invite() }))
-assert.equal((await post('/api/admin/promote', { user: 'kim3' }, kim3)).status, 403)
-assert.equal((await post('/api/admin/promote', { user: 'kim3' }, leon)).status, 200)
-assert.equal((await (await get('/api/me', kim3)).json()).admin, 1)
-assert.equal((await post('/api/admin/promote', { user: 'ghost' }, leon)).status, 400)
-
-const code2 = (await (await post('/api/admin/invite', {}, leon)).json()).code
-let open = (await (await get('/api/admin/invites', leon)).json()).invites.map((i: any) => i.code)
-assert.ok(open.includes(code2))
-await fetch(`${url}/api/admin/invite`, { method: 'DELETE', headers: { cookie: leon }, body: JSON.stringify({ code: code2 }) })
-open = (await (await get('/api/admin/invites', leon)).json()).invites.map((i: any) => i.code)
-assert.ok(!open.includes(code2))
-assert.equal((await post('/api/signup', { user: 'nope', pass: 'longenough', invite: code2 })).status, 403)
-
-assert.equal((await post('/api/admin/revoke', { user: 'kim3' }, leon)).status, 200)
-assert.equal((await get('/api/me', kim3)).status, 401)
-
 // an invite older than its window is no longer an invite, and does not clutter the open list
-const oldCode = (await (await post('/api/admin/invite', {}, leon)).json()).code
+const oldCode = server.invite()
 db.prepare('update invites set ts = ? where code = ?').run(Date.now() - 8 * 86400_000, oldCode)
 assert.equal((await post('/api/signup', { user: 'late', pass: 'longenough', invite: oldCode })).status, 403)
-assert.ok(!(await (await get('/api/admin/invites', leon)).json()).invites.some((i: any) => i.code === oldCode))
 
-/* ---------- sharing ---------- */
-const del2 = (path: string, body: unknown, cookie: string) =>
-  fetch(url + path, { method: 'DELETE', headers: { cookie }, body: JSON.stringify(body) })
-const pdoc = (pid: string, cookie: string, owner = '') =>
-  get(`/api/pdoc?pid=${pid}${owner ? `&owner=${owner}` : ''}`, cookie)
-const putPdoc = (pid: string, version: number, state: unknown, cookie: string, owner = '') =>
-  fetch(`${url}/api/pdoc?pid=${pid}${owner ? `&owner=${owner}` : ''}`, {
-    method: 'PUT', headers: { cookie, 'if-match': String(version) }, body: JSON.stringify({ state }),
-  })
-
-const ada = jar(await post('/api/signup', { user: 'ada', pass: 'longenough', invite: server.invite() }))
-const bo = jar(await post('/api/signup', { user: 'bo', pass: 'longenough', invite: server.invite() }))
-const cy = jar(await post('/api/signup', { user: 'cy', pass: 'longenough', invite: server.invite() }))
-
-// nothing is shared until it is
-assert.equal((await pdoc('p1', ada)).status, 404)
-assert.deepEqual(await (await get('/api/shares', ada)).json(), { mine: [], with_me: [], links: [] })
-assert.deepEqual((await (await get('/api/roster', ada)).json()).roster, [])
-
-// ada shares p1 with bo read-only, and with cy to edit
-assert.equal((await post('/api/share', { pid: 'p1', user: 'ghost' }, ada)).status, 404)
-assert.equal((await post('/api/share', { pid: 'p1', user: 'ada' }, ada)).status, 400)
-assert.equal((await post('/api/share', { pid: 'p1', user: 'bo' }, ada)).status, 200)
-r = await post('/api/share', { pid: 'p1', user: 'cy', edit: true }, ada)
-assert.deepEqual((await r.json()).members.map((m: any) => [m.name, m.edit]), [['bo', 0], ['cy', 1]])
-
-// sub-projects travel only when the share says so, and it is the project's answer, not each member's
-assert.equal((await post('/api/share', { pid: 'p1', user: 'bo', subs: true }, ada)).status, 200)
-assert.deepEqual((await (await get('/api/shares', ada)).json()).mine.map((m: any) => [m.name, m.subs]),
-  [['bo', 1], ['cy', 1]])
-assert.equal((await post('/api/share', { pid: 'p1', user: 'bo', subs: false }, ada)).status, 200)
-
-// the owner writes it; both members can read it
-assert.equal((await putPdoc('p1', 0, { project: { id: 'p1', name: 'Kova' }, items: ['a'] }, ada)).status, 200)
-let d = await (await pdoc('p1', bo, 'ada')).json()
-assert.deepEqual(d.state, { project: { id: 'p1', name: 'Kova' }, items: ['a'] })
-assert.equal(d.edit, false)
-assert.equal((await (await pdoc('p1', cy, 'ada')).json()).edit, true)
-
-// read-only means read-only on the wire, not just in the buttons
-assert.equal((await putPdoc('p1', d.version, { items: ['bo was here'] }, bo, 'ada')).status, 403)
-// the editor may write, and the owner sees it
-assert.equal((await putPdoc('p1', d.version, { items: ['a', 'b'] }, cy, 'ada')).status, 200)
-assert.deepEqual((await (await pdoc('p1', ada)).json()).state, { items: ['a', 'b'] })
-// ...against a version, like everything else here
-assert.equal((await putPdoc('p1', 0, { items: ['stale'] }, cy, 'ada')).status, 409)
-
-// a stranger cannot reach it at all, nor share it on
-const dee = jar(await post('/api/signup', { user: 'dee', pass: 'longenough', invite: server.invite() }))
-assert.equal((await pdoc('p1', dee, 'ada')).status, 404)
-assert.equal((await putPdoc('p1', 1, { items: [] }, dee, 'ada')).status, 404)
-assert.equal((await post('/api/share', { pid: 'p1', user: 'dee' }, cy)).status, 403)
-
-// both sides see the share
-assert.deepEqual((await (await get('/api/shares', bo)).json()).with_me,
-  [{ pid: 'p1', edit: 0, subs: 0, owner: 'ada' }])
-assert.deepEqual((await (await get('/api/shares', bo)).json()).mine, [])
-
-// a member sees the whole company of the project, the owner among them — and a stranger sees none
-assert.deepEqual((await (await get('/api/roster', bo)).json()).roster.map((f: any) => [f.owner, f.name]),
-  [['ada', 'ada'], ['ada', 'bo'], ['ada', 'cy']])
-assert.deepEqual((await (await get('/api/roster', dee)).json()).roster, [])
-assert.equal((await fetch(url + '/api/roster')).status, 401)
-
-/* Who is in the room, and word that a document moved — one stream, told rather than asked for.
-   Presence is only ever about a project you are on: a stranger is told nothing, and never that
-   there was nothing to tell. */
-const here = (b: object, cookie: string) => post('/api/here', b, cookie)
-assert.equal((await fetch(url + '/api/here', { method: 'POST', body: '{}' })).status, 401)
+/* ---------- the stream: word that your document moved ---------- */
 assert.equal((await fetch(url + '/api/live')).status, 401)
 
 /** One open stream, read as the events arrive. `next` waits for the one after the call that
@@ -363,9 +252,8 @@ async function listen(cookie: string, device = '') {
   })()
   return {
     stop: () => ac.abort(),
-    /** Frames until one matches. Not "the next frame": every stream opening or closing stirs the
-     *  room for everyone, so counting them is a test that breaks whenever a case is added beside
-     *  it. The timeout is so a push that never arrives fails here rather than hanging the run. */
+    /** Frames until one matches. The timeout is so a push that never arrives fails here rather
+     *  than hanging the run. */
     until: async (fn: (f: { event: string, data: any }) => boolean, what = 'a frame') => {
       const stop = Date.now() + 5000
       for (;;) {
@@ -382,199 +270,21 @@ async function listen(cookie: string, device = '') {
     },
   }
 }
-const room = (f: { event: string, data: any }) => f.event === 'here'
-
-// bo opens a stream on p1 and is told the room straight away — empty, since bo is alone in it
-const boLive = await listen(bo)
-assert.deepEqual((await boLive.until(room, 'the opening room')).data, [])
-
-// cy walks in, and bo hears it without asking
-assert.equal((await here({ owner: 'ada', root: 'p1', pid: 'p1', id: 'i7' }, cy)).status, 200)
-assert.deepEqual((await boLive.until((f) => room(f) && f.data[0]?.id === 'i7', 'cy on i7')).data,
-  [{ name: 'cy', avatar: null, owner: 'ada', pid: 'p1', id: 'i7' }])
-
-/* A sub-project has no share row of its own — it travels inside the parent's slice — so the
-   project carrying the share is what the claim is checked against, and the one being looked at is
-   what comes back. The trap this file has now watched claim two bugs. */
-assert.equal((await here({ owner: 'ada', root: 'p1', pid: 'p1kid', id: 'i9' }, cy)).status, 200)
-assert.deepEqual((await boLive.until((f) => room(f) && f.data[0]?.id === 'i9', 'cy on the sub')).data,
-  [{ name: 'cy', avatar: null, owner: 'ada', pid: 'p1kid', id: 'i9' }])
-
-/* dee is on nothing and says they are on p1 anyway. The part that needs a check is not what dee
-   learns — nothing, and the room they asked about is filtered on the way out — but that dee does
-   not appear to anyone else. A place you name is not a place you are: unchecked, it puts a
-   stranger's face in a project header, which is a lie about who is in the room. */
-assert.equal((await here({ owner: 'ada', root: 'p1', pid: 'p1', id: 'i7' }, dee)).status, 200)
-assert.deepEqual((await boLive.until(room, 'the room after dee')).data.map((h: any) => h.name), ['cy'])
-
-// a write on the shared document reaches everyone on it, with the number to compare against
-const was = (await (await pdoc('p1', ada)).json()).version
-assert.equal((await putPdoc('p1', was, { items: ['a', 'b', 'c'] }, cy, 'ada')).status, 200)
-const ev = await boLive.until((f) => f.event === 'moved', 'word that the document moved')
-assert.deepEqual([ev.data.owner, ev.data.pid, ev.data.v > was], ['ada', 'p1', true])
-
 /* Your own document, between your own devices — the case the minute-long poll used to be the only
    answer to. The browser that wrote it is not told about its own writing, or every debounced
    keystroke would come straight back as a pull. */
-const boPhone = await listen(bo, 'phone')
+const phone = await listen(leon, 'phone')
 assert.equal((await fetch(`${url}/state`, {
   method: 'PUT',
-  headers: { cookie: bo, 'if-match': String((await (await get('/state', bo)).json()).version) },
+  headers: { cookie: leon, 'if-match': String((await (await get('/state', leon)).json()).version) },
   body: JSON.stringify({ state: { items: ['written on the laptop'] }, device: 'laptop' }),
 })).status, 200)
-const heard = await boPhone.until((f) => f.event === 'state', 'word that our own document moved')
+const heard = await phone.until((f) => f.event === 'state', 'word that our own document moved')
 assert.equal(heard.data.v > 0, true)
-boPhone.stop()
+phone.stop()
 
-// and the room empties when the person in it goes, said by the socket closing rather than by them
-const cyLive = await listen(cy)
-cyLive.stop()
-assert.deepEqual((await boLive.until((f) => room(f) && !f.data.length, 'the room emptying')).data, [])
-boLive.stop()
 
-/* The sweep for lost rows reaches into the project documents this account is on, not only its own:
-   a row can go missing out of a shared project without ever having been in a personal one. */
-{
-  const row = (id: string) => ({ id, text: id })
-  const v = (await (await pdoc('p1', ada)).json()).version
-  const v2 = (await (await putPdoc('p1', v, { items: [row('kept'), row('shared-gone')] }, ada)).json()).version
-  assert.equal((await putPdoc('p1', v2, { items: [row('kept')] }, ada)).status, 200)
-  const seen = async (c: string) =>
-    ((await (await get('/api/lost', c)).json()).lost as any[]).map((i) => i.id)
-  assert.deepEqual(await seen(ada), ['shared-gone'])       // its owner
-  assert.deepEqual(await seen(cy), ['shared-gone'])        // and everyone on it
-  assert.ok(!(await seen(leon)).includes('shared-gone'))   // and nobody else at all
-}
-
-// a member can leave, and takes nothing with them
-assert.equal((await del2('/api/share', { pid: 'p1', owner: 'ada' }, bo)).status, 200)
-assert.equal((await pdoc('p1', bo, 'ada')).status, 404)
-assert.equal((await pdoc('p1', cy, 'ada')).status, 200)
-
-// the owner unshares: the document goes with the last member
-assert.equal((await del2('/api/share', { pid: 'p1', user: 'cy' }, ada)).status, 200)
-assert.equal((await pdoc('p1', cy, 'ada')).status, 404)
-assert.equal((await pdoc('p1', ada)).status, 404)
-
-/* the id alone grants nothing: two people may hold the same project id and never meet, and
-   nobody can claim an id before its owner shares it */
-assert.equal((await post('/api/share', { pid: 'same', user: 'bo' }, ada)).status, 200)
-assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, dee)).status, 200)
-await putPdoc('same', 0, { items: ['ada'] }, ada)
-await putPdoc('same', 0, { items: ['dee'] }, dee)
-assert.deepEqual((await (await pdoc('same', bo, 'ada')).json()).state, { items: ['ada'] })
-assert.deepEqual((await (await pdoc('same', cy, 'dee')).json()).state, { items: ['dee'] })
-// ...and neither one's members can reach the other's
-assert.equal((await pdoc('same', bo, 'dee')).status, 404)
-assert.equal((await pdoc('same', cy, 'ada')).status, 404)
-// a member may not pass on what is not theirs
-assert.equal((await post('/api/share', { pid: 'same', user: 'cy' }, bo)).status, 403)
-
-/* ---------- public links ---------- */
-
-const linkOf = (t: string, cookie = '') =>
-  fetch(`${url}/api/link?t=${t}`, cookie ? { headers: { cookie } } : undefined)
-
-// a token nobody cut reaches nothing
-assert.equal((await linkOf('deadbeef')).status, 404)
-
-// ada links p2, and publishes it — the link is a reader, so there has to be something to read
-r = await post('/api/link', { pid: 'p2' }, ada)
-assert.equal(r.status, 200)
-const tok = (await r.json()).token
-assert.equal(tok.length, 32, '128 bits of hex')
-assert.equal((await putPdoc('p2', 0, { projects: [{ id: 'p2', name: 'Public' }], items: [] }, ada)).status, 200)
-
-// anyone at all, with no cookie: the project, and nothing else of ada's
-let lv = await (await linkOf(tok)).json()
-assert.deepEqual(lv.state.projects, [{ id: 'p2', name: 'Public' }])
-assert.equal(lv.owner, 'ada')
-assert.equal(lv.member, false)
-assert.equal(lv.signedIn, false)
-assert.equal(lv.joinable, false)
-
-// view only until it is not, and joining is the half that needs an account
-assert.equal((await post('/api/link/join', { t: tok })).status, 401)
-assert.equal((await post('/api/link/join', { t: tok }, bo)).status, 403)
-// the owner's own link opens as what it is: their project, theirs to edit
-assert.equal((await (await linkOf(tok, ada)).json()).member, true)
-
-// the same URL, now allowing it — the token does not change, so what was sent still works
-assert.equal((await (await post('/api/link', { pid: 'p2', joinable: true }, ada)).json()).token, tok)
-assert.equal((await post('/api/link/join', { t: tok }, bo)).status, 200)
-// bo is on it now, with edit, and the link opens as a fast way in rather than as a copy
-lv = await (await linkOf(tok, bo)).json()
-assert.equal(lv.member, true)
-assert.equal(lv.edit, true)
-const p2v = (await (await pdoc('p2', bo, 'ada')).json()).version
-assert.equal((await putPdoc('p2', p2v, { projects: [], items: ['bo'] }, bo, 'ada')).status, 200)
-
-// listed, and revoked — after which the link is dead for everyone
-assert.deepEqual((await (await get('/api/links', ada)).json()).links.map((l: any) => [l.pid, l.joinable]),
-  [['p2', 1]])
-assert.equal((await del2('/api/link', { pid: 'p2' }, ada)).status, 200)
-assert.equal((await linkOf(tok)).status, 404)
-// bo was a member in their own right, so revoking the link leaves them exactly where they were
-assert.equal((await pdoc('p2', bo, 'ada')).status, 200)
-
-// a project reachable only by link keeps its document; the link going is what retires it
-assert.equal((await post('/api/link', { pid: 'p3' }, ada)).status, 200)
-assert.equal((await putPdoc('p3', 0, { projects: [], items: ['solo'] }, ada)).status, 200)
-assert.equal((await del2('/api/link', { pid: 'p3' }, ada)).status, 200)
-assert.equal((await pdoc('p3', ada)).status, 404, 'the last way in went and the copy stayed')
-
-// and a project you are only a member of is not yours to link
-assert.equal((await post('/api/link', { pid: 'p2' }, bo)).status, 403)
-
-/* ---------- a link to one row ---------- */
-
-// its own account, because this one hands its whole document over to the test
-const pia = jar(await post('/api/signup', { user: 'pia', pass: 'longenough', invite: server.invite() }))
-const piav = async () => (await (await get('/state', pia)).json()).version
-await put(pia, 0, { items: [{ id: 'i1', text: 'hello' }, { id: 'i2', text: 'private' }] })
-
-r = await post('/api/link', { pid: 'i1', item: true }, pia)
-assert.equal(r.status, 200)
-const itok = (await r.json()).token
-// anyone at all, no cookie: that row, and nothing else of pia's — no document, no second item
-lv = await (await linkOf(itok)).json()
-assert.deepEqual(lv.item, { id: 'i1', text: 'hello' })
-assert.equal(lv.owner, 'pia')
-assert.equal(lv.state, undefined)
-// read out of the document each time, so an edit is live rather than a copy from when it was cut
-await put(pia, await piav(), { items: [{ id: 'i1', text: 'edited' }] })
-assert.equal((await (await linkOf(itok)).json()).item.text, 'edited')
-// asking twice is the same string, the way a project's link is
-assert.equal((await (await post('/api/link', { pid: 'i1', item: true }, pia)).json()).token, itok)
-// a row this server has never seen cannot be linked, and one deleted since reaches nothing
-assert.equal((await post('/api/link', { pid: 'nope', item: true }, pia)).status, 404)
-/* a row of someone else's project is in your document and still not yours to hand out — through a
-   sub-project too, which carries no share row of its own */
-assert.equal((await post('/api/share', { pid: 'ap', user: 'pia' }, ada)).status, 200)
-await put(pia, await piav(), {
-  projects: [{ id: 'ap' }, { id: 'asub', parent: 'ap' }],
-  items: [{ id: 'i1' }, { id: 'i3', pid: 'ap' }, { id: 'i4', pid: 'asub' }],
-})
-assert.equal((await post('/api/link', { pid: 'i3', item: true }, pia)).status, 403)
-assert.equal((await post('/api/link', { pid: 'i4', item: true }, pia)).status, 403)
-await put(pia, await piav(), { items: [{ id: 'i1', text: 'edited' }] })
-await put(pia, await piav(), { items: [] })
-assert.equal((await linkOf(itok)).status, 404)
-/* one id, one kind of link: both live in one table under one unique key, so the other half says so
-   rather than upserting over the row that is there and handing back a token it never stored */
-assert.equal((await post('/api/link', { pid: 'i1' }, pia)).status, 409)
-// listed beside the project ones, marked as what it is, and revoked the same way
-assert.deepEqual((await (await get('/api/links', pia)).json()).links.map((l: any) => [l.pid, l.item]),
-  [['i1', 1]])
-assert.equal((await del2('/api/link', { pid: 'i1', item: true }, pia)).status, 200)
-assert.deepEqual((await (await get('/api/links', pia)).json()).links, [])
-// and the same refusal the other way round
-assert.equal((await post('/api/link', { pid: 'pp' }, pia)).status, 200)
-await put(pia, await piav(), { items: [{ id: 'pp', text: 'one id, two things' }] })
-assert.equal((await post('/api/link', { pid: 'pp', item: true }, pia)).status, 409)
-
-/* deleting your own account: the password again, and never the last admin — a server nobody can
-   cut an invite on can never let anyone in again. Everything of theirs goes on the cascade. */
+/* deleting your own account: the password again. Everything of theirs goes on the cascade. */
 const bye = jar(await post('/api/signup', { user: 'zed', pass: 'longenough', invite: server.invite() }))
 await put(bye, 0, { items: ['zeds'] })
 const byebye = (cookie: string, pass: string) => fetch(`${url}/api/account`, {
@@ -600,10 +310,15 @@ assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', inv
 /* The routes that left with the trading desk and the calendar are gone, not merely unlinked. */
 const kInv = server.invite()
 const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
-for (const gone of ['/api/wallets', '/api/positions', '/api/closed', '/api/holdings', '/api/desk', '/api/feed', '/api/cal', '/api/search?q=hy']) {
+for (const gone of ['/api/wallets', '/api/positions', '/api/closed', '/api/holdings', '/api/desk', '/api/feed', '/api/cal', '/api/search?q=hy',
+  // and the ones that left with sharing
+  '/api/users', '/api/shares', '/api/roster', '/api/links', '/api/link?t=x', '/api/pdoc?pid=x', '/api/admin/users']) {
   assert.equal((await get(gone, kUser)).status, 404, `${gone} still answers`)
 }
 assert.equal((await get('/api/hl/candles?coin=BTC&interval=1d')).status, 404)
+
+// the healthcheck reads the database, and needs no session to say so
+assert.deepEqual(await (await get('/healthz')).json(), { ok: true })
 
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 
@@ -696,14 +411,13 @@ const opened = await fetch(`http://127.0.0.1:${cliPort}/api/signup`, {
 })
 assert.equal(opened.status, 200, 'the code the command line printed was refused')
 
-/* and on that server 'first' is the only admin there is, which is where the other half of the
-   self-delete rule holds: leaving would take the last person who can cut an invite with it. */
+/* and the only account may leave: the next boot with nobody on it logs a fresh invite. */
 const alone = await fetch(`http://127.0.0.1:${cliPort}/api/account`, {
   method: 'DELETE',
   headers: { cookie: jar(opened) },
   body: JSON.stringify({ pass: 'longenough' }),
 })
-assert.equal(alone.status, 400, 'the only admin walked out and shut the door behind them')
+assert.equal(alone.status, 200)
 cli.close()
 
 console.log('server ok')
