@@ -20,6 +20,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
   var window: NSWindow!
   var web: WKWebView!
   var status: NSStatusItem!
+  var side: DragStrip!
   var panel: NSPanel!
   var field: NSTextField!
 
@@ -43,25 +44,41 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
     window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
-      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered, defer: false)
     window.title = "Stash"
-    /* The title bar wears the desk — the sidebar's warm grey — so the window reads as one surface
-       rather than a system-grey strip over the app. Its light or dark follows the page's own theme
-       (see the "theme" op), not the Mac's: Stash in light mode on a Mac in dark mode had a black bar. */
+    /* No title bar: the page runs to the top edge and the three buttons sit in the sidebar's first
+       row, beside the wordmark (the page makes room — see `mac` in src/lib/mac.ts). The window still
+       moves by its top edge: a thin native strip over the page does what a title bar would. */
     window.titlebarAppearsTransparent = true
-    window.backgroundColor = NSColor(name: nil) { look in
-      look.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(srgbRed: 0x11 / 255, green: 0x12 / 255, blue: 0x14 / 255, alpha: 1)
-        : NSColor(srgbRed: 0xef / 255, green: 0xef / 255, blue: 0xec / 255, alpha: 1)
-    }
+    window.titleVisibility = .hidden
+    // an empty unified toolbar is only there for its height: the buttons sit inset and lower, as in
+    // Notes or Mail, rather than tight in the corner of a 28-point bar
+    window.toolbar = NSToolbar(identifier: "stash")
+    window.toolbarStyle = .unified
+    // light or dark follows the page's own theme (the "theme" op, and `didFinish`), not the Mac's
+    window.backgroundColor = sheet
     window.isReleasedWhenClosed = false
-    window.contentView = web
+    let frame = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 800))   // the window's size, so the parts resize from it
+    web.frame = frame.bounds
+    web.autoresizingMask = [.width, .height]
+    frame.addSubview(web)
+    // the margin above the page, across the whole window
+    let margin = DragStrip(frame: NSRect(x: 0, y: frame.bounds.height - 8, width: frame.bounds.width, height: 8))
+    margin.autoresizingMask = [.width, .minYMargin]
+    frame.addSubview(margin)
+    // the sidebar's first row, beside the buttons — as wide as the page says the sidebar is ("chrome")
+    side = DragStrip(frame: NSRect(x: 0, y: frame.bounds.height - DragStrip.height, width: 0, height: DragStrip.height))
+    side.autoresizingMask = [.minYMargin]
+    frame.addSubview(side)
+    window.contentView = frame
     window.center()
     window.setFrameAutosaveName("main")
     window.makeKeyAndOrderFront(nil)
 
     NSApp.mainMenu = menu()
+    // the system's own Window menu: Move & Resize, tiling, the open-window list
+    NSApp.windowsMenu = NSApp.mainMenu?.items.last?.submenu
     statusItem()
     hotkey()
     UNUserNotificationCenter.current().delegate = self
@@ -281,6 +298,16 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     return .allow
   }
 
+  /// Every page that finishes loading says which theme it is in, whether or not it knows the
+  /// "theme" op yet: a saved older version of the site never sends it, and the bar stayed the
+  /// Mac's dark over a light Stash until the site's own update was taken.
+  func webView(_ web: WKWebView, didFinish nav: WKNavigation!) {
+    web.evaluateJavaScript("document.documentElement.classList.contains('dark')") { [weak self] dark, _ in
+      guard let dark = dark as? Bool else { return }
+      MainActor.assumeIsolated { self?.window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua) }
+    }
+  }
+
   /// The site could not be reached and nothing was cached to open instead — first launch offline,
   /// the server down, a captive portal. A blank window says nothing; this says what happened, and
   /// tries again by itself as well as on the button.
@@ -384,6 +411,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     case "remind":
       await remind(body["list"] as? [[String: Any]] ?? [])
       return (true, nil)
+    case "chrome":
+      // how wide the sidebar is now (0 when it is folded away), for the strip that drags the window
+      let w = CGFloat(body["sidebar"] as? Double ?? 0)
+      side.frame = NSRect(x: 0, y: side.superview!.bounds.height - DragStrip.height, width: w, height: DragStrip.height)
+      return (true, nil)
     case "theme":
       // the page's light or dark, for the window's own chrome: title bar, traffic lights, menus
       window.appearance = NSAppearance(named: body["dark"] as? Bool == true ? .darkAqua : .aqua)
@@ -452,6 +484,16 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       item("Close", #selector(NSWindow.performClose(_:)), "w"),
     ])
     return bar
+  }
+}
+
+/// Where a title bar would be: drag the window by it, double-click to zoom it, as the system would.
+/// Over the page, which keeps nothing clickable beneath one — the sidebar's first row, and the margin
+/// above the sheet. `height` is the unified toolbar's.
+final class DragStrip: NSView {
+  static let height: CGFloat = 52
+  override func mouseDown(with event: NSEvent) {
+    if event.clickCount == 2 { window?.performZoom(nil) } else { window?.performDrag(with: event) }
   }
 }
 

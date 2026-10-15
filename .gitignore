@@ -24,4 +24,4 @@ dist-ssr
 *.sln
 *.sw?
 
-macos/Stash.app
+macos/build.noindex/

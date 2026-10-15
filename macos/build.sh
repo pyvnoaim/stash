@@ -1,15 +1,18 @@
 #!/bin/sh
-# Builds macos/Stash.app from Stash.swift and the PWA icon, and zips it into public/Stash.zip,
+# Builds macos/build.noindex/Stash.app from Stash.swift and the PWA icon, and zips it into public/Stash.zip,
 # which is what the website's "Get the Mac app" downloads and what installed apps update themselves
 # from — commit the zip, its .sig and mac.json with any Swift change.
 # `--install` also copies the app to /Applications.
 set -e
 cd "$(dirname "$0")"
-app=Stash.app
+# built where Spotlight never looks: a folder ending in .noindex is skipped, so the build is not a
+# second "Stash" beside the installed one every time you search for it
+mkdir -p build.noindex
+app=build.noindex/Stash.app
 version=$(node -p "require('../package.json').version")
 pub=$(swift sign.swift pub)   # the update key's public half, which every update must verify against
 
-rm -rf "$app" Stash.iconset
+rm -rf "$app" Stash.iconset Stash.app   # Stash.app: where builds used to land, which Spotlight did list
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" Stash.iconset
 
 # universal, so the download runs on Intel Macs as well
@@ -35,6 +38,8 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key><string>Stash</string>
   <key>CFBundleIconFile</key><string>Stash</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -52,5 +57,5 @@ swift sign.swift sign ../public/Stash.zip > ../public/Stash.zip.sig
 printf '{"version":"%s"}\n' "$version" > ../public/mac.json
 
 if [ "$1" = --install ]; then
-  rm -rf "/Applications/$app" && cp -R "$app" /Applications/ && echo "installed /Applications/$app"
+  rm -rf /Applications/Stash.app && cp -R "$app" /Applications/ && echo "installed /Applications/Stash.app"
 fi

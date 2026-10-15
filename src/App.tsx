@@ -484,7 +484,7 @@ export default function App() {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* the full-page editor brings its own header (back + title), so the search bar steps aside */}
           {!paged && (
-          <header className="flex shrink-0 flex-col gap-5 px-4 pt-3 pb-2 md:px-8 md:pt-6">
+          <header className="room-for-buttons flex shrink-0 flex-col gap-5 px-4 pt-3 pb-2 md:px-8 md:pt-6">
             <div className="relative flex min-h-9 items-center gap-3">
             <SidebarTrigger className="text-muted-foreground -ml-2" />
             {/* the project's own colour beside its name — the same dot the sidebar row wears */}
