@@ -570,7 +570,8 @@ export default function App() {
           {/* a [[link]] followed from a note opens that item's page: you were reading, so you keep
               reading, rather than being put back in a list to find your place in */}
           {!page && paged && (
-            <NotePage it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
+            // keyed: another note is another page, not this one's open block carried over to it
+            <NotePage key={paged.id} it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
           )}
 
           {!page && !paged && (

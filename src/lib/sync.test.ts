@@ -187,6 +187,33 @@ assert.equal(await count(), before + 1)
   assert.ok(getState().items.some((i) => i.text === 'typed a moment before the pull'))
 }
 
+/* Deleted here while another device, which still had it, saved. The push meets a 409 and merges —
+   and a merge keeps a row only one side has, so the project used to come straight back. */
+{
+  const { addProject, removeProject } = await import('./store.ts')
+  const doomed = addProject('Doomed')
+  await flush()
+  await syncNow()
+  const cur = await (await fetch('/state')).json()
+  assert.ok(cur.state.projects.some((p: any) => p.id === doomed.id))
+  // the phone, which still has the project, writes something else first
+  await real(`${url}/state`, {
+    method: 'PUT',
+    headers: { cookie, 'if-match': String(cur.version) },
+    body: JSON.stringify({
+      state: { ...cur.state, items: [...cur.state.items, { ...cur.state.items[0], id: 'phone3', text: 'meanwhile' }] },
+      device: 'other',
+    }),
+  })
+  removeProject(doomed.id)
+  await flush()
+  await syncNow()
+  const ended = await onServer()
+  assert.ok(!ended.projects.some((p: any) => p.id === doomed.id), 'the deleted project came back')
+  assert.ok(ended.items.some((i: any) => i.text === 'meanwhile'), 'the phone’s write was lost')
+  assert.ok(!getState().projects.some((p) => p.id === doomed.id))
+}
+
 server.close()
 console.log('sync ok')
 

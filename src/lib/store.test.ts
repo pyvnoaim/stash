@@ -12,7 +12,7 @@ const {
   addItem, addProject, addShared, clearDone, getState, itemOf, load, moveBefore, moveProject, patch, redo, renameTag,
   flatProjects, patchProject, removeItem, removeProject, select, setProjectSort, setTheme,
   toggleDone, undo, visible, monthlyCost, yearlyCost, chargesBetween, nextCharge,
-  setOnPersist, flush, focus, mergeRemote, adoptRemote,
+  setOnPersist, flush, focus, mergeRemote, adoptRemote, addSub, removeSub, restoreSub,
   tagsFor,
   readHash, emptyTrash, restoreTrash, restoreItem,
   replaceAll,
@@ -311,6 +311,57 @@ assert.ok((getState().items.find((i) => i.id === 'e1')?.editedAt ?? 0) > 0)
   const stale = structuredClone(getState())
   removeProject(p.id)
   assert.equal(mergeRemote(getState(), stale).items.find((i) => i.id === 'filed')!.pid, null)
+}
+
+/* ---------- a deleted project or subscription stays deleted through a merge ---------- */
+
+{
+  wipe()
+  const p = addProject('Old project')
+  addSub('expense', 'Old sub', 5, 'monthly')
+  const sub = getState().subs[0]
+  const other = structuredClone(getState())     // a device that has not heard of either delete
+  await new Promise((r) => setTimeout(r, 600))  // past the half second that joins edits into one undo step
+  removeProject(p.id)
+  removeSub(sub.id)
+  const merged = mergeRemote(getState(), other)
+  assert.ok(!merged.projects.some((x) => x.id === p.id), 'the project came back')
+  assert.ok(!merged.subs.some((x) => x.id === sub.id), 'the subscription came back')
+  // ...from either side: the other device merging ours drops its copy too
+  const theirs = mergeRemote(other, getState())
+  assert.ok(!theirs.projects.some((x) => x.id === p.id))
+
+  /* Undone after the delete had already reached the other device. Taking the record off here is not
+     enough — the other side still holds it — so the undo is an act of its own, stamped later. */
+  const heard = structuredClone(getState())     // the other device, after it pulled both deletes
+  undo()                                        // one step: both landed inside the same half second
+  assert.ok(getState().projects.some((x) => x.id === p.id))
+  assert.ok(getState().subs.some((x) => x.id === sub.id))
+  const after = mergeRemote(getState(), heard)
+  assert.ok(after.projects.some((x) => x.id === p.id), 'the undo lost to the delete the other device held')
+  assert.ok(after.subs.some((x) => x.id === sub.id))
+  // ...and the other device, merging ours, takes the undo rather than keeping its delete
+  assert.ok(mergeRemote(heard, getState()).projects.some((x) => x.id === p.id))
+  // redo deletes it again, everywhere
+  redo()
+  assert.ok(!mergeRemote(getState(), other).projects.some((x) => x.id === p.id))
+  undo()
+
+  // the toast's Undo on a subscription, the same way
+  const once = removeSub(sub.id)
+  const heardSub = structuredClone(getState())
+  restoreSub(once)
+  assert.ok(mergeRemote(getState(), heardSub).subs.some((x) => x.id === sub.id), 'a restored sub lost to its delete')
+
+  // a backup imported to get a deleted project back keeps it through the next merge
+  const backup = structuredClone(getState())
+  removeProject(p.id)
+  const remembers = structuredClone(getState())
+  replaceAll(backup)
+  assert.ok(mergeRemote(getState(), remembers).projects.some((x) => x.id === p.id), 'the import lost to the delete')
+
+  // and the record ages out rather than growing for ever
+  assert.deepEqual(load({ deletes: [{ id: 'x', at: 1 }, { id: 'y', at: Date.now() }] }).deletes.map((d) => d.id), ['y'])
 }
 
 /* ---------- a document from another device keeps what is this machine's ---------- */

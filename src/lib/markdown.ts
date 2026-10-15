@@ -137,6 +137,47 @@ export function promoteBox(text: string, line: number): { note: string, title: s
 export interface Block { from: number, to: number, text: string }
 
 /**
+ * The blocks to draw around an open range: any block running into it is cut, so its lines on either
+ * side still show. Typing a word into the blank line between two paragraphs makes the three lines
+ * one paragraph, and drawn as one it either hid the paragraphs you were writing between or left the
+ * editor nowhere to stand. The open range itself is left out — the editor is what shows it.
+ */
+export function around(blocks: Block[], open: { from: number, to: number }): Block[] {
+  return blocks.flatMap((b) => {
+    if (b.to < open.from || b.from > open.to) return [b]
+    const lines = b.text.split('\n')
+    const out: Block[] = []
+    if (b.from < open.from) {
+      out.push({ from: b.from, to: open.from - 1, text: lines.slice(0, open.from - b.from).join('\n') })
+    }
+    if (b.to > open.to) {
+      out.push({ from: open.to + 1, to: b.to, text: lines.slice(open.to - b.from + 1).join('\n') })
+    }
+    return out
+  })
+}
+
+/**
+ * Where an open block is in `note` now. Its range is line numbers, and those go stale the moment
+ * the note changes underneath — another device's edit, adopted mid-sentence — after which writing
+ * by them overwrites whatever moved into those lines and leaves the block's old text behind as a
+ * duplicate. So: its own lines if they still hold its text, otherwise the nearest run of lines that
+ * does, otherwise null — the block itself was changed or removed, and there is nothing safe to
+ * write over.
+ */
+export function locate(note: string, b: Block): Block | null {
+  const lines = note.split('\n')
+  const want = b.text.split('\n')
+  const at = (n: number) => want.every((l, i) => lines[n + i] === l)
+  if (at(b.from)) return { from: b.from, to: b.from + want.length - 1, text: b.text }   // the usual case
+  let best = -1
+  for (let n = 0; n + want.length <= lines.length; n++) {
+    if (at(n) && (best < 0 || Math.abs(n - b.from) < Math.abs(best - b.from))) best = n
+  }
+  return best < 0 ? null : { from: best, to: best + want.length - 1, text: b.text }
+}
+
+/**
  * The note cut into the pieces the page edits one at a time.
  *
  * Not the renderer's own parse, and deliberately coarser than it: this only has to answer "which
