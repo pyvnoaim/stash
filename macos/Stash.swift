@@ -262,6 +262,18 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     }
   }
   func watchButtons() {
+    /* The band they sit in, first: a moment after launch macOS shrinks it back to its own 32 points
+       without touching the buttons, which leaves them pressed against the top — measured, not
+       guessed: the buttons stayed at (20, 19) while the band went from 52 to 32. */
+    if let band = window.standardWindowButton(.closeButton)?.superview?.superview {
+      band.postsFrameChangedNotifications = true
+      NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: band, queue: .main) { [weak self] _ in
+        MainActor.assumeIsolated {
+          guard let self, band.frame.height != DragStrip.height else { return }
+          self.placeButtons()
+        }
+      }
+    }
     for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
       guard let b = window.standardWindowButton(kind) else { continue }
       b.postsFrameChangedNotifications = true
