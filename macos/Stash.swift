@@ -1,9 +1,14 @@
 // Stash for macOS: one window, one WKWebView on the deployed app. Everything the app is lives on
 // the server and in this web view's own localStorage; this file only supplies what a browser tab
 // would have — a menu bar, file pickers, downloads, and links that leave in the default browser —
-// plus the one thing a tab cannot: measuring the disk for the Disk tool, which never deletes.
+// plus what a tab cannot: measuring the disk for the Disk tool (which never deletes), a capture
+// panel on ⌃⌥Space and in the menu bar, due dates in Notification Center, and updating itself.
+// The page's half is src/lib/mac.ts.
 // ponytail: no Xcode project, `macos/build.sh` compiles this with swiftc.
 import AppKit
+import Carbon.HIToolbox
+import CryptoKit
+import UserNotifications
 import WebKit
 
 // `defaults write xyz.pyvno.stash url http://localhost:5173` points it at a dev server.
@@ -11,26 +16,37 @@ let home = URL(string: UserDefaults.standard.string(forKey: "url") ?? "https://s
 
 @MainActor
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
-  WKScriptMessageHandlerWithReply {
+  WKScriptMessageHandlerWithReply, UNUserNotificationCenterDelegate, NSWindowDelegate, NSTextFieldDelegate {
   var window: NSWindow!
   var web: WKWebView!
+  var status: NSStatusItem!
+  var panel: NSPanel!
+  var field: NSTextField!
 
   func applicationDidFinishLaunching(_ note: Notification) {
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .default()   // persistent: localStorage and the session cookie survive a quit
     // its presence is also how the page knows it is in the app and offers the Disk tool
-    config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "disk")
+    config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "stash")
     web = WKWebView(frame: .zero, configuration: config)
     web.navigationDelegate = self
     web.uiDelegate = self
     web.allowsBackForwardNavigationGestures = true
     web.isInspectable = true
+    // the page's own sheet colour behind it until it paints, so a dark launch does not flash white
+    let sheet = NSColor(name: nil) { look in
+      look.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? NSColor(srgbRed: 0x1a / 255, green: 0x1b / 255, blue: 0x1e / 255, alpha: 1) : .white
+    }
+    web.setValue(false, forKey: "drawsBackground")
+    web.underPageBackgroundColor = sheet
 
     window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
     window.title = "Stash"
+    window.backgroundColor = sheet
     window.isReleasedWhenClosed = false
     window.contentView = web
     window.center()
@@ -38,7 +54,206 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     window.makeKeyAndOrderFront(nil)
 
     NSApp.mainMenu = menu()
+    statusItem()
+    hotkey()
+    UNUserNotificationCenter.current().delegate = self
     web.load(URLRequest(url: home))
+    Task { await update() }
+    Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in Task { @MainActor in await self.update() } }
+  }
+
+  // MARK: updates
+
+  /// Installed over this copy and waiting for a restart, so a later check does not fetch it again.
+  var updated: String?
+
+  /// What the site serves (`mac.json`, written by build.sh) against this copy's version. A newer
+  /// one is downloaded, checked against the key this app shipped with, and put in place of this
+  /// bundle; the page offers the restart. A zip that does not verify is never unpacked.
+  func update() async {
+    let info = Bundle.main.infoDictionary ?? [:]
+    guard updated == nil,
+          let raw = (info["StashUpdateKey"] as? String).flatMap({ Data(base64Encoded: $0) }),
+          let key = try? Curve25519.Signing.PublicKey(rawRepresentation: raw) else { return }
+    func get(_ path: String) async throws -> Data {
+      let (data, res) = try await URLSession.shared.data(for: URLRequest(url: home.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData))
+      guard (res as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+      return data
+    }
+    let fm = FileManager.default
+    let tmp = fm.temporaryDirectory.appending(path: "stash-update-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: tmp) }
+    do {
+      let served = try JSONDecoder().decode([String: String].self, from: try await get("mac.json"))
+      let current = info["CFBundleShortVersionString"] as? String ?? "0"
+      guard let version = served["version"], newer(version, than: current) else { return }
+      let zip = try await get("Stash.zip")
+      let sig = String(decoding: try await get("Stash.zip.sig"), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+      guard let signature = Data(base64Encoded: sig), key.isValidSignature(signature, for: zip) else { return }
+      try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+      try zip.write(to: tmp.appending(path: "Stash.zip"))
+      let unzip = try Process.run(URL(fileURLWithPath: "/usr/bin/ditto"),
+                                  arguments: ["-x", "-k", tmp.appending(path: "Stash.zip").path, tmp.path])
+      await Task.detached { unzip.waitUntilExit() }.value
+      let fresh = tmp.appending(path: "Stash.app")
+      // the version that counts is the one inside the signed app, not mac.json's word for it: an old
+      // zip signed long ago must not roll this one back to whatever was wrong with it
+      guard unzip.terminationStatus == 0, let bundle = Bundle(url: fresh),
+            bundle.bundleIdentifier == Bundle.main.bundleIdentifier,
+            let inside = bundle.infoDictionary?["CFBundleShortVersionString"] as? String,
+            inside == version, newer(inside, than: current) else { return }
+      do {
+        _ = try fm.replaceItemAt(Bundle.main.bundleURL, withItemAt: fresh)
+      } catch {
+        // run from somewhere read-only — still in Downloads, so macOS moved it to a private copy
+        send("stash:update-failed", version)
+        return
+      }
+      updated = version
+      send("stash:updated", version)
+    } catch {
+      return   // offline, or the server did not answer: the next check tries again
+    }
+  }
+
+  /// 5.10.0 after 5.9.2: compared number by number, not as text.
+  func newer(_ a: String, than b: String) -> Bool { a.compare(b, options: .numeric) == .orderedDescending }
+
+  /// Quit, and open the same path again once this process is gone — which is now the new version.
+  func relaunch() {
+    let wait = Process()
+    wait.executableURL = URL(fileURLWithPath: "/bin/sh")
+    wait.arguments = ["-c", "while kill -0 $1 2>/dev/null; do sleep 0.2; done; open \"$0\"",
+                      Bundle.main.bundleURL.path, String(ProcessInfo.processInfo.processIdentifier)]
+    try? wait.run()
+    NSApp.terminate(nil)
+  }
+
+  @objc func show() {
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate()
+  }
+
+  /// An event on the page's window (see src/lib/mac.ts). Arguments, not interpolation: a captured
+  /// line is whatever was typed, quotes and all.
+  func send(_ name: String, _ detail: String) {
+    web.callAsyncJavaScript("dispatchEvent(new CustomEvent(name, { detail }))",
+                           arguments: ["name": name, "detail": detail], in: nil, in: .page, completionHandler: nil)
+  }
+
+  // MARK: capture
+
+  func statusItem() {
+    status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    status.button?.image = NSImage(systemSymbolName: "tray.and.arrow.down", accessibilityDescription: "Stash")
+    let m = NSMenu()
+    let cap = NSMenuItem(title: "Capture…", action: #selector(capture), keyEquivalent: " ")
+    cap.keyEquivalentModifierMask = [.control, .option]   // shown, not bound: the hotkey below is
+    for i in [cap, NSMenuItem(title: "Open Stash", action: #selector(show), keyEquivalent: "")] {
+      i.target = self
+      m.addItem(i)
+    }
+    m.addItem(.separator())
+    m.addItem(NSMenuItem(title: "Quit Stash", action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
+    status.menu = m
+  }
+
+  /// ⌃⌥Space from any app. Carbon's hot keys need no Accessibility permission, which an event tap would.
+  /// ponytail: fixed chord; make it a setting if it ever collides with something.
+  func hotkey() {
+    var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+    InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+      MainActor.assumeIsolated { (NSApp.delegate as? App)?.capture() }   // delivered on the main thread
+      return noErr
+    }, 1, &spec, nil, nil)
+    var ref: EventHotKeyRef?
+    RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey | optionKey),
+                        EventHotKeyID(signature: OSType(0x5354_4153), id: 1), GetApplicationEventTarget(), 0, &ref)
+  }
+
+  /// A Spotlight-sized field over whatever you are in. Non-activating: typing into it leaves the app
+  /// you came from in front, and Enter puts you straight back there.
+  @objc func capture() {
+    if panel == nil {
+      panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 56),
+                       styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+      panel.titleVisibility = .hidden
+      panel.titlebarAppearsTransparent = true
+      for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(b)?.isHidden = true }
+      panel.level = .floating
+      panel.hidesOnDeactivate = false
+      panel.isMovableByWindowBackground = true
+      panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+      panel.delegate = self
+      field = NSTextField(frame: NSRect(x: 18, y: 12, width: 524, height: 30))
+      field.font = .systemFont(ofSize: 20)
+      field.isBordered = false
+      field.drawsBackground = false
+      field.focusRingType = .none
+      field.placeholderString = "Capture to Stash: @project #tag tomorrow 9am"
+      field.target = self
+      field.action = #selector(captured)
+      field.delegate = self
+      panel.contentView?.addSubview(field)
+    }
+    field.stringValue = ""
+    if let screen = NSScreen.main?.visibleFrame {   // upper third, where Spotlight sits
+      panel.setFrameOrigin(NSPoint(x: screen.midX - 280, y: screen.minY + screen.height * 0.68))
+    }
+    panel.makeKeyAndOrderFront(nil)
+    panel.makeFirstResponder(field)
+  }
+
+  @objc func captured() {
+    let line = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    panel.orderOut(nil)
+    if !line.isEmpty { send("stash:capture", line) }
+  }
+
+  // Esc, or clicking anywhere else, puts it away with nothing filed
+  func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+    guard sel == #selector(NSResponder.cancelOperation(_:)) else { return false }
+    panel.orderOut(nil)
+    return true
+  }
+
+  func windowDidResignKey(_ note: Notification) {
+    if (note.object as? NSWindow) === panel { panel.orderOut(nil) }
+  }
+
+  // MARK: notifications
+
+  // up on screen even while Stash is the app in front
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                          willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+    [.banner, .sound]
+  }
+
+  // clicked: the window, on the row it was about
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    let id = response.notification.request.identifier
+    await MainActor.run {
+      show()
+      send("stash:open", id)
+    }
+  }
+
+  /// The page's whole schedule, replacing whatever was pending: it sends it whenever it changes.
+  func remind(_ list: [[String: Any]]) async {
+    let center = UNUserNotificationCenter.current()
+    center.removeAllPendingNotificationRequests()
+    let requests = list.compactMap { r -> UNNotificationRequest? in
+      guard let id = r["id"] as? String, let title = r["title"] as? String, let when = r["when"] as? Double else { return nil }
+      let content = UNMutableNotificationContent()
+      content.title = title
+      content.body = r["body"] as? String ?? ""
+      content.sound = .default
+      let at = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date(timeIntervalSince1970: when / 1000))
+      return UNNotificationRequest(identifier: id, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: at, repeats: false))
+    }
+    // asked the first time there is something to say, not at launch
+    guard !requests.isEmpty, (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
+    for r in requests { try? await center.add(r) }
   }
 
   // Closing the window keeps the app; clicking the Dock icon brings it back, as Mail does.
@@ -103,10 +318,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     return url
   }
 
-  // MARK: disk
+  // MARK: the page's requests
 
-  // Read-only on purpose: it measures, shows a path in Finder, or copies text. Removing anything is
-  // the script the page builds, which the user reads and runs in Terminal themselves.
+  // The disk ops are read-only on purpose: they measure, show a path in Finder, or copy text.
+  // Removing anything is the script the page builds, which the user reads and runs in Terminal.
   func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
     // the whole origin, not just the host: an http:// page or another port on the same name is not the app
     let origin = message.frameInfo.securityOrigin
@@ -125,6 +340,12 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       NSPasteboard.general.clearContents()
       NSPasteboard.general.setString(body["text"] as? String ?? "", forType: .string)
       return (true, nil)
+    case "remind":
+      await remind(body["list"] as? [[String: Any]] ?? [])
+      return (true, nil)
+    case "relaunch":
+      relaunch()
+      return (true, nil)
     case "fda":
       NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
       return (true, nil)
@@ -139,9 +360,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
   // menu items take their keys before the page does, so they hand the page an event instead
   @objc func palette() { tell("palette") }
   @objc func settings() { tell("settings") }
-  func tell(_ what: String) {
-    web.evaluateJavaScript("dispatchEvent(new CustomEvent('stash:menu', { detail: '\(what)' }))")
-  }
+  func tell(_ what: String) { send("stash:menu", what) }
 
   func menu() -> NSMenu {
     let bar = NSMenu()
@@ -189,6 +408,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     ])
     return bar
   }
+}
+
+/// The capture panel has no title bar to click, and a borderless window will not take typing without this.
+final class KeyPanel: NSPanel {
+  override var canBecomeKey: Bool { true }
 }
 
 /// One walk of the home folder: every folder's size, a tree of the ones worth drawing, and the sizes

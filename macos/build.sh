@@ -1,11 +1,13 @@
 #!/bin/sh
 # Builds macos/Stash.app from Stash.swift and the PWA icon, and zips it into public/Stash.zip,
-# which is what the website's "Get the Mac app" downloads — commit that zip with any Swift change.
+# which is what the website's "Get the Mac app" downloads and what installed apps update themselves
+# from — commit the zip, its .sig and mac.json with any Swift change.
 # `--install` also copies the app to /Applications.
 set -e
 cd "$(dirname "$0")"
 app=Stash.app
 version=$(node -p "require('../package.json').version")
+pub=$(swift sign.swift pub)   # the update key's public half, which every update must verify against
 
 rm -rf "$app" Stash.iconset
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" Stash.iconset
@@ -38,12 +40,16 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>StashUpdateKey</key><string>$pub</string>
 </dict></plist>
 EOF
 
 codesign --force --sign - "$app"   # ad-hoc: enough to run on this Mac
 echo "built macos/$app"
 rm -f ../public/Stash.zip && ditto -c -k --keepParent "$app" ../public/Stash.zip && echo "zipped public/Stash.zip"
+swift sign.swift sign ../public/Stash.zip > ../public/Stash.zip.sig
+# which app the zip holds: an installed app on another version updates to it (Updater in Stash.swift)
+printf '{"version":"%s"}\n' "$version" > ../public/mac.json
 
 if [ "$1" = --install ]; then
   rm -rf "/Applications/$app" && cp -R "$app" /Applications/ && echo "installed /Applications/$app"
