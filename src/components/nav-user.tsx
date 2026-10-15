@@ -1,10 +1,12 @@
 import { useSyncExternalStore } from 'react'
-import { CloudOff, LogOut, RefreshCw, Settings } from 'lucide-react'
+import { CloudOff, Download, LogOut, RefreshCw, Settings } from 'lucide-react'
+import { toast } from 'sonner'
 import { Avatar } from '@/components/settings-dialog'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SidebarMenuButton } from '@/components/ui/sidebar'
+import { desktop } from '@/lib/store'
 import { getSync, logout, subscribeSync, syncNow } from '@/lib/sync'
 
 const HINT: Record<string, string> = {
@@ -21,6 +23,9 @@ const HINT: Record<string, string> = {
  * Your account, the history and the roster of people are settings, and they live in Settings.
  * Signing in happens at the gate, never here.
  */
+// a Mac's browser, not the app already, and not an iPad, which says Macintosh too
+const macBrowser = !desktop && /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints < 2
+
 export function NavUser({ onSettings }: { onSettings: () => void }) {
   const { status, user } = useSyncExternalStore(subscribeSync, getSync)
 
@@ -48,6 +53,18 @@ export function NavUser({ onSettings }: { onSettings: () => void }) {
         <DropdownMenuItem onClick={onSettings}>
           <Settings /> Settings
         </DropdownMenuItem>
+        {/* not notarized, so the first open is blocked until it is allowed once — the toast says where */}
+        {macBrowser && (
+          <DropdownMenuItem asChild>
+            <a href="/Stash.zip" download onClick={() => toast('Downloading Stash for Mac', {
+              description: 'Unzip it into Applications. The first open is blocked: allow it under '
+                + 'System Settings → Privacy & Security → Open Anyway.',
+              duration: 15000,
+            })}>
+              <Download /> Get the Mac app
+            </a>
+          </DropdownMenuItem>
+        )}
         {user && (
           <>
             <DropdownMenuSeparator />

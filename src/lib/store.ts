@@ -227,7 +227,14 @@ export const isView = (id: string): id is ViewId => id in VIEWS
 /** Not filtered lists, so they stay out of VIEWS and App renders each on its own. */
 export const PDF = 'pdf'
 export const SUBS = 'subs'
-const PAGES: string[] = [SUBS, PDF]
+export const DISK = 'disk'
+const PAGES: string[] = [SUBS, PDF, DISK]
+
+/** Inside the macOS app, which answers on this handler; a browser has no disk to show. */
+export const desktop = typeof window !== 'undefined'
+  && !!(window as { webkit?: { messageHandlers?: { disk?: unknown } } }).webkit?.messageHandlers?.disk
+/** Whether a tool exists here at all, before whether it is switched on. */
+export const toolHere = (id: string) => id !== DISK || desktop
 export const isPage = (id: string) => PAGES.includes(id)
 
 /**
@@ -240,11 +247,12 @@ export const isPage = (id: string) => PAGES.includes(id)
 export const TOOLS = [
   { id: SUBS, name: 'Subscriptions' },
   { id: PDF, name: 'PDF editor' },
+  { id: DISK, name: 'Disk' },
 ]
 
 /** Off, not on: a document written before this existed lists none, and shows them all — and a
  *  tool added later is on for everyone until they say otherwise, which is the kinder default. */
-export const toolOn = (s: Pick<State, 'hidden'>, id: string) => !s.hidden.includes(id)
+export const toolOn = (s: Pick<State, 'hidden'>, id: string) => !s.hidden.includes(id) && toolHere(id)
 export const setTool = (id: string, on: boolean) => set((s) => ({
   ...s,
   hidden: on ? s.hidden.filter((h) => h !== id) : [...s.hidden, id],
@@ -756,7 +764,7 @@ export const useStash = () => useSyncExternalStore(subscribe, getState)
 export const project = (s: State, id: string | null) => s.projects.find((p) => p.id === id)
 
 const PAGE_NAMES: Record<string, string> = {
-  [PDF]: 'PDF', [SUBS]: 'Subscriptions',
+  [PDF]: 'PDF', [SUBS]: 'Subscriptions', [DISK]: 'Disk',
 }
 
 export const viewName = (s: State) =>

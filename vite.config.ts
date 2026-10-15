@@ -59,8 +59,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         // pdf.js is heavier than everything else together, but offline is the point here
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-        // never serve the app shell where the sync API was asked for
-        navigateFallbackDenylist: [/^\/(api|state)/],
+        // never serve the app shell where the sync API, or the Mac app's download, was asked for
+        navigateFallbackDenylist: [/^\/(api|state)/, /^\/Stash\.zip$/],
         runtimeCaching: [{
           /* The pictures in notes. CacheFirst, not NetworkFirst, and it is the one thing here that
              earns it: a blob id is 128 bits of randomness and the bytes behind it never change, so

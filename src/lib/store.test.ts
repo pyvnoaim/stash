@@ -875,11 +875,14 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
    the page stops being somewhere `sel` may point, or a hash bookmarked when it was on opens a
    view with nothing in it and no way back. */
 {
-  const { TOOLS, toolOn, isRoute, setTool, SUBS, PDF } = await import('./store.ts')
+  const { TOOLS, toolOn, isRoute, setTool, SUBS, PDF, DISK } = await import('./store.ts')
 
-  // nothing stored: every one of them on, which is what every document written before this says
+  // nothing stored: every one of them on, which is what every document written before this says —
+  // except Disk, which only the macOS app has, and this is not it
   const fresh = load({})
-  assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length)
+  assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length - 1)
+  assert.equal(toolOn(fresh, DISK), false)
+  assert.equal(isRoute(fresh, DISK), false)
   assert.equal(isRoute(fresh, SUBS), true)
 
   // switched off, it is not a route — and a document naming it as the open view opens elsewhere

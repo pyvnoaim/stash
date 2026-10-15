@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight, CalendarClock, CalendarDays, CheckCheck, ClipboardCopy,
-  Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
+  Download, Eraser, FileText, Flag, FlagOff, HardDrive, Inbox, Layers, Lightbulb, ListTodo,
   Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { today, tomorrow } from '@/lib/parse'
 import {
   clearDone, getState, isPage, openIn, patch, PDF, project, replaceAll, select,
-  SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
+  DISK, SUBS, toolOn, useStash, viewName, VIEWS, visible, type Item, type State, type ViewId,
 } from '@/lib/store'
 
 /* Typed against ViewId rather than left to infer: this map is walked with the key straight out of
@@ -33,6 +33,7 @@ const VIEW_ICONS: Record<ViewId, React.ElementType> = {
 const PAGES = [
   { id: PDF, name: 'PDF editor', icon: FileText },
   { id: SUBS, name: 'Subscriptions', icon: Wallet },
+  { id: DISK, name: 'Disk', icon: HardDrive },
 ]
 
 const trim = (t: string) => (t.length > 28 ? t.slice(0, 28) + '…' : t)
