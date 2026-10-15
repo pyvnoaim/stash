@@ -108,7 +108,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
   // Read-only on purpose: it measures, shows a path in Finder, or copies text. Removing anything is
   // the script the page builds, which the user reads and runs in Terminal themselves.
   func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
-    guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host == home.host,
+    // the whole origin, not just the host: an http:// page or another port on the same name is not the app
+    let origin = message.frameInfo.securityOrigin
+    guard message.frameInfo.isMainFrame, origin.protocol == home.scheme, origin.host == home.host,
+          origin.port == (home.port ?? 0),
           let body = message.body as? [String: Any] else { return (nil, "refused") }
     switch body["op"] as? String {
     case "scan":
