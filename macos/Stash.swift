@@ -46,7 +46,15 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
     window.title = "Stash"
-    window.backgroundColor = sheet
+    /* The title bar wears the desk — the sidebar's warm grey — so the window reads as one surface
+       rather than a system-grey strip over the app. Its light or dark follows the page's own theme
+       (see the "theme" op), not the Mac's: Stash in light mode on a Mac in dark mode had a black bar. */
+    window.titlebarAppearsTransparent = true
+    window.backgroundColor = NSColor(name: nil) { look in
+      look.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? NSColor(srgbRed: 0x11 / 255, green: 0x12 / 255, blue: 0x14 / 255, alpha: 1)
+        : NSColor(srgbRed: 0xef / 255, green: 0xef / 255, blue: 0xec / 255, alpha: 1)
+    }
     window.isReleasedWhenClosed = false
     window.contentView = web
     window.center()
@@ -375,6 +383,10 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       return (true, nil)
     case "remind":
       await remind(body["list"] as? [[String: Any]] ?? [])
+      return (true, nil)
+    case "theme":
+      // the page's light or dark, for the window's own chrome: title bar, traffic lights, menus
+      window.appearance = NSAppearance(named: body["dark"] as? Bool == true ? .darkAqua : .aqua)
       return (true, nil)
     case "relaunch":
       relaunch()

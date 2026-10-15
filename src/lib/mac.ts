@@ -15,6 +15,7 @@ export type Op =
   | { op: 'fda' }
   | { op: 'remind', list: Reminder[] }
   | { op: 'relaunch' }
+  | { op: 'theme', dark: boolean }
 
 export const native = (m: Op) =>
   (window as unknown as { webkit: { messageHandlers: { stash: { postMessage(m: Op): Promise<unknown> } } } })
@@ -42,6 +43,14 @@ export function reminders(s: Pick<State, 'items'>, now: number): Reminder[] {
 
 export function startMac() {
   if (!desktop) return
+
+  /* The window's title bar follows the app's theme rather than the Mac's. `applyTheme` is the one
+     place that sets the class, for the system's preference and the header's toggle alike, so the
+     class is what is watched. An older app without the op simply keeps the Mac's. */
+  const html = document.documentElement
+  const theme = () => void native({ op: 'theme', dark: html.classList.contains('dark') }).catch(() => {})
+  theme()
+  new MutationObserver(theme).observe(html, { attributes: true, attributeFilter: ['class'] })
 
   // ⌃⌥Space or the menu-bar icon: a line typed anywhere, filed the way the capture bar files it,
   // without moving the window to where it landed — you were somewhere else, and still are
