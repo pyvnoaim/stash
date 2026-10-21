@@ -1,9 +1,36 @@
+<div align="center">
+
+<img src="public/icon-192.png" width="96" alt="">
+
 # Stash
+
+**Tasks, ideas and notes across projects — one place, built for one person.**
+
+[stash.pyvno.xyz](https://stash.pyvno.xyz) · React · TypeScript · Node + SQLite · Swift
+
+<img src=".github/screenshot.png" width="860" alt="Stash's inbox: tasks with tags, due dates and a repeat, beside the sidebar of lists, tags and tools">
+
+</div>
+
+---
 
 Tasks, ideas and notes across projects, with a page for subscriptions and a PDF editor beside
 them. React + Vite + Tailwind + shadcn/ui: a white sheet on a warm-grey desk, one accent, light and
 dark. Everything lives in your browser's localStorage and works with no server at all; an account on
 your own server syncs that same data between your devices. It is built for one person.
+
+- **Capture in one line** — `! fix preset loader @kova #audio tomorrow` files a flagged, tagged task with a due date
+- **Notes** — markdown pages with `[[links]]` and pictures
+- **Subscriptions** — what goes out and comes in each month, and what to set aside for the yearly bills
+- **PDF editor** — add, delete and merge pages and drop text on them, entirely in the tab
+- **Sync** — local-first; an account on your own server keeps devices in step
+- **From Claude** — a hosted MCP server, so Claude can read and file into your stash
+- **Mac app** — native window, ⌃⌥Space capture, notifications, and a Disk tool
+
+**Contents:** [Run it](#run-it) · [Capture](#capture) · [Keys](#keys) · [Notes](#notes) ·
+[Subscriptions](#subscriptions) · [PDF](#pdf) · [Layout](#layout) · [Backups](#backups) ·
+[Accounts and sync](#accounts-and-sync) · [From Claude](#from-claude) · [Hosting it](#hosting-it) ·
+[License](#license)
 
 Type is Geist for reading and Geist Mono for counts, dates and tags. Geist Pixel **Square** is the
 wordmark and nothing else. Mono and Pixel are self-hosted in `src/fonts/` under OFL-1.1.
