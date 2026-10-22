@@ -597,7 +597,10 @@ final class Scan: @unchecked Sendable {
       lock.withLock { unreadable += 1 }
       return Node(n: name, s: 0, k: nil)
     }
-    let isTagged = !inHit && depth > 0 && items.contains { tags.contains($0.lastPathComponent) && Scan.isTag($0) }
+    // a tag anyone can drop in: not trusted at the top of a repo, or in a folder straight under a home
+    // folder (~/Downloads/x, ~/dev/x), where a planted one would have a whole project cleared
+    let isTagged = !inHit && depth > 2 && !items.contains { $0.lastPathComponent == ".git" }
+      && items.contains { tags.contains($0.lastPathComponent) && Scan.isTag($0) }
     let hit = paths.contains(rel) || (!inHit && names.contains(name)) || isTagged
     func visit(_ item: URL) -> Node {
       let v = try? item.resourceValues(forKeys: Set(Scan.keys))
