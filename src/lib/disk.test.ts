@@ -39,3 +39,16 @@ test('findings sum each rule, and the script quotes paths and never names ~ itse
   assert.doesNotMatch(sh, /rm -rf ~\s*$/m)
   assert.doesNotMatch(sh, /DerivedData/)
 })
+
+test('a tagged folder counts in a project, not inside a tool', () => {
+  const scan: Scan = {
+    tree: { n: '~', s: 0 }, total: 0, free: 0, unreadable: 0,
+    hits: { '~/dev/app/target': 4e9, '~/.cache/uv': 1e9 },
+    tagged: ['~/dev/app/target', '~/.cache/uv'],
+  }
+  const f = findings(scan)
+  assert.deepEqual(f.map((x) => [x.id, x.size, x.where]), [['tagged', 4e9, ['~/dev/app/target']], ['py', 1e9, ['~/.cache/uv']]])
+  assert.match(script(f, '2026-10-22'), /^rm -rf ~\/'dev\/app\/target'$/m)
+  // an older Mac app sends no tagged list
+  assert.deepEqual(findings({ ...scan, tagged: undefined }).map((x) => x.id), ['py'])
+})

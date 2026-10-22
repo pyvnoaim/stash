@@ -15,6 +15,8 @@ export type Scan = {
   free: number
   /** folders the app was not allowed into — what Full Disk Access would add */
   unreadable: number
+  /** `~/…` folders holding a tag file a rule named; also in `hits`. Absent from an older Mac app. */
+  tagged?: string[]
 }
 
 /**
@@ -26,6 +28,8 @@ export type Rule = {
   id: string, name: string, safe: boolean, paths?: string[], dirs?: string[], cmd?: string
   /** the command clears some of the folder, not all of it, so its size is only a ceiling */
   partial?: boolean
+  /** a file that marks the folder holding it as one to clear, wherever that folder is */
+  tag?: string
 }
 
 export const RULES: Rule[] = [
@@ -41,6 +45,8 @@ export const RULES: Rule[] = [
   { id: 'cargo', name: 'Cargo registry', safe: true, paths: ['~/.cargo/registry'] },
   { id: 'derived', name: 'Xcode DerivedData', safe: true, paths: ['~/Library/Developer/Xcode/DerivedData'] },
   { id: 'next', name: 'Next.js & Turbo build output', safe: true, dirs: ['.next', '.turbo'] },
+  // the standard cache marker (bford.info/cachedir): Cargo's target, Python venvs, ruff and others write it
+  { id: 'tagged', name: 'Build caches', safe: true, tag: 'CACHEDIR.TAG' },
   { id: 'trash', name: 'Trash', safe: true, paths: ['~/.Trash'], cmd: `osascript -e 'tell application "Finder" to empty trash'` },
   // review: gone is gone until you reinstall or re-download it, which may be a long wait
   { id: 'modules', name: 'node_modules', safe: false, dirs: ['node_modules'] },
@@ -55,6 +61,7 @@ export const RULES: Rule[] = [
 export const wanted = () => ({
   paths: RULES.flatMap((r) => r.paths ?? []),
   names: RULES.flatMap((r) => r.dirs ?? []),
+  tags: RULES.flatMap((r) => r.tag ?? []),
 })
 
 export type Found = Rule & { size: number, where: string[] }
@@ -67,7 +74,8 @@ const toolOwned = (p: string) => p.startsWith('~/.') || p.startsWith('~/Library/
 export function findings(scan: Scan): Found[] {
   return RULES.map((r) => {
     const where = Object.keys(scan.hits).filter((p) =>
-      r.paths?.includes(p) || (!toolOwned(p) && r.dirs?.includes(p.slice(p.lastIndexOf('/') + 1))))
+      r.paths?.includes(p) || (!toolOwned(p) && (r.dirs?.includes(p.slice(p.lastIndexOf('/') + 1))
+        || (!!r.tag && !!scan.tagged?.includes(p)))))
     return { ...r, where, size: where.reduce((n, p) => n + scan.hits[p], 0) }
   }).filter((f) => f.size > 0).sort((a, b) => b.size - a.size)
 }

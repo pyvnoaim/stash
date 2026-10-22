@@ -448,7 +448,8 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
           let body = message.body as? [String: Any] else { return (nil, "refused") }
     switch body["op"] as? String {
     case "scan":
-      let scan = Scan(paths: body["paths"] as? [String] ?? [], names: body["names"] as? [String] ?? [])
+      let scan = Scan(paths: body["paths"] as? [String] ?? [], names: body["names"] as? [String] ?? [],
+                      tags: body["tags"] as? [String] ?? [])
       return (await Task.detached { scan.run() }.value, nil)
     case "reveal":
       guard let path = body["path"] as? String else { return (nil, "no path") }
@@ -556,7 +557,7 @@ final class KeyPanel: NSPanel {
 /// of the paths and folder names the page's cleanup rules asked about.
 final class Scan: @unchecked Sendable {
   struct Node: Encodable { let n: String; let s: Int64; let k: [Node]? }
-  struct Out: Encodable { let tree: Node; let hits: [String: Int64]; let total: Int64; let free: Int64; let unreadable: Int }
+  struct Out: Encodable { let tree: Node; let hits: [String: Int64]; let total: Int64; let free: Int64; let unreadable: Int; let tagged: [String] }
 
   static let root = FileManager.default.homeDirectoryForCurrentUser.path
   static func expand(_ p: String) -> String { p.hasPrefix("~/") ? root + p.dropFirst(1) : p }
@@ -567,17 +568,25 @@ final class Scan: @unchecked Sendable {
     // cloud drives: listing one asks the provider over the network, and what it holds is in the cloud
     "~/Library/CloudStorage", "~/Library/Mobile Documents"]
 
-  let paths: Set<String>, names: Set<String>
+  let paths: Set<String>, names: Set<String>, tags: Set<String>
   let lock = NSLock()
-  var hits: [String: Int64] = [:], unreadable = 0
+  var hits: [String: Int64] = [:], unreadable = 0, tagged: [String] = []
 
-  init(paths: [String], names: [String]) { self.paths = Set(paths); self.names = Set(names) }
+  init(paths: [String], names: [String], tags: [String]) { self.paths = Set(paths); self.names = Set(names); self.tags = Set(tags) }
+
+  /// A real cache tag starts with this line; a file that only has the name does not count.
+  static let signature = Data("Signature: 8a477f597d28d172789f06886806bc55".utf8)
+  static func isTag(_ url: URL) -> Bool {
+    guard let f = try? FileHandle(forReadingFrom: url) else { return false }
+    defer { try? f.close() }
+    return (try? f.read(upToCount: signature.count)) == signature
+  }
 
   func run() -> String {
     let tree = walk(URL(fileURLWithPath: Scan.root), "~", depth: 0, inHit: false)
     let v = try? URL(fileURLWithPath: Scan.root).resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
     let out = Out(tree: tree, hits: hits, total: Int64(v?.volumeTotalCapacity ?? 0),
-                  free: v?.volumeAvailableCapacityForImportantUsage ?? 0, unreadable: unreadable)
+                  free: v?.volumeAvailableCapacityForImportantUsage ?? 0, unreadable: unreadable, tagged: tagged)
     return String(decoding: (try? JSONEncoder().encode(out)) ?? Data(), as: UTF8.self)
   }
 
@@ -588,7 +597,8 @@ final class Scan: @unchecked Sendable {
       lock.withLock { unreadable += 1 }
       return Node(n: name, s: 0, k: nil)
     }
-    let hit = paths.contains(rel) || (!inHit && names.contains(name))
+    let isTagged = !inHit && depth > 0 && items.contains { tags.contains($0.lastPathComponent) && Scan.isTag($0) }
+    let hit = paths.contains(rel) || (!inHit && names.contains(name)) || isTagged
     func visit(_ item: URL) -> Node {
       let v = try? item.resourceValues(forKeys: Set(Scan.keys))
       if v?.isDirectory == true && v?.isSymbolicLink != true {
@@ -610,7 +620,7 @@ final class Scan: @unchecked Sendable {
       kids = items.map(visit)
     }
     let size = kids.reduce(0) { $0 + $1.s }
-    if hit { lock.withLock { hits[rel] = size } }
+    if hit { lock.withLock { hits[rel] = size; if isTagged { tagged.append(rel) } } }
     // only what the page could draw: 1% of this folder and 10 MB at least, the biggest 40
     let floor = max(size / 100, 10_000_000)
     let kept = depth < 8 ? Array(kids.filter { $0.s >= floor }.sorted { $0.s > $1.s }.prefix(40)) : []
