@@ -78,7 +78,12 @@ export function NotePage({ it, onBack, onOpen }: {
     const ta = e.currentTarget
     if (ta.selectionStart === ta.selectionEnd) { setBar(null); return }
     const box = ta.parentElement!.getBoundingClientRect()
-    setBar({ top: Math.max(4, e.clientY - box.top - 44), left: Math.max(4, e.clientX - box.left) })
+    /* Above the line the drag ended on, out past the block's own top if need be — pinned inside
+       it, a selection on the first line had the bar sitting on the very text it was for. Only
+       when the scroller's top edge would cut it off does it drop below the line instead. */
+    const room = e.clientY - (ta.closest('.overflow-y-auto')?.getBoundingClientRect().top ?? 0)
+    const y = e.clientY - box.top
+    setBar({ top: room > 52 ? y - 44 : y + 20, left: Math.max(4, e.clientX - box.left) })
   }
 
   /** Leave the caret at `from` once React has re-committed the controlled value — every one of
