@@ -206,7 +206,7 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                     : own ? { color: own } : undefined}
                   className={cn(
                     // a phone's row has room for the title and the day, and the rest is one tap away
-                    'hidden max-w-40 cursor-pointer truncate font-mono text-xs sm:inline',
+                    'hidden max-w-40 cursor-pointer truncate font-mono text-xs sm:inline lg:max-w-80',
                     // a gradient is painted through the letters, so the text has no colour of its own
                     grad ? 'bg-clip-text text-transparent hover:opacity-80'
                       : own ? 'hover:opacity-80' : 'text-muted-foreground hover:text-foreground',

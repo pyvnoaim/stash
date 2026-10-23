@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
-import { dayLabel, parseCapture, parseList, repeatLabel, type Parsed } from '@/lib/parse'
+import { dayLabel, parseCapture, parseList, repeatLabel, today, type Parsed } from '@/lib/parse'
 import { addItem, addItems, itemOf, project, tagsFor, TRASH, useStash, type Item, type ItemType } from '@/lib/store'
 
 const TYPES = [
@@ -38,10 +38,15 @@ export function Capture({ inputRef, className, announce }: {
   /** The project a line lands in: the one it names, or the one you are standing in. */
   const pidOf = (line: Parsed) => line.pid ?? (project(s, s.sel) ? s.sel : null)
 
+  /* Added while standing in Today, an undated line is due today — otherwise it vanished from the
+     list it was typed into. Not under a search (`announce`): that list is not Today. */
+  const onToday = s.sel === 'today' && !announce
+
   // a line off the clipboard brought its own checkbox, a typed one is whatever the toggle says
   const make = (line: Parsed, done: boolean | null = null): Item => itemOf(line, {
     type: done === null ? type : 'task',
     pid: pidOf(line),
+    due: line.due ?? (onToday ? today() : null),
     done: !!done,
     doneAt: done ? Date.now() : null,
   })
@@ -166,7 +171,8 @@ export function Capture({ inputRef, className, announce }: {
           aria-label="Add an item"
           disabled={locked}
           placeholder={locked ? 'The trash takes nothing new'
-              : here ? `Add to ${here.name}` : s.sel === 'inbox' ? 'Add anything — sort it later' : 'Add to Stash'}
+              : here ? `Add to ${here.name}` : s.sel === 'inbox' ? 'Add anything — sort it later'
+              : onToday ? 'Add to Today' : 'Add to Stash'}
           className="pl-3! text-[15px]"   // beats the group's own [&>input]:pl-1.5
         />
 
