@@ -536,16 +536,14 @@ export function NotePage({ it, onBack, onOpen }: {
             /* A picture is the one paste that is not text. Everything else falls through to the
                browser's own handling, so pasting a screenshot works and pasting a paragraph is
                untouched.
-               `items` as well as `files`: a screenshot copied out of some apps arrives as a
-               clipboard item of kind file with `files` left empty, and reading only the one list
-               is why a paste sometimes did nothing at all. */
-            const pics = [
-              ...e.clipboardData.files,
-              ...[...e.clipboardData.items]
-                .filter((i) => i.kind === 'file')
-                .map((i) => i.getAsFile())
-                .filter((f): f is File => !!f),
-            ]
+               `items` first, `files` only when it has none: a screenshot copied out of some apps
+               arrives as a clipboard item of kind file with `files` left empty, but an ordinary
+               paste lists the same picture in both, and reading the two together put it in twice. */
+            const fromItems = [...e.clipboardData.items]
+              .filter((i) => i.kind === 'file')
+              .map((i) => i.getAsFile())
+              .filter((f): f is File => !!f)
+            const pics = fromItems.length ? fromItems : [...e.clipboardData.files]
             if (!pics.some((f) => f.type.startsWith('image/'))) return
             e.preventDefault()
             void addPictures(pics)
