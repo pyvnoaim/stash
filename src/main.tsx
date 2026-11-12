@@ -53,6 +53,15 @@ const updateSW = registerSW({
   },
 })
 
+/* The theme, before anything is drawn. It used to go on in App's effect, and App does not mount
+   until the server has said who you are — so the splash, which opens over that blank, played its
+   whole beat in light and the app snapped dark underneath it. Read straight off the store, which
+   loads from localStorage at import. App still watches for a cross-window change or the system
+   flipping under `auto`; this is only the first frame.
+   And before startMac: the other way round, its first report read a page with no data-theme yet
+   and pinned the window light, and since the app takes its messages asynchronously that could land
+   after the `auto` one and leave the window, and so the page, light under a dark Mac. */
+applyTheme(getState().theme)
 startMac()
 
 /* The chart's offline bars, left in every browser that ever opened Markets. The routes that filled
@@ -114,12 +123,6 @@ async function hardReload() {
 if (import.meta.env.PROD) {
   void navigator.storage?.persisted?.().then((p) => p || navigator.storage.persist())
 }
-/* The theme, before anything is drawn. It used to go on in App's effect, and App does not mount
-   until the server has said who you are — so the splash, which opens over that blank, played its
-   whole beat in light and the app snapped dark underneath it. Read straight off the store, which
-   loads from localStorage at import. App still watches for a cross-window change or the system
-   flipping under `auto`; this is only the first frame. */
-applyTheme(getState().theme)
 startSync()
 
 /**
