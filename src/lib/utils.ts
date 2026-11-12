@@ -14,11 +14,11 @@ export function cn(...inputs: ClassValue[]) {
 export const MONEY_IN = 'text-emerald-600 dark:text-emerald-400'
 
 /** The one place that decides whether the document is dark — shadcn switches on a .dark class. */
-export const applyTheme = (theme: Theme) =>
-  document.documentElement.classList.toggle(
-    'dark',
-    theme === 'dark' || (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches),
-  )
+export const applyTheme = (theme: Theme) => {
+  const html = document.documentElement
+  html.dataset.theme = theme   // the Mac app reads it: under `auto` its window must follow the Mac, not the page
+  html.classList.toggle('dark', theme === 'dark' || (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches))
+}
 
 /**
  * Switch the theme as a circle opening from wherever you clicked, using the browser's own

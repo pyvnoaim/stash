@@ -15,7 +15,7 @@ export type Op =
   | { op: 'fda' }
   | { op: 'remind', list: Reminder[] }
   | { op: 'relaunch' }
-  | { op: 'theme', dark: boolean }
+  | { op: 'theme', dark: boolean | null }
   | { op: 'chrome', sidebar: number }
 
 export const native = (m: Op) =>
@@ -45,14 +45,15 @@ export function reminders(s: Pick<State, 'items'>, now: number): Reminder[] {
 export function startMac() {
   if (!desktop) return
 
-  /* The window's title bar follows the app's theme rather than the Mac's. `applyTheme` is the one
-     place that sets the class, for the system's preference and the header's toggle alike, so the
-     class is what is watched. An older app without the op simply keeps the Mac's. */
+  /* The window's title bar follows a light or dark picked in the header. Under `auto` it is left to
+     the Mac (`dark: null`): pinning it there would pin the web view's prefers-color-scheme too, and
+     the page would never see the Mac flip again. `applyTheme` sets both the class and data-theme. */
   const html = document.documentElement
   html.classList.add('mac')   // no title bar: see index.css and the sidebar's first row
-  const theme = () => void native({ op: 'theme', dark: html.classList.contains('dark') }).catch(() => {})
+  const theme = () =>
+    void native({ op: 'theme', dark: html.dataset.theme === 'auto' ? null : html.classList.contains('dark') }).catch(() => {})
   theme()
-  new MutationObserver(theme).observe(html, { attributes: true, attributeFilter: ['class'] })
+  new MutationObserver(theme).observe(html, { attributes: true, attributeFilter: ['class', 'data-theme'] })
 
   // ⌃⌥Space or the menu-bar icon: a line typed anywhere, filed the way the capture bar files it,
   // without moving the window to where it landed — you were somewhere else, and still are

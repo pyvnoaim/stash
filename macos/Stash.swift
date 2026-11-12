@@ -352,10 +352,15 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
   /// "theme" op yet: a saved older version of the site never sends it, and the bar stayed the
   /// Mac's dark over a light Stash until the site's own update was taken.
   func webView(_ web: WKWebView, didFinish nav: WKNavigation!) {
-    web.evaluateJavaScript("document.documentElement.classList.contains('dark')") { [weak self] dark, _ in
-      guard let dark = dark as? Bool else { return }
-      MainActor.assumeIsolated { self?.window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua) }
+    let js = "document.documentElement.dataset.theme === 'auto' ? null : document.documentElement.classList.contains('dark')"
+    web.evaluateJavaScript(js) { [weak self] dark, _ in
+      MainActor.assumeIsolated { self?.window.appearance = Self.appearance(dark as? Bool) }
     }
+  }
+
+  /// nil under the page's `auto`: the window, and so the web view's prefers-color-scheme, follow the Mac
+  static func appearance(_ dark: Bool?) -> NSAppearance? {
+    dark.flatMap { NSAppearance(named: $0 ? .darkAqua : .aqua) }
   }
 
   /// The site could not be reached and nothing was cached to open instead — first launch offline,
@@ -469,7 +474,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       return (true, nil)
     case "theme":
       // the page's light or dark, for the window's own chrome: title bar, traffic lights, menus
-      window.appearance = NSAppearance(named: body["dark"] as? Bool == true ? .darkAqua : .aqua)
+      window.appearance = Self.appearance(body["dark"] as? Bool)
       return (true, nil)
     case "relaunch":
       relaunch()
