@@ -34,6 +34,8 @@ export const FIXED: [string, string][] = [
   ['⇧↑ ⇧↓', 'Extend the selection'],
   ['⌥↑ ⌥↓', 'Reorder the selected row'],
   ['Esc', 'Leave the field, close the page, drop the selection, close the inspector'],
+  ['⌥⌘↑ ⌥⌘↓', 'Move the block you are writing in, on a note page'],
+  ['⇧⌘D', 'Duplicate it'],
 ]
 
 /* What the fixed half already answers to. Bare keys only: the handler drops every ⌘ press before

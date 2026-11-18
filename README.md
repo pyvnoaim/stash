@@ -186,26 +186,28 @@ The panel edits a note in its 300px column; the ⤢ in its header — **Open as 
 whole main area to one item instead, for a note too long for that. It is the same `text` and `note`,
 so editing on the page and editing in the panel are one edit, and either shows the other's changes.
 
-The page starts in preview when there is already something to read and in edit when the note is
-empty and waiting. The ✏/👁 toggle in the header switches the two by hand. Select text in the
-editor and a small toolbar lands where the selection ended — heading (cycles 1→2→3→off), quote,
-bold, italic, underline, strikethrough, code and link — each wrapping the selection and leaving it
-selected inside the new marks, so a second press peels them back off.
+The page is one editor: what you read is what you type into, with no switch between a preview and
+its source. It is still markdown in the store — `src/lib/note-doc.ts` is the dictionary between the
+two — so the panel's plain field and the MCP server go on reading and writing the same text. The
+first edit made on the page tidies a note written elsewhere: `*` bullets become `-` and a heading
+gets a blank line under it. Opening a note changes nothing.
 
-It is a small markdown renderer, not a full CommonMark one: headings, ordered and unordered lists,
-quotes, fenced code, and the inline marks notes actually use. It builds React elements rather than
-HTML, so there is no escaping to get wrong and no dependency to pull. Markdown has no underline, so
-`++x++` stands in for it. A link only renders as a real link for a safe scheme — `http`, `https`,
-`mailto`, or a same-page `/` or `#` — and anything else, `javascript:` or `data:`, is defanged to
-`#`.
+Hover a block and two handles stand in the gutter beside it. **+** adds a block below: text, a
+heading, a list, a checklist, a quote or code. The grip turns the block into another kind,
+duplicates it (`⇧⌘D`), moves it (`⌥⌘↑` `⌥⌘↓`) or deletes it. On a phone the grip stands beside
+the block the cursor is in. Select text and a small toolbar lands above it — bold, italic,
+underline, strikethrough, code and link.
 
-`- [ ]` and `- [x]` render as real checkboxes in the preview, and ticking one rewrites that line
-in the note. A checklist is therefore just text, with nothing to keep in step with it.
+The editor is Tiptap, loaded only when a note is opened full-page. Markdown has no underline, so
+`++x++` stands in for it. Typing `[[` offers the titles a link could name; Enter takes the first.
+A link only opens for a safe scheme, and a picture only loads from this app's own paths.
+
+`- [ ]` and `- [x]` are real checkboxes, and ticking one rewrites that line in the note. A
+checklist is therefore just text, with nothing to keep in step with it.
 
 ### Pictures
 
-Paste a screenshot into the editor, drop a file on it, or use the picture button in the header —
-the last of them because a phone has neither of the first two. Several at once upload together and
+Paste a screenshot into the note. Several at once upload together and
 are written in as one edit, so one `⌘Z` takes the lot back out. What lands in the note is ordinary
 markdown, `![name](/api/blob/…)`, which means a note with a picture in it is still just text.
 
@@ -450,7 +452,8 @@ is still in the file and still copies out.
 - `server/blob.ts` — the pictures in notes: what bytes count as one, and which ids a document still points at
 - `server/mcp.ts` — the MCP dispatcher: stdio from a checkout, or hosted at `/mcp` by the server
 - `src/components/` — sidebar, capture, row, inspector, command palette, the note page, the Subscriptions page
-- `src/components/markdown.tsx` — the small markdown renderer for the note page
+- `src/components/note-editor.tsx` — the note page: one rich-text editor (Tiptap) over the note's markdown
+- `src/lib/note-doc.ts` — the dictionary between a note's markdown and the editor's document
 - `src/components/ui/` — shadcn components, owned by this repo, edit freely
 - `src/pdf/doc.ts` — every PDF operation, free of React and the DOM so `npm test` covers it
 - `src/pdf/editor.tsx` — the PDF tab: pdf.js draws it, the stamps are HTML on top until export

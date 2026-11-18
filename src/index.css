@@ -325,3 +325,54 @@
 .mac-folded .room-for-buttons {
   padding-left: 96px;
 }
+
+/* ---------- the note editor: one editable document, drawn the way the note reads ---------- */
+.note-body { font-size: 1rem; line-height: 1.7; overflow-wrap: anywhere; }
+.note-body > * + * { margin-top: 0.5rem; }
+.note-body :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; letter-spacing: -0.015em; }
+.note-body h1 { font-size: 1.625rem; letter-spacing: -0.025em; }
+.note-body h2 { font-size: 1.3125rem; }
+.note-body h3 { font-size: 1.0625rem; }
+.note-body > h1:not(:first-child), .note-body > h2:not(:first-child), .note-body > h3:not(:first-child) { margin-top: 1.5rem; }
+.note-body ul, .note-body ol { padding-left: 1.25rem; }
+.note-body ul { list-style: disc; }
+.note-body ol { list-style: decimal; }
+/* a checklist is boxes, not discs: the box stands where the disc would */
+.note-body ul[data-type='taskList'] { list-style: none; padding-left: 0; }
+.note-body ul[data-type='taskList'] li { display: flex; align-items: flex-start; gap: 0.625rem; }
+.note-body ul[data-type='taskList'] li > label { display: flex; height: 1lh; align-items: center; }
+.note-body ul[data-type='taskList'] li > label input {
+  appearance: none; position: relative; width: 1.125rem; height: 1.125rem; margin: 0; cursor: pointer;
+  border: 1.5px solid color-mix(in oklab, var(--foreground) 45%, transparent); border-radius: 0.375rem;
+}
+.note-body ul[data-type='taskList'] li > label input:checked { border-color: var(--primary); background: var(--primary); }
+/* the tick is drawn, not an image: two sides of a small box, turned */
+.note-body ul[data-type='taskList'] li > label input:checked::after {
+  content: ''; position: absolute; left: 0.3125rem; top: 0.125rem; width: 0.3125rem; height: 0.5625rem;
+  border: solid var(--primary-foreground); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.note-body ul[data-type='taskList'] li > label input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.note-body ul[data-type='taskList'] li > div { min-width: 0; flex: 1; }
+.note-body ul[data-type='taskList'] li[data-checked='true'] > div { color: var(--muted-foreground); text-decoration: line-through; }
+.note-body blockquote {
+  border-left: 3px solid color-mix(in oklab, var(--foreground) 20%, transparent);
+  padding-left: 0.875rem; color: var(--muted-foreground); font-style: italic;
+}
+.note-body pre {
+  overflow-x: auto; border-radius: var(--radius-md); background: var(--muted);
+  padding: 0.75rem; font-family: var(--font-mono); font-size: 0.85em;
+}
+.note-body :not(pre) > code { border-radius: 0.25rem; background: var(--muted); padding: 0.1em 0.3em; font-family: var(--font-mono); font-size: 0.85em; }
+.note-body a { color: var(--tint-foreground); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+/* a [[link]] is a chip that points somewhere, which is what the tint is for */
+.note-body span[data-wiki] { border-radius: 0.25rem; background: var(--tint); padding: 0.05em 0.35em; color: var(--tint-foreground); cursor: pointer; }
+.note-body img { max-width: 100%; border-radius: var(--radius-md); }
+.note-body .ProseMirror-selectednode { outline: 2px solid var(--ring); outline-offset: 2px; }
+.note-body hr { border-top: 1px solid var(--border); margin-block: 1rem; }
+.note-body table { width: 100%; border-collapse: collapse; text-align: left; }
+.note-body th, .note-body td { border-bottom: 1px solid var(--border); padding: 0.25rem 0.5rem; vertical-align: top; }
+.note-body th { font-weight: 600; }
+/* an empty note renders as nothing at all, which is nothing to aim at either */
+.note-body p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder); float: left; height: 0; color: var(--muted-foreground); pointer-events: none;
+}

@@ -11,7 +11,6 @@ import { ProjectProgress } from '@/components/project-header'
 import { Inspector, Selection } from '@/components/inspector'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { ItemRow } from '@/components/item-row'
-import { NotePage } from '@/components/note-page'
 import SubsPage from '@/components/subs-page'
 import { FileDialog } from '@/components/file-dialog'
 import { ProjectDialog } from '@/components/project-dialog'
@@ -32,6 +31,8 @@ import {
 const PdfEditor = lazy(() => import('@/pdf/editor'))
 // only the macOS app ever opens it, so a browser never downloads it
 const DiskPage = lazy(() => import('@/components/disk-page'))
+// the editor is the heaviest thing in the app and most visits never open a note full-page
+const NotePage = lazy(() => import('@/components/note-editor'))
 
 const Waiting = ({ name }: { name: string }) => (
   <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
@@ -587,7 +588,9 @@ export default function App() {
               reading, rather than being put back in a list to find your place in */}
           {!page && paged && (
             // keyed: another note is another page, not this one's open block carried over to it
-            <NotePage key={paged.id} it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
+            <Suspense fallback={<Waiting name="note" />}>
+              <NotePage key={paged.id} it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
+            </Suspense>
           )}
 
           {!page && !paged && (
