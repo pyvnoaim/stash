@@ -13,9 +13,11 @@ Checks before any push: `npm run lint`, `npm run typecheck`, `npm test`, `npm ru
 
 ## Bump the version on every push
 
-`main` is what deploys. A push to `origin/main` fires a GitHub webhook at Portainer, which
-re-clones the repo and rebuilds the stack — so every push is a release, and the version has to
-move with it.
+`main` is what deploys. A push to `origin/main` runs `.github/workflows/deploy.yml`: GitHub builds
+the image, pushes it to `ghcr.io/pyvnoaim/stash` (`:latest` and `:sha-<short>`), then calls the
+Dokploy deploy webhook (repo secret `DOKPLOY_WEBHOOK`), and Dokploy pulls `:latest` and restarts.
+The VPS never builds. So every push is a release, and the version has to move with it. A rollback
+is pointing the image in Dokploy (stash > General > Raw) at an older `:sha-…` tag and deploying.
 
 Before committing, bump `package.json`:
 
@@ -38,16 +40,12 @@ Which part to move:
 
 The version is the only way to tell what a deployment is actually running. `vite.config.ts` reads
 it out of `package.json` into `__BUILD__`, and Settings → About shows it beside `__BUILT_AT__`
-(`settings-dialog.tsx:352`). Portainer strips `.git` from its clone before building, so there is
-no commit sha on the deployed side — `__BUILD__` is the whole story. Leave the version alone and
-two different builds both claim to be the same one, and the only thing separating them is a
-timestamp.
+(`settings-dialog.tsx:352`). The app reads no commit sha (the image tag has one, the app does
+not), so inside the app `__BUILD__` is the whole story. Leave the version alone and two different
+builds both claim to be the same one, and the only thing separating them is a timestamp.
 
-That also makes it the way to check a deploy landed: if the webhook fired but Settings still shows
-the old version, Portainer re-cloned without rebuilding the image.
-
-Never push tags by hand: a tag push is a `push` event too, and the Portainer webhook would deploy
-twice.
+That also makes it the way to check a deploy landed: if the workflow went green but Settings still
+shows the old version, Dokploy did not pull the new image.
 
 ## Don't commit lockfile churn
 
