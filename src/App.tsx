@@ -122,7 +122,23 @@ export default function App() {
   /* Which list the open page was opened from — see the effect below. */
   const pageFrom = useRef<string | null>(null)
   // a double-click's second click asks for details on the way; the page answers both
-  const openPage = (id: string) => { pageFrom.current = s.sel; setDetails(false); setPageItem(id) }
+  /* A page is a step in history, so Back closes it — the trackpad's two-finger swipe, a mouse's back
+     button, the browser's arrow — as well as Esc and the path. Same address, so nothing about the
+     view changes; the step only carries which page was open. */
+  const openPage = (id: string) => {
+    pageFrom.current = s.sel
+    setDetails(false)
+    if (history.state?.page) history.replaceState({ page: id }, '')   // a [[link]] from one page to another
+    else history.pushState({ page: id }, '')
+    setPageItem(id)
+  }
+  /** Out of the page by the way it came in: back through its history step when there is one. */
+  const closePage = () => { if (history.state?.page) history.back(); else setPageItem(null) }
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => { if (!e.state?.page) setPageItem(null) }
+    addEventListener('popstate', onPop)
+    return () => removeEventListener('popstate', onPop)
+  }, [])
 
   /* The marks name rows in the list you were looking at, and this is no longer that list.
      The open page is different: a tool page is a detour rather than a destination,
@@ -253,7 +269,8 @@ export default function App() {
   /* Anything bound here belongs in SHORTCUTS (src/lib/keys.ts) in the same commit — that list
      is what the Settings card shows, and it cannot tell when this stops matching it. */
   useListKeys({
-    s, query, items, selected, chosen, marked, setMarked, inTrash, pageItem, setPageItem,
+    s, query, items, selected, chosen, marked, setMarked, inTrash, pageItem,
+    setPageItem: (id) => (id === null ? closePage() : setPageItem(id)),
     palette, setPalette, filing, setFiling, searchRef, openCapture, openPage, drop, purge,
     details, setDetails, keysOpen, setKeysOpen,
   })
@@ -310,7 +327,7 @@ export default function App() {
                comes back to the list exactly as it was. */
             <Suspense fallback={<Waiting name="note" />}>
               <div className="bg-background stash-glow fixed inset-0 z-30 flex flex-col">
-                <NotePage key={paged.id} it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
+                <NotePage key={paged.id} it={paged} onBack={closePage} onOpen={openPage} />
               </div>
             </Suspense>
           )}
