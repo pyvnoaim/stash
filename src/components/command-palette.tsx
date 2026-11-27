@@ -10,6 +10,7 @@ import {
   CommandList, CommandSeparator, CommandShortcut,
 } from '@/components/ui/command'
 import { cn } from '@/lib/utils'
+import { prose } from '@/lib/ink'
 import { today, tomorrow } from '@/lib/parse'
 import {
   clearDone, getState, isPage, openIn, patch, PDF, project, replaceAll, select,
@@ -89,7 +90,7 @@ export function importBackup(file: File) {
 
 /** Everything a search should look at, written the way you would type it. */
 const hay = (s: State, i: Item) => [
-  i.text, i.note, ...i.tags.map((t) => `#${t}`), project(s, i.pid)?.name,
+  i.text, prose(i.note), ...i.tags.map((t) => `#${t}`), project(s, i.pid)?.name,
 ].filter(Boolean).join(' ').toLowerCase()
 
 export function CommandPalette({

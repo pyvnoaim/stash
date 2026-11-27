@@ -54,3 +54,15 @@ assert.equal(trip('* a\n* b'), '- a\n- b')
 assert.equal(trip('# H\nbody'), '# H\n\nbody')
 
 console.log('note-doc: ok')
+
+/* A drawing rides through the note as a fence of numbers and comes back exactly, between prose. */
+{
+  const { toDoc: d, toNote: n } = await import('./note-doc.ts')
+  const note = 'Before\n\n```stash-draw\n{"h":360,"s":[[1,0,[10,10,50,20,12,60]]]}\n```\n\nAfter'
+  const doc = d(note)
+  assert.equal(doc.content?.[1]?.type, 'drawing')
+  assert.equal(doc.content?.[1]?.attrs?.data, '{"h":360,"s":[[1,0,[10,10,50,20,12,60]]]}')
+  assert.equal(n(doc), note)
+  // and an ordinary code fence is still code
+  assert.equal(d('```js\nlet a = 1\n```').content?.[0]?.type, 'codeBlock')
+}

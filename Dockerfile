@@ -16,7 +16,7 @@ COPY --from=build /app/dist ./dist
 COPY server/index.ts server/blob.ts server/mcp.ts ./server/
 # What the server shares with the app, for the hosted /mcp route: the document's rules and the
 # capture parser. Neither imports anything, so no node_modules ride into the image.
-COPY src/lib/core.ts src/lib/parse.ts ./src/lib/
+COPY src/lib/core.ts src/lib/parse.ts src/lib/ink.ts ./src/lib/
 # The database is the only thing this process writes, and it does not need to be root to do it.
 # Docker stamps a freshly created named volume with the ownership the image has on that path, so
 # /data belongs to node from the first `up`. An existing volume keeps whatever it already had —

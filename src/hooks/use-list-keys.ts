@@ -8,7 +8,9 @@ import {
 
 // BUTTON counts as typing so space activates the button instead of also toggling the row
 const typingIn = (el: EventTarget | null) =>
-  el instanceof HTMLElement && (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName) || el.isContentEditable)
+  el instanceof HTMLElement && (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName) || el.isContentEditable
+    // a drawing in a page is not contenteditable, but it is in the note: ⌘⌫ there must not trash it
+    || !!el.closest('.ProseMirror'))
 
 // an empty field has no text of its own to walk back — which is exactly where the capture box
 // leaves you after a submit, so ⌘Z there means the item you just added

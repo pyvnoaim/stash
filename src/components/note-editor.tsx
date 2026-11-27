@@ -3,10 +3,10 @@ import { Extension, type ChainedCommands, type Editor } from '@tiptap/core'
 import { Focus, Placeholder } from '@tiptap/extensions'
 import type { ResolvedPos } from '@tiptap/pm/model'
 import { TextSelection } from '@tiptap/pm/state'
-import { EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent, ReactNodeViewRenderer, useEditor } from '@tiptap/react'
 import {
   Bold, ChevronLeft, Code, FolderOpen, GripVertical, Heading1, Heading2, Heading3, Italic, Link2, List,
-  ListOrdered, ListTodo, Pilcrow, Plus, Quote, Strikethrough, Underline,
+  ListOrdered, ListTodo, PenLine, Pilcrow, Plus, Quote, Strikethrough, Underline,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Backlinks } from '@/components/inspector'
@@ -16,13 +16,15 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Hint } from '@/components/ui/tooltip'
 import { resolveWiki, wikiKey } from '@/lib/markdown'
-import { noteExtensions, toDoc, toNote } from '@/lib/note-doc'
+import { Drawing, noteExtensions, toDoc, toNote } from '@/lib/note-doc'
+import { DrawingView } from '@/components/drawing'
+import { prose } from '@/lib/ink'
 import { addItem, desktop, flush, getState, itemOf, patch, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 import { cn } from '@/lib/utils'
 import { click, FONTS, SIZES, usePageSettings, type PageFont, type PageSize, type PageSound } from '@/lib/page-settings'
 
-type Kind = 'text' | 'h1' | 'h2' | 'h3' | 'bullet' | 'number' | 'todo' | 'quote' | 'code'
+type Kind = 'text' | 'h1' | 'h2' | 'h3' | 'bullet' | 'number' | 'todo' | 'quote' | 'code' | 'draw'
 type Op = 'up' | 'down' | 'dup' | 'drop' | { add: Kind } | { turn: Kind }
 
 /** What a block can be, in the order both gutter menus offer it. */
@@ -36,6 +38,8 @@ const KINDS: { kind: Kind, label: string, icon: typeof Pilcrow }[] = [
   { kind: 'todo', label: 'Checklist', icon: ListTodo },
   { kind: 'quote', label: 'Quote', icon: Quote },
   { kind: 'code', label: 'Code', icon: Code },
+  // a sketch or handwriting: added below a block, never something a block turns into
+  { kind: 'draw', label: 'Drawing', icon: PenLine },
 ]
 const HANDLE = 'text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring flex h-6 w-5 cursor-pointer items-center justify-center rounded-sm outline-none focus-visible:ring-2 [&>svg]:size-4'
 
@@ -64,9 +68,10 @@ function blockOp(editor: Editor, pos: number, op: Op): boolean {
   const i = doc.resolve(pos).index(0)
   if (typeof op === 'object') {
     if ('add' in op) {
+      if (op.add === 'draw') return editor.chain().insertContentAt(end, { type: 'drawing' }).run()
       return asKind(editor.chain().insertContentAt(end, { type: 'paragraph' }).setTextSelection(end + 1), op.add).focus().run()
     }
-    if (node.isLeaf || node.type.name === 'table') return false
+    if (node.isLeaf || node.type.name === 'table' || op.turn === 'draw') return false
     // back to plain paragraphs first, so a list turned into a heading is not a heading inside a list
     const all = TextSelection.between(doc.resolve(pos + 1), doc.resolve(end - 1))
     return asKind(editor.chain().command(({ tr }) => { tr.setSelection(all); return true }).clearNodes(), op.turn).focus().run()
@@ -134,7 +139,11 @@ const BlockKeys = Extension.create({
 /* Made once, here, rather than in the component: `useEditor` compares its options by reference and
    re-applies all of them — props, plugins, decorations — whenever one is new, which with these
    built inline was every keystroke. */
-const PAGE_EXTENSIONS = [...noteExtensions, BlockKeys, Placeholder.configure({ placeholder: 'Write…' }),
+const PAGE_EXTENSIONS = [
+  // the drawing's view lives here, with React: note-doc.ts is also read under node, which has none
+  ...noteExtensions.map((x) => (x.name === 'drawing'
+    ? Drawing.extend({ addNodeView: () => ReactNodeViewRenderer(DrawingView, { stopEvent: () => true }) }) : x)),
+  BlockKeys, Placeholder.configure({ placeholder: 'Write…' }),
   // Focus marks the top-level block the cursor is in, which is what focus mode lights (see `quiet`)
   Focus.configure({ mode: 'shallowest', className: 'has-focus' })]
 
@@ -179,7 +188,11 @@ export default function NoteEditor({ it, onBack, onOpen }: {
 
   // the note as the editor last read or wrote it: anything else arriving in `it.note` came from outside
   const last = useRef(it.note)
-  const [initial] = useState(() => toDoc(it.note))
+  // an empty note still opens on a paragraph: with none there is nothing to type into or to say Write… on
+  const [initial] = useState(() => {
+    const d = toDoc(it.note)
+    return d.content?.length ? d : { type: 'doc', content: [{ type: 'paragraph' }] }
+  })
 
   /* The note is written back a moment after typing pauses, not on every key: turning the whole
      document into markdown and storing it re-rendered everything that reads the stash, per letter.
@@ -462,7 +475,7 @@ export default function NoteEditor({ it, onBack, onOpen }: {
     toast(`Task added${filed ? ` to ${filed.name}` : ''}`)
   }
 
-  const kinds = (pick: (kind: Kind) => void) => KINDS.map(({ kind, label, icon: Icon }) => (
+  const kinds = (pick: (kind: Kind) => void, adding = true) => KINDS.filter((k) => adding || k.kind !== 'draw').map(({ kind, label, icon: Icon }) => (
     <DropdownMenuItem key={kind} className={ROW} onSelect={() => pick(kind)}><Icon />{label}</DropdownMenuItem>
   ))
 
@@ -500,7 +513,7 @@ export default function NoteEditor({ it, onBack, onOpen }: {
     el.style.height = `${el.scrollHeight}px`
   }, [it.text, it.id])
 
-  const words = (it.note.match(/\S+/g) ?? []).length + (it.text.match(/\S+/g) ?? []).length
+  const words = (prose(it.note).match(/\S+/g) ?? []).length + (it.text.match(/\S+/g) ?? []).length
   const minutes = Math.max(1, Math.round(words / 220))
 
   return (
@@ -586,7 +599,7 @@ export default function NoteEditor({ it, onBack, onOpen }: {
                   <DropdownMenuContent align="start" className={cn(MENU, 'w-56')} onCloseAutoFocus={(e) => e.preventDefault()}>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger className={ROW}>Turn into</DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className={cn(MENU, 'w-48')}>{kinds((turn) => act(hover.pos, { turn }))}</DropdownMenuSubContent>
+                      <DropdownMenuSubContent className={cn(MENU, 'w-48')}>{kinds((turn) => act(hover.pos, { turn }), false)}</DropdownMenuSubContent>
                     </DropdownMenuSub>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger className={cn(ROW, 'md:hidden')}>Add below</DropdownMenuSubTrigger>

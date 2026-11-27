@@ -22,7 +22,8 @@ assert(!sw.includes('NetworkFirst'), 'a NetworkFirst route is back in the built 
 /* The pictures in notes are the one CacheFirst route, and the only thing here that may be: a blob
    id is random and its bytes never change, so a cached copy cannot be a stale answer to anything.
    If this stops shipping, notes stop rendering their pictures offline. */
-assert(/registerRoute\(\/[^,]*blob[^,]*\/,new e\.CacheFirst/.test(sw),
+// whatever one-letter name the minifier gave workbox this build: it was `e`, then `s`
+assert(/registerRoute\(\/[^,]*blob[^,]*\/,new [A-Za-z_$][\w$]*\.CacheFirst/.test(sw),
   'the note-pictures route is not in the built worker — notes would lose their pictures offline')
 
 console.log('sw routes ok')

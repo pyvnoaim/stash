@@ -9,7 +9,7 @@ chrome are spent only where they say something. Native platform behaviour beats 
 | Surface | Token | Light / dark | Used for |
 | --- | --- | --- | --- |
 | Ground | `--background`, `--sidebar` | `#f7f7f5` / `#18181a` | everything: the sidebar and the page stand on it together |
-| Glow | `--glow` (`.stash-glow`) | white 90% / white 6% | one radial wash from the top, behind everything |
+| Glow | `--glow` (`.stash-glow`) | white 90% / none | one radial wash from the top in light; none on Graphite, where it bands |
 | Float | `--popover` | `#ffffff` / `#202023` | what floats: the capture field, menus, dialogs |
 | Well | `--muted` | `#f0efeb` / `#202023` | code, a resting tile |
 | Tray | `--secondary` | `#efeeea` / `#26262a` | behind segmented pills |
@@ -27,6 +27,11 @@ way back, as is Esc), a 44px title, 18px text at 1.8 in a 620px column, and the 
 (Saved or Editing, tags, words, read time). Focus mode fades every block but the one being written.
 Its settings (typeface, size, focus, typewriter scroll, key sounds, the info line) are this device's,
 in `lib/page-settings.ts`, and open as a plain list over the page, which blurs back behind it.
+
+A page can hold drawings (+ → Drawing): pen, mouse or trackpad, width from a pen's pressure or the
+stroke's speed, each stroke cleaned when it lifts (`lib/ink.ts`). The strokes are kept, as a
+```` ```stash-draw ```` fence in the note, so a drawing can be drawn on or erased later. Its tools sit
+on its top edge and show on hover; ⌘Z, E and Esc work while it has focus.
 
 ## Colour
 

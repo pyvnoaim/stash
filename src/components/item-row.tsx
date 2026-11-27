@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/context-menu'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
 import { TYPE_ICON } from '@/components/item-types'
+import { prose } from '@/lib/ink'
 import { dayLabel, repeatLabel, today, tomorrow } from '@/lib/parse'
 import {
   focus, moveBefore, patch, toggleDone, type Item, type ItemType, type Project,
@@ -80,7 +81,7 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
   const grad = !!upper && up !== own
   const end = (c: string | null) => c ?? 'var(--muted-foreground)'
   // blank lines are spacing, not content — they must not inflate the "there is more" count
-  const note = it.note.split('\n').map((l) => l.trim()).filter(Boolean)
+  const note = prose(it.note).split('\n').map((l) => l.trim()).filter(Boolean)
   const t = today()
 
   return (

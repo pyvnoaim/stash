@@ -7,6 +7,7 @@
  * a document it has just pulled) are running the same rules rather than two copies of them.
  */
 import { isRepeat, nextAfter, today, type Parsed, type Repeat } from './parse.ts'
+import { prose } from './ink.ts'
 
 export type ItemType = 'task' | 'idea' | 'note'
 export type Theme = 'auto' | 'light' | 'dark'
@@ -633,7 +634,7 @@ export function visible(s: State, query: string): Item[] {
   if (s.sel === TRASH) {
     const rows = [...s.trash].sort((a, b) => b.delAt - a.delAt)
     return q
-      ? rows.filter((i) => `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(q))
+      ? rows.filter((i) => `${i.text} ${prose(i.note)} ${i.tags.join(' ')}`.toLowerCase().includes(q))
       : rows
   }
   if (q) {
@@ -660,7 +661,7 @@ export function visible(s: State, query: string): Item[] {
     if (!text.length) return list
     const rest = text.join(' ')
     return list.filter((i) =>
-      `${i.text} ${i.note} ${i.tags.join(' ')}`.toLowerCase().includes(rest))
+      `${i.text} ${prose(i.note)} ${i.tags.join(' ')}`.toLowerCase().includes(rest))
   }
   const filter = isView(s.sel) ? VIEWS[s.sel].filter : inProject(s, s.sel)
   const list = s.items.filter(filter)

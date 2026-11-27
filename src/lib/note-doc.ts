@@ -7,6 +7,7 @@ import { TableKit } from '@tiptap/extension-table'
 import Underline from '@tiptap/extension-underline'
 import { MarkdownManager } from '@tiptap/markdown'
 import StarterKit from '@tiptap/starter-kit'
+import { readInk, writeInk } from './ink.ts'
 import { safeSrc } from './markdown.ts'
 
 /**
@@ -38,6 +39,35 @@ const WikiLink = Node.create({
   },
   parseMarkdown: (token) => ({ type: 'wikiLink', attrs: { label: token.label } }),
   renderMarkdown: (node) => `[[${node.attrs?.label ?? ''}]]`,
+})
+
+/**
+ * A drawing (see lib/ink.ts): one block, its strokes held as a string of numbers. In the note it is
+ * a fence nothing else needs to understand — ```stash-draw, one line of data — so the plain field,
+ * MCP and an export all carry it through untouched, and the editor draws it (note-editor.tsx gives
+ * it the view). Matched before the ordinary code fence, which would otherwise take it as code.
+ */
+export const Drawing = Node.create({
+  name: 'drawing',
+  group: 'block',
+  atom: true,
+  draggable: false,
+  addAttributes: () => ({ data: { default: '' } }),
+  // read through the validator either way in, so pasted HTML can never carry a newline into the fence
+  parseHTML: () => [{ tag: 'div[data-drawing]', getAttrs: (el) => ({ data: writeInk(readInk(el.getAttribute('data-drawing'))) }) }],
+  renderHTML: ({ node }) => ['div', { 'data-drawing': node.attrs.data }],
+  markdownTokenizer: {
+    name: 'drawing',
+    level: 'block',
+    // only where a fence can open — at a line's start — or a mention of one mid-sentence cuts the note
+    start: (src: string) => src.search(/^```stash-draw\n/m),
+    tokenize(src: string) {
+      const m = /^```stash-draw\n([^\n]*)\n```(?:\n|$)/.exec(src)
+      return m ? { type: 'drawing', raw: m[0], data: m[1] } : undefined
+    },
+  },
+  parseMarkdown: (token) => ({ type: 'drawing', attrs: { data: token.data } }),
+  renderMarkdown: (node) => '```stash-draw\n' + writeInk(readInk(node.attrs?.data)) + '\n```',
 })
 
 export const noteExtensions: AnyExtension[] = [
@@ -77,6 +107,7 @@ export const noteExtensions: AnyExtension[] = [
   }).configure({ inline: true }),
   TableKit,
   WikiLink,
+  Drawing,
 ]
 
 const manager = new MarkdownManager({ extensions: noteExtensions, markedOptions: { breaks: true, gfm: true } })
