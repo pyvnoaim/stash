@@ -1,16 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Extension, type ChainedCommands, type Editor } from '@tiptap/core'
-import { Placeholder } from '@tiptap/extensions'
+import { Focus, Placeholder } from '@tiptap/extensions'
 import type { ResolvedPos } from '@tiptap/pm/model'
 import { TextSelection } from '@tiptap/pm/state'
 import { EditorContent, useEditor } from '@tiptap/react'
 import {
-  ArrowLeft, Bold, Code, FolderOpen, GripVertical, Heading1, Heading2, Heading3, Italic, Link2, List,
+  Bold, ChevronLeft, Code, FolderOpen, GripVertical, Heading1, Heading2, Heading3, Italic, Link2, List,
   ListOrdered, ListTodo, Pilcrow, Plus, Quote, Strikethrough, Underline,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Backlinks } from '@/components/inspector'
-import { Button } from '@/components/ui/button'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
   DropdownMenuShortcut, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
@@ -18,9 +17,10 @@ import {
 import { Hint } from '@/components/ui/tooltip'
 import { resolveWiki, wikiKey } from '@/lib/markdown'
 import { noteExtensions, toDoc, toNote } from '@/lib/note-doc'
-import { addItem, getState, itemOf, patch, select, useStash, type Item } from '@/lib/store'
+import { addItem, desktop, flush, getState, itemOf, patch, select, useStash, type Item } from '@/lib/store'
 import { uploadImage } from '@/lib/sync'
 import { cn } from '@/lib/utils'
+import { click, FONTS, SIZES, usePageSettings, type PageFont, type PageSize, type PageSound } from '@/lib/page-settings'
 
 type Kind = 'text' | 'h1' | 'h2' | 'h3' | 'bullet' | 'number' | 'todo' | 'quote' | 'code'
 type Op = 'up' | 'down' | 'dup' | 'drop' | { add: Kind } | { turn: Kind }
@@ -131,6 +131,13 @@ const BlockKeys = Extension.create({
  * the store — `lib/note-doc.ts` is the dictionary — so the inspector's plain field and the MCP
  * server go on reading and writing the same text.
  */
+/* Made once, here, rather than in the component: `useEditor` compares its options by reference and
+   re-applies all of them — props, plugins, decorations — whenever one is new, which with these
+   built inline was every keystroke. */
+const PAGE_EXTENSIONS = [...noteExtensions, BlockKeys, Placeholder.configure({ placeholder: 'Write…' }),
+  // Focus marks the top-level block the cursor is in, which is what focus mode lights (see `quiet`)
+  Focus.configure({ mode: 'shallowest', className: 'has-focus' })]
+
 export default function NoteEditor({ it, onBack, onOpen }: {
   it: Item
   onBack: () => void
@@ -172,10 +179,77 @@ export default function NoteEditor({ it, onBack, onOpen }: {
 
   // the note as the editor last read or wrote it: anything else arriving in `it.note` came from outside
   const last = useRef(it.note)
+  const [initial] = useState(() => toDoc(it.note))
+
+  /* The note is written back a moment after typing pauses, not on every key: turning the whole
+     document into markdown and storing it re-rendered everything that reads the stash, per letter.
+     Flushed on blur, on leaving the page, when the tab is hidden, and before a change from
+     elsewhere is taken in — so nothing typed is ever left only in the editor. */
+  const pending = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const editorRef = useRef<Editor | null>(null)
+  /** Returns whether it wrote anything: the editor's text differed from what was last stored. */
+  const flushNote = useCallback(() => {
+    clearTimeout(pending.current)
+    pending.current = undefined
+    const ed = editorRef.current
+    if (!ed || ed.isDestroyed) return false
+    const note = toNote(ed.getJSON())
+    if (note === last.current) return false
+    last.current = note
+    patch(it.id, { note })
+    return true
+  }, [it.id])
+  useEffect(() => {
+    /* Leaving: the store's own pagehide save has already run by now, before this note reached it,
+       so the store is saved again here, at once — a closing tab keeps no timers. Hidden counts too:
+       a phone switching apps may never come back to fire anything. */
+    const away = () => { if (flushNote()) flush() }
+    const hidden = () => { if (document.hidden) away() }
+    addEventListener('pagehide', away)
+    document.addEventListener('visibilitychange', hidden)
+    return () => {
+      removeEventListener('pagehide', away)
+      document.removeEventListener('visibilitychange', hidden)
+      flushNote()
+    }
+  }, [flushNote])
+
+  /* The info line's two words, as the quiet editor has them: Editing while keys are going, Saved a
+     moment after they stop. The note is written back 300ms after the last key (see flushNote), so
+     the 900ms here is what keeps Saved true when it shows — keep it the longer of the two. */
+  const [editing, setEditing] = useState(false)
+  const settle = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const typed = () => {
+    setEditing(true)
+    clearTimeout(settle.current)
+    settle.current = setTimeout(() => setEditing(false), 900)
+  }
+  useEffect(() => () => clearTimeout(settle.current), [])
+
+  /* The quiet editor's settings: typeface, size, focus mode, typewriter scroll, key sounds, the info
+     line. This machine's, not the stash's (see lib/page-settings). ⌘. switches focus, ⌘, opens the list. */
+  const [ps, setPs] = usePageSettings()
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '.') { e.preventDefault(); setPs('focus', !ps.focus) }
+      else if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v) }
+      // Esc puts the list away before it does anything else
+      else if (e.key === 'Escape' && open) { e.preventDefault(); e.stopPropagation(); setOpen(false) }
+    }
+    addEventListener('keydown', onKey, true)
+    return () => removeEventListener('keydown', onKey, true)
+  })
+  const scroller = useRef<HTMLDivElement>(null)
+  // the editor is made once, so the handlers it carries read the live settings through here
+  const feel = useRef(ps)
+  feel.current = ps
 
   const editor = useEditor({
-    extensions: [...noteExtensions, BlockKeys, Placeholder.configure({ placeholder: 'Write…' })],
-    content: toDoc(it.note),
+    extensions: PAGE_EXTENSIONS,
+    // read once: Tiptap only uses it on creation, and parsing the note on every render was the
+    // single largest cost of a keystroke on a long page
+    content: initial,
     editorProps: {
       attributes: { class: 'note-body outline-none', 'aria-label': 'Note' },
       handleClickOn: (_view, _pos, node) => {
@@ -189,6 +263,10 @@ export default function NoteEditor({ it, onBack, onOpen }: {
       /* While a [[ is being typed: Enter or Tab takes the first suggestion, and Esc puts the list
          away without leaving the note — stopped here, or App's own Esc would blur the editor. */
       handleKeyDown: (_view, e) => {
+        // a key's sound, for the keys that write: letters, space, Enter, Backspace — not ⌘ chords
+        if (!e.metaKey && !e.ctrlKey && (e.key.length === 1 || e.key === 'Enter' || e.key === 'Backspace')) {
+          click(feel.current.sound, e.key === ' ')
+        }
         if (!live.current.open) return false
         if (e.key === 'Escape') { e.stopPropagation(); live.current.dismiss(); return true }
         return (e.key === 'Enter' || e.key === 'Tab') && !!live.current.pick?.()
@@ -207,16 +285,25 @@ export default function NoteEditor({ it, onBack, onOpen }: {
       },
     },
     onUpdate: ({ editor }) => {
-      // ponytail: the whole note is written out and stored on every keystroke, as the old page did.
-      // Debounce it, flushing on blur, unmount and pagehide, if a long note ever types slowly.
-      const note = toNote(editor.getJSON())
-      last.current = note
-      patch(it.id, { note })
+      typed()
+      clearTimeout(pending.current)
+      pending.current = setTimeout(flushNote, 300)
       besideCaret(editor)   // the handles' position was measured against the text as it stood
     },
-    onSelectionUpdate: ({ editor }) => { readCaret(editor); besideCaret(editor); if (editor.state.selection.empty) setBar(null) },
-    onBlur: () => { setWiki(null) },
+    onSelectionUpdate: ({ editor }) => {
+      readCaret(editor); besideCaret(editor); if (editor.state.selection.empty) setBar(null)
+      /* Typewriter scroll: the line being written stays where the eye already is, a little above the
+         middle, and the page moves under it rather than the cursor running down the screen. */
+      const box = scroller.current
+      if (!feel.current.typewriter || !box || !editor.isFocused) return
+      const at = editor.view.coordsAtPos(editor.state.selection.from)
+      const r = box.getBoundingClientRect()
+      const by = at.top - r.top - r.height * 0.42
+      if (Math.abs(by) > 4) box.scrollBy({ top: by, behavior: 'smooth' })
+    },
+    onBlur: () => { setWiki(null); flushNote() },
   })
+  editorRef.current = editor
 
   /* The note changed somewhere else — another device, the inspector, an undo — so the document is
      read again from it. Never on the editor's own writes: those are `last`, and re-reading them
@@ -224,6 +311,11 @@ export default function NoteEditor({ it, onBack, onOpen }: {
      was, as near as the new text allows. */
   useEffect(() => {
     if (!editor || it.note === last.current) return
+    /* Typing still on its way out is newer than what just arrived, and a note is one field: the same
+       rule a sync merge holds to (the later edit wins), so the typing is kept and sent. Only when it
+       did change something — typed and deleted back to the stored text is nothing, and then the
+       arrival is taken in as usual. */
+    if (pending.current !== undefined && flushNote()) return
     last.current = it.note
     setHover(null)   // the handles name a position in the document that is about to be replaced
     setBox1(null)
@@ -232,7 +324,7 @@ export default function NoteEditor({ it, onBack, onOpen }: {
     editor.chain().setMeta('addToHistory', false).setContent(toDoc(it.note), { emitUpdate: false }).run()
     const max = editor.state.doc.content.size
     if (editor.isFocused) editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) })
-  }, [editor, it.note])
+  }, [editor, it.note, flushNote])
 
   /* Where nothing hovers — a phone — the handles stand beside the block the cursor is in, which is
      the only way to reach them there. With a mouse they follow the pointer instead (`onMove`), and
@@ -408,18 +500,40 @@ export default function NoteEditor({ it, onBack, onOpen }: {
     el.style.height = `${el.scrollHeight}px`
   }, [it.text, it.id])
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="room-for-buttons flex h-14 shrink-0 items-center gap-2 px-3 md:px-5">
-        {/* back says where back is: the project this is filed under, wearing its dot */}
-        <Button variant="ghost" size="sm" onClick={onBack} aria-label="Back to list" className="text-muted-foreground">
-          <ArrowLeft />
-          {filed && <span className="bg-muted-foreground size-2 rounded-full" style={filed.color ? { backgroundColor: filed.color } : undefined} />}
-          {filed?.name ?? 'Back'}
-        </Button>
-      </div>
+  const words = (it.note.match(/\S+/g) ?? []).length + (it.text.match(/\S+/g) ?? []).length
+  const minutes = Math.max(1, Math.round(words / 220))
 
-      <div className="mx-auto flex min-h-0 w-full max-w-[680px] flex-1 flex-col gap-5 px-6 pt-10 pb-6 md:max-w-[744px] md:px-14 md:pt-[72px]">
+  return (
+    <div
+      className={cn('quiet relative flex min-h-0 flex-1 flex-col', ps.focus && 'quiet-focus')}
+      style={{ '--page-font': FONTS[ps.font].stack, '--page-size': `${SIZES[ps.size][0]}px` } as React.CSSProperties}
+    >
+      {/* The way back is the path itself, faint, as the quiet editor has it — where you are is the
+          link to where you were. In the Mac app it stands clear of the window's three buttons. */}
+      <header className={cn('flex h-14 shrink-0 items-center gap-2 pr-4', desktop ? 'pl-[84px]' : 'pl-3 md:pl-6')}>
+        <button type="button" onClick={onBack} aria-label={`Back to ${filed?.name ?? 'the list'}`}
+          className="text-muted-foreground hover:text-foreground flex min-h-11 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors">
+          <ChevronLeft className="size-3.5" />
+          {filed && <span className="size-2 rounded-full" style={{ backgroundColor: filed.color ?? 'var(--muted-foreground)' }} />}
+          <span>{filed?.name ?? 'Stash'}</span>
+          <span aria-hidden className="opacity-60">/</span>
+          <span className="max-w-[40ch] truncate">{it.text || 'Untitled'}</span>
+          <span className="ml-2 font-mono text-[11px] opacity-60 max-md:hidden">esc</span>
+        </button>
+        <span className="flex-1" />
+        <Hint label={open ? 'Close settings (esc)' : 'Settings (⌘,)'}>
+          <button type="button" aria-expanded={open} aria-label={open ? 'Close settings' : 'Page settings'} onClick={() => setOpen((v) => !v)}
+            className="text-muted-foreground hover:text-foreground relative z-20 flex size-10 items-center justify-center rounded-xl transition-colors hover:bg-[rgb(127_127_127/0.1)]">
+            {open
+              ? <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+              : <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>}
+          </button>
+        </Hint>
+      </header>
+
+      {/* the page steps back while its settings are up, the way the quiet editor's does */}
+      <div className={cn('mx-auto flex min-h-0 w-full max-w-[668px] flex-1 flex-col gap-6 px-6 pt-10 transition-[opacity,filter,transform] duration-500 ease-[cubic-bezier(.16,1,.3,1)] md:pt-[104px]',
+        open && 'pointer-events-none scale-[0.97] opacity-0 blur-[10px]')}>
         <textarea
           ref={titleRef}
           rows={1}
@@ -429,20 +543,14 @@ export default function NoteEditor({ it, onBack, onOpen }: {
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); editor?.commands.focus('start') } }}
           placeholder="Untitled"
           aria-label="Title"
-          className="placeholder:text-muted-foreground shrink-0 resize-none overflow-hidden bg-transparent text-[34px] leading-[1.1] font-semibold tracking-[-0.035em] outline-none md:text-[40px]"
+          style={{ fontFamily: 'var(--page-font)', fontSize: `min(${SIZES[ps.size][1]}px, 9vw)` }}
+          className="placeholder:text-muted-foreground shrink-0 resize-none overflow-hidden bg-transparent leading-[1.1] font-semibold tracking-[-0.03em] outline-none"
         />
-        {/* what kind of thing it is, what it is tagged and when it last changed, said once and quietly:
-            one line of mono under the title rather than a row of chips and a date across the page */}
-        <div className="text-muted-foreground -mt-2 shrink-0 font-mono text-xs">
-          {[
-            it.type, ...it.tags.map((t) => '#' + t),
-            ...(it.editedAt ? [`edited ${new Date(it.editedAt).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`] : []),
-          ].join(' · ')}
-        </div>
 
         {/* the gutter is inside the scroller, which would otherwise clip the handles standing in it */}
         <div
-          className="-ml-6 min-h-0 flex-1 cursor-text overflow-y-auto pl-6 md:-ml-14 md:pl-14"
+          ref={scroller}
+          className={cn('-ml-6 min-h-0 flex-1 cursor-text overflow-y-auto pl-6 md:-ml-14 md:pl-14', ps.typewriter && 'pb-[45vh]')}
           // the empty page under the last block reads as more note, so a click there is the end of it
           onClick={(e) => { if (e.target === e.currentTarget) editor?.commands.focus('end') }}
           onMouseMove={onMove}
@@ -576,12 +684,73 @@ export default function NoteEditor({ it, onBack, onOpen }: {
             )}
           </div>
 
-          {/* the other half of every [[link]]: what points here, at the foot of what it points at */}
-          <div className="[&_label]:text-muted-foreground mt-10 border-t pt-5 empty:hidden [&_label]:font-mono [&_label]:text-[11px] [&_label]:font-medium [&_label]:tracking-[0.06em] [&_label]:uppercase">
+          {/* the other half of every [[link]]: what points here, quietly, at the foot of the page */}
+          <div className="[&_label]:text-muted-foreground mt-12 pb-24 empty:hidden [&_label]:text-[13px] [&_label]:font-normal">
             <Backlinks it={it} onOpen={onOpen} />
           </div>
         </div>
       </div>
+
+      {/* The quiet editor's info line: faint, at the foot, and only what you would glance at. */}
+      {open && <Settings ps={ps} set={setPs} />}
+
+      <footer role="status" className={cn('text-muted-foreground flex shrink-0 flex-wrap justify-between gap-x-6 gap-y-1 px-6 py-5 text-[13px] tabular-nums transition-opacity duration-500 md:px-9',
+        (!ps.info || open) && 'opacity-0')}>
+        <span>{editing ? 'Editing' : 'Saved'}</span>
+        <span className="flex gap-5">
+          {it.tags.length > 0 && <span className="max-md:hidden">{it.tags.map((t) => '#' + t).join(' ')}</span>}
+          <span>{words} {words === 1 ? 'word' : 'words'}</span>
+          <span>{minutes} min read</span>
+        </span>
+      </footer>
     </div>
+  )
+}
+
+/* ---------- the quiet editor's settings list: plain rows, applies as you choose ---------- */
+
+function Settings({ ps, set }: { ps: ReturnType<typeof usePageSettings>[0], set: ReturnType<typeof usePageSettings>[1] }) {
+  const Opt = <V extends string>({ value, current, label, onPick, style }: {
+    value: V, current: V, label: string, onPick: (v: V) => void, style?: React.CSSProperties
+  }) => (
+    <button type="button" aria-pressed={value === current} onClick={() => onPick(value)} style={style}
+      className={cn('relative py-3 text-sm transition-colors', value === current ? 'text-foreground' : 'text-muted-foreground hover:text-foreground')}>
+      {label}
+      <span aria-hidden className={cn('bg-foreground absolute inset-x-0 bottom-1.5 h-[1.5px] rounded-full transition-transform duration-500 ease-[cubic-bezier(.16,1,.3,1)]',
+        value === current ? 'scale-x-100' : 'scale-x-0')} />
+    </button>
+  )
+  const Switch = ({ on, label, onFlip }: { on: boolean, label: string, onFlip: () => void }) => (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onFlip}
+      className={cn('relative h-6 w-10 rounded-full p-0.5 transition-colors', on ? 'bg-foreground' : 'bg-foreground/15')}>
+      <span className={cn('bg-background block size-5 rounded-full shadow transition-transform duration-500 ease-[cubic-bezier(.34,1.45,.5,1)]', on && 'translate-x-4')} />
+    </button>
+  )
+  const Row = ({ label, children, last }: { label: string, children: React.ReactNode, last?: boolean }) => (
+    <div className={cn('flex min-h-14 flex-wrap items-center justify-between gap-x-6 border-t py-1.5', last && 'border-b')}>
+      <span className="text-[15px]">{label}</span>
+      <div className="flex flex-wrap items-center gap-5">{children}</div>
+    </div>
+  )
+  return (
+    <section aria-label="Page settings" className="animate-in fade-in-0 slide-in-from-bottom-2 absolute inset-0 z-10 flex justify-center overflow-auto px-6 pt-[120px] pb-20 duration-500">
+      <div className="flex w-full max-w-[560px] flex-col">
+        <h2 className="mb-7 text-[28px] font-semibold tracking-[-0.02em]">Settings</h2>
+        <Row label="Typeface">
+          {(Object.keys(FONTS) as PageFont[]).map((f) => <Opt key={f} value={f} current={ps.font} label={FONTS[f].label} onPick={(v) => set('font', v)} style={{ fontFamily: FONTS[f].stack }} />)}
+        </Row>
+        <Row label="Text size">
+          {(['s', 'm', 'l'] as PageSize[]).map((z) => <Opt key={z} value={z} current={ps.size} label="Aa" onPick={(v) => set('size', v)} style={{ fontSize: { s: 13, m: 15, l: 18 }[z] }} />)}
+        </Row>
+        <Row label="Key sounds">
+          {(['off', 'soft', 'crisp', 'typewriter'] as PageSound[]).map((k) => (
+            <Opt key={k} value={k} current={ps.sound} label={k[0].toUpperCase() + k.slice(1)} onPick={(v) => { set('sound', v); for (let i = 0; i < 4; i++) setTimeout(() => click(v, i === 2), i * 110) }} />
+          ))}
+        </Row>
+        <Row label="Focus mode"><Switch on={ps.focus} label="Focus mode" onFlip={() => set('focus', !ps.focus)} /></Row>
+        <Row label="Typewriter scroll"><Switch on={ps.typewriter} label="Typewriter scroll" onFlip={() => set('typewriter', !ps.typewriter)} /></Row>
+        <Row label="Word count and status" last><Switch on={ps.info} label="Word count and status" onFlip={() => set('info', !ps.info)} /></Row>
+      </div>
+    </section>
   )
 }

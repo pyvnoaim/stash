@@ -31,9 +31,10 @@ export const FIXED: [string, string][] = [
   ['⌘A', 'Select every row in the list — or the page text, where there is no list'],
   ['↑ ↓ or J K', 'Move through the list'],
   ['⏎ or double-click', 'Open the row full-page'],
+  ['E', 'Edit the row’s details: date, tags, repeat'],
   ['⇧↑ ⇧↓', 'Extend the selection'],
   ['⌥↑ ⌥↓', 'Reorder the selected row'],
-  ['Esc', 'Leave the field, close the page, drop the selection, close the inspector'],
+  ['Esc', 'Leave the field, close the page, close the details, drop the selection'],
   ['⌥⌘↑ ⌥⌘↓', 'Move the block you are writing in, on a note page'],
   ['⇧⌘D', 'Duplicate it'],
 ]

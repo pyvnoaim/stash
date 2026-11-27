@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   ArrowDownAZ, ArrowDownZA, ArrowUpDown, ClockArrowDown, ClockArrowUp, GripVertical,
-  ChevronRight, PencilLine, Plus, Trash2,
+  CalendarCheck, ChevronRight, Inbox, Lightbulb, PencilLine, Plus, Trash2,
 } from 'lucide-react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -25,7 +25,6 @@ import {
   SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, useSidebar,
 } from '@/components/ui/sidebar'
 import { Hint } from '@/components/ui/tooltip'
-import { Kbd } from '@/components/ui/kbd'
 import { NavUser } from '@/components/nav-user'
 import { ProjectDialog } from '@/components/project-dialog'
 import { SettingsDialog } from '@/components/settings-dialog'
@@ -35,7 +34,7 @@ import { today } from '@/lib/parse'
 import {
   addProject, moveProject, patch, patchProject, project, removeProject,
   canNest, childProjects, renameTag, rootProjects, setProjectSort, tagCounts, toggleCollapsed, TOOLS,
-  desktop, toolOn, TRASH, useStash, VIEWS, type Item, type Project, type ProjectSort,
+  desktop, toolOn, useStash, VIEWS, type Item, type Project, type ProjectSort,
 } from '@/lib/store'
 
 const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
@@ -51,6 +50,14 @@ const SORTS: { id: ProjectSort; label: string; icon: React.ElementType }[] = [
 /** How long the open waits for a second click. Comfortably inside the platform's own
  *  double-click window, and short enough that a plain click still feels like one. */
 const DOUBLE_CLICK = 220
+
+/** The views the sidebar leads with. The rest — Today, Upcoming, Flagged, Everything, Done, the
+ *  trash — are a ⌘K away, and a link to any of them still opens it. */
+const LEAD = [
+  { id: 'inbox', icon: Inbox },
+  { id: 'ideas', icon: Lightbulb },
+  { id: 'tasks', icon: CalendarCheck },
+] as const
 
 /** The tags group's fold, kept in `collapsed` beside the project ids — none of which it can be. */
 const TAGS_FOLD = '__tags__'
@@ -120,7 +127,7 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
 
   // dropping a row on a destination is the whole point of the sidebar being a drop target.
   // Only where the drop means something — Upcoming, Everything and Done have nothing to set.
-  const DROPS: Record<string, Partial<Item>> = { today: { due: today() }, inbox: { pid: null } }
+  const DROPS: Record<string, Partial<Item>> = { today: { due: today() }, tasks: { due: today() }, inbox: { pid: null } }
 
   const clear = () => { setOver(null); setEdge(null) }
 
@@ -305,39 +312,31 @@ export function AppSidebar({ tag, onTag, onNavigate, onSearch }: {
     /* On the desk, beside the sheet: no border and no fill of its own. It slides off the screen
        rather than folding to icons — the rows are words, and a column of them with the words taken
        away is not a way to find anything. */
-    <Sidebar variant="inset" collapsible="offcanvas">
+    <Sidebar variant="sidebar" collapsible="offcanvas">
       {/* In the Mac app the window has no title bar, and its three buttons sit in this row: the
           wordmark moves in beside them, on their centre line, and the row is exactly the strip that
           drags the window (Stash.swift, DragStrip) — nothing in it is there to be clicked. */}
-      <SidebarHeader ref={headRef} className={desktop ? '-mt-2 h-[52px] justify-center pt-0 pr-4 pb-0 pl-[84px]' : 'px-4 pt-4 pb-1'}>
+      <SidebarHeader ref={headRef} className={cn('flex-row items-center', desktop ? '-mt-2 h-[52px] pt-0 pr-4 pb-0 pl-[84px]' : 'px-4 pt-4 pb-1')}>
         <span className="font-pixel text-xl tracking-[0.02em]">stash</span>
+        {/* The one search over everything, as the key that opens it: a second search box that
+            found less than ⌘K would be two answers to one question. */}
+        <button type="button" onClick={() => { onSearch(); setOpenMobile(false) }}
+          className="border-sidebar-border text-muted-foreground hover:text-foreground ml-auto rounded-md border px-1.5 py-0.5 font-mono text-[11px] transition-colors">
+          ⌘K
+        </button>
       </SidebarHeader>
 
       <SidebarContent>
-        {/* The one search over everything. It opens the palette rather than being a field of its
-            own: a second search box that finds less than ⌘K would be two answers to one question. */}
-        <SidebarGroup className="pb-0">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton onClick={() => { onSearch(); setOpenMobile(false) }}
-                className="border-sidebar-border text-muted-foreground bg-background/60 h-[34px] border">
-                <span>Search</span>
-                <Kbd className="ml-auto rounded-sm bg-transparent font-mono">⌘K</Kbd>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroup>
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {Object.entries(VIEWS).map(([id, v]) => {
-                // Done and the trash carry no badge: neither is work waiting to be done, and a
-                // number beside them is a number nobody is meant to act on
-                const n = id === 'done' || id === TRASH ? 0 : s.items.filter(v.filter).length
+              {LEAD.map(({ id, icon: Icon }) => {
+                const n = s.items.filter(VIEWS[id].filter).length
                 return (
                   <SidebarMenuItem key={id} {...dropOn(id)}>
                     <SidebarMenuButton isActive={s.sel === id} onClick={() => go(id)}>
-                      <span>{v.name}</span>
+                      <Icon />
+                      <span>{VIEWS[id].name}</span>
                     </SidebarMenuButton>
                     {n > 0 && <SidebarMenuBadge className={COUNT}>{n}</SidebarMenuBadge>}
                   </SidebarMenuItem>

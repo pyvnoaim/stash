@@ -27,7 +27,7 @@ for (const junk of [null, undefined, 42, 'nope', [], { items: 'no' }, { projects
   const st = load(junk)
   assert.deepEqual(st.items, [])
   assert.deepEqual(st.projects, [])
-  assert.equal(st.sel, 'today')
+  assert.equal(st.sel, 'tasks')
   assert.equal(st.theme, 'auto')
 }
 
@@ -105,10 +105,10 @@ assert.equal(load({ items: [{ id: '1' }, { text: 'no id' }, null] }).items.lengt
 
 // sel survives only if it still points somewhere
 assert.equal(load({ sel: 'done' }).sel, 'done')
-assert.equal(load({ sel: 'overview' }).sel, 'today')   // a page that was retired opens on Today
+assert.equal(load({ sel: 'overview' }).sel, 'tasks')   // a page that was retired opens on Tasks
 assert.equal(load({ sel: 'pdf' }).sel, 'pdf')
 assert.equal(load({ sel: 'a', projects: [{ id: 'a', name: 'Kova' }] }).sel, 'a')
-assert.equal(load({ sel: 'a' }).sel, 'today')
+assert.equal(load({ sel: 'a' }).sel, 'tasks')
 
 assert.equal(load({ theme: 'dark' }).theme, 'dark')
 assert.equal(load({ theme: 'neon' }).theme, 'auto')
@@ -130,7 +130,7 @@ removeProject(proj.id)
 assert.deepEqual(getState().projects, [])
 assert.deepEqual(getState().items.map((i) => i.id).sort(), ['open', 'shut'])
 assert.deepEqual(getState().items.map((i) => i.pid), [null, null])
-assert.equal(getState().sel, 'today')   // the view you were in went with it
+assert.equal(getState().sel, 'tasks')   // the view you were in went with it
 
 // clearing finished takes only the finished, and undo puts them back
 const cleared = clearDone()
@@ -1016,14 +1016,14 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length)
   // the Disk tool came out: a hash or a stored view naming it opens Today
   assert.equal(isRoute(fresh, 'disk'), false)
-  assert.equal(load({ sel: 'disk' }).sel, 'today')
+  assert.equal(load({ sel: 'disk' }).sel, 'tasks')
   assert.equal(isRoute(fresh, SUBS), true)
 
   // switched off, it is not a route — and a document naming it as the open view opens elsewhere
   const off = load({ hidden: [SUBS] })
   assert.equal(toolOn(off, SUBS), false)
   assert.equal(isRoute(off, SUBS), false)
-  assert.equal(load({ hidden: [SUBS], sel: SUBS }).sel, 'today')
+  assert.equal(load({ hidden: [SUBS], sel: SUBS }).sel, 'tasks')
   assert.equal(load({ hidden: [PDF], sel: SUBS }).sel, SUBS)   // the others are untouched
 
   // junk in the field is not a switch: only real ids, and anything else is no ids at all
@@ -1031,13 +1031,13 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   assert.deepEqual(load({ hidden: [SUBS, 'market', 7 as unknown as string] }).hidden, [SUBS])
 
   // a page that was retired is not a route either: a document left standing on it opens on Today
-  assert.equal(load({ sel: 'market' }).sel, 'today')
+  assert.equal(load({ sel: 'market' }).sel, 'tasks')
 
   // switching one off while standing on it moves you off it, rather than leaving a blank page
   select(SUBS)
   assert.equal(getState().sel, SUBS)
   setTool(SUBS, false)
-  assert.equal(getState().sel, 'today')
+  assert.equal(getState().sel, 'tasks')
   setTool(SUBS, true)
   assert.equal(toolOn(getState(), SUBS), true)
 }

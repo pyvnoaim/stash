@@ -10,7 +10,7 @@ import { ItemList } from '@/components/item-list'
 import { ListHeader } from '@/components/list-header'
 import { MobileTabs } from '@/components/mobile-tabs'
 import { ProjectDialog } from '@/components/project-dialog'
-import SubsPage from '@/components/subs-page'
+import { ShortcutsDialog } from '@/components/shortcuts-dialog'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useListKeys } from '@/hooks/use-list-keys'
@@ -23,6 +23,8 @@ import {
 
 // the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
 const PdfEditor = lazy(() => import('@/pdf/editor'))
+// a tool page most visits never open
+const SubsPage = lazy(() => import('@/components/subs-page'))
 // the editor is the heaviest thing in the app and most visits never open a note full-page
 const NotePage = lazy(() => import('@/components/note-editor'))
 
@@ -119,7 +121,8 @@ export default function App() {
 
   /* Which list the open page was opened from — see the effect below. */
   const pageFrom = useRef<string | null>(null)
-  const openPage = (id: string) => { pageFrom.current = s.sel; setPageItem(id) }
+  // a double-click's second click asks for details on the way; the page answers both
+  const openPage = (id: string) => { pageFrom.current = s.sel; setDetails(false); setPageItem(id) }
 
   /* The marks name rows in the list you were looking at, and this is no longer that list.
      The open page is different: a tool page is a detour rather than a destination,
@@ -128,6 +131,7 @@ export default function App() {
      another list or a search, is leaving it for good. */
   useEffect(() => {
     setMarked([])
+    setDetails(false)
     if (query || (!isPage(s.sel) && s.sel !== pageFrom.current)) setPageItem(null)
   }, [s.sel, query])
   // the open page is an item; if it's gone (deleted, filtered out) fall back to the list
@@ -223,10 +227,25 @@ export default function App() {
      it is the click that means "I am about to write here", where J and K mean "show me the next
      one", and only this half is allowed to take the keyboard. */
   const [clicked, setClicked] = useState(0)
+  /* The details panel opens on purpose — "Edit details" or e — rather than on every click: a click
+     selects, the way j and k do, and the list keeps its width. It follows the selection while open. */
+  const [details, setDetails] = useState(false)
+  // the `?` sheet — here, so the list's keys can stand still while it is open
+  const [keysOpen, setKeysOpen] = useState(false)
+  // nothing in hand is nothing to show the details of: the next click selects again, not opens
+  useEffect(() => { if (!s.focus && !marked.length) setDetails(false) }, [s.focus, marked.length])
+  useEffect(() => {
+    const open = () => setDetails(true)
+    addEventListener('stash:details', open)
+    return () => removeEventListener('stash:details', open)
+  }, [])
   const pick = (id: string, range: boolean) => {
     const { items: list, focus: anchor } = pickState.current
     const from = list.findIndex((i) => i.id === anchor)
     const to = list.findIndex((i) => i.id === id)
+    /* A click on the row already in hand is a second look: it opens the details. That is the way in
+       on a phone, which has no `e`, and it is what a second click usually means anyway. */
+    if (!range && id === anchor) { setMarked([]); setDetails(true); setClicked((n) => n + 1); return }
     if (!range || from < 0 || to < 0) { setMarked([]); focus(id); setClicked((n) => n + 1); return }
     setMarked(list.slice(Math.min(from, to), Math.max(from, to) + 1).map((i) => i.id))
   }
@@ -236,6 +255,7 @@ export default function App() {
   useListKeys({
     s, query, items, selected, chosen, marked, setMarked, inTrash, pageItem, setPageItem,
     palette, setPalette, filing, setFiling, searchRef, openCapture, openPage, drop, purge,
+    details, setDetails, keysOpen, setKeysOpen,
   })
 
   // the Mac app's menu bar: its ⌘K is taken before the page sees the key, so it says so instead
@@ -248,7 +268,7 @@ export default function App() {
   return (
     // delayDuration: the shipped default is 0, which fires a tooltip at every passing cursor
     <TooltipProvider delayDuration={200}>
-    <SidebarProvider>
+    <SidebarProvider className="stash-glow">
       {/* the sidebar tag is lit only while the search is that one tag and nothing else */}
       <AppSidebar
         tag={(() => {
@@ -261,14 +281,14 @@ export default function App() {
       />
 
       {/* the sheet: inset from the desk on every side but the sidebar's, inside a hairline */}
-      <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden md:h-[calc(100svh-1rem)] md:border md:shadow-none">
+      <SidebarInset className="flex h-svh min-w-0 flex-row overflow-hidden bg-transparent">
         <div className="flex min-w-0 flex-1 flex-col">
           {/* the full-page editor brings its own header (back + title), so the search bar steps aside */}
           {!paged && (
           <ListHeader query={query} setQuery={setQuery} page={page} count={items.length} searchRef={searchRef} boxRef={boxRef} />
           )}
 
-          {page === SUBS && <SubsPage />}
+          {page === SUBS && <Suspense fallback={<Waiting name="Subscriptions" />}><SubsPage /></Suspense>}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would
@@ -285,8 +305,13 @@ export default function App() {
               reading, rather than being put back in a list to find your place in */}
           {!page && paged && (
             // keyed: another note is another page, not this one's open block carried over to it
+            /* The whole window, sidebar and all: a page is somewhere you go to write, and the quiet
+               editor it is modelled on has nothing else on screen. Esc, or the path at the top,
+               comes back to the list exactly as it was. */
             <Suspense fallback={<Waiting name="note" />}>
-              <NotePage key={paged.id} it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
+              <div className="bg-background stash-glow fixed inset-0 z-30 flex flex-col">
+                <NotePage key={paged.id} it={paged} onBack={() => setPageItem(null)} onOpen={openPage} />
+              </div>
             </Suspense>
           )}
 
@@ -303,8 +328,8 @@ export default function App() {
 
         {/* the full-page editor already holds the item, so the side panel steps aside for it — and
             so does the trash, where there is nothing to edit on a deleted row */}
-        <DetailsPanel onDismiss={() => { setMarked([]); focus(null) }}>
-          {page || paged || inTrash ? null : marked.length > 1
+        <DetailsPanel onDismiss={() => setDetails(false)}>
+          {page || paged || inTrash || !details ? null : marked.length > 1
             ? <Selection ids={marked} onDelete={() => drop(marked)} />
             : selected ? <Inspector it={selected} openedAt={clicked} onDelete={() => drop([selected.id])} onExpand={() => openPage(selected.id)} onOpenItem={openPage} /> : null}
         </DetailsPanel>
@@ -330,6 +355,8 @@ export default function App() {
           focus((items.slice(at + 1).find((i) => !ids.includes(i.id)) ?? items.find((i) => !ids.includes(i.id)))?.id ?? null)
         }}
       />
+
+      <ShortcutsDialog open={keysOpen} onOpenChange={setKeysOpen} />
 
       <ProjectDialog
         open={newProject}

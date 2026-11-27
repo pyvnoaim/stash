@@ -7,6 +7,8 @@ const BY_VIEW: Record<string, Copy> = {
   today: { title: 'Nothing due today.', body: 'Give anything a date and it turns up here on the day.' },
   upcoming: { title: 'Nothing scheduled.', body: 'Type a date as you capture: tomorrow, friday, 2026-09-01.' },
   flagged: { title: 'Nothing flagged.', body: 'Start a capture with ! to flag it, or flag anything from its row.' },
+  ideas: { title: 'No ideas yet.', body: 'A plain line captured anywhere is an idea, and it lands here.' },
+  tasks: { title: 'Nothing dated.', body: 'Give a line a date as you capture — tomorrow, friday 9am — and it shows up here.' },
   inbox: { title: 'Inbox is empty.', body: 'Anything captured without a project waits here until you file it.' },
   all: { title: 'Nothing open.', body: 'Everything you capture shows up here until it is finished.' },
   done: { title: 'Nothing finished yet.', body: 'Tick a task off and it moves here, kept for good.' },

@@ -1,30 +1,38 @@
 # Stash design
 
-A white sheet on a warm-grey desk, with one accent. It is quiet by default. Colour, weight and
+The quiet editor's ground, one accent. Two screens do the work: a fast list of quick titles, and the
+page, which is the quiet editor (`~/dev/quiet-editor`). It is quiet by default. Colour, weight and
 chrome are spent only where they say something. Native platform behaviour beats anything custom.
-
-When in doubt, copy `subs-page.tsx`. It is the reference page: figures across the top, a control
-row, an add row, then one ruled list.
 
 ## Surfaces
 
 | Surface | Token | Light / dark | Used for |
 | --- | --- | --- | --- |
-| Desk | `--sidebar` | `#efefec` / `#111214` | behind the sidebar and phone tabs |
-| Sheet | `--background` | `#ffffff` / `#1a1b1e` | all content |
-| Well | `--muted` | `#f6f6f4` / `#222327` | the add row, code, a resting tile |
-| Tray | `--secondary` | `#f1f1ee` / `#26282c` | behind segmented pills |
+| Ground | `--background`, `--sidebar` | `#f7f7f5` / `#18181a` | everything: the sidebar and the page stand on it together |
+| Glow | `--glow` (`.stash-glow`) | white 90% / white 6% | one radial wash from the top, behind everything |
+| Float | `--popover` | `#ffffff` / `#202023` | what floats: the capture field, menus, dialogs |
+| Well | `--muted` | `#f0efeb` / `#202023` | code, a resting tile |
+| Tray | `--secondary` | `#efeeea` / `#26262a` | behind segmented pills |
 
-- The active sidebar row is a piece of the sheet: sheet colour inside a 1px `--sidebar-border`
-  hairline, not a filled highlight.
-- Lists are one sheet with rules between the rows (`border-t` on the list, `border-b` per row), not a
-  card per row. A border around something already aligned is chrome, not structure.
-- No shadows on the sheet. Elevation is for things that float: popovers, dialogs, toasts.
+- No sheet, no desk: the sidebar and the content share the ground, split by one `--sidebar-border` hairline.
+- The active sidebar row is lifted off the ground: white (`--sidebar-accent`) inside a hairline.
+- Lists are rows on the ground with space between them, not cards. A border around something already
+  aligned is chrome, not structure.
+- Elevation is for things that float — the capture field, popovers, dialogs, toasts — and nothing else.
+
+## The page
+
+Opening a row fills the window with the quiet editor: no sidebar, the path faint at the top (it is the
+way back, as is Esc), a 44px title, 18px text at 1.8 in a 620px column, and the info line at the foot
+(Saved or Editing, tags, words, read time). Focus mode fades every block but the one being written.
+Its settings (typeface, size, focus, typewriter scroll, key sounds, the info line) are this device's,
+in `lib/page-settings.ts`, and open as a plain list over the page, which blurs back behind it.
 
 ## Colour
 
 - **One accent:** `--primary` (`#2f4bff`, `#4a62ff` dark). It is the one filled button on a page,
-  the one that commits. Never decoration, never two on one screen.
+  the one that commits, and the + on the capture field. Never decoration, never two on one screen,
+  and never a project's colour.
 - `--tint` / `--tint-foreground`: the accent as a wash, for a link or a chip that points somewhere.
 - The only other colours: project dots, `MONEY_IN` (emerald) for income, and `--destructive` for
   what deletes or undoes.
@@ -49,6 +57,8 @@ row, an add row, then one ruled list.
 
 ## Layout and spacing
 
+- **Rows:** tasks wear their circle, a line with a page behind it wears a page icon, a plain idea wears
+  nothing. The row the keyboard is on is a soft background only — never an accent bar at its edge.
 - **Tool page shell:** `flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 pt-3 pb-8
   *:shrink-0 md:px-8`. The page scrolls inside itself; the document never scrolls.
 - Sections are separated by `gap-6` and, where a band ends, a `border-b pb-7`.
@@ -103,7 +113,7 @@ transition to 1ms (`index.css`), so nothing may depend on an animation finishing
 
 ## Phone
 
-- Below `md` the sidebar becomes bottom tabs (`mobile-tabs.tsx`), padded for the home indicator
+- Below `md` the sidebar becomes bottom tabs (`mobile-tabs.tsx`: Inbox, Ideas, Tasks, Search, More), padded for the home indicator
   with `env(safe-area-inset-bottom)`.
 - A field that has no room stays an icon until tapped, then takes the whole row.
 - Hover-reveal controls must also be reachable by tap or long-press (the row's context menu).
@@ -111,7 +121,7 @@ transition to 1ms (`index.css`), so nothing may depend on an animation finishing
 ## Focus and keyboard
 
 - Everything works from the keyboard. Shortcuts live in one table (`lib/keys.ts`) and can be
-  rebound; never hard-code a key in a component.
+  rebound; never hard-code a key in a component. `?` shows them all; each list shows three at its foot.
 - Focus is visible (`focus-visible:border-ring` or the ring utilities). Never `outline-none`
   without a replacement.
 - A dialog owns every key while it is open, Esc included.

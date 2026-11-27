@@ -1,14 +1,13 @@
 import { useMemo, useState } from 'react'
-import { CornerDownLeft } from 'lucide-react'
-import { ITEM_TYPES } from '@/components/item-types'
+import { CornerDownLeft, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import { dayLabel, parseCapture, parseList, repeatLabel, today, type Parsed } from '@/lib/parse'
 import { addItem, addItems, itemOf, project, tagsFor, TRASH, useStash, type Item, type ItemType } from '@/lib/store'
 
-const TYPES = ITEM_TYPES
+/** `[] ` at the start of a line is how you say "task" when nothing else in the line does. */
+const TICK = /^\s*\[\s?\]\s*/
 
 export function Capture({ inputRef, className, announce }: {
   inputRef: React.RefObject<HTMLInputElement | null>
@@ -18,10 +17,18 @@ export function Capture({ inputRef, className, announce }: {
   announce?: boolean
 }) {
   const s = useStash()
-  const [type, setType] = useState<ItemType>('task')
   const [raw, setRaw] = useState('')
 
-  const parsed = useMemo(() => parseCapture(raw, s.projects), [raw, s.projects])
+  const parsed = useMemo(() => parseCapture(raw.replace(TICK, ''), s.projects), [raw, s.projects])
+
+  /* No switch to set first: the line says what it is. In Ideas it is an idea and in Tasks a task;
+     anywhere else a date or a leading `[]` makes it a task, and a plain line is an idea — most of
+     what gets captured is a thought to keep, not a thing to do. */
+  const typeOf = (text: string, line: Parsed): ItemType =>
+    s.sel === 'ideas' ? 'idea'
+      : s.sel === 'tasks' || s.sel === 'today' || TICK.test(text) || line.due ? 'task'
+        : 'idea'
+  const type = typeOf(raw, parsed)
 
   // what the parser understood, shown before you commit to it
   const understood = [
@@ -35,13 +42,13 @@ export function Capture({ inputRef, className, announce }: {
   /** The project a line lands in: the one it names, or the one you are standing in. */
   const pidOf = (line: Parsed) => line.pid ?? (project(s, s.sel) ? s.sel : null)
 
-  /* Added while standing in Today, an undated line is due today — otherwise it vanished from the
-     list it was typed into. Not under a search (`announce`): that list is not Today. */
-  const onToday = s.sel === 'today' && !announce
+  /* Added while standing in Today or Tasks, an undated line is due today — otherwise it vanished
+     from the list it was typed into. Not under a search (`announce`): that list is not either. */
+  const onToday = (s.sel === 'today' || s.sel === 'tasks') && !announce
 
-  // a line off the clipboard brought its own checkbox, a typed one is whatever the toggle says
-  const make = (line: Parsed, done: boolean | null = null): Item => itemOf(line, {
-    type: done === null ? type : 'task',
+  // a line off the clipboard brought its own checkbox; a typed one is whatever it says it is
+  const make = (line: Parsed, done: boolean | null = null, kind: ItemType = type): Item => itemOf(line, {
+    type: done === null ? kind : 'task',
     pid: pidOf(line),
     due: line.due ?? (onToday ? today() : null),
     done: !!done,
@@ -96,9 +103,9 @@ export function Capture({ inputRef, className, announce }: {
     e.preventDefault()
     // read again now: the preview was worked out when the line was typed, and "9am" or "today"
     // can mean something else by the time Enter is pressed
-    const now = parseCapture(raw, s.projects)
+    const now = parseCapture(raw.replace(TICK, ''), s.projects)
     if (!now.text) return
-    const it = make(now)
+    const it = make(now, null, typeOf(raw, now))
     addItem(it)
     setRaw('')
     if (announce) toast(`Added to ${it.pid ? project(s, it.pid)?.name ?? 'Stash' : it.due ? 'your lists' : 'Inbox'}`)
@@ -111,7 +118,7 @@ export function Capture({ inputRef, className, announce }: {
     const lines = parseList(text, s.projects)
     if (!lines.length) return
     e.preventDefault()
-    addItems(lines.map((l) => make(l, l.done)))
+    addItems(lines.map((l) => make(l, l.done, typeOf('', l))))
     toast(`Added ${lines.length} ${lines.length === 1 ? 'item' : 'items'}`)
   }
 
@@ -123,40 +130,11 @@ export function Capture({ inputRef, className, announce }: {
 
   return (
     <form onSubmit={submit} autoComplete="off" className={cn('relative', className)}>
-      {/* The first thing on the page, and the size of it says so: a filled field rather than an
-          outlined one, tall enough to be the obvious place to start typing. */}
-      <InputGroup className="bg-muted dark:bg-muted h-12 rounded-[10px] border-transparent">
-        <InputGroupAddon align="inline-start" className="pl-2">
-          {/* grid-cols-3 under w-fit gives three columns as wide as the widest label, which is what
-              lets the pill be a plain w-1/3 translated by column — no measuring, no layout effect */}
-          <ToggleGroup
-            type="single"
-            value={type}
-            onValueChange={(v) => { if (v) { setType(v as ItemType); inputRef.current?.focus() } }}
-            className="relative grid shrink-0 grid-cols-3 gap-0"
-          >
-            <span
-              aria-hidden
-              className="bg-background ring-border absolute inset-y-0 left-0 w-1/3 rounded-md ring-1 transition-transform duration-200 ease-out motion-reduce:transition-none"
-              style={{ transform: `translateX(${TYPES.findIndex((t) => t.id === type) * 100}%)` }}
-            />
-            {/* labels stay visible: three options fit, and a hover-only label is a bug farm */}
-            {TYPES.map(({ id, label, icon: Icon }) => (
-              <ToggleGroupItem
-                key={id}
-                value={id}
-                aria-label={label}
-                // the pill draws the active background now, so the item's own must get out of its way
-                className="text-muted-foreground data-[state=on]:text-foreground relative z-10 h-8 w-full gap-1.5 rounded-md px-2.5 hover:bg-transparent data-[state=on]:bg-transparent"
-                // radix focuses the item on click and onValueChange hands focus straight back to the
-                // field — long enough for the focus ring to flash. Keyboard focus still lands normally.
-                onMouseDown={(e) => e.preventDefault()}
-              >
-                <Icon className="size-3.5" />
-                <span className="hidden text-xs sm:inline">{label}</span>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+      {/* The one thing on the page that floats: white above the ground, with a soft shadow, the
+          way the menus are — it is where every line starts. */}
+      <InputGroup className="bg-popover dark:bg-popover border-border h-[52px] rounded-xl shadow-[0_10px_30px_rgb(31_29_26/0.07),0_1px_3px_rgb(31_29_26/0.05)] dark:shadow-[0_10px_30px_rgb(0_0_0/0.35)]">
+        <InputGroupAddon align="inline-start" className="pl-4">
+          <Plus className="text-primary size-4" strokeWidth={2.4} />
         </InputGroupAddon>
 
         <InputGroupInput
@@ -168,8 +146,9 @@ export function Capture({ inputRef, className, announce }: {
           aria-label="Add an item"
           disabled={locked}
           placeholder={locked ? 'The trash takes nothing new'
-              : here ? `Add to ${here.name}` : s.sel === 'inbox' ? 'Add anything — sort it later'
-              : onToday ? 'Add to Today' : 'Add to Stash'}
+              : s.sel === 'ideas' ? 'An idea, then Enter'
+              : s.sel === 'tasks' || s.sel === 'today' ? 'A task, then Enter — tomorrow 9am works'
+              : here ? `A quick title for ${here.name}, then Enter` : 'A quick title, then Enter'}
           className="pl-3! text-[15px]"   // beats the group's own [&>input]:pl-1.5
         />
 
@@ -181,6 +160,8 @@ export function Capture({ inputRef, className, announce }: {
               ))}
             </span>
           ) : null}
+          {/* what it will be, said quietly before it is — so a plain line becoming an idea is no surprise */}
+          {raw.trim() && <span className="text-muted-foreground font-mono text-xs">{type}</span>}
           {raw.trim() && (
             <kbd className="text-muted-foreground px-1.5 py-0.5 font-mono text-[10px]">
               <CornerDownLeft className="inline size-3" />

@@ -218,6 +218,11 @@ export const markAll = (list: Delete[], ids: Set<string>, deleted: boolean): Del
    and finally the archive. */
 export const VIEWS = {
   inbox: { name: 'Inbox', filter: (i: Item) => !i.done && !i.pid },
+  /* The two the sidebar leads with, beside Inbox: the quick lines that are ideas, and every dated
+     thing in one run — what slipped, what is today, what is coming — so the day is one list rather
+     than three places to look. Today and Upcoming stay as views of their own for ⌘K and links. */
+  ideas: { name: 'Ideas', filter: (i: Item) => !i.done && i.type === 'idea' },
+  tasks: { name: 'Tasks', filter: (i: Item) => !i.done && !!i.due, grouped: true },
   today: { name: 'Today', filter: (i: Item) => !i.done && !!i.due && i.due <= today(), grouped: true },
   upcoming: { name: 'Upcoming', filter: (i: Item) => !i.done && !!i.due && i.due > today(), grouped: true },
   flagged: { name: 'Flagged', filter: (i: Item) => !i.done && i.flag },
@@ -228,6 +233,10 @@ export const VIEWS = {
      It says false rather than throwing, because the counters do run it over every item. */
   trash: { name: 'Recently deleted', filter: () => false },
 } as const
+
+/** Where the app opens and where it lands when the view it was in goes away: Tasks, which holds
+ *  today and is lit in the sidebar, where Today itself is a ⌘K away and lights nothing. */
+export const HOME = 'tasks'
 
 /** `sel` for the trash, which is a view id like any other — but the rows come from `s.trash`. */
 export const TRASH = 'trash'
@@ -260,7 +269,7 @@ export const setTool = (s: State, id: string, on: boolean): State => ({
   ...s,
   hidden: on ? s.hidden.filter((h) => h !== id) : [...s.hidden, id],
   // switched off while you are standing on it, which is otherwise a page with no way back to it
-  sel: !on && s.sel === id ? 'today' : s.sel,
+  sel: !on && s.sel === id ? HOME : s.sel,
 })
 
 /** Everything `sel` is allowed to be, which is also everything the URL hash may name. A tool that
@@ -271,7 +280,7 @@ export const isRoute = (s: Pick<State, 'projects' | 'hidden'>, id: string) =>
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
 export const blank = (): State => ({
-  v: 1, projects: [], items: [], trash: [], subs: [], sel: 'today', focus: null, theme: 'auto',
+  v: 1, projects: [], items: [], trash: [], subs: [], sel: HOME, focus: null, theme: 'auto',
   projectSort: 'manual', collapsed: [], hidden: [], hotkeys: {}, deletes: [],
   subSort: 'recent', subView: 'expense',
 })
@@ -533,6 +542,7 @@ function sortProjects(s: State, list: Project[]): Project[] {
   }
   if (s.projectSort === 'edited' || s.projectSort === 'edited-asc') {
     const touched = new Map(s.projects.map((p) => [p.id, 0]))
+    const parentOf = new Map(s.projects.map((p) => [p.id, p.parent]))
     const bump = (id: string, at: number) => {
       if (at > (touched.get(id) ?? 0)) touched.set(id, at)
     }
@@ -541,7 +551,7 @@ function sortProjects(s: State, list: Project[]): Project[] {
       const at = Math.max(i.editedAt ?? 0, i.ts)
       bump(i.pid, at)
       // work in a sub-project is work in its parent, or a busy parent would sort as untouched
-      const up = s.projects.find((p) => p.id === i.pid)?.parent
+      const up = parentOf.get(i.pid)
       if (up) bump(up, at)
     }
     const dir = s.projectSort === 'edited' ? -1 : 1
@@ -595,7 +605,11 @@ export const inProject = (s: State, id: string) => {
 }
 
 /** How much is still open under a project, its sub-projects included. */
-export const openIn = (s: State, id: string) => s.items.filter((i) => !i.done && inProject(s, id)(i)).length
+export const openIn = (s: State, id: string) => {
+  // the lookup once, not once per item: called per project over every item, that was the cost
+  const has = inProject(s, id)
+  return s.items.filter((i) => !i.done && has(i)).length
+}
 
 /** The order kinds read in, in Everything: tasks to do, then ideas and notes to keep. */
 export const TYPE_RANK: Record<ItemType, number> = { task: 0, idea: 1, note: 2 }
@@ -910,7 +924,7 @@ export const removeProject = (s: State, id: string): State => ({
   projects: s.projects.filter((p) => p.id !== id).map((p) => (p.parent === id ? { ...p, parent: null } : p)),
   // stamped, so a merge keeps them in Inbox rather than filed under a project that is gone
   items: s.items.map((i) => (i.pid === id ? { ...i, pid: null, editedAt: Date.now() } : i)),
-  sel: s.sel === id ? 'today' : s.sel,
+  sel: s.sel === id ? HOME : s.sel,
   collapsed: s.collapsed.filter((c) => c !== id),
   deletes: mark(s.deletes, id, true),
 })

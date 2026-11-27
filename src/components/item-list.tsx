@@ -66,6 +66,8 @@ export function ItemList({
   // and recompute when the content itself changes, without tearing the observer down each time
   useEffect(checkMore, [items])
 
+  const day = today()
+  const grouped = isGrouped(s)
   let group: string | null = null
 
   return (
@@ -127,13 +129,15 @@ export function ItemList({
           <EmptyState view={s.sel} query={query} onOpen={jumpTo} />
         ) : (
           items.map((it) => {
+            /* worked out once per render (see `day` and `grouped` above the map): per row they were
+               a date format and a view lookup for every line on screen */
             // every type-sorted list reads as sections by kind; the dated views keep their
             // day headers, and Done stays a flat run of what finished last
-            const late = !query && isGrouped(s) && !!it.due && it.due < today()
+            const late = !query && grouped && !!it.due && it.due < day
             const label = query ? null
               // everything past its day is one group: which day it slipped from is on the row
               : late ? 'Overdue'
-              : isGrouped(s) ? (it.due ? dayLabel(it.due) : null)
+              : grouped ? (it.due ? dayLabel(it.due) : null)
               : s.sel === 'done' ? null
               // finished rows sink below every kind, so they head as what they are rather
               // than re-opening the section their type belongs to
@@ -177,20 +181,13 @@ export function ItemList({
         )}
       </div>
 
-      {/* The Inbox is the one list whose job is to be emptied, so it says how: the keys that
-          file, date and drop the row in hand. Desktop only — a phone has no keys to name. */}
-      {!query && s.sel === 'inbox' && items.length > 0 && (
-        <footer className="text-muted-foreground bg-muted/50 hidden shrink-0 flex-wrap gap-x-5 gap-y-1.5 border-t px-8 py-3 text-[13px] md:flex">
-          {([['file', 'File to project'], ['today', 'Today'], ['tomorrow', 'Tomorrow'], ['remove', 'Delete']] as const).map(([id, what]) => (
-            <span key={id} className="flex items-center gap-1.5">
-              <kbd className="bg-background rounded-[5px] border px-1.5 py-px font-mono text-[11px] font-medium">{pretty(hotkey(s, id))}</kbd>
-              {what}
-            </span>
+      {/* Three keys, not every key: the ones that get you from a line to its page and its details,
+          and the one that shows the rest. Desktop only — a phone has no keys to name. */}
+      {items.length > 0 && (
+        <footer className="text-muted-foreground hidden shrink-0 flex-wrap gap-x-5 gap-y-1.5 px-8 py-3 font-mono text-[11.5px] md:flex">
+          {([['⏎', 'open as page'], ['e', 'details'], [pretty(hotkey(s, 'file')), 'file'], ['?', 'all keys']] as const).map(([k, what]) => (
+            <span key={what}><kbd className="text-foreground/70 font-[inherit]">{k}</kbd> {what}</span>
           ))}
-          <span className="flex items-center gap-1.5">
-            <kbd className="bg-background rounded-[5px] border px-1.5 py-px font-mono text-[11px] font-medium">J K</kbd>
-            Next, previous
-          </span>
         </footer>
       )}
     </div>

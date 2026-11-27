@@ -1,8 +1,8 @@
 import { memo, useState } from 'react'
 import { toast } from 'sonner'
 import {
-  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, Flag, Inbox, Lightbulb, ListTodo,
-  Maximize2, PencilLine, Repeat, RotateCcw, Share2, StickyNote, Trash2,
+  CalendarOff, CalendarPlus, Check, Copy, CornerDownRight, FileText, Flag, Inbox, ListTodo,
+  Maximize2, PencilLine, Repeat, RotateCcw, Share2, Trash2,
 } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Hint } from '@/components/ui/tooltip'
@@ -161,8 +161,10 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
                 <ListTodo className="size-3.5" />
               </span>
             ) : (
+              /* A line with a page behind it says so; a plain idea is just its words, lined up with
+                 the rest — a marker on every row would be a column of noise. */
               <span className="text-muted-foreground flex size-4 items-center justify-center">
-                {it.type === 'idea' ? <Lightbulb className="size-3.5" /> : <StickyNote className="size-3.5" />}
+                {(it.type === 'note' || it.note.trim()) && <FileText className="size-3.5" />}
               </span>
             )}
           </span>
@@ -297,9 +299,11 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
           <ContextMenuShortcut>⏎ or double-click</ContextMenuShortcut>
         </ContextMenuItem>
 
-        <ContextMenuItem onSelect={() => focus(it.id)}>
+        {/* the details panel no longer opens on every click; this is the way to it (or e) */}
+        <ContextMenuItem onSelect={() => { focus(it.id); dispatchEvent(new CustomEvent('stash:details', { detail: it.id })) }}>
           <PencilLine />
           Edit details
+          <ContextMenuShortcut>e</ContextMenuShortcut>
         </ContextMenuItem>
 
         <ContextMenuItem onSelect={() => patch(it.id, { flag: !it.flag })}>

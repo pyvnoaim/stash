@@ -1,6 +1,6 @@
 import { useSidebar } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
-import { SUBS, toolOn, useStash } from '@/lib/store'
+import { useStash } from '@/lib/store'
 
 /**
  * A phone's way round the app: the places a thumb goes most, and the rest behind More — the same
@@ -10,10 +10,11 @@ import { SUBS, toolOn, useStash } from '@/lib/store'
 export function MobileTabs({ onNavigate, onSearch }: { onNavigate: (id: string) => void, onSearch: () => void }) {
   const s = useStash()
   const { setOpenMobile } = useSidebar()
+  // the same three the sidebar leads with; projects and the tools are behind More
   const tabs = [
-    { id: 'today', name: 'Today' },
     { id: 'inbox', name: 'Inbox' },
-    ...(toolOn(s, SUBS) ? [{ id: SUBS, name: 'Subs' }] : []),
+    { id: 'ideas', name: 'Ideas' },
+    { id: 'tasks', name: 'Tasks' },
   ]
   const item = 'flex min-h-11 items-center justify-center rounded-[10px] text-[13px]'
   return (
@@ -22,7 +23,7 @@ export function MobileTabs({ onNavigate, onSearch }: { onNavigate: (id: string) 
       {tabs.map(({ id, name }) => (
         <button key={id} type="button" onClick={() => onNavigate(id)} aria-current={s.sel === id ? 'page' : undefined}
           // the same piece-of-the-sheet the sidebar's own row is
-          className={cn(item, s.sel === id ? 'bg-background ring-sidebar-border font-medium ring-1' : 'text-muted-foreground')}>
+          className={cn(item, s.sel === id ? 'bg-sidebar-accent ring-sidebar-border font-medium ring-1' : 'text-muted-foreground')}>
           {name}
         </button>
       ))}

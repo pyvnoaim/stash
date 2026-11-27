@@ -56,7 +56,9 @@ export default defineConfig({
         },
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        /* mjs too: pdf.js's worker. Without it the precached PDF editor could not run offline at
+           all, which was paying the download for none of the point. */
+        globPatterns: ['**/*.{js,mjs,css,html,svg,png,woff2}'],
         // pdf.js is heavier than everything else together, but offline is the point here
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         // never serve the app shell where the sync API, or the Mac app's download, was asked for

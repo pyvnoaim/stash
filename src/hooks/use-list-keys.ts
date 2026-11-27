@@ -39,6 +39,12 @@ export interface ListKeys {
   openPage: (id: string) => void
   drop: (ids: string[], hard?: boolean) => void
   purge: (ids?: string[]) => void
+  /** whether the details panel is open — it opens on purpose (e), and Esc closes it first */
+  details: boolean
+  setDetails: (v: boolean) => void
+  /** the `?` sheet, which owns the keys while it is up */
+  keysOpen: boolean
+  setKeysOpen: (v: boolean) => void
 }
 
 /**
@@ -50,6 +56,7 @@ export function useListKeys(ctx: ListKeys) {
   const {
     s, query, items, selected, chosen, marked, setMarked, inTrash, pageItem, setPageItem,
     palette, setPalette, filing, setFiling, searchRef, openCapture, openPage, drop, purge,
+    details, setDetails, keysOpen, setKeysOpen,
   } = ctx
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -60,7 +67,7 @@ export function useListKeys(ctx: ListKeys) {
       const k = (id: string) => hit(e, hotkey(s, id))
 
       if (k('palette') && !e.repeat) { e.preventDefault(); setPalette((v) => !v); return }
-      if (palette || filing) return     // the dialog owns every other key while it is open, esc included
+      if (palette || filing || keysOpen) return     // a dialog owns every other key while it is open, esc included
 
       if (k('search')) { e.preventDefault(); searchRef.current?.select(); return }
       if (k('capture')) { e.preventDefault(); openCapture(); return }
@@ -76,6 +83,7 @@ export function useListKeys(ctx: ListKeys) {
       if (e.key === 'Escape') {
         if (typingIn(e.target)) (e.target as HTMLElement).blur()
         else if (pageItem) setPageItem(null)
+        else if (details) setDetails(false)
         else if (marked.length) setMarked([])
         else if (s.focus) focus(null)
         return
@@ -171,6 +179,8 @@ export function useListKeys(ctx: ListKeys) {
           ?? items[0]?.id ?? null)
         return
       }
+      // every key on one sheet
+      if (e.key === '?') { e.preventDefault(); setKeysOpen(true); return }
       if (!chosen.length) return
       // due dates, on the lot: one brings it forward to today, the other pushes it to tomorrow
       if (k('today') || k('tomorrow')) {
@@ -191,6 +201,12 @@ export function useListKeys(ctx: ListKeys) {
       if (k('file')) {
         e.preventDefault()
         if (!inTrash) setFiling(chosen)
+        return
+      }
+      // the details panel, on purpose — a click only selects now. Fixed, like ⏎ beside it.
+      if (key === 'e' && !inTrash) {
+        e.preventDefault()
+        setDetails(true)
       }
     }
     document.addEventListener('keydown', onKey)

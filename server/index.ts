@@ -243,6 +243,7 @@ export function start({
     dropAllSessions: db.prepare('delete from sessions where user = ?'),
     pruneSessions: db.prepare('delete from sessions where seen < ? or created < ?'),
     latest: db.prepare('select v, json from docs where user = ? order by v desc limit 1'),
+    oldest: db.prepare('select min(ts) as ts from docs where user = ?'),
     insert: db.prepare('insert into docs (user, ts, device, json) values (?, ?, ?, ?)'),
     prune: db.prepare(`delete from docs where user = ? and v not in
       (select v from docs where user = ? order by v desc limit ?)`),
@@ -357,6 +358,9 @@ export function start({
   }
 
   const base = resolve(root)
+
+  /** When pictures were last swept (see /api/blob). */
+  let swept = 0
 
   /** MCP contexts by user and password hash — built and bounded in the /mcp route. */
   const mcps = new Map<string, ReturnType<typeof createStash>>()
@@ -516,20 +520,16 @@ export function start({
       /* Two passes, because the first version of each document is that document as it stands and
          a row is only missing when every one of them is missing it — so what is still here has to
          be known in full before a single row can be called lost. */
-      const seen = new Set<string>()
+      // what is here is the newest version alone, read once rather than passed over with the rest
       const has = new Set<string>()
-      let since = 0
-      for (const r of each()) {
-        since = since ? Math.min(since, r.ts) : r.ts
-        if (seen.has(r.key)) continue
-        seen.add(r.key)
-        // the trash counts as still here: a row somebody deleted is not a row that went missing
-        const d = doc(r.json)
-        for (const i of [...(d?.items ?? []), ...(d?.trash ?? [])]) {
-          const id = (i as { id?: string })?.id
-          if (id) has.add(id)
-        }
+      const newest = q.latest.get(user.id) as { json: string } | undefined
+      const d = newest ? doc(newest.json) : null
+      // the trash counts as still here: a row somebody deleted is not a row that went missing
+      for (const i of [...(d?.items ?? []), ...(d?.trash ?? [])]) {
+        const id = (i as { id?: string })?.id
+        if (id) has.add(id)
       }
+      const since = Number((q.oldest.get(user.id) as { ts: number | null }).ts ?? 0)
       // newest first, so the copy kept for each id is the last one any history saw of it
       const lost = new Map<string, unknown>()
       const done = new Set<string>()
@@ -627,8 +627,11 @@ export function start({
          ponytail: every version is scanned rather than only the newest, so restoring an old one
          does not come back with its pictures collected. Index the ids out of the documents on
          write if the sweep itself ever drags. */
-      const stale = q.sweepable.all(user.id, Date.now() - GRACE) as { id: string }[]
+      /* At most once a GRACE: `sweepable` is every picture past its grace, the ones notes still use
+         included, so once any picture was a day old every upload read all fifty documents. */
+      const stale = Date.now() - swept > GRACE ? q.sweepable.all(user.id, Date.now() - GRACE) as { id: string }[] : []
       if (stale.length) {
+        swept = Date.now()
         const live = new Set<string>()
         for (const d of q.allDocs.iterate() as Iterable<{ json: string }>) {
           for (const r of referenced(d.json)) live.add(r)

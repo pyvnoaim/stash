@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { CalendarIcon, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Calendar } from '@/components/ui/calendar'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { cn, QUIET } from '@/lib/utils'
 import { addDays, dayLabel, today } from '@/lib/parse'
+
+/* The month grid and its date library are a fifth of the startup bundle and only ever seen inside
+   this popover, so they load the first time it opens rather than with the app. */
+const Calendar = lazy(() => import('@/components/ui/calendar').then((m) => ({ default: m.Calendar })))
 
 /** Stash stores dates as local 'YYYY-MM-DD'; the calendar speaks Date. */
 const toDate = (due: string | null) => (due ? new Date(due + 'T00:00') : undefined)
@@ -82,13 +85,15 @@ export function DueField({ id, due, at, placeholder, quiet, onPick, onTime }: {
         <Separator />
         {/* day glyphs are centred in their cells, so the last week sits balanced against the popover
             edge rather than leaving a top-aligned gap below the numbers */}
-        <Calendar
-          mode="single"
-          defaultMonth={toDate(due)}
-          selected={toDate(due)}
-          onSelect={(d) => set(d ? toStamp(d) : null)}
-          className="p-2"
-        />
+        <Suspense fallback={<div className="h-[300px] w-[250px]" />}>
+          <Calendar
+            mode="single"
+            defaultMonth={toDate(due)}
+            selected={toDate(due)}
+            onSelect={(d) => set(d ? toStamp(d) : null)}
+            className="p-2"
+          />
+        </Suspense>
       </PopoverContent>
     </Popover>
   )

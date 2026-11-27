@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight, CalendarClock, CalendarDays, CheckCheck, ClipboardCopy,
+  ArrowRight, CalendarCheck, CalendarClock, CalendarDays, CheckCheck, ClipboardCopy,
   Download, Eraser, FileText, Flag, FlagOff, Inbox, Layers, Lightbulb, ListTodo,
   Plus, StickyNote, Trash2, Upload, Wallet,
 } from 'lucide-react'
@@ -25,6 +25,8 @@ const VIEW_ICONS: Record<ViewId, React.ElementType> = {
   upcoming: CalendarClock,
   flagged: Flag,
   inbox: Inbox,
+  ideas: Lightbulb,
+  tasks: CalendarCheck,
   all: Layers,
   done: CheckCheck,
   trash: Trash2,
@@ -115,13 +117,14 @@ export function CommandPalette({
   }, [s, q])
 
   // counts don't depend on the query — memoise so typing doesn't rescan every item / project each key
+  // ...and nothing at all while it is closed: these ran on every edit with the palette out of sight
   const viewCounts = useMemo(
-    () => Object.fromEntries(Object.entries(VIEWS).map(([id, v]) => [id, s.items.filter(v.filter).length])),
-    [s.items],
+    () => (open ? Object.fromEntries(Object.entries(VIEWS).map(([id, v]) => [id, s.items.filter(v.filter).length])) : {}),
+    [s.items, open],
   )
   const openCounts = useMemo(
-    () => Object.fromEntries(s.projects.map((p) => [p.id, openIn(s, p.id)])),
-    [s.projects, s.items], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (open ? Object.fromEntries(s.projects.map((p) => [p.id, openIn(s, p.id)])) : {}),
+    [s.projects, s.items, open], // eslint-disable-line react-hooks/exhaustive-deps
   )
   const picked = ids.map((id) => s.items.find((i) => i.id === id)).filter((i) => !!i)
   const it = picked[0]
@@ -269,7 +272,7 @@ export function CommandPalette({
 
           <CommandGroup heading="Data">
             {/* a page has no list to copy, and an empty one would put a bare heading on the clipboard */}
-            {!isPage(s.sel) && visible(s, '').length > 0 && (
+            {open && !isPage(s.sel) && visible(s, '').length > 0 && (
               <CommandItem value="copy markdown list clipboard" onSelect={run(copyList)}>
                 <ClipboardCopy />
                 <span>Copy “{viewName(s)}” as Markdown</span>

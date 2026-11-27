@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* the skill notes under .claude/ are prose about class names, not markup that uses them */
+@source not "../.claude";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
@@ -62,73 +64,80 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* A white sheet on a warm-grey desk, one accent. The desk is `--sidebar`: the sidebar sits on it
-   and the content is the sheet. `--primary` is the accent, so the one filled button on a page is
-   the one that commits. `--tint` is the accent as a wash, for a link or a chip that points
-   somewhere. Project dots are the only other colour in the app. */
+/* The quiet editor's ground, one accent. The page and the sidebar stand on the same surface — no
+   sheet, no desk — and a soft glow from the top (`.stash-glow`) is the only thing drawn behind them.
+   Ink is warm and full-contrast where it is read; `--muted-foreground` holds 4.5:1 on the ground.
+   `--primary` is the accent and the only blue: a project never wears it. Floating things (menus,
+   dialogs, the capture field) are the one place white sits above the ground. */
 :root {
-    --background: #ffffff;
-    --foreground: #17181b;
+    --background: #f7f7f5;
+    --foreground: #1f1d1a;
     --card: #ffffff;
-    --card-foreground: #17181b;
+    --card-foreground: #1f1d1a;
     --popover: #ffffff;
-    --popover-foreground: #17181b;
+    --popover-foreground: #1f1d1a;
     --primary: #2f4bff;
     --primary-foreground: #ffffff;
-    --secondary: #f1f1ee;
-    --secondary-foreground: #17181b;
-    --muted: #f6f6f4;
-    --muted-foreground: #62656d;
-    --accent: #f1f1ee;
-    --accent-foreground: #17181b;
+    --secondary: #efeeea;
+    --secondary-foreground: #1f1d1a;
+    --muted: #f0efeb;
+    --muted-foreground: #6a645b;
+    --accent: #efeeea;
+    --accent-foreground: #1f1d1a;
     --destructive: #b42318;
-    --border: #e6e6e2;
-    --input: #dcdcd7;
+    --border: #e7e5e0;
+    --input: #dddad3;
     --ring: #2f4bff;
     --tint: #eceeff;
     --tint-foreground: #2337c6;
     --radius: 0.625rem;
-    --sidebar: #efefec;
-    --sidebar-foreground: #17181b;
+    --glow: rgba(255, 255, 255, 0.9);
+    --sidebar: #f7f7f5;
+    --sidebar-foreground: #1f1d1a;
     --sidebar-primary: #2f4bff;
     --sidebar-primary-foreground: #ffffff;
     --sidebar-accent: #ffffff;
-    --sidebar-accent-foreground: #17181b;
-    --sidebar-border: #dcdcd7;
+    --sidebar-accent-foreground: #1f1d1a;
+    --sidebar-border: #e7e5e0;
     --sidebar-ring: #2f4bff;
 }
 
-/* The accent lightens where it is a mark or text and stays solid where it is a fill, so both hold
-   their contrast on the dark sheet. */
+/* Graphite. The accent lightens where it is a mark or text and stays solid where it is a fill. */
 .dark {
-    --background: #1a1b1e;
-    --foreground: #edede9;
-    --card: #1a1b1e;
-    --card-foreground: #edede9;
-    --popover: #222327;
-    --popover-foreground: #edede9;
+    --background: #18181a;
+    --foreground: #f2f2f4;
+    --card: #202023;
+    --card-foreground: #f2f2f4;
+    --popover: #202023;
+    --popover-foreground: #f2f2f4;
     --primary: #4a62ff;
     --primary-foreground: #ffffff;
-    --secondary: #26282c;
-    --secondary-foreground: #edede9;
-    --muted: #222327;
-    --muted-foreground: #9a9da5;
-    --accent: #26282c;
-    --accent-foreground: #edede9;
+    --secondary: #26262a;
+    --secondary-foreground: #f2f2f4;
+    --muted: #202023;
+    --muted-foreground: #8e8e96;
+    --accent: #26262a;
+    --accent-foreground: #f2f2f4;
     --destructive: #ff8a7a;
-    --border: #2a2c31;
-    --input: #363940;
+    --border: #2a2a2e;
+    --input: #36363b;
     --ring: #8c9bff;
     --tint: #23284a;
     --tint-foreground: #b4beff;
-    --sidebar: #111214;
-    --sidebar-foreground: #edede9;
+    --glow: rgba(255, 255, 255, 0.06);
+    --sidebar: #18181a;
+    --sidebar-foreground: #f2f2f4;
     --sidebar-primary: #4a62ff;
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #1a1b1e;
-    --sidebar-accent-foreground: #edede9;
-    --sidebar-border: #2a2c31;
+    --sidebar-accent: #26262a;
+    --sidebar-accent-foreground: #f2f2f4;
+    --sidebar-border: #2a2a2e;
     --sidebar-ring: #8c9bff;
+}
+
+/* The quiet editor's light from above: one radial wash, behind everything, never over it. */
+.stash-glow {
+  background-image: radial-gradient(ellipse 60% 50% at 58% -8%, var(--glow), transparent 70%);
 }
 
 @layer base {
@@ -155,9 +164,9 @@
     }
 }
 
-/* The row you are on in the sidebar is a piece of the sheet: its colour, inside a hairline. */
+/* The row you are on in the sidebar is lifted a little off the ground: white, inside a hairline. */
 [data-sidebar="menu-button"][data-active="true"] {
-  box-shadow: 0 0 0 1px var(--sidebar-border);
+  box-shadow: 0 0 0 1px var(--sidebar-border), 0 1px 2px rgb(0 0 0 / 0.04);
 }
 
 /* the item list can hold thousands of rows, each a full context-menu tree. content-visibility lets
@@ -325,6 +334,13 @@
 .mac-folded .room-for-buttons {
   padding-left: 96px;
 }
+
+/* ---------- the page: the quiet editor's measure, and focus mode ---------- */
+.quiet .note-body { font-family: var(--page-font); font-size: var(--page-size, 1.125rem); line-height: 1.8; }
+.quiet .note-body > * + * { margin-top: 1.25rem; }
+/* focus mode: what you are writing stays in full ink, everything around it steps back */
+.quiet .note-body > * { transition: color 0.7s cubic-bezier(.16,1,.3,1), opacity 0.7s cubic-bezier(.16,1,.3,1); }
+.quiet-focus .note-body.ProseMirror-focused > *:not(.has-focus) { color: var(--muted-foreground); opacity: 0.55; }
 
 /* ---------- the note editor: one editable document, drawn the way the note reads ---------- */
 .note-body { font-size: 1rem; line-height: 1.7; overflow-wrap: anywhere; }

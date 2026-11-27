@@ -40,7 +40,7 @@ export function readHash(hash = location.hash): { sel: string, query: string } {
 /** core's `load`, and this device's own fields held to their shapes on the way in. */
 export function load(data: unknown): State {
   const st = core.load(data)
-  if (!core.isRoute(st, st.sel)) st.sel = 'today'
+  if (!core.isRoute(st, st.sel)) st.sel = core.HOME
   if (!['auto', 'light', 'dark'].includes(st.theme)) st.theme = 'auto'
   st.collapsed = Array.isArray(st.collapsed) ? st.collapsed.map(String) : []
   /* only bindings the app has an action for, and only strings: a hand-edited backup must not be
@@ -65,7 +65,7 @@ let state: State = read(localStorage.getItem(KEY))
    hash was write-only on a cold start: App wrote it on mount and every link into the app landed on
    Today instead of where it pointed. The search that rides the hash is App's half. */
 const booted = readHash().sel
-state = { ...state, sel: core.isRoute(state, booted) ? booted : 'today' }
+state = { ...state, sel: core.isRoute(state, booted) ? booted : core.HOME }
 
 const listeners = new Set<() => void>()
 
@@ -224,7 +224,7 @@ export function adoptRemote(data: unknown) {
     ...next,
     // where you are, how it looks, the keyboard: this machine's, whatever the other one had
     ...core.deviceOf(state),
-    sel: core.isRoute(next, state.sel) ? state.sel : 'today',
+    sel: core.isRoute(next, state.sel) ? state.sel : core.HOME,
     // what you have open stays open, unless the other device took it away
     focus: next.items.some((i) => i.id === state.focus) ? state.focus : null,
   }
