@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { CornerDownLeft, Lightbulb, ListTodo, StickyNote } from 'lucide-react'
+import { CornerDownLeft } from 'lucide-react'
+import { ITEM_TYPES } from '@/components/item-types'
 import { toast } from 'sonner'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -7,11 +8,7 @@ import { cn } from '@/lib/utils'
 import { dayLabel, parseCapture, parseList, repeatLabel, today, type Parsed } from '@/lib/parse'
 import { addItem, addItems, itemOf, project, tagsFor, TRASH, useStash, type Item, type ItemType } from '@/lib/store'
 
-const TYPES = [
-  { id: 'task', label: 'Task', icon: ListTodo },
-  { id: 'idea', label: 'Idea', icon: Lightbulb },
-  { id: 'note', label: 'Note', icon: StickyNote },
-] as const
+const TYPES = ITEM_TYPES
 
 export function Capture({ inputRef, className, announce }: {
   inputRef: React.RefObject<HTMLInputElement | null>

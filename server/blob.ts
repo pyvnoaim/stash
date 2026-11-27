@@ -16,9 +16,8 @@ export const MAX_IMAGE = 5 * 1024 * 1024
 /**
  * And a quarter of a gigabyte per account, which is the ceiling on the whole feature. Without one
  * a signed-in account can grow the database until the disk it sits on is full — which needs no
- * malice, just a client that retries an upload in a loop, and which takes the server down for
- * everyone rather than for whoever did it. The roster is invited people, so this is a guard rail
- * and not a wall: fifty screenshots a week would take years to reach.
+ * malice, just a client that retries an upload in a loop, and the server with it. A guard rail and
+ * not a wall: fifty screenshots a week would take years to reach.
  */
 export const MAX_PER_USER = 250 * 1024 * 1024
 

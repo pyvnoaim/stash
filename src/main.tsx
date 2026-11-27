@@ -5,6 +5,7 @@ import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App.tsx'
 import { Toaster } from './components/ui/sonner.tsx'
+import { ErrorBoundary } from './components/error-boundary.tsx'
 import { LoginGate } from './components/login-gate.tsx'
 import { Splash } from './components/splash.tsx'
 import { getSync, hasLocal, startSync, subscribeSync } from './lib/sync.ts'
@@ -154,6 +155,6 @@ function Root() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Toaster position="bottom-right" />
-    <Root />
+    <ErrorBoundary><Root /></ErrorBoundary>
   </StrictMode>,
 )

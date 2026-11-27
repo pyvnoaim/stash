@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Copy, Database, Download, Eraser,
-  History, Info, Keyboard, LogOut, RefreshCw, RotateCcw, Trash2, Upload, UserPen, Wrench,
+  History, Info, Keyboard, LogOut, RefreshCw, RotateCcw, Upload, UserPen, Wrench,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { exportBackup, importBackup } from '@/components/command-palette'
 import { PasswordInput } from '@/components/password-input'
 import { Section } from '@/components/section'
-import {
-  AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
-  AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -27,7 +23,7 @@ import {
   resetHotkeys, setHotkey, setTool, TOOLS, toolOn, useStash,
 } from '@/lib/store'
 import {
-  changePassword, deleteAccount, devices, getSync, logout, lost, restore, subscribeSync,
+  changePassword, devices, getSync, logout, lost, restore, subscribeSync,
   updateAccount, versions, type Device, type Version,
 } from '@/lib/sync'
 
@@ -533,8 +529,6 @@ function AccountPanel({ name: initial, avatar: initialAvatar }: {
       <PasswordForm />
 
       <Devices />
-
-      <DeleteAccount />
     </>
   )
 }
@@ -602,66 +596,6 @@ function Devices() {
               ))}
             </div>
           )}
-    </Section>
-  )
-}
-
-/** The way out for good. Asks for the password, the same as changing one does, and says plainly
- *  what survives it: this machine's own copy, which was never the server's to take. */
-function DeleteAccount() {
-  const [open, setOpen] = useState(false)
-  const [pass, setPass] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const go = async () => {
-    setBusy(true)
-    const err = await deleteAccount(pass)
-    setBusy(false)
-    if (err) return setError(err)
-    // the gate takes the screen the moment the session goes; nothing here to return to
-    toast('Account deleted')
-  }
-
-  return (
-    <Section
-      danger
-      title="Delete account"
-      hint="Account, devices, synced history and pictures — gone from this server. Its daily
-        backups still hold them for up to a week. What is on this machine stays."
-    >
-      <AlertDialog
-        open={open}
-        onOpenChange={(v) => { setOpen(v); if (!v) { setPass(''); setError('') } }}
-      >
-        <AlertDialogTrigger asChild>
-          <Button variant="destructive" size="sm" className="justify-self-start">
-            <Trash2 /> Delete account
-          </Button>
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete your account?</AlertDialogTitle>
-            <AlertDialogDescription>
-              There is no undoing this from here. The server's daily backups hold a copy for up to a
-              week, then that is gone too. What is on this machine stays.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="grid gap-2">
-            <Label htmlFor="del-pass">Your password</Label>
-            <PasswordInput id="del-pass" autoComplete="current-password" value={pass}
-              onChange={(e) => { setPass(e.target.value); setError('') }} />
-            {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep it</AlertDialogCancel>
-            {/* not AlertDialogAction: that closes on click, and a wrong password has to stay open */}
-            <Button variant="destructive" disabled={!pass || busy} onClick={go}>
-              {busy ? 'One moment…' : 'Delete for ever'}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Section>
   )
 }

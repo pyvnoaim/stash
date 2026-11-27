@@ -226,8 +226,6 @@ export async function updateAccount(patch: { name?: string, avatar?: string }): 
   }
 }
 export const login = (user: string, pass: string) => account('/api/login', { user, pass })
-export const signup = (user: string, pass: string, invite: string) =>
-  account('/api/signup', { user, pass, invite })
 
 export async function logout(everywhere = false) {
   try { await fetch(everywhere ? '/api/logout-all' : '/api/logout', { method: 'POST' }) } catch { /* gone is gone */ }
@@ -252,11 +250,6 @@ export interface Device { created: number, seen: number, device: string | null, 
 /** Where this account is signed in. Empty when the server cannot be reached. */
 export const devices = (): Promise<Device[]> =>
   call('/api/sessions').then((j) => j.sessions as Device[]).catch(() => [])
-
-/** Your account off the server, password in hand. What this machine holds locally stays put. */
-export const deleteAccount = (pass: string) =>
-  call('/api/account', { method: 'DELETE', body: JSON.stringify({ pass }) })
-    .then(() => { setSnap({ user: null, status: 'out' }); return null }).catch(errorOf)
 
 export interface Version { v: number, ts: number, device: string, size: number }
 

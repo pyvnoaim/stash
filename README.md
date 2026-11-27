@@ -501,10 +501,9 @@ undo for the day that picks wrong. Moving around is not an edit: changing view, 
 switching the theme never pushes anything, so one device browsing never disturbs another. Nothing
 secret rides the sync: the document is your rows and your settings.
 
-Signup wants an invite code: sixteen hex characters out of `randomBytes`, good once and dead after
-a week. A fresh server logs its first one, and `node server/index.ts invite` cuts another — which is
-also the way back in if the account is ever lost. Wrong codes and wrong passwords cool off after ten
-tries, per address and name, so a stranger guessing at yours locks out only themselves.
+There is no signup. The account is made on the server, and its password set again if it is ever
+forgotten, by `node server/index.ts passwd <name>` with the password on stdin. Wrong passwords cool
+off after ten tries, per address and name, so a stranger guessing at yours locks out only themselves.
 
  **Account** in the footer menu holds the three things a person owns:
 a name and a picture — shrunk to a 128px square before it ever leaves the browser — a password
@@ -513,8 +512,7 @@ Restoring one writes it forward as a new version rather than deleting what came 
 a snapshot back is itself undoable, which is the only reason the list is safe to put in front of
 anyone. **Sign out everywhere** is there for a lost device.
 
-There is no email anywhere in the system: a forgotten password is deleting the row and cutting a
-new invite. Sessions live in an `HttpOnly` cookie for 180 days, idle out after 30 unused, and are
+There is no email anywhere in the system: a forgotten password is `passwd` again. Sessions live in an `HttpOnly` cookie for 180 days, idle out after 30 unused, and are
 stored hashed, so a copied database file logs nobody in.
 
 The server is `server/index.ts`: Node and SQLite, both from the runtime, zero dependencies — the
@@ -610,23 +608,14 @@ only way in. With nginx proxy manager: a proxy host for the domain, forwarded to
 with **Force SSL**, **HTTP/2**, **HSTS** and **Websockets** on. The security headers travel in
 the app's own responses, so nothing else needs configuring in the proxy.
 
-```sh
-docker compose up -d --build                            # PROXY_NET names the proxy's network if not npm_default
-docker compose logs stash                               # the first invite code is in the logs
-docker compose exec stash node server/index.ts invite   # another, any time
-```
-
-No proxy network to join? `compose.standalone.yml` publishes the port on loopback instead — the
-same container behind whatever TLS you already run on the host, or plain `localhost:8787` to try
-it out:
+A push to `main` is a release: GitHub builds the image, pushes it to `ghcr.io/pyvnoaim/stash`, and
+Dokploy pulls it and restarts (see CLAUDE.md). Schema migrations run on boot, and the old container
+stops cleanly rather than being killed. Docker's healthcheck asks `/healthz`, which reads the
+database. The account, on a fresh volume or a forgotten password:
 
 ```sh
-docker compose -f compose.standalone.yml up -d --build
+docker exec -it <the stash container> node server/index.ts passwd leon   # asks for it; a reset signs every device out
 ```
-
-Updating is `git pull && docker compose up -d --build` — schema migrations run on boot, the old
-container stops cleanly rather than being killed, and a tab that is already open offers **Reload**
-when the new bundle is waiting. Docker's healthcheck asks `/healthz`, which reads the database.
 
 The daily copies sit in the `stash` volume. To keep them off the box, a host cron along the lines of
 `docker cp <the stash container>:/data/. /srv/backups/stash/` followed by your own off-site sync is enough.

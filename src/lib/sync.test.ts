@@ -1,6 +1,9 @@
 // The sync engine against the real server — no mocks, the same wire the app uses.
 import assert from 'node:assert/strict'
-import { start } from '../../server/index.ts'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { passwd, start } from '../../server/index.ts'
 
 // store.ts and sync.ts expect a browser; give them just enough of one
 const disk = new Map<string, string>()
@@ -14,7 +17,9 @@ Object.assign(globalThis, {
   location: { hash: '' },
 })
 
-const server = start({ port: 0, db: ':memory:', root: '.' })
+// a file rather than :memory:, so the command line's `passwd` can make the account beside it
+const dbFile = join(mkdtempSync(join(tmpdir(), 'stash-sync-')), 'test.db')
+const server = start({ port: 0, db: dbFile, root: '.' })
 await new Promise((ok) => server.on('listening', ok))
 const { port } = server.address() as { port: number }
 const url = `http://127.0.0.1:${port}`
@@ -29,7 +34,7 @@ globalThis.fetch = (async (path: any, init?: RequestInit) => {
 }) as typeof fetch
 
 const { addItem, getState, setSubSort, uid } = await import('./store.ts')
-const { getSync, login, logout, signup, startSync, syncNow } = await import('./sync.ts')
+const { getSync, login, logout, startSync, syncNow } = await import('./sync.ts')
 startSync()  // wires onPersist, asks /api/me (nobody yet — 'out')
 await new Promise((r) => setTimeout(r, 50))   // let that first answer land before asserting on it
 const flush = () => new Promise((r) => setTimeout(r, 250))  // store's 200ms save debounce
@@ -38,10 +43,11 @@ const add = (text: string) => addItem({
   flag: false, tags: [], done: false, doneAt: null, ts: 1, editedAt: null,
 })
 
-// an account, with a first document pushed on signup because local data already existed
+// an account, with a first document pushed on signing in because local data already existed
 add('first')
 await flush()
-assert.equal(await signup('leon', 'longenough', server.invite()), null)
+await passwd(dbFile, 'leon', 'longenough')
+assert.equal(await login('leon', 'longenough'), null)
 assert.equal(getSync().status, 'ok')
 
 // an edit lands on the server via push

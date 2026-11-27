@@ -10,6 +10,8 @@ notarization or App Store concerns.
 - How it should look and read: **`DESIGN.md`**. Follow it for any UI or copy change.
 
 Checks before any push: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
+The Docker build runs lint and tests again (and tsc inside the build), so a red test on GitHub
+stops the deploy and the running container stays on the last good image.
 
 ## Bump the version on every push
 

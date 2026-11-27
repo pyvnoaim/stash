@@ -7,12 +7,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 process.env.NODE_ENV = 'production'   // assert the cookie as the container serves it
-const { start } = await import('./index.ts')
+const { start, passwd } = await import('./index.ts')
 
 const root = mkdtempSync(join(tmpdir(), 'stash-'))
 writeFileSync(join(root, 'index.html'), '<!doctype html>hi')
 
-// the same file the server opens, so a test can age an invite the way a week would
+// the same file the server opens, so a test can read what it wrote and make accounts beside it
 const dbFile = join(root, 'test.db')
 const server = start({ port: 0, db: dbFile, root })
 const { DatabaseSync } = await import('node:sqlite')
@@ -26,21 +26,26 @@ const jar = (r: Response) => /stash_s=[a-f0-9]{64}/.exec(r.headers.get('set-cook
 const post = (path: string, body: unknown, cookie = '') =>
   fetch(url + path, { method: 'POST', headers: { cookie }, body: JSON.stringify(body) })
 const get = (path: string, cookie = '') => fetch(url + path, { headers: { cookie } })
+/** Another account, made the only way there is now — the command line's \`passwd\` — and signed in. */
+const account = async (user: string) => {
+  await passwd(dbFile, user, 'longenough')
+  return post('/api/login', { user, pass: 'longenough' })
+}
 
-// a fresh boot with no users cuts the bootstrap invite itself (it lands in the container logs)
-assert.equal((db.prepare('select count(*) as n from invites where used is null').get() as { n: number }).n, 1)
+// signup came out with its invite codes: the table is not even made
+assert.equal((db.prepare("select count(*) as n from sqlite_master where name = 'invites'").get() as { n: number }).n, 0)
 
 // the door is shut without a session
 assert.equal((await get('/state')).status, 401)
 assert.equal((await get('/api/me')).status, 401)
 
-// an invite is one-use, expiring, and never guessable: 64 bits of hex, dead after a week
-// signup wants an invite, a sane name and a real password
-assert.equal((await post('/api/signup', { user: 'leon', pass: 'longenough', invite: 'nope' })).status, 403)
-const inv = server.invite()
-assert.equal((await post('/api/signup', { user: 'l!', pass: 'longenough', invite: inv })).status, 400)
-assert.equal((await post('/api/signup', { user: 'leon', pass: 'short', invite: inv })).status, 400)
-let r = await post('/api/signup', { user: 'Leon ', pass: 'longenough', invite: inv })
+// no way in from the web but signing in: the account comes from the command line, which holds it
+// to a sane name and a real password
+assert.equal((await post('/api/signup', { user: 'leon', pass: 'longenough' })).status, 405)
+await assert.rejects(passwd(dbFile, 'l!', 'longenough'))
+await assert.rejects(passwd(dbFile, 'leon', 'short'))
+assert.equal(await passwd(dbFile, 'leon', 'longenough'), 'account made')
+let r = await post('/api/login', { user: 'Leon ', pass: 'longenough' })
 assert.equal(r.status, 200)
 const leon = jar(r)
 assert.match(r.headers.get('set-cookie') ?? '', /HttpOnly; Secure; SameSite=Strict/)
@@ -66,10 +71,6 @@ assert.equal(named.filter((d) => d.device === 'Claude, over MCP').length, 2,
 // on purpose — what matters is that the one client that does name itself is read, not lumped in
 assert.equal(named.some((d) => d.device === 'A browser'), true)
 
-// the invite is spent, the name is taken
-assert.equal((await post('/api/signup', { user: 'other', pass: 'longenough', invite: inv })).status, 403)
-assert.equal((await post('/api/signup', { user: 'leon', pass: 'longenough', invite: server.invite() })).status, 409)
-
 // login: wrong password and unknown user read the same
 assert.equal((await post('/api/login', { user: 'leon', pass: 'wrong' })).status, 401)
 assert.equal((await post('/api/login', { user: 'ghost', pass: 'wrong' })).status, 401)
@@ -80,10 +81,10 @@ assert.equal((await fetch(`${url}/api/logout`, {
   method: 'POST', headers: { cookie: leon, origin: 'https://evil.example' },
 })).status, 403)
 
-// first through the door is admin, the second is not
-const mia = jar(await post('/api/signup', { user: 'mia', pass: 'longenough', invite: server.invite() }))
-assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leon', admin: 1, avatar: null })
-assert.deepEqual(await (await get('/api/me', mia)).json(), { user: 'mia', admin: 0, avatar: null })
+// a second account, to prove each reads only its own
+const mia = jar(await account('mia'))
+assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leon', avatar: null })
+assert.deepEqual(await (await get('/api/me', mia)).json(), { user: 'mia', avatar: null })
 
 // the document: absent, then versioned, then scoped to its owner
 const put = (cookie: string, version: number, state: unknown) => fetch(`${url}/state`, {
@@ -131,8 +132,8 @@ r = await post('/api/account', { name: 'Leo n', pass: 'x' }, leon)      // space
 assert.equal(r.status, 400)
 assert.equal((await post('/api/account', { name: 'mia' }, leon)).status, 409)
 r = await post('/api/account', { name: 'leonc', avatar: px }, leon)
-assert.deepEqual(await r.json(), { user: 'leonc', admin: 1, avatar: px })
-assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leonc', admin: 1, avatar: px })
+assert.deepEqual(await r.json(), { user: 'leonc', avatar: px })
+assert.deepEqual(await (await get('/api/me', leon)).json(), { user: 'leonc', avatar: px })
 // the old name is free again, junk and oversized pictures are refused, '' clears
 assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 401)
 assert.equal((await post('/api/account', { avatar: 'data:text/html;base64,PGI+' }, leon)).status, 400)
@@ -142,7 +143,7 @@ assert.equal((await r.json()).avatar, null)
 await post('/api/account', { name: 'leon' }, leon)                      // back, for the tests below
 
 // a third account, for the session and logout cases below
-const kim = jar(await post('/api/signup', { user: 'kim', pass: 'longenough', invite: server.invite() }))
+const kim = jar(await account('kim'))
 
 /* where you are signed in: yours only, the one asking marked, and never the hash that proves it —
    a list that handed those out would be a list of working cookies. */
@@ -184,7 +185,7 @@ assert.deepEqual((await (await get('/state', leon)).json()).state, { items: ['a'
 assert.equal((await versions(leon)).length, vs.length + 1)   // ...as a new version, not a rollback
 assert.equal((await post('/api/restore', { version: 9999 }, leon)).status, 404)
 // and never anyone else's: a fresh account cannot restore into leon's history
-const nia = jar(await post('/api/signup', { user: 'nia', pass: 'longenough', invite: server.invite() }))
+const nia = jar(await account('nia'))
 assert.equal((await post('/api/restore', { version: vs[0].v }, nia)).status, 404)
 assert.deepEqual(await (await get('/api/versions', nia)).json(), { versions: [] })
 
@@ -202,7 +203,7 @@ assert.deepEqual(await (await get('/api/versions', nia)).json(), { versions: [] 
   assert.ok(typeof lost[0].lostAt === 'number')                // when the history last held it
   assert.ok(since > 0 && since <= lost[0].lostAt)              // and how far back the looking went
   // one account's history, like every other read of it
-  const rex = jar(await post('/api/signup', { user: 'rex', pass: 'longenough', invite: server.invite() }))
+  const rex = jar(await account('rex'))
   assert.deepEqual(await (await get('/api/lost', rex)).json(), { lost: [], since: 0 })
   assert.equal((await get('/api/lost')).status, 401)
 }
@@ -214,11 +215,6 @@ assert.equal((await post('/api/password', { current: 'longenough', next: 'newlon
 assert.equal((await post('/api/login', { user: 'leon', pass: 'longenough' })).status, 401)
 assert.equal((await post('/api/login', { user: 'leon', pass: 'newlongenough' })).status, 200)
 assert.equal((await get('/api/me', leon)).status, 200)   // the session that changed it survives
-
-// an invite older than its window is no longer an invite, and does not clutter the open list
-const oldCode = server.invite()
-db.prepare('update invites set ts = ? where code = ?').run(Date.now() - 8 * 86400_000, oldCode)
-assert.equal((await post('/api/signup', { user: 'late', pass: 'longenough', invite: oldCode })).status, 403)
 
 /* ---------- the stream: word that your document moved ---------- */
 assert.equal((await fetch(url + '/api/live')).status, 401)
@@ -284,35 +280,16 @@ assert.equal(heard.data.v > 0, true)
 phone.stop()
 
 
-/* deleting your own account: the password again. Everything of theirs goes on the cascade. */
-const bye = jar(await post('/api/signup', { user: 'zed', pass: 'longenough', invite: server.invite() }))
-await put(bye, 0, { items: ['zeds'] })
-const byebye = (cookie: string, pass: string) => fetch(`${url}/api/account`, {
-  method: 'DELETE', headers: { cookie }, body: JSON.stringify({ pass }),
-})
-assert.equal((await byebye('', 'longenough')).status, 401)
-assert.equal((await byebye(bye, 'wrong')).status, 401)
-assert.equal((await byebye(bye, 'longenough')).status, 200)
-assert.equal((await get('/api/me', bye)).status, 401)               // the session went with the row
-assert.equal(db.prepare('select count(*) as n from docs where user not in (select id from users)')
-  .get()!.n, 0, 'their documents outlived them')
-// and the name is free again, which is the proof the row itself is gone
-assert.equal((await post('/api/signup', { user: 'zed', pass: 'longenough', invite: server.invite() })).status, 200)
-
-/* a code off a terminal keeps its newline, and a phone capitalises hex — both are the code. It
-   has to be spent in the form it was checked in, or the padded one would be good forever. Down
-   here because it makes a user, and the roll call above counts them. */
-const messy = server.invite()
-r = await post('/api/signup', { user: 'ines', pass: 'longenough', invite: ` ${messy.toUpperCase()}\n` })
-assert.equal(r.status, 200)
-assert.equal((await post('/api/signup', { user: 'ines2', pass: 'longenough', invite: messy })).status, 403)
+/* The account cannot delete itself from the web any more: there is one, and it is the owner's. */
+assert.equal((await fetch(`${url}/api/account`, { method: 'DELETE', headers: { cookie: leon }, body: '{}' })).status, 405)
 
 /* The routes that left with the trading desk and the calendar are gone, not merely unlinked. */
-const kInv = server.invite()
-const kUser = jar(await post('/api/signup', { user: 'kay', pass: 'longenough', invite: kInv }))
+const kUser = jar(await account('kay'))
 for (const gone of ['/api/wallets', '/api/positions', '/api/closed', '/api/holdings', '/api/desk', '/api/feed', '/api/cal', '/api/search?q=hy',
   // and the ones that left with sharing
-  '/api/users', '/api/shares', '/api/roster', '/api/links', '/api/link?t=x', '/api/pdoc?pid=x', '/api/admin/users']) {
+  '/api/users', '/api/shares', '/api/roster', '/api/links', '/api/link?t=x', '/api/pdoc?pid=x', '/api/admin/users',
+  // and with signup
+  '/api/signup']) {
   assert.equal((await get(gone, kUser)).status, 404, `${gone} still answers`)
 }
 assert.equal((await get('/api/hl/candles?coin=BTC&interval=1d')).status, 404)
@@ -322,8 +299,6 @@ assert.deepEqual(await (await get('/healthz')).json(), { ok: true })
 
 /* ---------- pictures: what goes in, what comes back, and what is refused ---------- */
 
-/* kUser's session, rather than one more account: the signup limiter is deliberately tight and this
-   file has already spent most of its allowance by here. */
 const bUser = kUser
 const raw = (path: string, body: BodyInit, cookie = '', type = 'image/png') =>
   fetch(url + path, { method: 'POST', headers: { cookie, 'content-type': type }, body })
@@ -375,13 +350,6 @@ assert.equal((await get(`/api/blob/${'f'.repeat(32)}`, bUser)).status, 404)
 // an id that is not one at all does not reach the table
 assert.equal((await get('/api/blob/nope', bUser)).status, 404)
 
-/* a run of wrong codes from one address cools off — the invite space is 64 bits wide, but nothing
-   should be free to work through it. Last, because the cool-off outlives the test that trips it. */
-for (let i = 0; i < 11; i++) {
-  await post('/api/signup', { user: `x${i}`, pass: 'longenough', invite: 'deadbeefdeadbeef' })
-}
-assert.equal((await post('/api/signup', { user: 'blocked', pass: 'longenough', invite: server.invite() })).status, 429)
-
 // static, and no climbing out of it — the page carries its own security headers,
 // so they hold whatever terminates TLS in front
 r = await fetch(`${url}/`)
@@ -394,30 +362,28 @@ assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fetc%2fpasswd`)).status, 403)
 
 server.close()
 
-/* The first account on a fresh install signs up with a code from the command line, and that is a
-   second insert — the server's own never runs. One that leaves the timestamp to its default prints
-   a code born older than the week it gets, so the install can never be opened. Through the door
-   rather than against the query, since it is the door that was shut. */
+/* The command line, as a fresh install meets it: the password on stdin makes the account, the
+   server lets it in, and running it again is how a forgotten password is set. */
 const cliDb = join(root, 'cli.db')
-const cliCode = execFileSync(process.execPath, [
+const cliPasswd = (pass: string) => execFileSync(process.execPath, [
   '--experimental-strip-types', '--disable-warning=ExperimentalWarning',
-  fileURLToPath(new URL('index.ts', import.meta.url)), 'invite',
-], { env: { ...process.env, STASH_DB: cliDb } }).toString().trim()
+  fileURLToPath(new URL('index.ts', import.meta.url)), 'passwd', 'First',
+], { env: { ...process.env, STASH_DB: cliDb }, input: pass + '\n' }).toString().trim()
+// no database there yet is a mistyped path, not a new install, until the server has made one
+assert.throws(() => cliPasswd('longenough'))
 const cli = start({ port: 0, db: cliDb, root })
 await new Promise((ok) => cli.on('listening', ok))
-const cliPort = (cli.address() as { port: number }).port
-const opened = await fetch(`http://127.0.0.1:${cliPort}/api/signup`, {
-  method: 'POST', body: JSON.stringify({ user: 'first', pass: 'longenough', invite: cliCode }),
-})
-assert.equal(opened.status, 200, 'the code the command line printed was refused')
-
-/* and the only account may leave: the next boot with nobody on it logs a fresh invite. */
-const alone = await fetch(`http://127.0.0.1:${cliPort}/api/account`, {
-  method: 'DELETE',
-  headers: { cookie: jar(opened) },
-  body: JSON.stringify({ pass: 'longenough' }),
-})
-assert.equal(alone.status, 200)
+assert.equal(cliPasswd('longenough'), 'account made')
+const cliUrl = `http://127.0.0.1:${(cli.address() as { port: number }).port}/api/login`
+const cliLogin = (pass: string) => fetch(cliUrl, { method: 'POST', body: JSON.stringify({ user: 'first', pass }) })
+assert.equal((await cliLogin('longenough')).status, 200, 'the account the command line made was refused')
+const before = await cliLogin('longenough')
+const kept = /stash_s=[a-f0-9]{64}/.exec(before.headers.get('set-cookie') ?? '')?.[0] ?? ''
+assert.equal(cliPasswd('forgotten-and-reset'), 'password changed, every device signed out')
+assert.equal((await fetch(cliUrl.replace('/api/login', '/api/me'), { headers: { cookie: kept } })).status, 401,
+  'a session from before the reset still works')
+assert.equal((await cliLogin('longenough')).status, 401)
+assert.equal((await cliLogin('forgotten-and-reset')).status, 200)
 cli.close()
 
 console.log('server ok')

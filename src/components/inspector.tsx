@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Flag, Lightbulb, ListTodo, Maximize2, StickyNote, Trash2, X } from 'lucide-react'
+import { ExternalLink, Flag, Maximize2, Trash2, X } from 'lucide-react'
+import { ITEM_TYPES } from '@/components/item-types'
 import { DueField } from '@/components/due-field'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { Badge } from '@/components/ui/badge'
@@ -17,14 +18,6 @@ import { isRepeat, REPEATS, repeatLabel, today } from '@/lib/parse'
 import { wikiKey, wikiLinks } from '@/lib/markdown'
 import { patch, tagsFor, useStash, type Item, type ItemType } from '@/lib/store'
 
-/* The same three, wearing the same icons the capture bar gives them. They were three words in
-   three boxes here and an icon-and-word pair one row up, which is one switch drawn two ways —
-   and the icon is what the eye actually sorts a row of buttons by. */
-const TYPES = [
-  { id: 'task' as ItemType, label: 'Task', icon: ListTodo },
-  { id: 'idea' as ItemType, label: 'Idea', icon: Lightbulb },
-  { id: 'note' as ItemType, label: 'Note', icon: StickyNote },
-]
 const QUICK = '__inbox__'   // Select can't hold "" as a value
 const ONCE = '__once__'
 
@@ -144,6 +137,173 @@ function TagSuggest({ pid, has, q, onPick }: {
   )
 }
 
+/* ---------- the parts both panels are built from ---------- */
+
+/** The column itself: one shell for one row or several, so the two cannot drift apart. */
+function Panel({ label, head, children }: { label: string, head: React.ReactNode, children: React.ReactNode }) {
+  return (
+    <aside
+      aria-label={label}
+      // on a phone it is the content of a full-width bottom sheet, so the fixed column
+      // (and the border that divides it from the list) only applies once there is a list beside it
+      className="flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
+    >
+      <div className="flex shrink-0 items-center px-5 pt-5">{head}</div>
+      <div
+        // field names are mono and muted: they are furniture, and the values are what is read
+        className="[&_label]:text-muted-foreground flex flex-1 flex-col gap-5 overflow-y-auto p-5 *:shrink-0 [&_label]:font-mono [&_label]:text-xs [&_label]:font-normal"
+        /* A label here only names its field. `htmlFor` stays — it is what a screen reader reads
+           the box by — but the browser's other half of it, click the word and the control takes
+           the caret, is not wanted: clicking a heading opening the select two rows down reads as
+           the panel acting on its own. Cancelled on the way past rather than on each label. */
+        onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
+      >
+        {children}
+      </div>
+    </aside>
+  )
+}
+
+/** What kind of thing it is: a quiet segmented control, since changing it is rare. `value` null is
+ *  a selection of mixed kinds, where no segment is lit. */
+function TypeSwitch({ value, onPick }: { value: ItemType | null, onPick: (t: ItemType) => void }) {
+  return (
+    <div className="bg-secondary grid w-full grid-cols-3 gap-0.5 rounded-[9px] p-[3px]">
+      {ITEM_TYPES.map(({ id, label, icon: Icon }) => (
+        <Button
+          key={id}
+          size="sm"
+          variant="ghost"
+          aria-pressed={value === id}
+          className={cn('h-[26px] rounded-md text-xs', value === id
+            ? 'bg-background ring-border hover:bg-background ring-1'
+            : 'text-muted-foreground hover:bg-transparent')}
+          onClick={() => onPick(id)}
+        >
+          <Icon className="size-3.5" />
+          {label}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
+/** `value` undefined is a mix: the select shows "Mixed" until a project is picked for all of them. */
+function ProjectField({ id, value, onPick }: { id: string, value: string | null | undefined, onPick: (pid: string | null) => void }) {
+  const s = useStash()
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>Project</Label>
+      <Select
+        value={value === undefined ? undefined : value ?? QUICK}
+        onValueChange={(v) => onPick(v === QUICK ? null : v)}
+      >
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue placeholder="Mixed" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={QUICK}>Inbox</SelectItem>
+          {s.projects.map((p) => (
+            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
+/**
+ * The field only ever adds — the chips under it are the list, and each one removes itself. For
+ * several rows the chips are only the tags every one of them carries: a chip that meant "some of
+ * these" would lie.
+ */
+function TagsField({ id, pid, tags, placeholder, resetKey, onAdd, onRemove, removeLabel = (t) => `Remove #${t}` }: {
+  id: string
+  /** the project whose family's tags are offered first */
+  pid: string | null
+  tags: string[]
+  placeholder: string
+  /** a new row or a new selection empties the box */
+  resetKey: string
+  onAdd: (add: string[]) => void
+  onRemove: (t: string) => void
+  removeLabel?: (t: string) => string
+}) {
+  const box = useRef<HTMLInputElement>(null)
+  const [tagq, setTagq] = useState('')
+
+  /** Whatever is in the box joins the tags, and the box empties for the next one. */
+  const addTags = (el: HTMLInputElement) => {
+    const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
+    el.value = ''
+    setTagq('')
+    if (add.length) onAdd(add)
+  }
+
+  /* A suggestion taken whole. Only the word it was being narrowed down with is replaced — that
+     fragment was the search, but anything typed before it was meant, and clearing the box would
+     have quietly thrown it away. Then through addTags, so one place decides what a tag is. */
+  const pickTag = (t: string) => {
+    const el = box.current
+    if (!el) { onAdd([t]); return }
+    el.value = el.value.replace(/[^\s,#]*$/, t)
+    addTags(el)
+  }
+
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>Tags</Label>
+      {/* relative, so what it suggests hangs off the field rather than off the panel */}
+      <div className="relative">
+        <Input
+          id={id}
+          key={resetKey}
+          ref={box}
+          placeholder={placeholder}
+          onChange={(e) => setTagq(e.currentTarget.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
+          // typed, then clicked away: the words were meant, so they land rather than evaporate
+          onBlur={(e) => addTags(e.currentTarget)}
+        />
+        <TagSuggest pid={pid} has={tags} q={tagq} onPick={pickTag} />
+      </div>
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {tags.map((t) => (
+            <Badge key={t} variant="secondary" className="gap-1 pr-1.5 font-mono">
+              #{t}
+              <button
+                type="button"
+                aria-label={removeLabel(t)}
+                onClick={() => onRemove(t)}
+                /* opacity, not visibility: a hidden element takes neither focus nor a tap, so the
+                   keyboard would skip it and a phone, which has no hover, could never remove a tag.
+                   The space stays reserved, so arriving at a chip doesn't make it grow under you. */
+                className="text-muted-foreground hover:text-foreground opacity-0 transition-opacity group-hover/badge:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
+              >
+                {/* Badge sizes its own svgs, but this one is a button's child and misses that */}
+                <X className="size-3" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One unflagged in a selection means the button flags, so clearing a mix takes two presses. */
+function FlagButton({ on, label, onToggle }: { on: boolean, label: string, onToggle: () => void }) {
+  return (
+    <Button variant="outline" size="sm" aria-pressed={on} onClick={onToggle}>
+      {on ? <span className="bg-ring size-1.5 rounded-full" /> : <Flag className="size-3.5" />}
+      {on ? 'Flagged' : label}
+    </Button>
+  )
+}
+
+/* ---------- one row ---------- */
+
 export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
   it: Item
   /** Bumped by the list every time a row is *clicked* open — see the effect below. */
@@ -153,8 +313,6 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
   /** open another item's page — what a backlink does when clicked */
   onOpenItem: (id: string) => void
 }) {
-  const s = useStash()
-
   /* Ready to type. Opening a row is nearly always the prelude to renaming it, and the caret used to
      land nowhere at all — you clicked once to open the panel and again to write in it.
      Off the click's own counter and never off the selection, which is the whole care here: J and K
@@ -175,64 +333,11 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
     el.setSelectionRange(el.value.length, el.value.length)
   }, [openedAt, phone])
 
-  const box = useRef<HTMLInputElement>(null)
-  const [tagq, setTagq] = useState('')
-
-  /** Whatever is in the box joins the tags it already has, and the box empties for the next one. */
-  const addTags = (el: HTMLInputElement) => {
-    const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
-    el.value = ''
-    setTagq('')
-    if (add.length) patch(it.id, { tags: [...new Set([...it.tags, ...add])] })
-  }
-
-  /* A suggestion taken whole. Only the word it was being narrowed down with is replaced — that
-     fragment was the search, but anything typed before it was meant, and clearing the box would
-     have quietly thrown it away. Then through addTags, so one place decides what a tag is. */
-  const pickTag = (t: string) => {
-    const el = box.current
-    if (!el) { patch(it.id, { tags: [...new Set([...it.tags, t])] }); return }
-    el.value = el.value.replace(/[^\s,#]*$/, t)
-    addTags(el)
-  }
-
   return (
-    <aside
-      aria-label="Item details"
-      // on a phone it is the content of a full-width bottom sheet, so the fixed column
-      // (and the border that divides it from the list) only applies once there is a list beside it
-      className="flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
+    <Panel
+      label="Item details"
+      head={<TypeSwitch value={it.type} onPick={(id) => patch(it.id, { type: id, done: id === 'task' ? it.done : false })} />}
     >
-      {/* what kind of thing it is: a quiet segmented control, since changing it is rare */}
-      <div className="flex shrink-0 items-center px-5 pt-5">
-        <div className="bg-secondary grid w-full grid-cols-3 gap-0.5 rounded-[9px] p-[3px]">
-          {TYPES.map(({ id, label, icon: Icon }) => (
-            <Button
-              key={id}
-              size="sm"
-              variant="ghost"
-              className={cn('h-[26px] rounded-md text-xs', it.type === id
-                ? 'bg-background ring-border hover:bg-background ring-1'
-                : 'text-muted-foreground hover:bg-transparent')}
-              onClick={() => patch(it.id, { type: id, done: id === 'task' ? it.done : false })}
-            >
-              <Icon className="size-3.5" />
-              {label}
-            </Button>
-          ))}
-        </div>
-      </div>
-
-      <div
-        // field names are mono and muted: they are furniture, and the values are what is read
-        className="[&_label]:text-muted-foreground flex flex-1 flex-col gap-5 overflow-y-auto p-5 *:shrink-0 [&_label]:font-mono [&_label]:text-xs [&_label]:font-normal"
-        /* A label here only names its field. `htmlFor` stays — it is what a screen reader reads
-           the box by — but the browser's other half of it, click the word and the control takes
-           the caret, is not wanted: the fields are a column of headings and boxes, and clicking a
-           heading opening the select two rows down reads as the panel acting on its own. Cancelled
-           on the way past rather than on each of the six labels. */
-        onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
-      >
       <div className="grid gap-2">
         <Label htmlFor="i-title" className="sr-only">Title</Label>
         {/* the title is the heading of the panel, not one more boxed field in it */}
@@ -308,66 +413,19 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
         </div>
       )}
 
-      <div className="grid gap-2">
-        <Label htmlFor="i-project">Project</Label>
-        <Select
-          value={it.pid ?? QUICK}
-          onValueChange={(v) => patch(it.id, { pid: v === QUICK ? null : v })}
-        >
-          <SelectTrigger id="i-project" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={QUICK}>Inbox</SelectItem>
-            {s.projects.map((p) => (
-              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <ProjectField id="i-project" value={it.pid} onPick={(pid) => patch(it.id, { pid })} />
 
-      <div className="grid gap-2">
-        <Label htmlFor="i-tags">Tags</Label>
-        {/* the field only ever adds — the chips below are the list, and each one removes itself.
-            relative, so what it suggests hangs off the field rather than off the panel */}
-        <div className="relative">
-          <Input
-            id="i-tags"
-            key={it.id}
-            ref={box}
-            placeholder="audio bug"
-            onChange={(e) => setTagq(e.currentTarget.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
-            // typed, then clicked away: the words were meant, so they land rather than evaporate
-            onBlur={(e) => addTags(e.currentTarget)}
-          />
-          <TagSuggest pid={it.pid} has={it.tags} q={tagq} onPick={pickTag} />
-        </div>
-        {it.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {it.tags.map((t) => (
-              <Badge key={t} variant="secondary" className="gap-1 pr-1.5 font-mono">
-                #{t}
-                <button
-                  type="button"
-                  aria-label={`Remove #${t}`}
-                  onClick={() => patch(it.id, { tags: it.tags.filter((x) => x !== t) })}
-                  // the space stays reserved, so arriving at a chip doesn't make it grow under you
-                  className="text-muted-foreground hover:text-foreground opacity-0 transition-opacity group-hover/badge:opacity-100 focus-visible:opacity-100"
-                >
-                  {/* Badge sizes its own svgs, but this one is a button's child and misses that */}
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            ))}
-          </div>
-        )}
-      </div>
+      <TagsField
+        id="i-tags"
+        pid={it.pid}
+        tags={it.tags}
+        placeholder="audio bug"
+        resetKey={it.id}
+        onAdd={(add) => patch(it.id, { tags: [...new Set([...it.tags, ...add])] })}
+        onRemove={(t) => patch(it.id, { tags: it.tags.filter((x) => x !== t) })}
+      />
 
-      <Button variant="outline" size="sm" aria-pressed={it.flag} onClick={() => patch(it.id, { flag: !it.flag })}>
-        {it.flag ? <span className="bg-ring size-1.5 rounded-full" /> : <Flag className="size-3.5" />}
-        {it.flag ? 'Flagged' : 'Flag'}
-      </Button>
+      <FlagButton on={it.flag} label="Flag" onToggle={() => patch(it.id, { flag: !it.flag })} />
 
       <Separator className="mt-auto" />
       <div className="text-muted-foreground font-mono text-[11px]">
@@ -378,10 +436,11 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
       <Button variant="outline" size="sm" onClick={onDelete}>
         <Trash2 className="size-3.5" /> Delete item
       </Button>
-      </div>
-    </aside>
+    </Panel>
   )
 }
+
+/* ---------- several rows ---------- */
 
 /**
  * The same panel for several rows at once: only what they have in common, since a field with two
@@ -389,8 +448,6 @@ export function Inspector({ it, openedAt, onDelete, onExpand, onOpenItem }: {
  */
 export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => void }) {
   const s = useStash()
-  const box = useRef<HTMLInputElement>(null)
-  const [tagq, setTagq] = useState('')
   const picked = s.items.filter((i) => ids.includes(i.id))
   if (!picked.length) return null
 
@@ -401,54 +458,22 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
   // tags every one of them carries — the only ones a single chip can honestly stand for
   const common = picked[0].tags.filter((t) => picked.every((i) => i.tags.includes(t)))
 
-  /** Adds to each row's own tags rather than replacing them: a shared list would wipe the rest. */
-  const addTags = (el: HTMLInputElement) => {
-    const add = el.value.split(/[\s,#]+/).filter(Boolean).map((t) => t.toLowerCase())
-    el.value = ''
-    setTagq('')
-    if (add.length) picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, ...add])] }))
-  }
-
-  /** As in the single-row panel: the fragment it was found with is replaced, the rest stands. */
-  const pickTag = (t: string) => {
-    const el = box.current
-    if (!el) { picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, t])] })); return }
-    el.value = el.value.replace(/[^\s,#]*$/, t)
-    addTags(el)
-  }
-
   return (
-    <aside
-      aria-label="Selection details"
-      className="flex w-full shrink-0 flex-col overflow-hidden md:w-75 md:border-l"
-    >
-      <div className="flex shrink-0 items-center px-5 pt-5">
+    <Panel
+      label="Selection details"
+      head={(
         <div>
           <p className="text-lg font-semibold tracking-tight">{picked.length} selected</p>
           <p className="text-muted-foreground text-xs">
             {tasks.length === picked.length ? 'All tasks' : `${tasks.length} of them tasks`}
           </p>
         </div>
-      </div>
-
-      {/* labels name their fields and no more, as in the single-row panel above */}
-      <div
-        className="[&_label]:text-muted-foreground flex flex-1 flex-col gap-5 overflow-y-auto p-5 *:shrink-0 [&_label]:font-mono [&_label]:text-xs [&_label]:font-normal"
-        onClick={(e) => { if ((e.target as HTMLElement).closest('label')) e.preventDefault() }}
-      >
-      <div className="grid grid-cols-3 gap-1.5">
-        {TYPES.map(({ id, label, icon: Icon }) => (
-          <Button
-            key={id}
-            size="sm"
-            variant={same('type') && picked[0].type === id ? 'default' : 'outline'}
-            onClick={() => each({ type: id, ...(id === 'task' ? {} : { done: false }) })}
-          >
-            <Icon className="size-3.5" />
-            {label}
-          </Button>
-        ))}
-      </div>
+      )}
+    >
+      <TypeSwitch
+        value={same('type') ? picked[0].type : null}
+        onPick={(id) => each({ type: id, ...(id === 'task' ? {} : { done: false }) })}
+      />
 
       <div className="grid gap-2">
         <Label htmlFor="s-due">Due</Label>
@@ -460,72 +485,27 @@ export function Selection({ ids, onDelete }: { ids: string[]; onDelete: () => vo
         />
       </div>
 
-      <div className="grid gap-2">
-        <Label htmlFor="s-project">Project</Label>
-        <Select
-          value={same('pid') ? picked[0].pid ?? QUICK : undefined}
-          onValueChange={(v) => each({ pid: v === QUICK ? null : v })}
-        >
-          <SelectTrigger id="s-project" className="w-full">
-            <SelectValue placeholder="Mixed" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={QUICK}>Inbox</SelectItem>
-            {s.projects.map((p) => (
-              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <ProjectField id="s-project" value={same('pid') ? picked[0].pid : undefined} onPick={(pid) => each({ pid })} />
 
-      <div className="grid gap-2">
-        <Label htmlFor="s-tags">Tags</Label>
-        {/* adds to every row, keeping whatever each already had — the field cannot show a list
-            that differs per row, so it only ever adds */}
-        <div className="relative">
-          <Input
-            id="s-tags"
-            key={ids.join(' ')}
-            ref={box}
-            placeholder="Add to all"
-            onChange={(e) => setTagq(e.currentTarget.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTags(e.currentTarget) } }}
-            onBlur={(e) => addTags(e.currentTarget)}
-          />
-          {/* the first row's project stands for the selection: they are picked out of one list */}
-          <TagSuggest pid={picked[0].pid} has={common} q={tagq} onPick={pickTag} />
-        </div>
-        {/* only the ones every row carries: a chip that meant "some of these" would lie */}
-        {common.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {common.map((t) => (
-              <Badge key={t} variant="secondary" className="gap-1 pr-1.5 font-mono">
-                #{t}
-                <button
-                  type="button"
-                  aria-label={`Remove #${t} from all`}
-                  onClick={() => picked.forEach((i) => patch(i.id, { tags: i.tags.filter((x) => x !== t) }))}
-                  className="text-muted-foreground hover:text-foreground opacity-0 transition-opacity group-hover/badge:opacity-100 focus-visible:opacity-100"
-                >
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* adds to each row's own tags rather than replacing them: a shared list would wipe the rest.
+          The first row's project stands for the selection: they are picked out of one list. */}
+      <TagsField
+        id="s-tags"
+        pid={picked[0].pid}
+        tags={common}
+        placeholder="Add to all"
+        resetKey={ids.join(' ')}
+        onAdd={(add) => picked.forEach((i) => patch(i.id, { tags: [...new Set([...i.tags, ...add])] }))}
+        onRemove={(t) => picked.forEach((i) => patch(i.id, { tags: i.tags.filter((x) => x !== t) }))}
+        removeLabel={(t) => `Remove #${t} from all`}
+      />
 
-      {/* one of them unflagged means the button flags, so it takes two presses to clear a mix */}
-      <Button variant="outline" size="sm" aria-pressed={flagged} onClick={() => each({ flag: !flagged })}>
-        {flagged ? <span className="bg-ring size-1.5 rounded-full" /> : <Flag className="size-3.5" />}
-        {flagged ? 'Flagged' : 'Flag all'}
-      </Button>
+      <FlagButton on={flagged} label="Flag all" onToggle={() => each({ flag: !flagged })} />
 
       <Separator className="mt-auto" />
       <Button variant="outline" size="sm" onClick={onDelete}>
         <Trash2 className="size-3.5" /> Delete {picked.length} items
       </Button>
-      </div>
-    </aside>
+    </Panel>
   )
 }

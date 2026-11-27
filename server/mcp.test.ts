@@ -5,18 +5,20 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const { start } = await import('./index.ts')
+const { start, passwd } = await import('./index.ts')
 const { addDays, today } = await import('../src/lib/parse.ts')
 
 const root = mkdtempSync(join(tmpdir(), 'stash-mcp-'))
 writeFileSync(join(root, 'index.html'), '<!doctype html>hi')
-const server = start({ port: 0, db: join(root, 'test.db'), root })
+const db = join(root, 'test.db')
+const server = start({ port: 0, db, root })
 await new Promise((ok) => server.on('listening', ok))
 const { port } = server.address() as { port: number }
 const url = `http://127.0.0.1:${port}`
 
-const signup = await fetch(`${url}/api/signup`, {
-  method: 'POST', body: JSON.stringify({ user: 'leon', pass: 'longenough', invite: server.invite() }),
+await passwd(db, 'leon', 'longenough')
+const signup = await fetch(`${url}/api/login`, {
+  method: 'POST', body: JSON.stringify({ user: 'leon', pass: 'longenough' }),
 })
 assert.equal(signup.status, 200)
 

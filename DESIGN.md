@@ -69,9 +69,9 @@ row, an add row, then one ruled list.
 
 - **Quiet fields** (`QUIET` in `lib/utils.ts`): no border at rest. The border appears on hover,
   focus and open. A row of editable values reads as text, not a form.
-- **Hover-reveal for anything destructive:** `invisible` until the row is hovered or focused, and
-  always `focus-visible:visible`, so the keyboard reaches it. Use `visibility`, not opacity, so no
-  faded icons get left behind on scroll.
+- **Hover-reveal for anything destructive:** `opacity-0` until the row is hovered or focused, with
+  `focus-visible:opacity-100` and `pointer-coarse:opacity-100`. Not `visibility`: a hidden element
+  takes neither keyboard focus nor a tap, so the keyboard skips it and a phone can never use it.
 - **Segmented pills:** a `bg-secondary` tray with a `p-[3px]` inset. The selected one is
   `bg-background` with `ring-1 ring-border`, not an inverted block.
 - Every clickable thing gets the pointer cursor, menu items included (`index.css` puts it back

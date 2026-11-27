@@ -64,6 +64,10 @@ const cols = (t: string) =>
 
 // sharing is gone from the file, not left in it unread
 for (const t of ['shares', 'pdocs', 'links']) assert.deepEqual(cols(t), [], `${t} is still there`)
+// ...but signup's leftovers stay: an image from before 7.0.0 names them at boot, and a rollback
+// to one must still start on this database
+assert.ok(cols('users').includes('admin'), 'users.admin was dropped, and a rollback past 7.0.0 would crash')
+assert.ok(cols('invites').length > 0, 'invites was dropped, and a rollback past 7.0.0 would crash')
 
 // ...and the account and its documents came through untouched, which is the whole point
 assert.equal((now.prepare('select count(*) as n from users').get() as any).n, 1)

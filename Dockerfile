@@ -4,6 +4,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+# The checks CLAUDE.md asks for before a push, here as well: a push to main deploys, and this is the
+# one place GitHub runs anything before it does. A failing test stops the image, so the running
+# container stays whatever shipped last. (tsc runs inside the build.)
+RUN npm run lint && npm test
 RUN npm run build
 
 FROM node:24-alpine

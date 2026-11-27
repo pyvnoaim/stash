@@ -20,7 +20,7 @@ const HINT: Record<string, string> = {
 /**
  * The sidebar footer: who you are and where your data stands. Three things behind it, and only
  * three — the two that act the moment they are chosen, and the window that holds everything else.
- * Your account, the history and the roster of people are settings, and they live in Settings.
+ * Your account and the history are settings, and they live in Settings.
  * Signing in happens at the gate, never here.
  */
 // a Mac's browser, not the app already, and not an iPad, which says Macintosh too

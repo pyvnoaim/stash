@@ -1,296 +1,25 @@
 import { useState } from 'react'
-import {
-  CalendarClock, CalendarDays, CheckCheck,
-  FileText, Flag, Inbox, Layers, Lightbulb, ListTodo, Monitor, PanelLeft, Plus, Search, StickyNote,
-  Wallet,
-} from 'lucide-react'
 import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { login, signup } from '@/lib/sync'
+import { login } from '@/lib/sync'
 
 /**
- * The whole screen while the server says "not signed in". Only an explicit 401 lands here —
- * no connection is not a refusal, so an offline start goes straight to the app and the data
- * this machine already holds. Real sessions run 180 days; a stranger runs into this instead.
+ * The whole screen while the server says "not signed in". Only an explicit 401 lands here — no
+ * connection is not a refusal, so an offline start goes straight to the app and the data this
+ * machine already holds. Real sessions run 180 days; a stranger runs into this instead.
  *
- * The left half is the pitch, and the pitch is the app itself: a small true-to-life window with
- * the sidebar, the list and the capture bar, where a line types itself and lands as the task it
- * describes. Anyone arriving with an invite can see what they are signing into before they do.
+ * Signing in and nothing else: there is one account, made on the server (`passwd`), so there is
+ * nobody to pitch the app to and no second door to offer.
  */
 export function LoginGate() {
-  return (
-    <div className="bg-background min-h-svh md:grid md:grid-cols-2">
-      <style>{`
-        @keyframes gate-type { from { width: 0 } to { width: 100% } }
-        @keyframes gate-in { from { opacity: 0; transform: translateY(3px) } to { opacity: 1; transform: none } }
-        @keyframes gate-caret { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
-        @keyframes gate-drift { to { background-position: 8px 8px } }
-        /* the box is sized by an invisible copy of the line, so 100% is exactly the text's own
-           width — ch would be the width of a zero, and this face is not monospaced */
-        .gate-type { position: absolute; inset: 0; overflow: hidden; white-space: nowrap;
-          animation: gate-type 1.5s steps(47) .4s both }
-        .gate-in { animation: gate-in .4s ease-out both }
-        .gate-caret { animation: gate-caret 1.1s steps(1) infinite }
-        .gate-drift { animation: gate-drift 7s linear infinite }
-        @media (prefers-reduced-motion: reduce) {
-          .gate-type, .gate-in, .gate-caret, .gate-drift { animation: none }
-        }
-      `}</style>
-
-      <div className="bg-muted/30 relative hidden flex-col justify-between overflow-hidden border-r p-10 md:flex">
-        {/* the texture: a pixel grid, barely there, drifting one cell at a time */}
-        <div
-          aria-hidden
-          className="gate-drift absolute inset-0 opacity-[0.05]"
-          style={{ backgroundImage: 'radial-gradient(currentColor 1px, transparent 1px)', backgroundSize: '8px 8px' }}
-        />
-        <Wordmark />
-        <Teaser />
-        <p className="text-muted-foreground relative text-xs">
-          Self-hosted · invite-only · works offline once it has loaded
-        </p>
-      </div>
-
-      {/* the flat side of the gate lifts a little at the top, so the card sits in something rather
-          than on nothing — the same muted the panel opposite is tinted with, faded out by halfway */}
-      <div className="from-muted/30 to-background flex min-h-svh flex-col bg-linear-to-b to-50% md:min-h-0">
-        <div className="p-6 md:hidden"><Wordmark /></div>
-        <div className="flex flex-1 items-start justify-center p-6 pt-10 md:items-center md:pt-6">
-          <div className="w-full max-w-sm md:rounded-xl md:border md:p-6">
-            <p className="text-muted-foreground mb-6 text-sm md:hidden">
-              Tasks, ideas and quick notes — signed in, yours follows you between devices.
-            </p>
-            <SignIn />
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function Wordmark() {
-  return (
-    <div className="font-heading relative flex items-center gap-2.5 text-lg tracking-wide">
-      {/* the favicon, rebuilt in divs: a square holding one lit pixel-bar */}
-      <span className="bg-foreground grid size-6 shrink-0 place-items-center rounded-md">
-        <span className="bg-background h-3 w-1 rounded-full" />
-      </span>
-      Stash
-    </div>
-  )
-}
-
-const LISTS = [
-  { icon: Inbox, label: 'Inbox', count: 4 },
-  { icon: CalendarDays, label: 'Today', count: 3, active: true },
-  { icon: CalendarClock, label: 'Upcoming', count: 9 },
-  { icon: Flag, label: 'Flagged', count: 1 },
-  { icon: Layers, label: 'Everything', count: 26 },
-  { icon: CheckCheck, label: 'Done' },
-]
-/* Invented, and deliberately so — the gate is a public page, and the names of real projects,
-   real tags and a real account are nobody else's business. */
-const PROJECTS = [
-  { name: 'Studio', color: '#3b82f6', count: 3 },
-  { name: 'Flat', color: '#f59e0b', count: 2 },
-]
-const TAGS = [{ name: 'audio', count: 3 }, { name: 'errands', count: 2 }]
-const TOOLS = [
-  { icon: Wallet, label: 'Subscriptions' },
-  { icon: FileText, label: 'PDF editor' },
-]
-
-/** Already in the list before the demo runs — the app is not empty when you arrive. */
-const ROWS = [
-  { text: 'master bus click', rail: '#3b82f6', tag: '#audio' },
-  { text: 'call the landlord', rail: '#f59e0b', due: '18:00' },
-  { text: 'sketch the export dialog', note: 'PDF first, CSV if anyone asks', extra: 2 },
-  { text: 'send the invoice', done: true },
-]
-
-const Item = ({ icon: Icon, label, count, active }: {
-  icon: React.ElementType, label: string, count?: number, active?: boolean
-}) => (
-  <div className={`flex items-center gap-2 rounded-md px-2 py-1 text-[11px] ${
-    active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-  }`}>
-    <Icon className="size-3 shrink-0" />
-    <span className="truncate">{label}</span>
-    {!!count && <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{count}</span>}
-  </div>
-)
-
-const GroupLabel = ({ children, action }: { children: React.ReactNode, action?: boolean }) => (
-  <div className="text-muted-foreground/70 font-heading flex items-center px-2 pt-2.5 pb-1 text-[9px] tracking-wider uppercase">
-    {children}
-    {action && <Plus className="ml-auto size-2.5" />}
-  </div>
-)
-
-/** A small, true-to-life window: the real sidebar, the real capture bar, the real rows. */
-function Teaser() {
-  return (
-    <div
-      aria-hidden
-      className="bg-background relative mx-auto grid w-full max-w-2xl grid-cols-[132px_1fr] overflow-hidden rounded-xl border shadow-2xl select-none"
-    >
-      <div className="bg-sidebar flex flex-col border-r">
-        {/* STASH shares a baseline with the page title, the way the real header does */}
-        <div className="flex h-9 items-center gap-1.5 border-b px-3">
-          <span className="font-pixel text-xs">stash</span>
-        </div>
-
-        <div className="flex-1 p-1.5">
-          <GroupLabel>Lists</GroupLabel>
-          {LISTS.map((l) => <Item key={l.label} {...l} />)}
-          <GroupLabel action>Projects</GroupLabel>
-          {PROJECTS.map((p) => (
-            <div key={p.name} className="text-muted-foreground flex items-center gap-2 rounded-md px-2 py-1 text-[11px]">
-              {/* a project's mark is a rail, not a dot — the same bar its rows carry */}
-              <span className="h-3 w-0.5 shrink-0 rounded-full" style={{ background: p.color }} />
-              <span className="truncate">{p.name}</span>
-              <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{p.count}</span>
-            </div>
-          ))}
-          <GroupLabel>Tags</GroupLabel>
-          {TAGS.map((t) => (
-            <div key={t.name} className="text-muted-foreground flex items-center gap-2 rounded-md px-2 py-1 text-[11px]">
-              <span className="shrink-0 opacity-70">#</span>
-              <span className="truncate">{t.name}</span>
-              <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{t.count}</span>
-            </div>
-          ))}
-          <GroupLabel>Tools</GroupLabel>
-          {TOOLS.map((t) => <Item key={t.label} {...t} />)}
-        </div>
-
-        <div className="flex items-center gap-2 border-t px-2.5 py-2">
-          <span className="bg-muted text-muted-foreground grid size-5 shrink-0 place-items-center rounded text-[9px] uppercase">
-            s
-          </span>
-          <div className="grid leading-tight">
-            <span className="text-[10px]">sam</span>
-            <span className="text-muted-foreground text-[9px]">Synced</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-col">
-        <div className="flex h-9 items-center gap-2 border-b px-3">
-          <PanelLeft className="text-muted-foreground size-3" />
-          <span className="text-border">|</span>
-          <span className="font-heading text-[10px] tracking-wider uppercase">Today</span>
-          <span className="text-muted-foreground text-[10px] tabular-nums">3</span>
-          <div className="ml-auto flex items-center gap-2">
-            <Monitor className="text-muted-foreground size-3" />
-            <div className="text-muted-foreground/60 flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px]">
-              <Search className="size-2.5" /> Search
-            </div>
-          </div>
-        </div>
-
-        <div className="min-h-62 space-y-1 p-2.5">
-          {/* the capture bar: the three kinds, then the line typing itself into the field */}
-          <div className="mb-2 flex items-center gap-2 rounded-lg border px-2 py-1.5">
-            {[
-              { icon: ListTodo, label: 'Task', on: true },
-              { icon: Lightbulb, label: 'Idea' },
-              { icon: StickyNote, label: 'Note' },
-            ].map(({ icon: Icon, label, on }) => (
-              <span
-                key={label}
-                className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${
-                  on ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-                }`}
-              >
-                <Icon className="size-2.5" /> {label}
-              </span>
-            ))}
-            <span className="text-border">|</span>
-            <span className="relative inline-block whitespace-nowrap text-[11px]">
-              {/* the sizer carries the caret's own width too, or the clip would cut it off */}
-              <span className="invisible">
-                ! fix the preset loader @studio #audio tomorrow
-                <span className="ml-px inline-block w-px" />
-              </span>
-              <span className="gate-type">
-                ! fix the preset loader @studio #audio tomorrow
-                <span className="gate-caret bg-foreground/70 ml-px inline-block h-[1em] w-px align-text-bottom" />
-              </span>
-            </span>
-          </div>
-
-          <Row className="gate-in [animation-delay:2.1s]"
-            text="fix the preset loader" rail="#3b82f6" tag="#audio" due="tomorrow" flag />
-          {ROWS.map((r) => <Row key={r.text} {...r} />)}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** Rows carry no border of their own in the real list — the rail and the spacing do the work. */
-function Row({ text, rail, tag, due, flag, done, note, extra, className = '' }: {
-  text: string
-  rail?: string
-  tag?: string
-  due?: string
-  flag?: boolean
-  done?: boolean
-  note?: string
-  extra?: number
-  className?: string
-}) {
-  return (
-    <div className={`relative flex items-start gap-2 rounded-md py-1 pl-2.5 text-[11px] ${className}`}>
-      {rail && <span className="absolute inset-y-1 left-0 w-0.5 rounded-full" style={{ background: rail }} />}
-      <span className={`mt-0.75 size-2.5 shrink-0 rounded-[3px] border ${
-        done ? 'bg-muted-foreground/40 border-transparent' : 'border-muted-foreground/50'
-      }`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className={`truncate ${done ? 'text-muted-foreground line-through' : ''}`}>{text}</span>
-          {flag && <Flag className="text-muted-foreground size-2.5 shrink-0" />}
-          {tag && <span className="text-muted-foreground/70 shrink-0 text-[10px]">{tag}</span>}
-          {due && <span className="text-muted-foreground ml-auto shrink-0 text-[10px]">{due}</span>}
-        </div>
-        {note && (
-          <div className="text-muted-foreground truncate text-[10px]">
-            {note} {!!extra && <span className="opacity-70">+{extra}</span>}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** Height from 0 to whatever the content is, in CSS alone: a grid row going 0fr → 1fr. */
-function Reveal({ open, children }: { open: boolean, children: React.ReactNode }) {
-  return (
-    <div
-      className={`grid transition-all duration-200 ease-out motion-reduce:transition-none ${
-        open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-      }`}
-    >
-      {/* the clip needs room, or it shaves the focus ring off whatever is inside it */}
-      <div className="overflow-hidden p-1 -m-1">{children}</div>
-    </div>
-  )
-}
-
-/** Two doors, one form — the toggle decides whether the invite field is part of it. */
-export function SignIn() {
-  const [mode, setMode] = useState<'in' | 'up'>('in')
   const [name, setName] = useState('')
   const [pass, setPass] = useState('')
-  const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const up = mode === 'up'
-  const ready = name && pass && (!up || code) && !busy
+  const ready = name && pass && !busy
   // what the message was about has just been retyped, so it is no longer about anything
   const field = (set: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     set(e.target.value)
@@ -299,85 +28,32 @@ export function SignIn() {
   const go = async () => {
     if (!ready) return
     setBusy(true)
-    const err = await (up ? signup(name, pass, code) : login(name, pass))
+    setError((await login(name, pass)) ?? '')
     setBusy(false)
-    setError(err ?? '')
     // nothing else to do on success: the sign-in flips the sync state and the gate is gone
   }
 
   return (
-    <div className="grid gap-5">
-      <div key={mode} className="gate-in grid gap-1">
-        <h2 className="font-heading text-xl tracking-wide">
-          {up ? 'Create account' : 'Welcome back'}
-        </h2>
-        <p className="text-muted-foreground text-sm">
-          {up ? 'An invite gets you a stash of your own.' : 'Sign in to pick up where you left off.'}
-        </p>
-      </div>
-
-      {/* one segmented switch: the lit half slides across rather than blinking to the other side */}
-      <div className="bg-muted relative grid grid-cols-2 rounded-lg p-1">
-        <span
-          aria-hidden
-          className={`bg-background absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md shadow-xs
-            transition-transform duration-200 ease-out motion-reduce:transition-none
-            ${up ? 'translate-x-full' : ''}`}
-        />
-        {([['in', 'Sign in'], ['up', 'Create account']] as const).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            // the lit half is a decoration the screen reader is told to skip, so the state lives here
-            aria-pressed={mode === id}
-            className={`relative rounded-md py-1.5 text-sm transition-colors ${
-              mode === id ? 'font-medium' : 'text-muted-foreground hover:text-foreground'
-            }`}
-            onClick={() => { setMode(id); setError('') }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+    <div className="bg-sidebar grid min-h-svh place-items-center p-4">
       <form
-        className="grid gap-3"
-        onSubmit={(e) => { e.preventDefault(); go() }}
+        className="bg-background grid w-full max-w-sm gap-4 rounded-[10px] border p-6"
+        onSubmit={(e) => { e.preventDefault(); void go() }}
       >
-        {/* the invite field opens and closes rather than appearing — 0fr→1fr is the CSS-only height */}
-        <Reveal open={up}>
-          <div className="grid gap-2 pb-3">
-            <Label htmlFor="sync-code">Invite code</Label>
-            {/* sixteen of hex: a phone would capitalise it and a spellchecker would correct it,
-                and the server has to take that anyway — this is only asking it not to happen */}
-            <Input id="sync-code" autoComplete="off" placeholder="from whoever runs this"
-              autoCapitalize="none" autoCorrect="off" spellCheck={false}
-              tabIndex={up ? undefined : -1} value={code} onChange={field(setCode)} />
-          </div>
-        </Reveal>
+        <span className="font-pixel text-xl tracking-[0.02em]">stash</span>
         <div className="grid gap-2">
           <Label htmlFor="sync-name">Name</Label>
-          {/* invented, like the rest of the gate — the account in the window opposite is this one */}
-          <Input id="sync-name" autoFocus autoComplete="username" placeholder="sam"
-            autoCapitalize="none" value={name} onChange={field(setName)} />
+          <Input id="sync-name" autoFocus autoComplete="username" autoCapitalize="none"
+            value={name} onChange={field(setName)} />
         </div>
         <div className="grid gap-2">
           <Label htmlFor="sync-pass">Password</Label>
-          <PasswordInput id="sync-pass" value={pass}
-            autoComplete={up ? 'new-password' : 'current-password'}
-            onChange={field(setPass)} />
-          <Reveal open={up}>
-            <p className="text-muted-foreground pb-1 text-xs">
-              Eight characters at least. There is no reset by mail — it lives in your keychain or nowhere.
-            </p>
-          </Reveal>
+          <PasswordInput id="sync-pass" autoComplete="current-password" value={pass} onChange={field(setPass)} />
         </div>
         {/* said out loud too: a refusal nobody can see is a form that simply did nothing */}
         {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
         {/* the password is hashed at a cost that is meant to be felt, so the button says it is
             working rather than sitting there greyed out for a second with nothing to show */}
-        <Button type="submit" disabled={!ready}>
-          {busy ? 'One moment…' : up ? 'Create account' : 'Sign in'}
-        </Button>
+        <Button type="submit" disabled={!ready}>{busy ? 'One moment…' : 'Sign in'}</Button>
       </form>
     </div>
   )

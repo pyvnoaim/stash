@@ -16,15 +16,15 @@
  * copied database file (a backup, a snapshot) contains nothing that logs anyone in. They idle out
  * after 30 days unused and die at 180 regardless.
  *
- * One person's server. Signup is invite-only: a fresh boot with no users logs its own first code,
- * and `node server/index.ts invite` cuts another from the CLI. No email, no reset flow — a
- * forgotten password is deleting the row and cutting a new invite.
+ * One person's server. There is no signup: the account is made, and its password set again when
+ * forgotten, from the command line — `node server/index.ts passwd <name>`, the password on stdin.
  *
  * The database is copied to `/data/backup-YYYY-MM-DD.db` once a day, seven kept (see `backup`).
  */
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { existsSync } from 'node:fs'
 import { readdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -45,8 +45,6 @@ const MCP_DEVICE = 'Claude, over MCP'
 /** Failed logins allowed per user-and-address before a cool-off. */
 const TRIES = 10
 const COOL_OFF = 15 * 60_000
-/** How long a signup code stays good. A code that leaks is a code that expires. */
-const INVITE_DAYS = 7
 /**
  * scrypt cost, stored per user so it can be raised later without breaking old hashes.
  * ponytail: 2^15 is OWASP's floor, not its ceiling — raise N here when hardware moves; old
@@ -153,8 +151,7 @@ const SCHEMA = `
   create table if not exists users (
     id integer primary key autoincrement, name text unique not null,
     salt blob not null, hash blob not null, n integer not null,
-    admin integer not null default 0, ts integer not null,
-    avatar text
+    ts integer not null, avatar text
   );
   create table if not exists sessions (
     hash text primary key,
@@ -164,8 +161,6 @@ const SCHEMA = `
        never the full user-agent, which is a fingerprint and answers a question nobody asked. */
     device text
   );
-  /* A code is one-use and short-lived: used holds the account it made, ts when it was cut. */
-  create table if not exists invites (code text primary key, used integer, ts integer not null default 0);
   create table if not exists docs (
     v integer primary key autoincrement,
     user integer not null references users(id) on delete cascade,
@@ -194,11 +189,11 @@ export function start({
   db.exec(SCHEMA)
   // a database from before avatars existed grows the column; a fresh one already has it
   try { db.exec('alter table users add column avatar text') } catch { /* already there */ }
-  try {
-    db.exec('alter table invites add column ts integer not null default 0')
-    // codes cut before they had a date get their full window from now rather than expiring at once
-    db.prepare('update invites set ts = ? where ts = 0').run(Date.now())
-  } catch { /* already there */ }
+  /* Signup came out, and the admin flag and the invite codes with it: one person's server has
+     nobody to invite and nobody to rank. The `admin` column and the `invites` table are left where
+     they are, unread: every image before 7.0.0 prepares statements naming them at boot, and a
+     rollback to one (CLAUDE.md's way back) would crash-loop on a database that had lost them.
+     ponytail: drop both once rolling back past 7.0.0 is no longer a thing anyone would do. */
   // sessions from before the list existed have no label, and read as the unknown device they are
   try { db.exec('alter table sessions add column device text') } catch { /* already there */ }
   /* Exchange keys came off the desk with the exchanges: Kraken, then MEXC, then Bitget and ApeX, all
@@ -219,13 +214,7 @@ export function start({
   db.exec('drop table if exists shares; drop table if exists pdocs; drop table if exists links')
   const q = {
     userByName: db.prepare('select * from users where name = ?'),
-    addUser: db.prepare('insert into users (name, salt, hash, n, admin, ts) values (?, ?, ?, ?, ?, ?)'),
     anyUser: db.prepare('select 1 from users limit 1'),
-    delUserById: db.prepare('delete from users where id = ?'),
-    invite: db.prepare('select * from invites where code = ? and used is null and ts > ?'),
-    useInvite: db.prepare('update invites set used = ? where code = ?'),
-    addInvite: db.prepare('insert into invites (code, ts) values (?, ?)'),
-    openInvites: db.prepare('select code, ts from invites where used is null and ts > ? order by ts desc'),
     rename: db.prepare('update users set name = ? where id = ?'),
     addBlob: db.prepare('insert into blobs (id, owner, mime, bytes, ts) values (?, ?, ?, ?, ?)'),
     blob: db.prepare('select mime, bytes from blobs where id = ?'),
@@ -243,7 +232,7 @@ export function start({
       where user = ? order by v desc`),
     version: db.prepare('select v, json from docs where user = ? and v = ?'),
     everyVersion: db.prepare('select v, ts, json from docs where user = ? order by v desc'),
-    session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.admin, u.avatar
+    session: db.prepare(`select s.hash, s.created, s.seen, u.id, u.name, u.avatar
       from sessions s join users u on u.id = s.user where s.hash = ?`),
     addSession: db.prepare('insert into sessions (hash, user, created, seen, device) values (?, ?, ?, ?, ?)'),
     dropStaleDevice: db.prepare('delete from sessions where user = ? and device = ? and seen < ?'),
@@ -351,11 +340,11 @@ export function start({
 
   /** The session's user, or null. Every route trusts only this — never an id off the request. */
   const auth = (req: IncomingMessage):
-    { id: number, name: string, admin: number, avatar: string | null } | null => {
+    { id: number, name: string, avatar: string | null } | null => {
     const t = cookieToken(req)
     if (!t) return null
     const s = q.session.get(hashToken(t)) as
-      { hash: string, created: number, seen: number, id: number, name: string, admin: number, avatar: string | null } | undefined
+      { hash: string, created: number, seen: number, id: number, name: string, avatar: string | null } | undefined
     if (!s) return null
     const now = Date.now()
     // idle out unused sessions, and cap even a busy one — a stolen cookie is not a lifetime pass
@@ -364,7 +353,7 @@ export function start({
       return null
     }
     if (now - s.seen > 3600_000) q.touchSession.run(now, s.hash)
-    return { id: s.id, name: s.name, admin: s.admin, avatar: s.avatar }
+    return { id: s.id, name: s.name, avatar: s.avatar }
   }
 
   const base = resolve(root)
@@ -372,20 +361,7 @@ export function start({
   /** MCP contexts by user and password hash — built and bounded in the /mcp route. */
   const mcps = new Map<string, ReturnType<typeof createStash>>()
 
-  /** One-use signup code — the first boot and the tests come through here. */
-  const invite = () => {
-    // 64 bits: not a code anyone guesses, and it is one-use and expiring on top of that
-    const code = randomBytes(8).toString('hex')
-    q.addInvite.run(code, Date.now())
-    return code
-  }
-  const inviteFloor = () => Date.now() - INVITE_DAYS * 86400_000
-
-  // a fresh instance cuts its own first code into the logs, so setup is compose up and nothing
-  // else; guarded on an open code so restarts before the first signup don't mint a pile
-  if (!q.anyUser.get() && !q.openInvites.all(inviteFloor()).length) {
-    console.log(`first invite: ${invite()}`)
-  }
+  if (!q.anyUser.get()) console.log('no account yet: node server/index.ts passwd <name>, password on stdin')
 
   /* The database, copied beside itself once a day: `backup-YYYY-MM-DD.db`, the newest seven kept.
      VACUUM INTO writes a consistent copy of a live WAL database without stopping anything. Beside
@@ -430,37 +406,6 @@ export function start({
       return send(res, 200, { ok: true })
     }
 
-    if (path === '/api/signup' && req.method === 'POST') {
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      // no session to key on here, so the address alone: enough to stop a script working through
-      // the code space, and 64 bits was never going to fall to one anyway
-      if (limited(`signup:${addr(req)}`)) return send(res, 429, { error: 'too many tries — wait 15 minutes' })
-      const name = String(b?.user ?? '').trim().toLowerCase()
-      const pass = String(b?.pass ?? '')
-      if (!/^[a-z0-9_-]{2,32}$/.test(name)) return send(res, 400, { error: 'name: 2–32 of a–z 0–9 _ -' })
-      if (pass.length < 8) return send(res, 400, { error: 'password: 8 characters at least' })
-      /* Read the way the name above it is: a code arrives pasted out of a terminal with the
-         newline still on it, or capitalised by a phone keyboard that treats hex as a sentence.
-         Neither is a wrong code, and "ask for a new one" is no help to either. The same string
-         spends it below — checking one form and burning another leaves the code good forever. */
-      const invite = String(b?.invite ?? '').trim().toLowerCase()
-      if (!q.invite.get(invite, inviteFloor())) {
-        return send(res, 403, { error: 'that invite is not valid — ask for a new one' })
-      }
-      if (q.userByName.get(name)) return send(res, 409, { error: 'name taken' })
-      // a code that worked clears the count: the limiter is here to stop guessing, and a real
-      // signup is the opposite of a guess
-      tries.delete(`signup:${addr(req)}`)
-      const salt = randomBytes(16)
-      // the first account through the door is the admin — it is yours, you deployed this
-      const admin = q.anyUser.get() ? 0 : 1
-      const id = Number(q.addUser.run(name, salt, await hashPass(pass, salt, SCRYPT_N), SCRYPT_N, admin, Date.now()).lastInsertRowid)
-      q.useInvite.run(id, invite)
-      log('signup', name, via(req))
-      return send(res, 200, { user: name, admin, avatar: null }, { 'set-cookie': cookie(newSession(id, deviceOf(req))) })
-    }
-
     if (path === '/api/login' && req.method === 'POST') {
       let b: any
       try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
@@ -468,7 +413,7 @@ export function start({
       const ip = addr(req)
       if (limited(`${ip}:${name}`)) return send(res, 429, { error: 'too many tries — wait 15 minutes' })
       const u = q.userByName.get(name) as
-        { id: number, salt: Buffer, hash: Buffer, n: number, admin: number } | undefined
+        { id: number, salt: Buffer, hash: Buffer, n: number, avatar: string | null } | undefined
       const h = await hashPass(String(b?.pass ?? ''), u ? Buffer.from(u.salt) : DUMMY_SALT, u?.n ?? SCRYPT_N)
       if (!u || !timingSafeEqual(h, Buffer.from(u.hash))) {
         log('login-fail', name, via(req))
@@ -477,7 +422,7 @@ export function start({
       tries.delete(`${ip}:${name}`)
       q.pruneSessions.run(Date.now() - IDLE_DAYS * 86400_000, Date.now() - MAX_DAYS * 86400_000)
       log('login', name, via(req))
-      return send(res, 200, { user: name, admin: u.admin, avatar: (u as any).avatar ?? null },
+      return send(res, 200, { user: name, avatar: u.avatar ?? null },
         { 'set-cookie': cookie(newSession(u.id, deviceOf(req))) })
     }
 
@@ -499,7 +444,7 @@ export function start({
     if (path === '/api/me') {
       const user = auth(req)
       return user
-        ? send(res, 200, { user: user.name, admin: user.admin, avatar: user.avatar })
+        ? send(res, 200, { user: user.name, avatar: user.avatar })
         : send(res, 401, { error: 'unauthorized' })
     }
 
@@ -534,7 +479,7 @@ export function start({
         }
         q.setAvatar.run(avatar, user.id)
       }
-      return send(res, 200, { user: name, admin: user.admin, avatar })
+      return send(res, 200, { user: name, avatar })
     }
 
     /* The fifty snapshots, and the way back to one. Restoring writes the old document forward as
@@ -757,25 +702,6 @@ export function start({
       return out == null || (Array.isArray(out) && !out.length) ? send(res, 202, {}) : send(res, 200, out)
     }
 
-    /* Your own account, gone: the sessions, the documents and the pictures go with it on the
-       cascade. The password again, for the reason changing one asks for it. The daily backups
-       still hold it until they age out, a week on. What is already on your devices stays there;
-       this server simply stops knowing you, and the next boot logs a fresh invite to sign up with. */
-    if (path === '/api/account' && req.method === 'DELETE') {
-      const user = auth(req)
-      if (!user) return send(res, 401, { error: 'unauthorized' })
-      let b: any
-      try { b = await readBody(req) } catch (e) { return send(res, 400, { error: String((e as Error).message) }) }
-      const u = q.userById.get(user.id) as { salt: Buffer, hash: Buffer, n: number }
-      if (!timingSafeEqual(await hashPass(String(b?.pass ?? ''), Buffer.from(u.salt), u.n), Buffer.from(u.hash))) {
-        log('delete-self-fail', user.name, via(req))
-        return send(res, 401, { error: 'wrong password' })
-      }
-      q.delUserById.run(user.id)
-      log('delete-self', user.name, via(req))
-      return send(res, 200, {}, { 'set-cookie': cookie('', 0) })
-    }
-
     /**
      * The stream: told that your document moved, the moment it does. Nobody polls for it — an edit
      * on the phone lands on the laptop when it is made rather than at the next sync, and it costs
@@ -923,25 +849,77 @@ export function start({
   })
 
   server.listen(port)
-  return Object.assign(server, { invite, stop })
+  return Object.assign(server, { stop })
+}
+
+/** Set a password, making the account if there is none by that name: the first setup, and the
+ *  answer to a forgotten password. The server need not be stopped — SQLite takes the write. */
+export async function passwd(dbPath: string, name: string, pass: string) {
+  if (!/^[a-z0-9_-]{2,32}$/.test(name)) throw new Error('name: 2–32 of a–z 0–9 _ -')
+  if (pass.length < 8) throw new Error('password: 8 characters at least')
+  /* The server's own file or nothing: a mistyped STASH_DB would otherwise make a fresh database,
+     print "account made", and leave the real one exactly as locked as it was. */
+  if (!existsSync(dbPath)) throw new Error(`no database at ${dbPath}: start the server once, or set STASH_DB`)
+  const db = new DatabaseSync(dbPath)
+  // the server may be mid-write — a sync, a session touch, the nightly backup — so wait, don't fail
+  db.exec('pragma busy_timeout = 5000')
+  db.exec(SCHEMA)
+  const salt = randomBytes(16)
+  const hash = await hashPass(pass, salt, SCRYPT_N)
+  const row = db.prepare('select id from users where name = ?').get(name) as { id: number } | undefined
+  if (row) {
+    db.prepare('update users set salt = ?, hash = ?, n = ? where id = ?').run(salt, hash, SCRYPT_N, row.id)
+    /* A reset is usually because the old password got out, so whatever signed in with it — a
+       browser, a cached MCP client — is signed out with it. Every device signs in again. */
+    db.prepare('delete from sessions where user = ?').run(row.id)
+  } else {
+    db.prepare('insert into users (name, salt, hash, n, ts) values (?, ?, ?, ?, ?)').run(name, salt, hash, SCRYPT_N, Date.now())
+  }
+  db.close()
+  return row ? 'password changed, every device signed out' : 'account made'
+}
+
+/** The password off stdin: piped, read whole; typed at a terminal, asked for, not echoed, and done
+ *  at Enter rather than waiting for ⌃D. */
+async function readPassword(): Promise<string> {
+  const stdin = process.stdin
+  if (!stdin.isTTY) {
+    const chunks: Buffer[] = []
+    for await (const c of stdin) chunks.push(c as Buffer)
+    return Buffer.concat(chunks).toString('utf8').replace(/\r?\n$/, '')
+  }
+  process.stderr.write('password: ')
+  stdin.setRawMode(true)
+  stdin.setEncoding('utf8')
+  return new Promise((done) => {
+    let pass = ''
+    const onData = (s: string) => {
+      for (const ch of s) {
+        if (ch === '\r' || ch === '\n') {
+          stdin.setRawMode(false); stdin.off('data', onData); stdin.pause()
+          process.stderr.write('\n')
+          return done(pass)
+        }
+        if (ch === '\u0003') { process.stderr.write('\n'); process.exit(130) }   // ⌃C
+        if (ch === '\u007f' || ch === '\b') pass = pass.slice(0, -1)
+        else pass += ch
+      }
+    }
+    stdin.on('data', onData)
+  })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const cmd = process.argv[2]
-  if (cmd === 'invite' || cmd === 'promote') {
-    const db = new DatabaseSync(process.env.STASH_DB ?? '/data/stash.db')
-    db.exec(SCHEMA)
-    if (cmd === 'invite') {
-      const code = randomBytes(8).toString('hex')
-      // with the time on it: the column defaults to 0 to let the migration spot the old rows, and
-      // 0 is older than any floor, so a code minted without one is expired before it is printed
-      db.prepare('insert into invites (code, ts) values (?, ?)').run(code, Date.now())
-      console.log(code)
-    } else {
-      const n = db.prepare('update users set admin = 1 where name = ?').run(String(process.argv[3] ?? '')).changes
-      console.log(n ? 'promoted' : 'no such user')
+  if (process.argv[2] === 'passwd') {
+    // stdin rather than an argument, so the password stays out of the shell's history and `ps`
+    const pass = await readPassword()
+    try {
+      console.log(await passwd(process.env.STASH_DB ?? '/data/stash.db', String(process.argv[3] ?? '').trim().toLowerCase(), pass))
+      process.exit(0)
+    } catch (e) {
+      console.error((e as Error).message)
+      process.exit(1)
     }
-    process.exit(0)
   }
   const s = start()
   s.on('listening', () => {

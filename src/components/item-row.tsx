@@ -12,16 +12,12 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
 import { cn, PROJECT_DRAG } from '@/lib/utils'
+import { TYPE_ICON } from '@/components/item-types'
 import { dayLabel, repeatLabel, today, tomorrow } from '@/lib/parse'
 import {
   focus, moveBefore, patch, toggleDone, type Item, type ItemType, type Project,
 } from '@/lib/store'
 
-const TYPE_ICONS: Record<ItemType, React.ElementType> = {
-  task: ListTodo,
-  idea: Lightbulb,
-  note: StickyNote,
-}
 
 /**
  * A link straight to the row — `/?item=<id>`, read in main.tsx — on the clipboard, rather than the
@@ -357,12 +353,12 @@ function ItemRowBase({ it, selected, marked, reorder, projects, sel, onSelect, o
 
         <ContextMenuSub>
           <ContextMenuSubTrigger>
-            {(() => { const I = TYPE_ICONS[it.type]; return <I /> })()}
+            {(() => { const I = TYPE_ICON[it.type]; return <I /> })()}
             Type
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {(Object.keys(TYPE_ICONS) as ItemType[]).map((t) => {
-              const Icon = TYPE_ICONS[t]
+            {(Object.keys(TYPE_ICON) as ItemType[]).map((t) => {
+              const Icon = TYPE_ICON[t]
               return (
                 <ContextMenuItem
                   key={t}
