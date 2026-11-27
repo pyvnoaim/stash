@@ -1009,14 +1009,14 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
    the page stops being somewhere `sel` may point, or a hash bookmarked when it was on opens a
    view with nothing in it and no way back. */
 {
-  const { TOOLS, toolOn, isRoute, setTool, SUBS, PDF, DISK } = await import('./store.ts')
+  const { TOOLS, toolOn, isRoute, setTool, SUBS, PDF } = await import('./store.ts')
 
-  // nothing stored: every one of them on, which is what every document written before this says —
-  // except Disk, which only the macOS app has, and this is not it
+  // nothing stored: every one of them on, which is what every document written before this says
   const fresh = load({})
-  assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length - 1)
-  assert.equal(toolOn(fresh, DISK), false)
-  assert.equal(isRoute(fresh, DISK), false)
+  assert.deepEqual(TOOLS.filter((t) => toolOn(fresh, t.id)).length, TOOLS.length)
+  // the Disk tool came out: a hash or a stored view naming it opens Today
+  assert.equal(isRoute(fresh, 'disk'), false)
+  assert.equal(load({ sel: 'disk' }).sel, 'today')
   assert.equal(isRoute(fresh, SUBS), true)
 
   // switched off, it is not a route — and a document naming it as the open view opens elsewhere
@@ -1101,4 +1101,18 @@ assert.equal('dismissed' in load({ dismissed: { a: Date.now() + 1000 } }), false
   assert.deepEqual(ids(m.trash), ['binned'])                  // deleted at 100, their edit was at 50
   // ...and the row they deleted at 200 stays live, because our edit at 300 came after it
   assert.equal(m.items.find((i) => i.id === 'edited')?.editedAt, 300)
+}
+
+/* The server's copy is the document alone: where this device is, how it looks and its keyboard
+   never leave it, and a document from another device cannot move this one. */
+{
+  const { docOf, deviceOf, DEVICE, changesDoc } = await import('./store.ts')
+  const st = load({ sel: 'inbox', theme: 'dark', hotkeys: { today: 'x' }, collapsed: ['p'], items: [] })
+  const doc = docOf(st)
+  for (const k of DEVICE) assert.equal(k in doc, false, `${k} went to the server`)
+  assert.ok('items' in doc && 'projects' in doc && 'deletes' in doc)
+  assert.deepEqual(Object.keys(deviceOf(st)).sort(), [...DEVICE].sort())
+  // moving about is not an edit; touching the document is
+  assert.equal(changesDoc(st, { ...st, sel: 'today', theme: 'light' }), false)
+  assert.equal(changesDoc(st, { ...st, items: [] }), true)
 }

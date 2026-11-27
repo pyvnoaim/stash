@@ -1,28 +1,20 @@
 /**
  * Stash over MCP: the same document the app syncs, from a Claude session.
  *
- * Every call pulls `/state`, runs the store's own actions over it and pushes the result back with
+ * Every call pulls `/state`, runs core's own edits over it and pushes the result back with
  * `If-Match` — so a line captured here is the write the capture bar makes, parser and all, and two
  * devices editing at once resolve exactly the way `sync.ts` decides it. Nothing here reimplements
  * a rule: the repeat that opens the next occurrence and the search syntax are the ones in
- * `store.ts`, reached rather than copied.
+ * `core.ts`, reached rather than copied. Each call works on its own copy of the document, so two
+ * in flight need nothing between them but the server's If-Match.
  *
  *   STASH_URL=https://stash.example STASH_USER=leon STASH_PASS=… \
  *     node --experimental-strip-types server/mcp.ts
  */
 import { realpathSync } from 'node:fs'
-import type { Item, ItemType, State } from '../src/lib/store.ts'
-
-/* store.ts is browser code: it reads localStorage and starts listening for another window's writes
-   the moment it loads. The same four-line shim its own tests use is all it needs to run out here —
-   and it has to be in place *before* the import, which is why these three are dynamic. */
-Object.assign(globalThis, {
-  localStorage: { getItem: () => null, setItem: () => {} },
-  addEventListener: () => {},
-  location: { hash: '' },
-})
-const store = await import('../src/lib/store.ts')
-const { parseCapture } = await import('../src/lib/parse.ts')
+import * as core from '../src/lib/core.ts'
+import type { Item, ItemType, State } from '../src/lib/core.ts'
+import { parseCapture } from '../src/lib/parse.ts'
 
 const UA = 'stash-mcp'   // names this client in the sessions list, so it can be revoked on sight
 
@@ -34,33 +26,24 @@ const envCfg = () => ({
   pass: process.env.STASH_PASS ?? '',
 })
 
-/**
- * One tool at a time, across every caller. The store is a single module-level document — every
- * tool pulls its caller's document into it and the writers push it back — so two calls in flight
- * (one client asking for several tools at once, or two different users through the hosted /mcp
- * route) would interleave their pulls and push one person's document under another's name. The
- * queue is global for exactly that reason: it is the store that is shared, not the session.
- * ponytail: one global queue, not a lock per document — there is one document slot.
- */
-let queue: Promise<unknown> = Promise.resolve()
-const serial = <T>(fn: () => Promise<T>): Promise<T> => {
-  const next = queue.then(fn, fn)   // runs either way: one failed call must not stall the rest
-  queue = next.catch(() => {})
-  return next
-}
-
 /* ---------- the session ---------- */
 
 /**
  * Everything one signed-in caller needs, closed over their own credentials: the stdio server is
  * one of these built from the environment, and the hosted /mcp route builds one per user. The
- * session cookie and document version live here; the store and the queue stay shared above.
+ * session cookie lives here; the document is pulled fresh on every call.
  */
 export function createStash({ url, user, pass, via }: { url: string, user: string, pass: string, via?: string }) {
 
 let cookie = ''
 
-async function login() {
+/* One sign-in at a time. A client sending six tools in one turn on a cold context, or after the
+   session idled out, would otherwise post six logins at once: six session rows, and a burst that
+   walks straight into the login limiter. Everyone waiting shares the one in flight. */
+let signingIn: Promise<void> | undefined
+const login = () => (signingIn ??= signIn().finally(() => { signingIn = undefined }))
+
+async function signIn() {
   if (!user || !pass) throw new Error('STASH_USER and STASH_PASS are not set')
   const r = await fetch(`${url}/api/login`, {
     // `via`: the address the hosted /mcp route was called from, for the server's login limiter
@@ -79,46 +62,49 @@ async function login() {
 async function api(path: string, init: RequestInit = {}) {
   if (!cookie) await login()
   const go = () => fetch(url + path, { ...init, headers: { 'user-agent': UA, cookie, ...init.headers } })
+  const sent = cookie
   const r = await go()
   if (r.status !== 401) return r
-  cookie = ''
-  await login()
+  // another call may already have signed in again while this one was out
+  if (cookie === sent) { cookie = ''; await login() }
   return go()
 }
 
-/** The document as the server has it. Every call starts here — another device may have written
- *  since the last one, and this process holds nothing between calls on purpose. */
-let version = 0
+/** The document as the server has it, and the version to write back over. Every call starts
+ *  here — another device may have written since the last one, and nothing is held between calls. */
 async function pull() {
   const r = await api('/state')
   if (!r.ok) throw new Error(`GET /state: ${r.status}`)
-  const { version: v, state } = await r.json() as { version: number, state: unknown }
-  version = v
-  store.adoptRemote(state)
-  return store.getState()
+  const { version, state } = await r.json() as { version: number, state: unknown }
+  return { s: core.load(state), version }
 }
 
 /** Back to the server, with the same 409 rule as `sync.ts`: another device wrote while we were
- *  thinking, so the two documents are merged row by row and the merge is what goes up. Sending ours
- *  again at their version, which this used to do, painted over whatever the phone had just saved. */
-async function push() {
-  /* Out through the same door every document comes in by. `load` is where an impossible date, a
-     junk colour and an illegal nesting are cleaned off, and a tool that reported the ask rather
-     than what survived it would be telling the one lie that matters: `due: '2026-13-45'` reads as
-     set, is dropped by the next reader, and the task is simply never due. */
-  store.adoptRemote(store.getState())
+ *  thinking, so the two documents are merged row by row and the merge is what goes up. Returns what
+ *  was stored, which is what every tool reports.
+ *
+ *  Out through the same door every document comes in by: `load` is where an impossible date, a junk
+ *  colour and an illegal nesting are cleaned off, and a tool that reported the ask rather than what
+ *  survived it would say `due: '2026-13-45'` was set on a task that is then never due. */
+async function push(next: State, version: number): Promise<State> {
+  let doc = core.load(core.docOf(next))
   const put = (v: number) => api('/state', {
     method: 'PUT', headers: { 'if-match': String(v) },
-    body: JSON.stringify({ state: store.getState(), device: UA }),
+    body: JSON.stringify({ state: core.docOf(doc), device: UA }),
   })
+  /* Again for as long as somebody else got there first: a client asking for six tools in one turn
+     sends six of these at once, and each merge can meet the next one's write. Every round merges
+     and never repeats a write, so it only stops being a 409 by landing.
+     ponytail: ten rounds, a client firing more than that at once gets the error back. */
   let r = await put(version)
-  if (r.status === 409) {
+  for (let n = 0; r.status === 409 && n < 10; n++) {
     const cur = await r.json() as { version: number, state: unknown }
-    if (cur.state) store.adoptRemote(store.mergeRemote(store.getState(), cur.state))
+    // and the merge back through `load` too: a project deleted on the phone leaves rows to re-home
+    if (cur.state) doc = core.load(core.docOf(core.mergeRemote(doc, cur.state)))
     r = await put(cur.version)
   }
   if (!r.ok) throw new Error(`PUT /state: ${r.status}`)
-  version = (await r.json() as { version: number }).version
+  return doc
 }
 
 /* ---------- what a row looks like from out here ---------- */
@@ -127,7 +113,7 @@ const shape = (s: State) => (i: Item) => ({
   id: i.id,
   type: i.type,
   text: i.text,
-  project: store.project(s, i.pid)?.name ?? null,
+  project: core.project(s, i.pid)?.name ?? null,
   ...(i.note && { note: i.note }),
   ...(i.due && { due: i.due }),
   ...(i.at && { at: i.at }),
@@ -179,20 +165,19 @@ const tools: Record<string, {
       },
     },
     run: async (a) => {
-      const s = await pull()
+      const { s } = await pull()
       const view = String(a.view ?? 'all')
       /* The enum above is a hint to the model, not a gate — nothing validates arguments against
          the schema, so the only guard is this line. The trash is a view like any other as far as
          `isView` is concerned, and a note deleted precisely so it would stop being read is not one
          to hand back here: what is deleted is out of every list, and out of this one too. */
-      if (!store.isView(view) || view === store.TRASH) throw new Error(`no such view: ${view}`)
-      store.select(view)
-      const items = store.visible(store.getState(), String(a.query ?? ''))
+      if (!core.isView(view) || view === core.TRASH) throw new Error(`no such view: ${view}`)
+      const items = core.visible({ ...s, sel: view }, String(a.query ?? ''))
       const limit = Number(a.limit ?? 200)
       return {
-        projects: store.flatProjects(s).map((p) => ({
-          name: p.name, open: store.openIn(s, p.id),
-          ...(p.parent && { under: store.project(s, p.parent)?.name }),
+        projects: core.flatProjects(s).map((p) => ({
+          name: p.name, open: core.openIn(s, p.id),
+          ...(p.parent && { under: core.project(s, p.parent)?.name }),
         })),
         count: items.length,
         items: items.slice(0, limit).map(shape(s)),
@@ -214,12 +199,10 @@ const tools: Record<string, {
       if (!lines.length) throw new Error('nothing to capture')
       const type = String(a.type ?? 'task') as ItemType
       if (!['task', 'idea', 'note'].includes(type)) throw new Error(`no such type: ${type}`)
-      const s = await pull()
+      const { s, version } = await pull()
       const made = lines.map((line) =>
-        store.itemOf(parseCapture(line, s.projects), { type, note: String(a.note ?? '') }))
-      store.addItems(made)
-      await push()
-      const now = store.getState()
+        core.itemOf(parseCapture(line, s.projects), { type, note: String(a.note ?? '') }))
+      const now = await push(core.addItems(s, made), version)
       // read back rather than echo: what the store kept, not what was asked for
       const ids = new Set(made.map((i) => i.id))
       return { added: now.items.filter((i) => ids.has(i.id)).map(shape(now)) }
@@ -249,12 +232,11 @@ const tools: Record<string, {
       required: ['id'],
     },
     run: async (a) => {
-      const s = await pull()
+      const { s, version } = await pull()
       const it = s.items.find((i) => i.id === a.id)
       if (!it) throw new Error(`no item ${a.id}`)
       if (a.remove) {
-        store.removeItem(a.id)
-        await push()
+        await push(core.removeItem(s, a.id), version)
         return { removed: a.id, was: shape(s)(it) }
       }
       const p: Partial<Item> = {}
@@ -262,10 +244,9 @@ const tools: Record<string, {
         if (k in a) (p as any)[k] = a[k]
       }
       if ('project' in a) p.pid = a.project == null ? null : asProject(s, a.project).id
-      if (Object.keys(p).length) store.patch(a.id, p)
-      if (typeof a.done === 'boolean' && a.done !== it.done) store.toggleDone(a.id)
-      await push()
-      const now = store.getState()
+      let next = Object.keys(p).length ? core.patch(s, a.id, p) : s
+      if (typeof a.done === 'boolean' && a.done !== it.done) next = core.toggleDone(next, a.id)
+      const now = await push(next, version)
       const after = now.items.find((i) => i.id === a.id)
       if (!after) throw new Error('the item went away mid-edit')
       return { item: shape(now)(after) }
@@ -286,31 +267,24 @@ const tools: Record<string, {
       required: ['name'],
     },
     run: async (a) => {
-      const s = await pull()
+      const { s, version } = await pull()
       const name = String(a.name).trim()
       if (!name) throw new Error('a project needs a name')
       const parent = 'under' in a && a.under != null ? asProject(s, a.under).id : null
       const had = s.projects.find((x) => x.name.toLowerCase() === name.toLowerCase())
-      if (had) {
-        store.patchProject(had.id, {
+      const next = had
+        ? core.patchProject(s, had.id, {
           ...(a.rename && { name: String(a.rename).trim() }),
           ...('color' in a && { color: a.color }),
           ...('under' in a && { parent }),
         })
-      } else {
-        store.addProject(name, a.color ?? null, parent)
-      }
-      await push()
-      const now = store.getState()
-      return { projects: store.flatProjects(now).map((p) => ({ name: p.name, under: store.project(now, p.parent)?.name ?? null, color: p.color })) }
+        : core.addProject(s, core.projectOf(name, a.color ?? null, parent))
+      const now = await push(next, version)
+      return { projects: core.flatProjects(now).map((p) => ({ name: p.name, under: core.project(now, p.parent)?.name ?? null, color: p.color })) }
     },
   },
 
   /**
-   * Subscriptions were the one top-level collection out here could not see at all — its own view,
-   * its own sorting, and every charge for a year ahead on the calendar feed, with no way to ask
-   * what they cost or to add the one that just started billing.
-   *
    * One tool rather than a read and two writers, the same shape `stash_project` settled on: called
    * with nothing it lists, called with a name it adds or patches that row, and it answers with the
    * whole list either way — the totals are the reason anyone asks, and they move on every write.
@@ -329,14 +303,15 @@ const tools: Record<string, {
         name: str,
         kind: { type: 'string', enum: ['expense', 'income'] },
         cost: { type: 'number', description: 'per billing cycle, not per month' },
-        cycle: { type: 'string', enum: [...store.CYCLES] },
+        cycle: { type: 'string', enum: [...core.CYCLES] },
         due: { type: ['string', 'null'], description: 'next charge as YYYY-MM-DD, or null to undate it' },
         rename: str,
         remove: { type: 'boolean' },
       },
     },
     run: async (a) => {
-      const s = await pull()
+      const { s, version } = await pull()
+      let now = s
       const wanted = 'name' in a ? String(a.name).trim() : ''
       if ('name' in a && !wanted) throw new Error('a subscription needs a name')
 
@@ -344,9 +319,9 @@ const tools: Record<string, {
         const had = s.subs.find((x) => x.name.toLowerCase() === wanted.toLowerCase())
         if (a.remove) {
           if (!had) throw new Error(`no subscription "${wanted}"`)
-          store.removeSub(had.id)
+          now = core.removeSub(s, had.id)
         } else if (had) {
-          store.patchSub(had.id, {
+          now = core.patchSub(s, had.id, {
             ...(a.rename && { name: String(a.rename).trim() }),
             ...('kind' in a && { kind: a.kind }),
             ...('cost' in a && { cost: Number(a.cost) }),
@@ -358,24 +333,23 @@ const tools: Record<string, {
           // for by name, rather than filed as a €0 monthly expense nobody meant
           const missing = ['kind', 'cost', 'cycle'].filter((k) => !(k in a))
           if (missing.length) throw new Error(`a new subscription needs ${missing.join(', ')}`)
-          store.addSub(a.kind, wanted, Number(a.cost), a.cycle, a.due ?? null)
+          now = core.addSub(s, core.subOf(a.kind, wanted, Number(a.cost), a.cycle, a.due ?? null))
         }
-        await push()
+        now = await push(now, version)
       }
 
       /* Off the pushed document rather than the ask — `load` drops an impossible date on the way
          through, and a row reported as due on a day that was thrown away is the one lie that
          matters here: it reads as dated, and then nothing is ever charged. */
-      const now = store.getState()
       const list = now.subs.map((x) => ({
         name: x.name,
         kind: x.kind,
         cost: x.cost,
         cycle: x.cycle,
         due: x.due,
-        next: store.nextCharge(x),
-        monthly: +store.monthlyCost(x).toFixed(2),
-        yearly: +store.yearlyCost(x).toFixed(2),
+        next: core.nextCharge(x),
+        monthly: +core.monthlyCost(x).toFixed(2),
+        yearly: +core.yearlyCost(x).toFixed(2),
       }))
       const per = (kind: string) => +list.filter((x) => x.kind === kind)
         .reduce((n, x) => n + x.monthly, 0).toFixed(2)
@@ -415,7 +389,7 @@ return async function rpc(m: any): Promise<any> {
       case 'tools/call': {
         const t = tools[m.params?.name]
         if (!t) throw new Error(`no such tool: ${m.params?.name}`)
-        const out = await serial(() => t.run(m.params?.arguments ?? {}))
+        const out = await t.run(m.params?.arguments ?? {})
         return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] })
       }
       default:

@@ -22,15 +22,13 @@ import { dayLabel, today, tomorrow, WORD } from '@/lib/parse'
 import { hit, pretty } from '@/lib/keys'
 import { applyTheme, cn } from '@/lib/utils'
 import {
-  addProject, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, moveBefore, patch, DISK, PDF, SUBS,
+  addProject, emptyTrash, flatProjects, focus, hotkey, isGrouped, isPage, isSorted, moveBefore, patch, PDF, SUBS,
   openIn, readHash, redo, removeItem, restoreItem, restoreTrash, select, tagCounts, toggleDone,
   TRASH, TRASH_DAYS, undo, useStash, viewName, VIEWS, visible, type Item, type ItemType,
 } from '@/lib/store'
 
 // the PDF editor drags in pdf.js and a worker, which is far heavier than the app itself
 const PdfEditor = lazy(() => import('@/pdf/editor'))
-// only the macOS app ever opens it, so a browser never downloads it
-const DiskPage = lazy(() => import('@/components/disk-page'))
 // the editor is the heaviest thing in the app and most visits never open a note full-page
 const NotePage = lazy(() => import('@/components/note-editor'))
 
@@ -571,7 +569,6 @@ export default function App() {
           )}
 
           {page === SUBS && <SubsPage />}
-          {page === DISK && <Suspense fallback={<Waiting name="Disk" />}><DiskPage /></Suspense>}
 
           {/* Once opened, the editor stays mounted and hides instead: it holds a file, its
               stamps and its undo history in memory, and unmounting to glance at Today would

@@ -1,12 +1,10 @@
 // Stash for macOS: one window, one WKWebView on the deployed app. Everything the app is lives on
 // the server and in this web view's own localStorage; this file only supplies what a browser tab
 // would have — a menu bar, file pickers, downloads, and links that leave in the default browser —
-// plus what a tab cannot: measuring the disk for the Disk tool (which never deletes), a capture
-// panel on ⌃⌥Space and in the menu bar, due dates in Notification Center, and updating itself.
+// plus updating itself.
 // The page's half is src/lib/mac.ts.
 // ponytail: no Xcode project, `macos/build.sh` compiles this with swiftc.
 import AppKit
-import Carbon.HIToolbox
 import CryptoKit
 import UserNotifications
 import WebKit
@@ -16,18 +14,15 @@ let home = URL(string: UserDefaults.standard.string(forKey: "url") ?? "https://s
 
 @MainActor
 final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate,
-  WKScriptMessageHandlerWithReply, UNUserNotificationCenterDelegate, NSWindowDelegate, NSTextFieldDelegate {
+  WKScriptMessageHandlerWithReply, NSWindowDelegate {
   var window: NSWindow!
   var web: WKWebView!
-  var status: NSStatusItem!
   var side: DragStrip!
-  var panel: NSPanel!
-  var field: NSTextField!
 
   func applicationDidFinishLaunching(_ note: Notification) {
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .default()   // persistent: localStorage and the session cookie survive a quit
-    // its presence is also how the page knows it is in the app and offers the Disk tool
+    // its presence is also how the page knows it is in the app
     config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "stash")
     web = WKWebView(frame: .zero, configuration: config)
     web.navigationDelegate = self
@@ -56,7 +51,7 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
        28-point bar — placed by hand (`placeButtons`), not by an empty toolbar: with a toolbar on the
        window, Rectangle could no longer find it. */
     window.delegate = self
-    // light or dark follows the page's own theme (the "theme" op, and `didFinish`), not the Mac's
+    // light or dark follows the page's own theme (the "theme" op from src/lib/mac.ts), not the Mac's
     window.backgroundColor = sheet
     window.isReleasedWhenClosed = false
     let frame = NSView(frame: NSRect(x: 0, y: 0, width: 1200, height: 800))   // the window's size, so the parts resize from it
@@ -81,9 +76,12 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     NSApp.mainMenu = menu()
     // the system's own Window menu: Move & Resize, tiling, the open-window list
     NSApp.windowsMenu = NSApp.mainMenu?.items.last?.submenu
-    statusItem()
-    hotkey()
-    UNUserNotificationCenter.current().delegate = self
+    /* Due-date reminders came out in 6.4.0, but what an older build handed macOS is still
+       scheduled there and would fire for tasks long finished. Cleared on every launch; costs
+       nothing when there is none. */
+    let center = UNUserNotificationCenter.current()
+    center.removeAllPendingNotificationRequests()
+    center.removeAllDeliveredNotifications()
     web.load(URLRequest(url: home))
     Task { await update() }
     Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in Task { @MainActor in await self.update() } }
@@ -156,92 +154,11 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
     NSApp.terminate(nil)
   }
 
-  @objc func show() {
-    window.makeKeyAndOrderFront(nil)
-    NSApp.activate()
-  }
-
-  /// An event on the page's window (see src/lib/mac.ts). Arguments, not interpolation: a captured
-  /// line is whatever was typed, quotes and all.
+  /// An event on the page's window (see src/lib/mac.ts). Arguments, not interpolation, so a detail
+  /// cannot break out of the string it is in.
   func send(_ name: String, _ detail: String) {
     web.callAsyncJavaScript("dispatchEvent(new CustomEvent(name, { detail }))",
                            arguments: ["name": name, "detail": detail], in: nil, in: .page, completionHandler: nil)
-  }
-
-  // MARK: capture
-
-  func statusItem() {
-    status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    status.button?.image = NSImage(systemSymbolName: "tray.and.arrow.down", accessibilityDescription: "Stash")
-    let m = NSMenu()
-    let cap = NSMenuItem(title: "Capture…", action: #selector(capture), keyEquivalent: " ")
-    cap.keyEquivalentModifierMask = [.control, .option]   // shown, not bound: the hotkey below is
-    for i in [cap, NSMenuItem(title: "Open Stash", action: #selector(show), keyEquivalent: "")] {
-      i.target = self
-      m.addItem(i)
-    }
-    m.addItem(.separator())
-    m.addItem(NSMenuItem(title: "Quit Stash", action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
-    status.menu = m
-  }
-
-  /// ⌃⌥Space from any app. Carbon's hot keys need no Accessibility permission, which an event tap would.
-  /// ponytail: fixed chord; make it a setting if it ever collides with something.
-  func hotkey() {
-    var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-    InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-      MainActor.assumeIsolated { (NSApp.delegate as? App)?.capture() }   // delivered on the main thread
-      return noErr
-    }, 1, &spec, nil, nil)
-    var ref: EventHotKeyRef?
-    RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey | optionKey),
-                        EventHotKeyID(signature: OSType(0x5354_4153), id: 1), GetApplicationEventTarget(), 0, &ref)
-  }
-
-  /// A Spotlight-sized field over whatever you are in. Non-activating: typing into it leaves the app
-  /// you came from in front, and Enter puts you straight back there.
-  @objc func capture() {
-    if panel == nil {
-      panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 56),
-                       styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
-      panel.titleVisibility = .hidden
-      panel.titlebarAppearsTransparent = true
-      for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { panel.standardWindowButton(b)?.isHidden = true }
-      panel.level = .floating
-      panel.hidesOnDeactivate = false
-      panel.isMovableByWindowBackground = true
-      panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-      panel.delegate = self
-      field = NSTextField(frame: NSRect(x: 18, y: 12, width: 524, height: 30))
-      field.font = .systemFont(ofSize: 20)
-      field.isBordered = false
-      field.drawsBackground = false
-      field.focusRingType = .none
-      field.placeholderString = "Capture to Stash: @project #tag tomorrow 9am"
-      field.target = self
-      field.action = #selector(captured)
-      field.delegate = self
-      panel.contentView?.addSubview(field)
-    }
-    field.stringValue = ""
-    if let screen = NSScreen.main?.visibleFrame {   // upper third, where Spotlight sits
-      panel.setFrameOrigin(NSPoint(x: screen.midX - 280, y: screen.minY + screen.height * 0.68))
-    }
-    panel.makeKeyAndOrderFront(nil)
-    panel.makeFirstResponder(field)
-  }
-
-  @objc func captured() {
-    let line = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    panel.orderOut(nil)
-    if !line.isEmpty { send("stash:capture", line) }
-  }
-
-  // Esc, or clicking anywhere else, puts it away with nothing filed
-  func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-    guard sel == #selector(NSResponder.cancelOperation(_:)) else { return false }
-    panel.orderOut(nil)
-    return true
   }
 
   /// Where the three buttons go: centred in a 52-point band, 20 points in. macOS lays them out again
@@ -292,45 +209,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
   func windowDidExitFullScreen(_ note: Notification) { if (note.object as? NSWindow) === window { placeButtons() } }
   func windowDidBecomeKey(_ note: Notification) { if (note.object as? NSWindow) === window { placeButtons() } }
 
-  func windowDidResignKey(_ note: Notification) {
-    if (note.object as? NSWindow) === panel { panel.orderOut(nil) }
-  }
-
-  // MARK: notifications
-
-  // up on screen even while Stash is the app in front
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                          willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-    [.banner, .sound]
-  }
-
-  // clicked: the window, on the row it was about
-  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-    let id = response.notification.request.identifier
-    await MainActor.run {
-      show()
-      send("stash:open", id)
-    }
-  }
-
-  /// The page's whole schedule, replacing whatever was pending: it sends it whenever it changes.
-  func remind(_ list: [[String: Any]]) async {
-    let center = UNUserNotificationCenter.current()
-    center.removeAllPendingNotificationRequests()
-    let requests = list.compactMap { r -> UNNotificationRequest? in
-      guard let id = r["id"] as? String, let title = r["title"] as? String, let when = r["when"] as? Double else { return nil }
-      let content = UNMutableNotificationContent()
-      content.title = title
-      content.body = r["body"] as? String ?? ""
-      content.sound = .default
-      let at = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date(timeIntervalSince1970: when / 1000))
-      return UNNotificationRequest(identifier: id, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: at, repeats: false))
-    }
-    // asked the first time there is something to say, not at launch
-    guard !requests.isEmpty, (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
-    for r in requests { try? await center.add(r) }
-  }
-
   // Closing the window keeps the app; clicking the Dock icon brings it back, as Mail does.
   func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool {
     window.makeKeyAndOrderFront(nil)
@@ -346,16 +224,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       return .cancel
     }
     return .allow
-  }
-
-  /// Every page that finishes loading says which theme it is in, whether or not it knows the
-  /// "theme" op yet: a saved older version of the site never sends it, and the bar stayed the
-  /// Mac's dark over a light Stash until the site's own update was taken.
-  func webView(_ web: WKWebView, didFinish nav: WKNavigation!) {
-    let js = "document.documentElement.dataset.theme === 'auto' ? null : document.documentElement.classList.contains('dark')"
-    web.evaluateJavaScript(js) { [weak self] dark, _ in
-      MainActor.assumeIsolated { self?.window.appearance = Self.appearance(dark as? Bool) }
-    }
   }
 
   /// nil under the page's `auto`: the window, and so the web view's prefers-color-scheme, follow the Mac
@@ -443,8 +311,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
 
   // MARK: the page's requests
 
-  // The disk ops are read-only on purpose: they measure, show a path in Finder, or copy text.
-  // Removing anything is the script the page builds, which the user reads and runs in Terminal.
   func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
     // the whole origin, not just the host: an http:// page or another port on the same name is not the app
     let origin = message.frameInfo.securityOrigin
@@ -452,21 +318,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
           origin.port == (home.port ?? 0),
           let body = message.body as? [String: Any] else { return (nil, "refused") }
     switch body["op"] as? String {
-    case "scan":
-      let scan = Scan(paths: body["paths"] as? [String] ?? [], names: body["names"] as? [String] ?? [],
-                      tags: body["tags"] as? [String] ?? [])
-      return (await Task.detached { scan.run() }.value, nil)
-    case "reveal":
-      guard let path = body["path"] as? String else { return (nil, "no path") }
-      NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: Scan.expand(path))])
-      return (true, nil)
-    case "copy":
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(body["text"] as? String ?? "", forType: .string)
-      return (true, nil)
-    case "remind":
-      await remind(body["list"] as? [[String: Any]] ?? [])
-      return (true, nil)
     case "chrome":
       // how wide the sidebar is now (0 when it is folded away), for the strip that drags the window
       let w = CGFloat(body["sidebar"] as? Double ?? 0)
@@ -478,9 +329,6 @@ final class App: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDele
       return (true, nil)
     case "relaunch":
       relaunch()
-      return (true, nil)
-    case "fda":
-      NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
       return (true, nil)
     default:
       return (nil, "unknown op")
@@ -550,89 +398,6 @@ final class DragStrip: NSView {
   static let height: CGFloat = 52
   override func mouseDown(with event: NSEvent) {
     if event.clickCount == 2 { window?.performZoom(nil) } else { window?.performDrag(with: event) }
-  }
-}
-
-/// The capture panel has no title bar to click, and a borderless window will not take typing without this.
-final class KeyPanel: NSPanel {
-  override var canBecomeKey: Bool { true }
-}
-
-/// One walk of the home folder: every folder's size, a tree of the ones worth drawing, and the sizes
-/// of the paths and folder names the page's cleanup rules asked about.
-final class Scan: @unchecked Sendable {
-  struct Node: Encodable { let n: String; let s: Int64; let k: [Node]? }
-  struct Out: Encodable { let tree: Node; let hits: [String: Int64]; let total: Int64; let free: Int64; let unreadable: Int; let tagged: [String] }
-
-  static let root = FileManager.default.homeDirectoryForCurrentUser.path
-  static func expand(_ p: String) -> String { p.hasPrefix("~/") ? root + p.dropFirst(1) : p }
-  static let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .totalFileAllocatedSizeKey]
-  // personal-data stores: tiny, and reading them asks for Contacts or Calendars access, which a
-  // disk map has no business asking for
-  static let skip: Set<String> = ["~/Library/Application Support/AddressBook", "~/Library/Calendars",
-    // cloud drives: listing one asks the provider over the network, and what it holds is in the cloud
-    "~/Library/CloudStorage", "~/Library/Mobile Documents"]
-
-  let paths: Set<String>, names: Set<String>, tags: Set<String>
-  let lock = NSLock()
-  var hits: [String: Int64] = [:], unreadable = 0, tagged: [String] = []
-
-  init(paths: [String], names: [String], tags: [String]) { self.paths = Set(paths); self.names = Set(names); self.tags = Set(tags) }
-
-  /// A real cache tag starts with this line; a file that only has the name does not count.
-  static let signature = Data("Signature: 8a477f597d28d172789f06886806bc55".utf8)
-  static func isTag(_ url: URL) -> Bool {
-    guard let f = try? FileHandle(forReadingFrom: url) else { return false }
-    defer { try? f.close() }
-    return (try? f.read(upToCount: signature.count)) == signature
-  }
-
-  func run() -> String {
-    let tree = walk(URL(fileURLWithPath: Scan.root), "~", depth: 0, inHit: false)
-    let v = try? URL(fileURLWithPath: Scan.root).resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
-    let out = Out(tree: tree, hits: hits, total: Int64(v?.volumeTotalCapacity ?? 0),
-                  free: v?.volumeAvailableCapacityForImportantUsage ?? 0, unreadable: unreadable, tagged: tagged)
-    return String(decoding: (try? JSONEncoder().encode(out)) ?? Data(), as: UTF8.self)
-  }
-
-  func walk(_ url: URL, _ rel: String, depth: Int, inHit: Bool) -> Node {
-    let name = depth == 0 ? "~" : url.lastPathComponent
-    if Scan.skip.contains(rel) { return Node(n: name, s: 0, k: nil) }
-    guard let items = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: Scan.keys) else {
-      lock.withLock { unreadable += 1 }
-      return Node(n: name, s: 0, k: nil)
-    }
-    // a tag anyone can drop in: not trusted at the top of a repo, or in a folder straight under a home
-    // folder (~/Downloads/x, ~/dev/x), where a planted one would have a whole project cleared
-    let isTagged = !inHit && depth > 2 && !items.contains { $0.lastPathComponent == ".git" }
-      && items.contains { tags.contains($0.lastPathComponent) && Scan.isTag($0) }
-    let hit = paths.contains(rel) || (!inHit && names.contains(name)) || isTagged
-    func visit(_ item: URL) -> Node {
-      let v = try? item.resourceValues(forKeys: Set(Scan.keys))
-      if v?.isDirectory == true && v?.isSymbolicLink != true {
-        // under any hit, a node_modules is already counted — in the Yarn cache, in the Trash
-        return walk(item, rel + "/" + item.lastPathComponent, depth: depth + 1, inHit: inHit || hit)
-      }
-      return Node(n: item.lastPathComponent, s: Int64(v?.totalFileAllocatedSize ?? 0), k: nil)
-    }
-    var kids: [Node]
-    if depth == 0 {   // the top level in parallel: Library alone is most of the wait, but not all of it
-      var slots = [Node?](repeating: nil, count: items.count)
-      let fill = NSLock()
-      DispatchQueue.concurrentPerform(iterations: items.count) { i in
-        let n = visit(items[i])
-        fill.withLock { slots[i] = n }
-      }
-      kids = slots.compactMap { $0 }
-    } else {
-      kids = items.map(visit)
-    }
-    let size = kids.reduce(0) { $0 + $1.s }
-    if hit { lock.withLock { hits[rel] = size; if isTagged { tagged.append(rel) } } }
-    // only what the page could draw: 1% of this folder and 10 MB at least, the biggest 40
-    let floor = max(size / 100, 10_000_000)
-    let kept = depth < 8 ? Array(kids.filter { $0.s >= floor }.sorted { $0.s > $1.s }.prefix(40)) : []
-    return Node(n: name, s: size, k: kept.isEmpty ? nil : kept)
   }
 }
 

@@ -124,9 +124,9 @@ assert.equal((await call('stash_read', { view: 'inbox' })).count, 2)
 assert.equal((await call('stash_edit', { id: cap.added[0].id, remove: true })).removed, cap.added[0].id)
 assert.equal((await call('stash_read', { query: 'preset' })).count, 0)
 
-/* Two calls in flight at once. The store is one module-level document, so without the queue the
-   second call's pull adopts over the first's edit before it has been pushed and one of them is
-   simply gone — and a client asking for two tools in one turn is entitled to, not a misuse. */
+/* Several calls in flight at once, each on its own copy of the document: every one but the first
+   to land meets a 409 and merges, and none of them is lost — a client asking for several tools in
+   one turn is entitled to, not a misuse. */
 const hands = ['one hand', 'two hand', 'three hand', 'four hand', 'five hand', 'six hand']
 await Promise.all(hands.map((text) => call('stash_capture', { text })))
 for (const text of hands) assert.equal((await call('stash_read', { query: text })).count, 1, `lost ${text}`)

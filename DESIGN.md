@@ -29,7 +29,7 @@ row, an add row, then one ruled list.
 - The only other colours: project dots, `MONEY_IN` (emerald) for income, and `--destructive` for
   what deletes or undoes.
 - To mark something without a new colour, use a diagonal hatch of the accent or the muted
-  foreground (as the Disk map marks what is safe or needs review) rather than another hue.
+  foreground rather than another hue.
 - Text selection is a wash of the foreground, not the browser's blue.
 - Every token is defined for light and dark in `src/index.css`. Components use tokens, never raw
   hex. In dark mode the accent lightens where it is text or a mark and stays solid where it is a

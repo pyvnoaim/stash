@@ -13,7 +13,7 @@
  * The version-and-dirty record lives in localStorage too, beside the data, so tabs share it and
  * a closed tab's unpushed edit is pushed by whoever opens the app next.
  */
-import { adoptRemote, flush, getState, KEY, mergeRemote, revive, setOnPersist, uid, type Item } from './store.ts'
+import { adoptRemote, docOf, flush, getState, KEY, mergeRemote, revive, setOnPersist, uid, type Item } from './store.ts'
 
 /** `init` is the moment before the server has answered — not signed out, not offline, unknown. */
 export type SyncStatus = 'init' | 'off' | 'out' | 'busy' | 'ok'
@@ -140,7 +140,8 @@ async function run(): Promise<void> {
   setSnap({ status: 'busy' })
   try {
     const at = m.rev
-    let body = JSON.stringify({ state: getState(), device })
+    // the document alone: where this device is and how it looks are nobody else's business
+    let body = JSON.stringify({ state: docOf(getState()), device })
     let r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(m.v) }, body })
     if (r.status === 409) {
       /* Another device wrote while we were away. Both writes count: what goes up is the two
@@ -150,8 +151,8 @@ async function run(): Promise<void> {
       const cur = await r.json()
       if (cur.state) {
         const merged = mergeRemote(getState(), cur.state)
-        adoptRemote(merged)                 // what we send is what this device holds from now on
-        body = JSON.stringify({ state: merged, device })
+        adoptRemote(merged)                 // what we send is what this device holds from now on —
+        body = JSON.stringify({ state: docOf(getState()), device })   // after load, not the raw merge
       }
       r = await fetch('/state', { method: 'PUT', headers: { 'if-match': String(cur.version) }, body })
     }

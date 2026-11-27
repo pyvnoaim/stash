@@ -5,8 +5,8 @@ Macs. Build for that. No onboarding for other users, no self-hosting guidance fo
 notarization or App Store concerns.
 
 - Web app: React + Vite + Tailwind + shadcn in `src/`, sync server and MCP in `server/`.
-- Mac app: `macos/Stash.swift`, a WKWebView around the live site, plus what a tab cannot do (Disk
-  tool, ⌃⌥Space capture, notifications, self-update). The page's half is `src/lib/mac.ts`.
+- Mac app: `macos/Stash.swift`, a WKWebView around the live site, plus a menu bar, file and save
+  panels, and self-update. The page's half is `src/lib/mac.ts`.
 - How it should look and read: **`DESIGN.md`**. Follow it for any UI or copy change.
 
 Checks before any push: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.

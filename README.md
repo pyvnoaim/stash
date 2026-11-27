@@ -25,7 +25,7 @@ your own server syncs that same data between your devices. It is built for one p
 - **PDF editor** — add, delete and merge pages and drop text on them, entirely in the tab
 - **Sync** — local-first; an account on your own server keeps devices in step
 - **From Claude** — a hosted MCP server, so Claude can read and file into your stash
-- **Mac app** — native window, ⌃⌥Space capture, notifications, and a Disk tool
+- **Mac app** — a native window around the site that updates itself
 
 **Contents:** [Run it](#run-it) · [Capture](#capture) · [Keys](#keys) · [Notes](#notes) ·
 [Subscriptions](#subscriptions) · [PDF](#pdf) · [Layout](#layout) · [Backups](#backups) ·
@@ -49,14 +49,6 @@ with a real menu bar, file pickers, save panels for downloads, and links that op
 browser — and copies it to `/Applications`. Needs only the Xcode command line tools. It also writes
 `public/Stash.zip`, which the site offers Mac browsers as **Get the Mac app** in the account menu.
 `defaults write xyz.pyvno.stash url http://localhost:5173` points it at a dev server instead.
-
-It lives in the menu bar too: **⌃⌥Space** from any app opens a capture field that files the line
-the way the capture bar would, and anything with a due date comes up in Notification Center — at
-its hour, or at nine on a day with none. Clicking one opens the row.
-
-The app also adds one tool a browser cannot have: **Disk**, a map of your home folder sized by what it
-holds, with the caches and build output worth clearing listed beside it. It only reads. Tick what
-should go and **Copy script** puts a shell script on the clipboard for you to read and run.
 
 | | |
 | --- | --- |
@@ -445,7 +437,8 @@ is still in the file and still copies out.
 ## Layout
 
 - `src/lib/parse.ts` — capture parser and date labels
-- `src/lib/store.ts` — state, validation on every load, actions, subscription cycle maths. `useSyncExternalStore`, no state library
+- `src/lib/core.ts` — the document: its shape, validation on every load, the merge, selectors, every edit as a pure function, subscription cycle maths. No DOM, so the MCP server runs it too
+- `src/lib/store.ts` — the page's live copy of it: localStorage, undo, and `useSyncExternalStore`, no state library
 - `src/lib/markdown.ts` — the note renderer's DOM-free helpers, so `npm test` covers link safety and what a `[[link]]` resolves to
 - `src/lib/sync.ts` — the sync engine: push on edit, pull on focus, never a dropped local edit
 - `server/index.ts` — accounts, sessions and one versioned document per user; Node + SQLite, no dependencies
@@ -558,7 +551,7 @@ claude mcp add stash -e STASH_URL=https://stash.example -e STASH_USER=leon -e ST
 | `stash_subs` | the recurring money in and out — lists with the monthly and yearly totals, adds, changes and removes |
 
 Nothing is reimplemented out there. The parser, the repeat that opens the next occurrence when a
-task is ticked, and the search syntax are `store.ts`'s, reached rather than copied. A write that
+task is ticked, and the search syntax are `core.ts`'s, reached rather than copied. A write that
 meets another device's newer one is merged with it, the same way the app merges, rather than sent
 over the top.
 

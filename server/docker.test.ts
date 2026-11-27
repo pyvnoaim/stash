@@ -16,3 +16,29 @@ for (const f of here) assert.ok(shipped.includes(f), `${f} is not in the Dockerf
 // it fails the build — so a module deleted from the repo and left on this line stops the deploy
 // dead, and the running container is whatever shipped last.
 for (const f of shipped) assert.ok(here.includes(f), `${f} is in the Dockerfile's COPY line but not in server/ — docker build would fail`)
+
+/* And what those files reach for outside server/: the app's own modules the MCP route runs. Walked
+   from the shipped server files through every relative import, so a new import in core.ts that is
+   not copied fails here rather than at the container's boot. */
+import { dirname, relative, resolve } from 'node:path'
+const root = resolve(new URL('..', import.meta.url).pathname)
+const libs = dockerfile.match(/^COPY (src\/lib\/\S+(?: src\/lib\/\S+)*) \.\/src\/lib\/$/m)?.[1]?.split(' ') ?? []
+const seen = new Set<string>()
+const walk = (file: string) => {
+  if (seen.has(file)) return
+  seen.add(file)
+  const text = readFileSync(resolve(root, file), 'utf8')
+  // every specifier: `from '…'`, `import('…')` and a bare `import '…'`, either quote
+  for (const [, spec] of text.matchAll(/(?:\bfrom|\bimport\(?)\s*['"]([^'"]+)['"]/g)) {
+    if (spec.startsWith('node:')) continue
+    // no node_modules ride into the image, so a package reached from a shipped file is a boot crash
+    assert.ok(spec.startsWith('.'), `${file} imports the package ${spec}, which the image does not have`)
+    walk(relative(root, resolve(root, dirname(file), spec)))
+  }
+}
+shipped.forEach(walk)
+for (const f of seen) {
+  if (f.startsWith('server/')) continue
+  assert.ok(libs.includes(f), `${f} is imported by the server but not copied into the image`)
+}
+for (const f of libs) assert.ok(seen.has(f), `${f} is copied into the image but nothing on the server imports it`)
